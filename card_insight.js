@@ -417,35 +417,36 @@
       var $recs = renderRecsSection(recs.slice(0, 30), object.method, recTitle);
       if ($recs) $body.append($recs);
 
-      $body.find('.selector').on('hover:focus', function (e) {
-        lastFocused = e.currentTarget;
-        scroll.update($(e.currentTarget), true);
-      });
-
+      // Hover:focus в bylampa не доходит до наших селекторов —
+      // обходимся без него, обновляем scroll напрямую из обработчиков клавиш.
       contentReady = true;
 
-      // ── ГЛАВНОЕ: имитируем то, что делает пользователь руками ──
-      // (head → content переключение). Это гарантированно
-      // пересобирает коллекцию Navigator после рендера контента.
-      try {
-        if (object.activity && object.activity.toggle) {
-          // Стандартный путь Lampa — есть в большинстве форков
-          object.activity.toggle();
-        }
-        // Дополнительный фолбэк для bylampa: имитируем уход и возврат
-        setTimeout(function () {
-          if (Lampa.Controller && Lampa.Controller.enabled().name === 'content') {
-            Lampa.Controller.collectionSet(scroll.render());
-            var first = scroll.render().find('.selector').first()[0];
-            if (first) Lampa.Controller.collectionFocus(first, scroll.render());
-          } else {
+      // ── ГЛАВНЫЙ ТРЮК: программно воспроизводим то,
+      // что делал пользователь руками — head → content.
+      // Именно это «будит» Navigator и наш toggle handler в bylampa.
+      setTimeout(function () {
+        try {
+          Lampa.Controller.toggle('head');
+          setTimeout(function () {
             Lampa.Controller.toggle('content');
-          }
-        }, 50);
-      } catch (er) {
-        Lampa.Controller.toggle('content');
-      }
+          }, 30);
+        } catch (er) {
+          Lampa.Controller.toggle('content');
+        }
+      }, 50);
     };
+
+    // Вспомогательная функция: после движения фокуса прокрутить контейнер
+    function syncScrollToFocus() {
+      // Даём Navigator один тик чтобы переставить класс .focus
+      setTimeout(function () {
+        var focused = scroll.render().find('.selector.focus')[0];
+        if (focused) {
+          lastFocused = focused;
+          scroll.update($(focused), true);
+        }
+      }, 0);
+    }
 
     this.start = function () {
       Lampa.Controller.add('content', {
@@ -464,22 +465,30 @@
         left: function () {
           if (typeof Navigator !== 'undefined' && Navigator.canmove && Navigator.canmove('left')) {
             Navigator.move('left');
+            syncScrollToFocus();
           } else {
             Lampa.Controller.toggle('menu');
           }
         },
         right: function () {
-          if (typeof Navigator !== 'undefined' && Navigator.move) Navigator.move('right');
+          if (typeof Navigator !== 'undefined' && Navigator.move) {
+            Navigator.move('right');
+            syncScrollToFocus();
+          }
         },
         up: function () {
           if (typeof Navigator !== 'undefined' && Navigator.canmove && Navigator.canmove('up')) {
             Navigator.move('up');
+            syncScrollToFocus();
           } else {
             Lampa.Controller.toggle('head');
           }
         },
         down: function () {
-          if (typeof Navigator !== 'undefined' && Navigator.move) Navigator.move('down');
+          if (typeof Navigator !== 'undefined' && Navigator.move) {
+            Navigator.move('down');
+            syncScrollToFocus();
+          }
         },
         back: this.back
       });
