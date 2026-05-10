@@ -110,9 +110,23 @@
     custom_model:    'ai_search_custom_model',
     custom_jsonmode: 'ai_search_custom_jsonmode',
 
+    result_count: 'ai_search_result_count',
+
     cache_ai:   'ai_search_cache',
     cache_tmdb: 'ai_search_tmdb_cache'
   };
+
+  var RESULT_COUNT_MIN = 1;
+  var RESULT_COUNT_MAX = 20;
+  var RESULT_COUNT_DEFAULT = 10;
+
+  function getResultCount() {
+    var raw = parseInt(Lampa.Storage.get(STORAGE.result_count, RESULT_COUNT_DEFAULT), 10);
+    if (!raw || isNaN(raw)) raw = RESULT_COUNT_DEFAULT;
+    if (raw < RESULT_COUNT_MIN) raw = RESULT_COUNT_MIN;
+    if (raw > RESULT_COUNT_MAX) raw = RESULT_COUNT_MAX;
+    return raw;
+  }
 
   // ====================================================
   // ЛОГГЕР
@@ -224,7 +238,8 @@
     if (!parsed) return out;
     var items = parsed.recommendations || parsed.movies || parsed.items || parsed.results || [];
     if (!Array.isArray(items)) return out;
-    for (var i = 0; i < items.length && out.length < 15; i++) {
+    var max = getResultCount();
+    for (var i = 0; i < items.length && out.length < max; i++) {
       var it = items[i];
       if (!it || typeof it !== 'object') continue;
       var rec = {
@@ -257,9 +272,10 @@
       finish(new Error('Таймаут ' + model.name));
     }, 25000);
 
+    var n = getResultCount();
     var prompt =
       'Запрос пользователя: "' + query + '"\n' +
-      'Предложи ровно 10 фильмов или сериалов, подходящих под запрос.\n' +
+      'Предложи ровно ' + n + ' фильмов или сериалов, подходящих под запрос.\n' +
       'Формат JSON: {"recommendations":[{"title":"Название","year":2023}]}\n' +
       'Отвечай ТОЛЬКО валидным JSON, без пояснений.';
 
@@ -270,7 +286,7 @@
         { role: 'user',   content: prompt }
       ],
       temperature: 0.6,
-      max_tokens: 1500
+      max_tokens: 2000
     };
     if (model.jsonMode) body.response_format = { type: 'json_object' };
 
@@ -376,7 +392,7 @@
   // ====================================================
   function fetchTmdbData(recommendations, callback) {
     var results = [], processed = 0;
-    var limit = Math.min(recommendations.length, 15);
+    var limit = Math.min(recommendations.length, getResultCount());
     if (!limit) return callback([]);
     var request = new Lampa.Reguest();
 
@@ -536,6 +552,23 @@
       field: {
         name: 'Своя модель: JSON-режим',
         description: 'response_format: json_object — включать только если модель поддерживает'
+      }
+    });
+
+    // --- Количество результатов ---
+    Lampa.SettingsApi.addParam({
+      component: 'ai_search',
+      param: { name: STORAGE.result_count, type: 'input', values: '', default: String(RESULT_COUNT_DEFAULT) },
+      field: {
+        name: 'Сколько фильмов искать',
+        description: 'От ' + RESULT_COUNT_MIN + ' до ' + RESULT_COUNT_MAX + '. Больше — дольше ждать. По умолчанию: ' + RESULT_COUNT_DEFAULT
+      },
+      onChange: function () {
+        var v = parseInt(Lampa.Storage.get(STORAGE.result_count, RESULT_COUNT_DEFAULT), 10);
+        if (!v || isNaN(v) || v < RESULT_COUNT_MIN) v = RESULT_COUNT_MIN;
+        if (v > RESULT_COUNT_MAX) v = RESULT_COUNT_MAX;
+        Lampa.Storage.set(STORAGE.result_count, v);
+        Lampa.Noty.show('Количество фильмов: ' + v);
       }
     });
 
