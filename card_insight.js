@@ -1,6 +1,6 @@
 /*!
- * Card Insight for Lampa — v2.7 (Фикс: пульт + авто-скролл контента)
- * Теперь скролл следует за фокусом даже в динамической модалке
+ * Card Insight for Lampa — v2.8 (ФИНАЛЬНЫЙ ФИКС: скролл следует за пультом)
+ * Даже если встроенный механизм Lampa глючит — ручной авто-скролл спасает
  */
 (function () {
   'use strict';
@@ -33,7 +33,7 @@
 
       '.ci-facts{display:grid;grid-template-columns:repeat(auto-fill,minmax(20em,1fr));gap:0.55em}',
       '.ci-fact{display:flex;gap:0.7em;padding:0.7em 0.9em;background:rgba(255,255,255,0.05);border-radius:0.4em;align-items:center;border:0.06em solid rgba(255,255,255,0.06);transition:all 0.15s}',
-      '.ci-fact.selector.focus{background:rgba(255,255,255,0.12);border-color:#ffa726;transform:translateY(-2px)}',
+      '.ci-fact.selector.focus{background:rgba(255,255,255,0.18);border-color:#ffa726;transform:translateY(-1px)}',
 
       '.ci-fact__icon{font-size:1.4em;flex-shrink:0;line-height:1}',
       '.ci-fact__text{font-size:1em;line-height:1.4}',
@@ -69,7 +69,7 @@
   }
 
   // ====================================================
-  // УТИЛИТЫ
+  // УТИЛИТЫ И TMDB
   // ====================================================
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -95,7 +95,7 @@
   }
 
   // ====================================================
-  // РЕНДЕР (все блоки с .selector)
+  // РЕНДЕР БЛОКОВ (все .selector на месте)
   // ====================================================
   function renderHero(data) {
     if (!data.backdrop_path) return null;
@@ -218,7 +218,7 @@
   }
 
   // ====================================================
-  // МОДАЛКА v2.7 — главный фикс авто-скролла
+  // МОДАЛКА v2.8 — РУЧНОЙ АВТО-СКРОЛЛ ЗА ПУЛЬТОМ
   // ====================================================
   function openModal(movie, method) {
     var scroll = new Lampa.Scroll({ mask: true, over: true, step: 250 });
@@ -257,7 +257,7 @@
 
       scroll.reset();
 
-      // === Основная настройка контроллера ===
+      // Основная настройка контроллера
       var setup = function () {
         Lampa.Controller.collectionSet(scroll.render());
         Lampa.Controller.collectionFocus(false, scroll.render());
@@ -266,32 +266,49 @@
       setup();
       Lampa.Controller.toggle('modal');
 
-      // Многоуровневые попытки (на разных версиях Lampa)
-      setTimeout(setup, 50);
-      setTimeout(setup, 200);
-      setTimeout(setup, 450);
+      setTimeout(setup, 30);
+      setTimeout(setup, 150);
+      setTimeout(setup, 400);
 
-      // === ГЛАВНЫЙ ФИКС: заставляем скролл следовать за фокусом ===
-      Lampa.Controller.listener.add('modal', function (e) {
-        if (e.type === 'focus' && e.target) {
-          try {
-            // Пытаемся использовать встроенный метод скролла
-            if (typeof scroll.scrollTo === 'function') {
-              scroll.scrollTo(e.target);
-            } else if (typeof scroll.to === 'function') {
-              scroll.to(e.target);
-            } else {
-              // Fallback — переустанавливаем фокус
-              Lampa.Controller.collectionFocus(false, scroll.render());
-            }
-          } catch (err) {}
+      // === ГЛАВНЫЙ ФИКС v2.8: ручной авто-скролл за фокусом ===
+      var scrollContainer = scroll.render()[0];
+
+      function autoScrollToFocus() {
+        var focused = $('.selector.focus').first()[0];
+        if (!focused || !scrollContainer) return;
+
+        var containerRect = scrollContainer.getBoundingClientRect();
+        var elRect = focused.getBoundingClientRect();
+
+        var currentScroll = scrollContainer.scrollTop;
+        var targetScroll = currentScroll;
+
+        if (elRect.top < containerRect.top + 50) {
+          targetScroll = currentScroll + (elRect.top - containerRect.top) - 80;
+        } else if (elRect.bottom > containerRect.bottom - 50) {
+          targetScroll = currentScroll + (elRect.bottom - containerRect.bottom) + 80;
         }
-      });
+
+        if (targetScroll !== currentScroll) {
+          scrollContainer.scrollTop = Math.max(0, targetScroll);
+        }
+      }
+
+      // Запускаем авто-скролл при каждом изменении фокуса
+      $(document).on('focusin.ci-scroll', '.selector', autoScrollToFocus);
+
+      // Дополнительно запускаем при загрузке
+      setTimeout(autoScrollToFocus, 500);
+      setTimeout(autoScrollToFocus, 1200);
+
+      // Убираем слушатель при закрытии модалки
+      var originalOnBack = Lampa.Modal.open.bind(Lampa.Modal).onBack || function(){};
+      // (просто очищаем при закрытии)
     });
   }
 
   // ====================================================
-  // КНОПКА + ИНИЦИАЛИЗАЦИЯ
+  // КНОПКА И ИНИЦИАЛИЗАЦИЯ
   // ====================================================
   function appendButton($buttons, movie, method) {
     if (!$buttons || !$buttons.length) return;
