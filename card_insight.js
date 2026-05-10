@@ -1,11 +1,11 @@
 /*!
- * Card Insight for Lampa — v3
+ * Card Insight for Lampa — v4 (no Lampa.Scroll)
  * Кнопка "Подробнее" на карточке: бэкдроп, описание, факты,
  * актёры и рекомендации TMDB.
  *
- * v3: Полноэкранная Activity вместо модалки (правильный TV-скролл).
- *     Фокус сам прокручивает страницу через Lampa.Controller.
- * Никаких API-ключей — встроенный Lampa.TMDB.
+ * v4: Использует CSS-скролл + native scrollIntoView вместо Lampa.Scroll.
+ *     Это совместимо с любым форком Lampa (bylampa, lampa-lite и т.д.).
+ *     Никаких API-ключей — встроенный Lampa.TMDB.
  */
 (function () {
   'use strict';
@@ -18,8 +18,9 @@
   function injectStyles() {
     if (document.getElementById('card-insight-styles')) return;
     var css = [
-      /* Корневой контейнер */
-      '.ci-page{padding:1.5em}',
+      /* Корневой контейнер — фикс. высота + CSS-скролл */
+      '.ci-root{position:absolute;top:0;left:0;right:0;bottom:0;overflow-y:auto;overflow-x:hidden;background:#000;-webkit-overflow-scrolling:touch}',
+      '.ci-page{padding:1.5em 2em 6em}',
       '.ci-loading{padding:4em 1em;text-align:center;opacity:0.7;font-size:1.3em}',
       '.ci-error{padding:2em 1em;text-align:center;color:#ff7e7e;opacity:0.85;font-size:1.2em}',
 
@@ -33,7 +34,8 @@
       '.ci-meta{display:flex;flex-wrap:wrap;gap:0.5em 1.3em;margin-bottom:1.2em;opacity:0.8;font-size:1.15em;padding:0 0.2em}',
       '.ci-meta__item{white-space:nowrap}',
       '.ci-meta__item--rating{color:#ffd54f;font-weight:700}',
-      '.ci-overview{line-height:1.6;margin:0 0 2em;font-size:1.2em;padding:0 0.2em;max-width:65em}',
+      '.ci-overview{line-height:1.6;margin:0 0 2em;font-size:1.2em;padding:0.3em 0.4em;max-width:65em;border-radius:0.4em;outline:none}',
+      '.ci-overview.focus{background:rgba(255,255,255,0.06)}',
 
       /* Заголовки секций */
       '.ci-section{margin-bottom:2em}',
@@ -42,14 +44,15 @@
 
       /* Факты */
       '.ci-facts{display:grid;grid-template-columns:repeat(auto-fill,minmax(22em,1fr));gap:0.6em}',
-      '.ci-fact{display:flex;gap:0.8em;padding:0.85em 1em;background:rgba(255,255,255,0.05);border-radius:0.4em;align-items:center;border:0.06em solid rgba(255,255,255,0.06)}',
+      '.ci-fact{display:flex;gap:0.8em;padding:0.85em 1em;background:rgba(255,255,255,0.05);border-radius:0.4em;align-items:center;border:0.06em solid rgba(255,255,255,0.06);outline:none}',
+      '.ci-fact.focus{background:rgba(255,255,255,0.18);box-shadow:0 0 0 0.2em #ffa726}',
       '.ci-fact__icon{font-size:1.5em;flex-shrink:0;line-height:1}',
       '.ci-fact__text{font-size:1.1em;line-height:1.4}',
       '.ci-fact__label{opacity:0.6;margin-right:0.3em}',
 
       /* Актёры */
       '.ci-cast{display:grid;grid-template-columns:repeat(auto-fill,minmax(9em,1fr));gap:0.9em}',
-      '.ci-actor{cursor:pointer;border-radius:0.4em;overflow:hidden;background:rgba(255,255,255,0.05);transition:transform 0.15s,background 0.15s}',
+      '.ci-actor{cursor:pointer;border-radius:0.4em;overflow:hidden;background:rgba(255,255,255,0.05);outline:none;transition:transform 0.15s,background 0.15s}',
       '.ci-actor.focus{transform:scale(1.05);background:rgba(255,255,255,0.2);box-shadow:0 0 0 0.2em #ffa726}',
       '.ci-actor__photo{position:relative;padding-top:130%;background:#222 center/cover no-repeat}',
       '.ci-actor__no-photo{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:2.4em;opacity:0.3}',
@@ -58,7 +61,7 @@
 
       /* Карточки рекомендаций */
       '.ci-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(14em,1fr));gap:1.1em}',
-      '.ci-card{cursor:pointer;border-radius:0.4em;overflow:hidden;background:rgba(255,255,255,0.05);transition:transform 0.15s,background 0.15s;position:relative}',
+      '.ci-card{cursor:pointer;border-radius:0.4em;overflow:hidden;background:rgba(255,255,255,0.05);outline:none;transition:transform 0.15s,background 0.15s;position:relative}',
       '.ci-card.focus{transform:scale(1.05);background:rgba(255,255,255,0.2);box-shadow:0 0 0 0.22em #ffa726}',
       '.ci-card__poster{position:relative;padding-top:150%;background:#222 center/cover no-repeat}',
       '.ci-card__no-poster{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:2.6em;opacity:0.25}',
@@ -68,14 +71,7 @@
       '.ci-card__year{opacity:0.55;font-size:0.9em;margin-top:0.3em}',
 
       /* Кнопка в карточке */
-      '.full-start__button.view--ci svg{margin-right:0.4em;vertical-align:middle}',
-
-      /* Невидимые "якоря" фокуса для текстовых блоков —
-         пульт по ним проходит и тащит скролл, но визуально не видны */
-      '.ci-focus-anchor{outline:none}',
-      '.ci-focus-anchor.focus{outline:none}',
-      '.ci-overview-block.focus{background:rgba(255,255,255,0.04);border-radius:0.4em}',
-      '.ci-fact.focus{background:rgba(255,255,255,0.15);box-shadow:0 0 0 0.15em #ffa726}'
+      '.full-start__button.view--ci svg{margin-right:0.4em;vertical-align:middle}'
     ].join('\n');
 
     var style = document.createElement('style');
@@ -212,7 +208,7 @@
   }
 
   // ====================================================
-  // РЕНДЕРИНГ СЕКЦИЙ
+  // РЕНДЕРИНГ
   // ====================================================
   function renderHero(data) {
     if (!data.backdrop_path) return null;
@@ -253,11 +249,7 @@
     }
 
     var overview = data.overview && data.overview.trim() ? data.overview : 'Описание отсутствует.';
-    $wrap.append(
-      '<div class="ci-overview ci-overview-block selector ci-focus-anchor" tabindex="0">' +
-        escapeHtml(overview) +
-      '</div>'
-    );
+    $wrap.append('<div class="ci-overview selector" tabindex="0">' + escapeHtml(overview) + '</div>');
     return $wrap;
   }
 
@@ -279,7 +271,7 @@
     return $sec;
   }
 
-  function renderCastSection(credits, onSelect) {
+  function renderCastSection(credits) {
     if (!credits || !credits.cast || !credits.cast.length) return null;
     var cast = credits.cast.slice(0, 20);
     var $sec = $('<div class="ci-section"></div>');
@@ -289,7 +281,7 @@
     cast.forEach(function (person) {
       var photo = person.profile_path ? Lampa.TMDB.image('t/p/w185' + person.profile_path) : '';
       var $card = $(
-        '<div class="ci-actor selector">' +
+        '<div class="ci-actor selector" tabindex="0">' +
           '<div class="ci-actor__photo"' +
             (photo ? ' style="background-image:url(\'' + photo + '\')"' : '') + '>' +
             (!photo ? '<div class="ci-actor__no-photo">👤</div>' : '') +
@@ -301,7 +293,6 @@
         '</div>'
       );
       $card.on('hover:enter', function () {
-        if (onSelect) onSelect();
         try {
           Lampa.Activity.push({
             url: 'person/' + person.id, title: person.name,
@@ -315,7 +306,7 @@
     return $sec;
   }
 
-  function renderRecsSection(items, defaultMethod, sectionTitle, onSelect) {
+  function renderRecsSection(items, defaultMethod, sectionTitle) {
     if (!items.length) return null;
     var $sec = $('<div class="ci-section"></div>');
     $sec.append('<div class="ci-section-title"><span class="ci-section-title__bar"></span>' + escapeHtml(sectionTitle) + '</div>');
@@ -331,7 +322,7 @@
         : (item.first_air_date || item.name ? 'tv' : defaultMethod);
 
       var $card = $(
-        '<div class="ci-card selector">' +
+        '<div class="ci-card selector" tabindex="0">' +
           '<div class="ci-card__poster"' +
             (posterUrl ? ' style="background-image:url(\'' + posterUrl + '\')"' : '') + '>' +
             (!posterUrl ? '<div class="ci-card__no-poster">🎬</div>' : '') +
@@ -344,7 +335,6 @@
         '</div>'
       );
       $card.on('hover:enter', function () {
-        if (onSelect) onSelect();
         Lampa.Activity.push({
           url: '', component: 'full', id: item.id, method: method,
           card: item, source: 'tmdb'
@@ -357,56 +347,52 @@
   }
 
   // ====================================================
-  // КОМПОНЕНТ ACTIVITY (правильный TV-скролл)
+  // КОМПОНЕНТ ACTIVITY (БЕЗ Lampa.Scroll, на чистом CSS)
   // ====================================================
   function CardInsightActivity(object) {
     var network = new Lampa.Reguest();
-    var scroll = new Lampa.Scroll({ mask: true, over: true, step: 250 });
-    var $body = $('<div class="ci-page"><div class="ci-loading">Загрузка…</div></div>');
+    var $root = $('<div class="ci-root"><div class="ci-page"><div class="ci-loading">Загрузка…</div></div></div>');
+    var $page = $root.find('.ci-page');
     var loaded = false;
     var contentReady = false;
     var lastFocused = null;
     var self = this;
 
     this.create = function () {
-      scroll.body().append($body);
       this.load();
       return this.render();
     };
 
     this.render = function () {
-      return scroll.render();
+      return $root;
     };
 
-    // Загрузка данных вынесена в отдельный метод — стандартный паттерн Lampa
     this.load = function () {
       fetchFullData(object.method, object.id, function (err, data) {
         if (loaded) return;
         loaded = true;
-        if (!$body) return;
-
+        if (!$page) return;
         if (err || !data) {
-          $body.html('<div class="ci-error">Не удалось загрузить данные TMDB</div>');
+          $page.html('<div class="ci-error">Не удалось загрузить данные TMDB</div>');
           return;
         }
-
         self.build(data);
       });
     };
 
     this.build = function (data) {
-      $body.empty();
+      $page.empty();
 
       var $hero = renderHero(data);
-      if ($hero) $body.append($hero);
+      if ($hero) $page.append($hero);
 
-      $body.append(renderOverview(data));
+      $page.append(renderOverview(data));
 
       var $facts = renderFactsSection(buildFacts(data));
-      if ($facts) $body.append($facts);
+      if ($facts) $page.append($facts);
 
       var $cast = renderCastSection(data.credits);
-      if ($cast) $body.append($cast);
+      if ($cast) $page.append($cast);
 
       var recs = (data.recommendations && data.recommendations.results) || [];
       var recTitle = 'Похожие';
@@ -415,73 +401,57 @@
         recTitle = 'Похожие (по жанру)';
       }
       var $recs = renderRecsSection(recs.slice(0, 30), object.method, recTitle);
-      if ($recs) $body.append($recs);
+      if ($recs) $page.append($recs);
 
-      // Hover:focus в bylampa не доходит до наших селекторов —
-      // обходимся без него, обновляем scroll напрямую из обработчиков клавиш.
       contentReady = true;
 
-      // ── ГЛАВНЫЙ ТРЮК: программно воспроизводим то,
-      // что делал пользователь руками — head → content.
-      // Именно это «будит» Navigator и наш toggle handler в bylampa.
+      // Включаем контроллер и ставим фокус
       setTimeout(function () {
         try {
-          Lampa.Controller.toggle('head');
-          setTimeout(function () {
-            Lampa.Controller.toggle('content');
-          }, 30);
-        } catch (er) {
           Lampa.Controller.toggle('content');
+        } catch (e) {
+          console.error('[Card Insight] toggle error:', e);
         }
-      }, 50);
+      }, 30);
     };
 
-    // Вспомогательная функция: после движения фокуса прокрутить контейнер.
-    // Используем ДВА механизма параллельно:
-    // 1) Lampa.Scroll.update — стандартный путь Lampa (если работает)
-    // 2) native scrollIntoView — браузерный, работает в любом WebView
-    function syncScrollToFocus() {
-      // requestAnimationFrame даёт DOM один цикл рендера на смену класса .focus
+    // КЛЮЧЕВАЯ ФУНКЦИЯ: скролл за фокусом через нативный API
+    function scrollToFocus() {
       var raf = window.requestAnimationFrame || function (cb) { return setTimeout(cb, 16); };
       raf(function () {
-        var focused = scroll.render().find('.selector.focus')[0];
+        var focused = $root.find('.selector.focus')[0];
         if (!focused) return;
         lastFocused = focused;
-
-        // Механизм 1: Lampa.Scroll
-        try { scroll.update($(focused), true); } catch (e) {}
-
-        // Механизм 2: нативный браузерный scroll
         try {
-          if (typeof focused.scrollIntoView === 'function') {
-            focused.scrollIntoView({
-              behavior: 'auto',
-              block: 'nearest',
-              inline: 'nearest'
-            });
-          }
-        } catch (e) {}
+          focused.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'nearest' });
+        } catch (e) {
+          // Древние WebView без scrollIntoView с options
+          try { focused.scrollIntoView(false); } catch (er) {}
+        }
       });
     }
 
     this.start = function () {
       Lampa.Controller.add('content', {
         toggle: function () {
-          Lampa.Controller.collectionSet(scroll.render());
+          Lampa.Controller.collectionSet($root);
           if (contentReady) {
-            var target = (lastFocused && scroll.render()[0] && $.contains(scroll.render()[0], lastFocused))
+            var target = (lastFocused && $.contains($root[0], lastFocused))
               ? lastFocused
-              : scroll.render().find('.selector').first()[0];
-            if (target) Lampa.Controller.collectionFocus(target, scroll.render());
+              : $root.find('.selector').first()[0];
+            if (target) {
+              Lampa.Controller.collectionFocus(target, $root);
+              scrollToFocus();
+            }
           }
         },
         update: function () {
-          Lampa.Controller.collectionSet(scroll.render());
+          Lampa.Controller.collectionSet($root);
         },
         left: function () {
           if (typeof Navigator !== 'undefined' && Navigator.canmove && Navigator.canmove('left')) {
             Navigator.move('left');
-            syncScrollToFocus();
+            scrollToFocus();
           } else {
             Lampa.Controller.toggle('menu');
           }
@@ -489,13 +459,13 @@
         right: function () {
           if (typeof Navigator !== 'undefined' && Navigator.move) {
             Navigator.move('right');
-            syncScrollToFocus();
+            scrollToFocus();
           }
         },
         up: function () {
           if (typeof Navigator !== 'undefined' && Navigator.canmove && Navigator.canmove('up')) {
             Navigator.move('up');
-            syncScrollToFocus();
+            scrollToFocus();
           } else {
             Lampa.Controller.toggle('head');
           }
@@ -503,7 +473,7 @@
         down: function () {
           if (typeof Navigator !== 'undefined' && Navigator.move) {
             Navigator.move('down');
-            syncScrollToFocus();
+            scrollToFocus();
           }
         },
         back: this.back
@@ -511,14 +481,14 @@
       Lampa.Controller.toggle('content');
     };
 
-    this.pause = function () {};
-    this.stop = function () {};
-    this.back = function () { Lampa.Activity.backward(); };
+    this.pause   = function () {};
+    this.stop    = function () {};
+    this.back    = function () { Lampa.Activity.backward(); };
     this.destroy = function () {
       network.clear();
-      scroll.destroy();
-      if ($body) $body.remove();
-      $body = null;
+      if ($root) $root.remove();
+      $root = null;
+      $page = null;
     };
   }
 
@@ -590,7 +560,7 @@
     injectStyles();
     registerComponent();
     injectButton();
-    console.log('[Card Insight v3] готов');
+    console.log('[Card Insight v4] готов');
   }
 
   if (window.appready) initialize();
