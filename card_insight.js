@@ -381,8 +381,6 @@
         toggle: function () {
           Lampa.Controller.collectionSet(scroll.render());
           if (contentReady) {
-            // Восстанавливаем последний сфокусированный элемент,
-            // или ставим фокус на первый селектор.
             var target = (lastFocused && $.contains(scroll.render()[0], lastFocused))
               ? lastFocused
               : scroll.render().find('.selector').first()[0];
@@ -393,15 +391,25 @@
           Lampa.Controller.collectionSet(scroll.render());
         },
         left: function () {
-          if (Navigator.canmove('left')) Navigator.move('left');
-          else Lampa.Controller.toggle('menu');
+          if (typeof Navigator !== 'undefined' && Navigator.canmove && Navigator.canmove('left')) {
+            Navigator.move('left');
+          } else {
+            Lampa.Controller.toggle('menu');
+          }
         },
-        right: function () { Navigator.move('right'); },
+        right: function () {
+          if (typeof Navigator !== 'undefined' && Navigator.move) Navigator.move('right');
+        },
         up: function () {
-          if (Navigator.canmove('up')) Navigator.move('up');
-          else Lampa.Controller.toggle('head');
+          if (typeof Navigator !== 'undefined' && Navigator.canmove && Navigator.canmove('up')) {
+            Navigator.move('up');
+          } else {
+            Lampa.Controller.toggle('head');
+          }
         },
-        down: function () { Navigator.move('down'); },
+        down: function () {
+          if (typeof Navigator !== 'undefined' && Navigator.move) Navigator.move('down');
+        },
         back: this.back
       });
       Lampa.Controller.toggle('content');
