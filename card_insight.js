@@ -436,16 +436,32 @@
       }, 50);
     };
 
-    // Вспомогательная функция: после движения фокуса прокрутить контейнер
+    // Вспомогательная функция: после движения фокуса прокрутить контейнер.
+    // Используем ДВА механизма параллельно:
+    // 1) Lampa.Scroll.update — стандартный путь Lampa (если работает)
+    // 2) native scrollIntoView — браузерный, работает в любом WebView
     function syncScrollToFocus() {
-      // Даём Navigator один тик чтобы переставить класс .focus
-      setTimeout(function () {
+      // requestAnimationFrame даёт DOM один цикл рендера на смену класса .focus
+      var raf = window.requestAnimationFrame || function (cb) { return setTimeout(cb, 16); };
+      raf(function () {
         var focused = scroll.render().find('.selector.focus')[0];
-        if (focused) {
-          lastFocused = focused;
-          scroll.update($(focused), true);
-        }
-      }, 0);
+        if (!focused) return;
+        lastFocused = focused;
+
+        // Механизм 1: Lampa.Scroll
+        try { scroll.update($(focused), true); } catch (e) {}
+
+        // Механизм 2: нативный браузерный scroll
+        try {
+          if (typeof focused.scrollIntoView === 'function') {
+            focused.scrollIntoView({
+              behavior: 'auto',
+              block: 'nearest',
+              inline: 'nearest'
+            });
+          }
+        } catch (e) {}
+      });
     }
 
     this.start = function () {
