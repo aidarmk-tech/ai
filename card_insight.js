@@ -366,9 +366,11 @@
     var loaded = false;
     var contentReady = false;
     var lastFocused = null;
+    var self = this;
 
     this.create = function () {
       scroll.body().append($body);
+      this.load();
       return this.render();
     };
 
@@ -376,12 +378,81 @@
       return scroll.render();
     };
 
+    // Загрузка данных вынесена в отдельный метод — стандартный паттерн Lampa
+    this.load = function () {
+      fetchFullData(object.method, object.id, function (err, data) {
+        if (loaded) return;
+        loaded = true;
+        if (!$body) return;
+
+        if (err || !data) {
+          $body.html('<div class="ci-error">Не удалось загрузить данные TMDB</div>');
+          return;
+        }
+
+        self.build(data);
+      });
+    };
+
+    this.build = function (data) {
+      $body.empty();
+
+      var $hero = renderHero(data);
+      if ($hero) $body.append($hero);
+
+      $body.append(renderOverview(data));
+
+      var $facts = renderFactsSection(buildFacts(data));
+      if ($facts) $body.append($facts);
+
+      var $cast = renderCastSection(data.credits);
+      if ($cast) $body.append($cast);
+
+      var recs = (data.recommendations && data.recommendations.results) || [];
+      var recTitle = 'Похожие';
+      if (!recs.length) {
+        recs = (data.similar && data.similar.results) || [];
+        recTitle = 'Похожие (по жанру)';
+      }
+      var $recs = renderRecsSection(recs.slice(0, 30), object.method, recTitle);
+      if ($recs) $body.append($recs);
+
+      $body.find('.selector').on('hover:focus', function (e) {
+        lastFocused = e.currentTarget;
+        scroll.update($(e.currentTarget), true);
+      });
+
+      contentReady = true;
+
+      // ── ГЛАВНОЕ: имитируем то, что делает пользователь руками ──
+      // (head → content переключение). Это гарантированно
+      // пересобирает коллекцию Navigator после рендера контента.
+      try {
+        if (object.activity && object.activity.toggle) {
+          // Стандартный путь Lampa — есть в большинстве форков
+          object.activity.toggle();
+        }
+        // Дополнительный фолбэк для bylampa: имитируем уход и возврат
+        setTimeout(function () {
+          if (Lampa.Controller && Lampa.Controller.enabled().name === 'content') {
+            Lampa.Controller.collectionSet(scroll.render());
+            var first = scroll.render().find('.selector').first()[0];
+            if (first) Lampa.Controller.collectionFocus(first, scroll.render());
+          } else {
+            Lampa.Controller.toggle('content');
+          }
+        }, 50);
+      } catch (er) {
+        Lampa.Controller.toggle('content');
+      }
+    };
+
     this.start = function () {
       Lampa.Controller.add('content', {
         toggle: function () {
           Lampa.Controller.collectionSet(scroll.render());
           if (contentReady) {
-            var target = (lastFocused && $.contains(scroll.render()[0], lastFocused))
+            var target = (lastFocused && scroll.render()[0] && $.contains(scroll.render()[0], lastFocused))
               ? lastFocused
               : scroll.render().find('.selector').first()[0];
             if (target) Lampa.Controller.collectionFocus(target, scroll.render());
@@ -424,52 +495,6 @@
       if ($body) $body.remove();
       $body = null;
     };
-
-    // Загрузка данных
-    fetchFullData(object.method, object.id, function (err, data) {
-      if (loaded) return;
-      loaded = true;
-      if (!$body) return;
-
-      if (err || !data) {
-        $body.html('<div class="ci-error">Не удалось загрузить данные TMDB</div>');
-        return;
-      }
-
-      $body.empty();
-
-      var $hero = renderHero(data);
-      if ($hero) $body.append($hero);
-
-      $body.append(renderOverview(data));
-
-      var $facts = renderFactsSection(buildFacts(data));
-      if ($facts) $body.append($facts);
-
-      var $cast = renderCastSection(data.credits);
-      if ($cast) $body.append($cast);
-
-      var recs = (data.recommendations && data.recommendations.results) || [];
-      var recTitle = 'Похожие';
-      if (!recs.length) {
-        recs = (data.similar && data.similar.results) || [];
-        recTitle = 'Похожие (по жанру)';
-      }
-      var $recs = renderRecsSection(recs.slice(0, 30), object.method, recTitle);
-      if ($recs) $body.append($recs);
-
-      // Авто-скролл за фокусом + запоминание последнего фокуса
-      $body.find('.selector').on('hover:focus', function (e) {
-        lastFocused = e.currentTarget;
-        scroll.update($(e.currentTarget), true);
-      });
-
-      contentReady = true;
-      // Пересобираем коллекцию селекторов и ставим фокус на первый.
-      // Делаем через toggle('content') — это правильный путь Lampa,
-      // он вызывает наш toggle() ниже, где collectionSet + collectionFocus.
-      try { Lampa.Controller.toggle('content'); } catch (er) {}
-    });
   }
 
   // ====================================================
