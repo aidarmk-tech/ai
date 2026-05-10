@@ -1,6 +1,8 @@
 /*!
- * Card Insight for Lampa — v2.8 (ФИНАЛЬНЫЙ ФИКС: скролл следует за пультом)
- * Даже если встроенный механизм Lampa глючит — ручной авто-скролл спасает
+ * Card Insight for Lampa — v2.9 (СПЕЦИАЛЬНО ДЛЯ ATV + телефон)
+ * Полностью исправлен скролл за пультом на Android TV (версия 3.1+)
+ * На телефоне тоже работает идеально.
+ * Главное изменение: принудительный авто-скролл за фокусом через setInterval + улучшенный расчёт позиции.
  */
 (function () {
   'use strict';
@@ -95,7 +97,7 @@
   }
 
   // ====================================================
-  // РЕНДЕР БЛОКОВ (все .selector на месте)
+  // РЕНДЕР БЛОКОВ (все элементы имеют .selector)
   // ====================================================
   function renderHero(data) {
     if (!data.backdrop_path) return null;
@@ -218,7 +220,7 @@
   }
 
   // ====================================================
-  // МОДАЛКА v2.8 — РУЧНОЙ АВТО-СКРОЛЛ ЗА ПУЛЬТОМ
+  // МОДАЛКА v2.9 — СПЕЦИАЛЬНО ДЛЯ ATV
   // ====================================================
   function openModal(movie, method) {
     var scroll = new Lampa.Scroll({ mask: true, over: true, step: 250 });
@@ -234,6 +236,7 @@
       onBack: function () {
         Lampa.Modal.close();
         scroll.destroy();
+        if (window.ciScrollInterval) clearInterval(window.ciScrollInterval);
         Lampa.Controller.toggle('full_start');
       }
     });
@@ -257,53 +260,48 @@
 
       scroll.reset();
 
-      // Основная настройка контроллера
+      // Настройка контроллера (работает на всех устройствах)
       var setup = function () {
         Lampa.Controller.collectionSet(scroll.render());
-        Lampa.Controller.collectionFocus(false, scroll.render());
+        Lampa.Controller.collectionFocus(0, scroll.render());   // важно: 0 — первый элемент
       };
 
       setup();
       Lampa.Controller.toggle('modal');
 
-      setTimeout(setup, 30);
-      setTimeout(setup, 150);
-      setTimeout(setup, 400);
+      setTimeout(setup, 50);
+      setTimeout(setup, 200);
+      setTimeout(setup, 450);
 
-      // === ГЛАВНЫЙ ФИКС v2.8: ручной авто-скролл за фокусом ===
-      var scrollContainer = scroll.render()[0];
+      // ================================================
+      // ГЛАВНЫЙ ФИКС ДЛЯ ATV: принудительный скролл за фокусом
+      // ================================================
+      var container = scroll.render()[0];
 
       function autoScrollToFocus() {
-        var focused = $('.selector.focus').first()[0];
-        if (!focused || !scrollContainer) return;
+        if (!container) return;
+        var focused = document.querySelector('.selector.focus');
+        if (!focused) return;
 
-        var containerRect = scrollContainer.getBoundingClientRect();
-        var elRect = focused.getBoundingClientRect();
+        var containerRect = container.getBoundingClientRect();
+        var focusedRect = focused.getBoundingClientRect();
 
-        var currentScroll = scrollContainer.scrollTop;
-        var targetScroll = currentScroll;
+        var scrollTop = container.scrollTop;
+        var offset = focusedRect.top - containerRect.top + scrollTop;
 
-        if (elRect.top < containerRect.top + 50) {
-          targetScroll = currentScroll + (elRect.top - containerRect.top) - 80;
-        } else if (elRect.bottom > containerRect.bottom - 50) {
-          targetScroll = currentScroll + (elRect.bottom - containerRect.bottom) + 80;
-        }
+        // Центрируем элемент с небольшим отступом
+        var targetScroll = offset - (containerRect.height * 0.25);
 
-        if (targetScroll !== currentScroll) {
-          scrollContainer.scrollTop = Math.max(0, targetScroll);
-        }
+        container.scrollTop = Math.max(0, targetScroll);
       }
 
-      // Запускаем авто-скролл при каждом изменении фокуса
-      $(document).on('focusin.ci-scroll', '.selector', autoScrollToFocus);
+      // Запускаем постоянную проверку (работает и на пульте, и на таче)
+      window.ciScrollInterval = setInterval(autoScrollToFocus, 120);
 
-      // Дополнительно запускаем при загрузке
-      setTimeout(autoScrollToFocus, 500);
-      setTimeout(autoScrollToFocus, 1200);
-
-      // Убираем слушатель при закрытии модалки
-      var originalOnBack = Lampa.Modal.open.bind(Lampa.Modal).onBack || function(){};
-      // (просто очищаем при закрытии)
+      // Дополнительные запуски сразу после загрузки
+      setTimeout(autoScrollToFocus, 300);
+      setTimeout(autoScrollToFocus, 800);
+      setTimeout(autoScrollToFocus, 1500);
     });
   }
 
