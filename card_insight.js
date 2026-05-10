@@ -68,7 +68,14 @@
       '.ci-card__year{opacity:0.55;font-size:0.9em;margin-top:0.3em}',
 
       /* Кнопка в карточке */
-      '.full-start__button.view--ci svg{margin-right:0.4em;vertical-align:middle}'
+      '.full-start__button.view--ci svg{margin-right:0.4em;vertical-align:middle}',
+
+      /* Невидимые "якоря" фокуса для текстовых блоков —
+         пульт по ним проходит и тащит скролл, но визуально не видны */
+      '.ci-focus-anchor{outline:none}',
+      '.ci-focus-anchor.focus{outline:none}',
+      '.ci-overview-block.focus{background:rgba(255,255,255,0.04);border-radius:0.4em}',
+      '.ci-fact.focus{background:rgba(255,255,255,0.15);box-shadow:0 0 0 0.15em #ffa726}'
     ].join('\n');
 
     var style = document.createElement('style');
@@ -246,7 +253,11 @@
     }
 
     var overview = data.overview && data.overview.trim() ? data.overview : 'Описание отсутствует.';
-    $wrap.append('<div class="ci-overview">' + escapeHtml(overview) + '</div>');
+    $wrap.append(
+      '<div class="ci-overview ci-overview-block selector ci-focus-anchor" tabindex="0">' +
+        escapeHtml(overview) +
+      '</div>'
+    );
     return $wrap;
   }
 
@@ -258,7 +269,7 @@
     facts.forEach(function (f) {
       var label = f.label ? '<span class="ci-fact__label">' + escapeHtml(f.label) + ':</span> ' : '';
       $list.append(
-        '<div class="ci-fact">' +
+        '<div class="ci-fact selector" tabindex="0">' +
           '<div class="ci-fact__icon">' + f.icon + '</div>' +
           '<div class="ci-fact__text">' + label + escapeHtml(f.text) + '</div>' +
         '</div>'
