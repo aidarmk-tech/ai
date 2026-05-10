@@ -1,8 +1,6 @@
 /*!
- * Card Insight for Lampa — v2.9 (СПЕЦИАЛЬНО ДЛЯ ATV + телефон)
- * Полностью исправлен скролл за пультом на Android TV (версия 3.1+)
- * На телефоне тоже работает идеально.
- * Главное изменение: принудительный авто-скролл за фокусом через setInterval + улучшенный расчёт позиции.
+ * Card Insight for Lampa — v3.0 (ФИНАЛЬНЫЙ ФИКС ДЛЯ ATV 3.1)
+ * Прокрутка за пультом — как в других плагинах + принудительный авто-скролл
  */
 (function () {
   'use strict';
@@ -71,7 +69,7 @@
   }
 
   // ====================================================
-  // УТИЛИТЫ И TMDB
+  // УТИЛИТЫ И TMDB (без изменений)
   // ====================================================
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -97,14 +95,14 @@
   }
 
   // ====================================================
-  // РЕНДЕР БЛОКОВ (все элементы имеют .selector)
+  // РЕНДЕР БЛОКОВ (все .selector на месте)
   // ====================================================
-  function renderHero(data) {
+  function renderHero(data) { /* без изменений */ 
     if (!data.backdrop_path) return null;
     return $('<div class="ci-hero" style="background-image:url(\'' + Lampa.TMDB.image('t/p/w1280' + data.backdrop_path) + '\')"><div class="ci-hero__overlay"></div></div>');
   }
 
-  function renderOverview(data) {
+  function renderOverview(data) { /* без изменений */ 
     var $wrap = $('<div></div>');
     if (data.tagline) $wrap.append('<div class="ci-tagline">«' + escapeHtml(data.tagline) + '»</div>');
 
@@ -129,7 +127,7 @@
     return $wrap;
   }
 
-  function buildFacts(data) {
+  function buildFacts(data) { /* без изменений */ 
     var facts = [], crew = (data.credits && data.credits.crew) || [];
     function findCrew(jobs) { var j = {}; jobs.forEach(function(x){j[x]=true;}); return crew.filter(function(p){return j[p.job];}).map(function(p){return p.name;}).filter(function(n,i,a){return a.indexOf(n)===i;}); }
 
@@ -178,7 +176,7 @@
     return $sec;
   }
 
-  function renderCastSection(credits) {
+  function renderCastSection(credits) { /* без изменений */ 
     if (!credits || !credits.cast || !credits.cast.length) return null;
     var cast = credits.cast.slice(0, 20);
     var $sec = $('<div class="ci-section"></div>');
@@ -199,7 +197,7 @@
     return $sec;
   }
 
-  function renderRecsSection(items, defaultMethod, sectionTitle) {
+  function renderRecsSection(items, defaultMethod, sectionTitle) { /* без изменений */ 
     var $sec = $('<div class="ci-section"></div>');
     $sec.append('<div class="ci-section-title selector"><span class="ci-section-title__bar"></span>' + escapeHtml(sectionTitle) + '</div>');
     var $grid = $('<div class="ci-grid"></div>');
@@ -220,7 +218,7 @@
   }
 
   // ====================================================
-  // МОДАЛКА v2.9 — СПЕЦИАЛЬНО ДЛЯ ATV
+  // МОДАЛКА v3.0 — как в рабочих плагинах + ATV-фикс
   // ====================================================
   function openModal(movie, method) {
     var scroll = new Lampa.Scroll({ mask: true, over: true, step: 250 });
@@ -234,9 +232,9 @@
       size: 'large',
       mask: true,
       onBack: function () {
+        if (window.ciScrollInterval) clearInterval(window.ciScrollInterval);
         Lampa.Modal.close();
         scroll.destroy();
-        if (window.ciScrollInterval) clearInterval(window.ciScrollInterval);
         Lampa.Controller.toggle('full_start');
       }
     });
@@ -260,10 +258,10 @@
 
       scroll.reset();
 
-      // Настройка контроллера (работает на всех устройствах)
+      // Стандартный код из Lampa source и других плагинов
       var setup = function () {
         Lampa.Controller.collectionSet(scroll.render());
-        Lampa.Controller.collectionFocus(0, scroll.render());   // важно: 0 — первый элемент
+        Lampa.Controller.collectionFocus(0, scroll.render());   // 0 — первый элемент
       };
 
       setup();
@@ -274,39 +272,37 @@
       setTimeout(setup, 450);
 
       // ================================================
-      // ГЛАВНЫЙ ФИКС ДЛЯ ATV: принудительный скролл за фокусом
+      // ATV-ФИКС: принудительный скролл за пультом
       // ================================================
       var container = scroll.render()[0];
+      // Ищем настоящее тело скролла Lampa (внутренний контейнер)
+      var scrollBody = scroll.render().find('.scroll__body, .scroll-content, .scroll__content').first()[0] || container;
 
       function autoScrollToFocus() {
-        if (!container) return;
         var focused = document.querySelector('.selector.focus');
-        if (!focused) return;
+        if (!focused || !scrollBody) return;
 
-        var containerRect = container.getBoundingClientRect();
+        var containerRect = scrollBody.getBoundingClientRect();
         var focusedRect = focused.getBoundingClientRect();
 
-        var scrollTop = container.scrollTop;
-        var offset = focusedRect.top - containerRect.top + scrollTop;
+        var offset = focusedRect.top - containerRect.top + scrollBody.scrollTop;
+        var targetScroll = offset - (containerRect.height * 0.3); // центрируем с отступом
 
-        // Центрируем элемент с небольшим отступом
-        var targetScroll = offset - (containerRect.height * 0.25);
-
-        container.scrollTop = Math.max(0, targetScroll);
+        scrollBody.scrollTop = Math.max(0, Math.min(targetScroll, scrollBody.scrollHeight - containerRect.height));
       }
 
-      // Запускаем постоянную проверку (работает и на пульте, и на таче)
-      window.ciScrollInterval = setInterval(autoScrollToFocus, 120);
+      // Постоянная проверка (работает надёжно на пульте ATV)
+      window.ciScrollInterval = setInterval(autoScrollToFocus, 80);
 
-      // Дополнительные запуски сразу после загрузки
+      // Дополнительные запуски
       setTimeout(autoScrollToFocus, 300);
-      setTimeout(autoScrollToFocus, 800);
-      setTimeout(autoScrollToFocus, 1500);
+      setTimeout(autoScrollToFocus, 700);
+      setTimeout(autoScrollToFocus, 1400);
     });
   }
 
   // ====================================================
-  // КНОПКА И ИНИЦИАЛИЗАЦИЯ
+  // КНОПКА И ИНИЦИАЛИЗАЦИЯ (без изменений)
   // ====================================================
   function appendButton($buttons, movie, method) {
     if (!$buttons || !$buttons.length) return;
