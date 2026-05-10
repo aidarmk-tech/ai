@@ -18,10 +18,10 @@
   function injectStyles() {
     if (document.getElementById('card-insight-styles')) return;
     var css = [
-      /* Корневой контейнер — фикс. высота + CSS-скролл */
-      '.ci-root{position:absolute;top:0;left:0;right:0;bottom:0;overflow-y:auto;overflow-x:hidden;background:#000;-webkit-overflow-scrolling:touch}',
-      '.ci-page{padding:1.5em 2em 6em}',
-      '.ci-loading{padding:4em 1em;text-align:center;opacity:0.7;font-size:1.3em}',
+      /* Корневой контейнер. БЕЗ position:absolute — диагностика */
+      '.ci-root{width:100%;min-height:100vh;background:#1a0033;color:#fff;overflow-y:auto;overflow-x:hidden}',
+      '.ci-page{padding:1.5em 2em 6em;min-height:100vh}',
+      '.ci-loading{padding:4em 1em;text-align:center;font-size:2em;color:#ffff00;font-weight:bold}',
       '.ci-error{padding:2em 1em;text-align:center;color:#ff7e7e;opacity:0.85;font-size:1.2em}',
 
       /* Hero — широкий бэкдроп */
@@ -350,8 +350,9 @@
   // КОМПОНЕНТ ACTIVITY (БЕЗ Lampa.Scroll, на чистом CSS)
   // ====================================================
   function CardInsightActivity(object) {
+    console.log('[CI] === constructor вызван ===', object);
     var network = new Lampa.Reguest();
-    var $root = $('<div class="ci-root"><div class="ci-page"><div class="ci-loading">Загрузка…</div></div></div>');
+    var $root = $('<div class="ci-root"><div class="ci-page"><div class="ci-loading">ЗАГРУЗКА...<br>method=' + (object.method || '?') + ' id=' + (object.id || '?') + '</div></div></div>');
     var $page = $root.find('.ci-page');
     var loaded = false;
     var contentReady = false;
@@ -359,21 +360,28 @@
     var self = this;
 
     this.create = function () {
+      console.log('[CI] create() вызван');
       this.load();
       return this.render();
     };
 
     this.render = function () {
+      console.log('[CI] render() вызван, $root существует:', !!$root, 'детей:', $root ? $root.children().length : 0);
       return $root;
     };
 
     this.load = function () {
+      console.log('[CI] load() начало fetch');
       fetchFullData(object.method, object.id, function (err, data) {
+        console.log('[CI] fetch завершён. err:', err, 'data:', !!data);
         if (loaded) return;
         loaded = true;
-        if (!$page) return;
+        if (!$page) {
+          console.warn('[CI] $page null — пропуск');
+          return;
+        }
         if (err || !data) {
-          $page.html('<div class="ci-error">Не удалось загрузить данные TMDB</div>');
+          $page.html('<div class="ci-error">Не удалось загрузить TMDB: ' + (err && err.message ? err.message : 'нет данных') + '</div>');
           return;
         }
         self.build(data);
@@ -381,6 +389,7 @@
     };
 
     this.build = function (data) {
+      console.log('[CI] build() начало рендера. title:', data.title || data.name);
       $page.empty();
 
       var $hero = renderHero(data);
@@ -404,13 +413,14 @@
       if ($recs) $page.append($recs);
 
       contentReady = true;
+      console.log('[CI] build() закончил, селекторов:', $root.find('.selector').length);
 
-      // Включаем контроллер и ставим фокус
       setTimeout(function () {
         try {
+          console.log('[CI] toggle("content")');
           Lampa.Controller.toggle('content');
         } catch (e) {
-          console.error('[Card Insight] toggle error:', e);
+          console.error('[CI] toggle error:', e);
         }
       }, 30);
     };
