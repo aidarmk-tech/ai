@@ -1,12 +1,12 @@
 /*!
- * Card Insight for Lampa — v2.6 (Фикс селекторов в фактах + усиленный скролл)
- * Теперь пульт проходит через ВСЕ блоки (включая "Интересные факты")
+ * Card Insight for Lampa — v2.7 (Фикс: пульт + авто-скролл контента)
+ * Теперь скролл следует за фокусом даже в динамической модалке
  */
 (function () {
   'use strict';
 
   // ====================================================
-  // СТИЛИ (добавил стиль для выделения фактов при фокусе)
+  // СТИЛИ
   // ====================================================
   function injectStyles() {
     if (document.getElementById('card-insight-styles')) return;
@@ -15,11 +15,9 @@
       '.ci-loading{padding:3em 1em;text-align:center;opacity:0.7;font-size:1.2em}',
       '.ci-error{padding:1.5em 1em;text-align:center;color:#ff7e7e;opacity:0.85}',
 
-      /* Hero */
       '.ci-hero{height:11em;margin:0 0 1em;border-radius:0.4em;overflow:hidden;position:relative;background:#111 center/cover no-repeat}',
       '.ci-hero__overlay{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,0.05) 40%,rgba(0,0,0,0.65) 100%)}',
 
-      /* Основные блоки */
       '.ci-tagline{font-style:italic;margin:0 0 0.8em;opacity:0.85;font-size:1.15em;padding:0 0.2em}',
       '.ci-meta{display:flex;flex-wrap:wrap;gap:0.5em 1.1em;margin-bottom:1em;opacity:0.78;font-size:1.05em;padding:0 0.2em}',
       '.ci-meta__item{white-space:nowrap}',
@@ -33,18 +31,18 @@
       '.ci-section-title.focus{background:rgba(255,255,255,0.08);border-color:#ffa726;transform:translateX(0.2em)}',
       '.ci-section-title__bar{display:inline-block;width:0.25em;height:1em;background:#ffa726;border-radius:0.1em}',
 
-      /* ФАКТЫ — теперь с фокусом */
       '.ci-facts{display:grid;grid-template-columns:repeat(auto-fill,minmax(20em,1fr));gap:0.55em}',
       '.ci-fact{display:flex;gap:0.7em;padding:0.7em 0.9em;background:rgba(255,255,255,0.05);border-radius:0.4em;align-items:center;border:0.06em solid rgba(255,255,255,0.06);transition:all 0.15s}',
       '.ci-fact.selector.focus{background:rgba(255,255,255,0.12);border-color:#ffa726;transform:translateY(-2px)}',
+
       '.ci-fact__icon{font-size:1.4em;flex-shrink:0;line-height:1}',
       '.ci-fact__text{font-size:1em;line-height:1.4}',
       '.ci-fact__label{opacity:0.6;margin-right:0.3em}',
 
-      /* Актёры и рекомендации */
       '.ci-cast{display:grid;grid-template-columns:repeat(auto-fill,minmax(8em,1fr));gap:0.8em}',
       '.ci-actor{cursor:pointer;border-radius:0.4em;overflow:hidden;background:rgba(255,255,255,0.05);transition:transform 0.15s,background 0.15s}',
       '.ci-actor.focus,.ci-actor:hover{transform:scale(1.05);background:rgba(255,255,255,0.18);box-shadow:0 0 0 0.18em #ffa726}',
+
       '.ci-actor__photo{position:relative;padding-top:130%;background:#222 center/cover no-repeat}',
       '.ci-actor__no-photo{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:2.2em;opacity:0.3}',
       '.ci-actor__name{padding:0.4em 0.55em 0;font-weight:600;font-size:0.95em;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:2.5em}',
@@ -53,6 +51,7 @@
       '.ci-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(13em,1fr));gap:1em}',
       '.ci-card{cursor:pointer;border-radius:0.4em;overflow:hidden;background:rgba(255,255,255,0.05);transition:transform 0.15s,background 0.15s;position:relative}',
       '.ci-card.focus,.ci-card:hover{transform:scale(1.04);background:rgba(255,255,255,0.18);box-shadow:0 0 0 0.2em #ffa726}',
+
       '.ci-card__poster{position:relative;padding-top:150%;background:#222 center/cover no-repeat}',
       '.ci-card__no-poster{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:2.5em;opacity:0.25}',
       '.ci-card__rating{position:absolute;top:0.4em;right:0.4em;background:rgba(0,0,0,0.78);padding:0.18em 0.5em;border-radius:0.25em;font-size:0.9em}',
@@ -60,7 +59,6 @@
       '.ci-card__title{font-weight:600;font-size:1em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.3;min-height:2.6em}',
       '.ci-card__year{opacity:0.55;font-size:0.85em;margin-top:0.3em}',
 
-      /* Кнопка */
       '.full-start__button.view--ci svg{margin-right:0.4em;vertical-align:middle;width:1.4em;height:1.4em;color:#ffa726}'
     ].join('\n');
 
@@ -71,7 +69,7 @@
   }
 
   // ====================================================
-  // УТИЛИТЫ И TMDB API (без изменений)
+  // УТИЛИТЫ
   // ====================================================
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -97,7 +95,7 @@
   }
 
   // ====================================================
-  // РЕНДЕР БЛОКОВ
+  // РЕНДЕР (все блоки с .selector)
   // ====================================================
   function renderHero(data) {
     if (!data.backdrop_path) return null;
@@ -129,8 +127,7 @@
     return $wrap;
   }
 
-  function buildFacts(data) { /* без изменений */ 
-    // ... (весь код buildFacts остался прежним)
+  function buildFacts(data) {
     var facts = [], crew = (data.credits && data.credits.crew) || [];
     function findCrew(jobs) { var j = {}; jobs.forEach(function(x){j[x]=true;}); return crew.filter(function(p){return j[p.job];}).map(function(p){return p.name;}).filter(function(n,i,a){return a.indexOf(n)===i;}); }
 
@@ -173,14 +170,12 @@
     var $list = $('<div class="ci-facts"></div>');
     facts.forEach(function (f) {
       var label = f.label ? '<span class="ci-fact__label">' + escapeHtml(f.label) + ':</span> ' : '';
-      // ←←←← ГЛАВНОЕ ИЗМЕНЕНИЕ: добавили .selector
       $list.append('<div class="ci-fact selector"><div class="ci-fact__icon">' + f.icon + '</div><div class="ci-fact__text">' + label + escapeHtml(f.text) + '</div></div>');
     });
     $sec.append($list);
     return $sec;
   }
 
-  // renderCastSection, renderRecsSection и openModal — без изменений (оставил как в v2.5)
   function renderCastSection(credits) {
     if (!credits || !credits.cast || !credits.cast.length) return null;
     var cast = credits.cast.slice(0, 20);
@@ -223,7 +218,7 @@
   }
 
   // ====================================================
-  // МОДАЛКА (v2.6 — те же усиленные вызовы)
+  // МОДАЛКА v2.7 — главный фикс авто-скролла
   // ====================================================
   function openModal(movie, method) {
     var scroll = new Lampa.Scroll({ mask: true, over: true, step: 250 });
@@ -262,22 +257,41 @@
 
       scroll.reset();
 
-      var setupController = function () {
+      // === Основная настройка контроллера ===
+      var setup = function () {
         Lampa.Controller.collectionSet(scroll.render());
         Lampa.Controller.collectionFocus(false, scroll.render());
       };
 
-      setupController();
+      setup();
       Lampa.Controller.toggle('modal');
 
-      setTimeout(setupController, 50);
-      setTimeout(setupController, 200);
-      setTimeout(() => Lampa.Controller.collectionFocus(false, scroll.render()), 400);
+      // Многоуровневые попытки (на разных версиях Lampa)
+      setTimeout(setup, 50);
+      setTimeout(setup, 200);
+      setTimeout(setup, 450);
+
+      // === ГЛАВНЫЙ ФИКС: заставляем скролл следовать за фокусом ===
+      Lampa.Controller.listener.add('modal', function (e) {
+        if (e.type === 'focus' && e.target) {
+          try {
+            // Пытаемся использовать встроенный метод скролла
+            if (typeof scroll.scrollTo === 'function') {
+              scroll.scrollTo(e.target);
+            } else if (typeof scroll.to === 'function') {
+              scroll.to(e.target);
+            } else {
+              // Fallback — переустанавливаем фокус
+              Lampa.Controller.collectionFocus(false, scroll.render());
+            }
+          } catch (err) {}
+        }
+      });
     });
   }
 
   // ====================================================
-  // КНОПКА И ИНИЦИАЛИЗАЦИЯ (без изменений)
+  // КНОПКА + ИНИЦИАЛИЗАЦИЯ
   // ====================================================
   function appendButton($buttons, movie, method) {
     if (!$buttons || !$buttons.length) return;
