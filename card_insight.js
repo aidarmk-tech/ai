@@ -1,5 +1,5 @@
 /*!
- * Card Insight for Lampa — v2.1 (Исправленная навигация и иконки)
+ * Card Insight for Lampa — v2.2 (Рабочая прокрутка модалки)
  * Кнопка "Подробнее" на карточке: бэкдроп, описание, факты,
  * актёры и рекомендации TMDB.
  */
@@ -12,7 +12,12 @@
   function injectStyles() {
     if (document.getElementById('card-insight-styles')) return;
     var css = [
-      '.ci-body{padding:0}',
+      /* КЛЮЧЕВОЕ: Ограничиваем высоту окна и включаем скролл */
+      '.ci-body{padding:0; position:relative; max-height:72vh; overflow-y:auto; overflow-x:hidden; scroll-behavior:smooth}',
+      /* Стилизация скроллбара под дизайн Lampa */
+      '.ci-body::-webkit-scrollbar{width:0.4em; background:rgba(255,255,255,0.05); border-radius:0.2em}',
+      '.ci-body::-webkit-scrollbar-thumb{background:#ffa726; border-radius:0.2em}',
+
       '.ci-loading{padding:3em 1em;text-align:center;opacity:0.7;font-size:1.2em}',
       '.ci-error{padding:1.5em 1em;text-align:center;color:#ff7e7e;opacity:0.85}',
 
@@ -26,17 +31,17 @@
       '.ci-meta__item{white-space:nowrap}',
       '.ci-meta__item--rating{color:#ffd54f;font-weight:700}',
       
-      /* Описание (сделано фокусируемым для прокрутки) */
+      /* Описание */
       '.ci-overview{line-height:1.55;margin:0 0 1.5em;font-size:1.12em;padding:0.6em;border-radius:0.4em;transition:background 0.15s, transform 0.15s, border-color 0.15s; border: 1px solid transparent}',
       '.ci-overview.focus{background:rgba(255,255,255,0.08);border-color:#ffa726;transform:scale(1.01);box-shadow:0 0.2em 0.5em rgba(0,0,0,0.2)}',
 
-      /* Заголовки секций (тоже фокусируемые "ступеньки" для пульта) */
+      /* Заголовки секций (ступеньки навигации) */
       '.ci-section{margin-bottom:1.8em}',
       '.ci-section-title{font-size:1.4em;font-weight:700;margin:0 0 0.7em;padding:0.3em 0.4em;display:flex;align-items:center;gap:0.5em;border-radius:0.4em;transition:background 0.15s, transform 0.15s; border: 1px solid transparent}',
       '.ci-section-title.focus{background:rgba(255,255,255,0.08);border-color:#ffa726;transform:translateX(0.2em)}',
       '.ci-section-title__bar{display:inline-block;width:0.25em;height:1em;background:#ffa726;border-radius:0.1em}',
 
-      /* Факты (без фокуса, чтобы пульт не застревал в мелкой сетке) */
+      /* Факты */
       '.ci-facts{display:grid;grid-template-columns:repeat(auto-fill,minmax(20em,1fr));gap:0.55em}',
       '.ci-fact{display:flex;gap:0.7em;padding:0.7em 0.9em;background:rgba(255,255,255,0.05);border-radius:0.4em;align-items:center;border:0.06em solid rgba(255,255,255,0.06)}',
       '.ci-fact__icon{font-size:1.4em;flex-shrink:0;line-height:1}',
@@ -63,7 +68,7 @@
       '.ci-card__title{font-weight:600;font-size:1em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.3;min-height:2.6em}',
       '.ci-card__year{opacity:0.55;font-size:0.85em;margin-top:0.3em}',
 
-      /* Кнопка в карточке (на экране фильма) */
+      /* Кнопка в карточке */
       '.full-start__button.view--ci svg{margin-right:0.4em;vertical-align:middle;width:1.4em;height:1.4em;color:#ffa726}'
     ].join('\n');
 
@@ -128,7 +133,6 @@
     }
 
     var overview = data.overview && data.overview.trim() ? data.overview : 'Описание отсутствует.';
-    // Блок описания как selector для старта фокуса
     $wrap.append('<div class="ci-overview selector">' + escapeHtml(overview) + '</div>');
     return $wrap;
   }
@@ -172,12 +176,10 @@
   function renderFactsSection(facts) {
     if (!facts.length) return null;
     var $sec = $('<div class="ci-section"></div>');
-    // Заголовок - это точка фокуса для пульта
     $sec.append('<div class="ci-section-title selector"><span class="ci-section-title__bar"></span>Интересные факты</div>');
     var $list = $('<div class="ci-facts"></div>');
     facts.forEach(function (f) {
       var label = f.label ? '<span class="ci-fact__label">' + escapeHtml(f.label) + ':</span> ' : '';
-      // Сами факты не имеют фокуса, чтобы не забивать навигацию пульта
       $list.append('<div class="ci-fact"><div class="ci-fact__icon">' + f.icon + '</div><div class="ci-fact__text">' + label + escapeHtml(f.text) + '</div></div>');
     });
     $sec.append($list);
@@ -188,7 +190,6 @@
     if (!credits || !credits.cast || !credits.cast.length) return null;
     var cast = credits.cast.slice(0, 20);
     var $sec = $('<div class="ci-section"></div>');
-    // Заголовок - точка фокуса
     $sec.append('<div class="ci-section-title selector"><span class="ci-section-title__bar"></span>В ролях</div>');
     var $row = $('<div class="ci-cast"></div>');
     cast.forEach(function (person) {
@@ -208,7 +209,6 @@
 
   function renderRecsSection(items, defaultMethod, sectionTitle) {
     var $sec = $('<div class="ci-section"></div>');
-    // Заголовок - точка фокуса
     $sec.append('<div class="ci-section-title selector"><span class="ci-section-title__bar"></span>' + escapeHtml(sectionTitle) + '</div>');
     var $grid = $('<div class="ci-grid"></div>');
     items.forEach(function (item) {
@@ -233,7 +233,18 @@
   function openModal(movie, method) {
     var $body = $('<div class="ci-body"><div class="ci-loading">Загрузка…</div></div>');
     
-    // Больше никакого SVG кода в title, только чистый текст
+    // --- МАГИЯ ПРОКРУТКИ ТУТ ---
+    // Слушаем событие фокуса Lampa и плавно прокручиваем содержимое к активному элементу
+    $body.on('hover:focus', '.selector', function () {
+      try {
+        // block: 'center' гарантирует, что элемент будет по центру окна
+        this.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } catch (e) {
+        // Если старый ТВ не поддерживает smooth, просто прыгаем к элементу
+        this.scrollIntoView(); 
+      }
+    });
+    
     Lampa.Modal.open({
       title: movie.title || movie.name || 'Подробнее',
       html: $body,
@@ -262,7 +273,7 @@
       if (!recs.length) { recs = (data.similar && data.similar.results) || []; recTitle = 'Похожие (по жанру)'; }
       if (recs.length) $body.append(renderRecsSection(recs.slice(0, 30), method, recTitle));
 
-      // Обновляем контроллер для работы с новыми "ступеньками" навигации
+      // Обновляем контроллер для пересчета навигации
       try { Lampa.Controller.toggle('modal'); } catch (e) {}
     });
   }
