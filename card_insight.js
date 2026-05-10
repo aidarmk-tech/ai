@@ -364,6 +364,8 @@
     var scroll = new Lampa.Scroll({ mask: true, over: true, step: 250 });
     var $body = $('<div class="ci-page"><div class="ci-loading">Загрузка…</div></div>');
     var loaded = false;
+    var contentReady = false;
+    var lastFocused = null;
 
     this.create = function () {
       scroll.body().append($body);
@@ -378,9 +380,13 @@
       Lampa.Controller.add('content', {
         toggle: function () {
           Lampa.Controller.collectionSet(scroll.render());
-          var first = scroll.render().find('.selector').first();
-          if (first.length) {
-            Lampa.Controller.collectionFocus(first[0], scroll.render());
+          if (contentReady) {
+            // Восстанавливаем последний сфокусированный элемент,
+            // или ставим фокус на первый селектор.
+            var target = (lastFocused && $.contains(scroll.render()[0], lastFocused))
+              ? lastFocused
+              : scroll.render().find('.selector').first()[0];
+            if (target) Lampa.Controller.collectionFocus(target, scroll.render());
           }
         },
         update: function () {
@@ -391,23 +397,23 @@
           else Lampa.Controller.toggle('menu');
         },
         right: function () { Navigator.move('right'); },
-        up:    function () {
+        up: function () {
           if (Navigator.canmove('up')) Navigator.move('up');
           else Lampa.Controller.toggle('head');
         },
-        down:  function () { Navigator.move('down'); },
-        back:  this.back
+        down: function () { Navigator.move('down'); },
+        back: this.back
       });
       Lampa.Controller.toggle('content');
     };
 
-    this.pause   = function () {};
-    this.stop    = function () {};
-    this.back    = function () { Lampa.Activity.backward(); };
+    this.pause = function () {};
+    this.stop = function () {};
+    this.back = function () { Lampa.Activity.backward(); };
     this.destroy = function () {
       network.clear();
       scroll.destroy();
-      $body.remove();
+      if ($body) $body.remove();
       $body = null;
     };
 
@@ -444,18 +450,17 @@
       var $recs = renderRecsSection(recs.slice(0, 30), object.method, recTitle);
       if ($recs) $body.append($recs);
 
-      // 🔑 Авто-скролл за фокусом
+      // Авто-скролл за фокусом + запоминание последнего фокуса
       $body.find('.selector').on('hover:focus', function (e) {
+        lastFocused = e.currentTarget;
         scroll.update($(e.currentTarget), true);
       });
 
-      // Сообщить контроллеру про новые .selector и поставить фокус
-      // на первый элемент — иначе первое "вниз" уходит в шапку.
-      var first = $body.find('.selector').first();
-      if (first.length) {
-        Lampa.Controller.collectionSet(scroll.render());
-        Lampa.Controller.collectionFocus(first[0], scroll.render());
-      }
+      contentReady = true;
+      // Пересобираем коллекцию селекторов и ставим фокус на первый.
+      // Делаем через toggle('content') — это правильный путь Lampa,
+      // он вызывает наш toggle() ниже, где collectionSet + collectionFocus.
+      try { Lampa.Controller.toggle('content'); } catch (er) {}
     });
   }
 
