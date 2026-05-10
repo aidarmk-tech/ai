@@ -1,5 +1,5 @@
 /*!
- * Card Insight for Lampa — v2.2 (Рабочая прокрутка модалки)
+ * Card Insight for Lampa — v2.3 (Нативный скролл Lampa)
  * Кнопка "Подробнее" на карточке: бэкдроп, описание, факты,
  * актёры и рекомендации TMDB.
  */
@@ -12,12 +12,8 @@
   function injectStyles() {
     if (document.getElementById('card-insight-styles')) return;
     var css = [
-      /* КЛЮЧЕВОЕ: Ограничиваем высоту окна и включаем скролл */
-      '.ci-body{padding:0; position:relative; max-height:72vh; overflow-y:auto; overflow-x:hidden; scroll-behavior:smooth}',
-      /* Стилизация скроллбара под дизайн Lampa */
-      '.ci-body::-webkit-scrollbar{width:0.4em; background:rgba(255,255,255,0.05); border-radius:0.2em}',
-      '.ci-body::-webkit-scrollbar-thumb{background:#ffa726; border-radius:0.2em}',
-
+      /* Убрали системный скролл, Lampa Scroll сделает всё сам */
+      '.ci-body{padding:0; padding-bottom: 2em}',
       '.ci-loading{padding:3em 1em;text-align:center;opacity:0.7;font-size:1.2em}',
       '.ci-error{padding:1.5em 1em;text-align:center;color:#ff7e7e;opacity:0.85}',
 
@@ -228,30 +224,24 @@
   }
 
   // ====================================================
-  // МОДАЛКА
+  // МОДАЛКА СО СКРОЛЛОМ (Исправлено!)
   // ====================================================
   function openModal(movie, method) {
+    // 1. Создаем нативный скролл-контейнер Lampa
+    var scroll = new Lampa.Scroll({ mask: true, over: true, step: 250 });
     var $body = $('<div class="ci-body"><div class="ci-loading">Загрузка…</div></div>');
     
-    // --- МАГИЯ ПРОКРУТКИ ТУТ ---
-    // Слушаем событие фокуса Lampa и плавно прокручиваем содержимое к активному элементу
-    $body.on('hover:focus', '.selector', function () {
-      try {
-        // block: 'center' гарантирует, что элемент будет по центру окна
-        this.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      } catch (e) {
-        // Если старый ТВ не поддерживает smooth, просто прыгаем к элементу
-        this.scrollIntoView(); 
-      }
-    });
-    
+    // 2. Вкладываем наше тело в скролл
+    scroll.append($body);
+
     Lampa.Modal.open({
       title: movie.title || movie.name || 'Подробнее',
-      html: $body,
+      html: scroll.render(), // Передаем скролл в модалку!
       size: 'large',
       mask: true,
       onBack: function () {
         Lampa.Modal.close();
+        scroll.destroy(); // Убиваем скролл при закрытии, чтобы не текла память
         Lampa.Controller.toggle('full_start');
       }
     });
@@ -273,7 +263,10 @@
       if (!recs.length) { recs = (data.similar && data.similar.results) || []; recTitle = 'Похожие (по жанру)'; }
       if (recs.length) $body.append(renderRecsSection(recs.slice(0, 30), method, recTitle));
 
-      // Обновляем контроллер для пересчета навигации
+      // 3. После добавления всех элементов ОБЯЗАТЕЛЬНО обновляем размеры скролла!
+      scroll.reset();
+
+      // Обновляем контроллер, Lampa Scroll сам поймает новые элементы
       try { Lampa.Controller.toggle('modal'); } catch (e) {}
     });
   }
@@ -285,7 +278,6 @@
     if (!$buttons || !$buttons.length) return;
     if ($buttons.find('.view--ci').length) return;
 
-    // Новая красивая иконка "Карточка с информацией"
     var svgIcon =
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
         '<rect x="3" y="4" width="18" height="16" rx="2" ry="2"></rect>' +
