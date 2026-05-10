@@ -378,9 +378,10 @@
       Lampa.Controller.add('content', {
         toggle: function () {
           Lampa.Controller.collectionSet(scroll.render());
-          // Берём первый .selector (или body, если нет)
           var first = scroll.render().find('.selector').first();
-          Lampa.Controller.collectionFocus(first.length ? first[0] : false, scroll.render());
+          if (first.length) {
+            Lampa.Controller.collectionFocus(first[0], scroll.render());
+          }
         },
         update: function () {
           Lampa.Controller.collectionSet(scroll.render());
@@ -443,14 +444,18 @@
       var $recs = renderRecsSection(recs.slice(0, 30), object.method, recTitle);
       if ($recs) $body.append($recs);
 
-      // 🔑 Авто-скролл за фокусом — главное для TV
-      scroll.minus();
+      // 🔑 Авто-скролл за фокусом
       $body.find('.selector').on('hover:focus', function (e) {
-        scroll.update($(e.target), true);
+        scroll.update($(e.currentTarget), true);
       });
 
-      // Перенастроить контроллер на новые .selector
-      try { Lampa.Controller.toggle('content'); } catch (er) {}
+      // Сообщить контроллеру про новые .selector и поставить фокус
+      // на первый элемент — иначе первое "вниз" уходит в шапку.
+      var first = $body.find('.selector').first();
+      if (first.length) {
+        Lampa.Controller.collectionSet(scroll.render());
+        Lampa.Controller.collectionFocus(first[0], scroll.render());
+      }
     });
   }
 
