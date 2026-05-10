@@ -1,6 +1,6 @@
 /*!
- * Card Insight for Lampa — v3.1 (Агрессивный фикс скролла для ATV 3.1)
- * Пульт теперь **обязательно** тянет контент за собой даже на второй странице
+ * Card Insight for Lampa — v4.0 (Activity вместо модалки)
+ * Полностью нативный скролл через Lampa.Activity — отлично работает на ATV 3.1
  */
 (function () {
   'use strict';
@@ -10,8 +10,8 @@
   // ====================================================
   function injectStyles() {
     if (document.getElementById('card-insight-styles')) return;
-    var css = [ /* стили без изменений — оставил как было */ 
-      '.ci-body{padding:0; padding-bottom: 2em}',
+    var css = [
+      '.ci-body{padding:0; padding-bottom: 3em}',
       '.ci-loading{padding:3em 1em;text-align:center;opacity:0.7;font-size:1.2em}',
       '.ci-error{padding:1.5em 1em;text-align:center;color:#ff7e7e;opacity:0.85}',
       '.ci-hero{height:11em;margin:0 0 1em;border-radius:0.4em;overflow:hidden;position:relative;background:#111 center/cover no-repeat}',
@@ -57,8 +57,15 @@
     document.head.appendChild(style);
   }
 
-  // УТИЛИТЫ, buildFacts, render* — полностью без изменений (чтобы не было ошибок)
-  function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]; }); }
+  // ====================================================
+  // УТИЛИТЫ И TMDB (оставил как было)
+  // ====================================================
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
+    });
+  }
+
   function formatNum(n) { return n == null ? '' : String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); }
   function formatMoney(n) {
     if (!n || n < 100) return '';
@@ -67,6 +74,7 @@
     if (n >= 1e3) return '$' + Math.round(n / 1e3) + ' тыс';
     return '$' + n;
   }
+
   var LANG_NAMES = { en:'английский',fr:'французский',de:'немецкий',es:'испанский',it:'итальянский',ja:'японский',ko:'корейский',zh:'китайский',cn:'китайский',tr:'турецкий',kk:'казахский',uk:'украинский',pl:'польский',pt:'португальский',sv:'шведский',nl:'нидерландский',da:'датский',fi:'финский',no:'норвежский',cs:'чешский',hi:'хинди',ar:'арабский',th:'тайский',vi:'вьетнамский',he:'иврит',el:'греческий',hu:'венгерский',ro:'румынский',ru:'русский' };
 
   function fetchFullData(method, id, callback) {
@@ -75,6 +83,9 @@
     network.silent(url, function (data) { callback(null, data); }, function (err) { callback(err || new Error('Ошибка сети')); });
   }
 
+  // ====================================================
+  // РЕНДЕР БЛОКОВ (без изменений)
+  // ====================================================
   function renderHero(data) {
     if (!data.backdrop_path) return null;
     return $('<div class="ci-hero" style="background-image:url(\'' + Lampa.TMDB.image('t/p/w1280' + data.backdrop_path) + '\')"><div class="ci-hero__overlay"></div></div>');
@@ -83,6 +94,7 @@
   function renderOverview(data) {
     var $wrap = $('<div></div>');
     if (data.tagline) $wrap.append('<div class="ci-tagline">«' + escapeHtml(data.tagline) + '»</div>');
+
     var meta = [];
     if (data.vote_average > 0) meta.push({ cls: 'ci-meta__item ci-meta__item--rating', text: '★ ' + Number(data.vote_average).toFixed(1) });
     var year = (data.release_date || data.first_air_date || '').substring(0, 4);
@@ -92,41 +104,49 @@
     if (data.number_of_seasons) meta.push({ text: 'сезонов: ' + data.number_of_seasons });
     if (data.number_of_episodes) meta.push({ text: 'серий: ' + data.number_of_episodes });
     if (data.genres && data.genres.length) meta.push({ text: data.genres.map(function (g) { return g.name; }).join(', ') });
+
     if (meta.length) {
       var $meta = $('<div class="ci-meta"></div>');
       meta.forEach(function (m) { $meta.append('<div class="' + (m.cls || 'ci-meta__item') + '">' + escapeHtml(m.text) + '</div>'); });
       $wrap.append($meta);
     }
+
     var overview = data.overview && data.overview.trim() ? data.overview : 'Описание отсутствует.';
     $wrap.append('<div class="ci-overview selector">' + escapeHtml(overview) + '</div>');
     return $wrap;
   }
 
-  function buildFacts(data) { /* полностью как раньше */ 
+  function buildFacts(data) {
     var facts = [], crew = (data.credits && data.credits.crew) || [];
     function findCrew(jobs) { var j = {}; jobs.forEach(function(x){j[x]=true;}); return crew.filter(function(p){return j[p.job];}).map(function(p){return p.name;}).filter(function(n,i,a){return a.indexOf(n)===i;}); }
+
     var directors = findCrew(['Director']); if (directors.length) facts.push({ icon: '🎬', label: 'Режиссёр', text: directors.join(', ') });
     var writers = findCrew(['Screenplay', 'Writer', 'Story']); if (writers.length) facts.push({ icon: '✍️', label: 'Сценарий', text: writers.slice(0, 3).join(', ') });
     var composers = findCrew(['Original Music Composer']); if (composers.length) facts.push({ icon: '🎵', label: 'Композитор', text: composers.join(', ') });
     var dop = findCrew(['Director of Photography']); if (dop.length) facts.push({ icon: '🎥', label: 'Оператор', text: dop[0] });
+
     if (data.budget > 1000 && data.revenue > 1000) {
       var ratio = data.revenue / data.budget, v;
       if (ratio >= 5) v = 'мега-хит'; else if (ratio >= 2) v = 'окупился ×' + ratio.toFixed(1); else if (ratio >= 1) v = 'окупился'; else v = 'не окупился';
       facts.push({ icon: '💰', text: formatMoney(data.budget) + ' → ' + formatMoney(data.revenue) + ' (' + v + ')' });
     } else if (data.budget > 1000) facts.push({ icon: '💰', label: 'Бюджет', text: formatMoney(data.budget) });
     else if (data.revenue > 1000) facts.push({ icon: '💰', label: 'Сборы', text: formatMoney(data.revenue) });
+
     if (data.vote_average >= 7.5 && data.vote_count >= 100) facts.push({ icon: '⭐', text: 'Высокий рейтинг ' + data.vote_average.toFixed(1) + '/10 (' + formatNum(data.vote_count) + ' оценок)' });
     else if (data.vote_count >= 5000) facts.push({ icon: '🔥', text: 'Очень популярный — ' + formatNum(data.vote_count) + ' оценок на TMDB' });
+
     if (data.belongs_to_collection && data.belongs_to_collection.name) facts.push({ icon: '🔗', label: 'Серия', text: data.belongs_to_collection.name });
     if (data.created_by && data.created_by.length) facts.push({ icon: '🎬', label: 'Создатель', text: data.created_by.map(function (p) { return p.name; }).join(', ') });
     if (data.networks && data.networks.length) facts.push({ icon: '📺', label: 'Канал', text: data.networks.map(function (n) { return n.name; }).join(', ') });
     if (data.status === 'Ended') facts.push({ icon: '🏁', text: 'Сериал завершён' });
     else if (data.status === 'Returning Series') facts.push({ icon: '🔄', text: 'Сериал продолжается' });
     else if (data.status === 'Canceled' || data.status === 'Cancelled') facts.push({ icon: '❌', text: 'Сериал закрыт' });
+
     var kws = (data.keywords && (data.keywords.keywords || data.keywords.results)) || [];
     if (kws.length) facts.push({ icon: '🏷️', label: 'Темы', text: kws.slice(0, 5).map(function (k) { return k.name; }).join(', ') });
     if (data.production_countries && data.production_countries.length > 1) facts.push({ icon: '🌍', label: 'Производство', text: data.production_countries.map(function (c) { return c.name; }).join(', ') });
     if (data.original_language && data.original_language !== 'ru') facts.push({ icon: '🗣️', label: 'Язык оригинала', text: LANG_NAMES[data.original_language] || data.original_language });
+    
     var origTitle = data.original_title || data.original_name, rusTitle = data.title || data.name;
     if (origTitle && rusTitle && origTitle !== rusTitle) facts.push({ icon: '📝', label: 'Оригинальное название', text: origTitle });
     return facts;
@@ -155,8 +175,7 @@
       var photo = person.profile_path ? Lampa.TMDB.image('t/p/w185' + person.profile_path) : '';
       var $card = $('<div class="ci-actor selector"><div class="ci-actor__photo"' + (photo ? ' style="background-image:url(\'' + photo + '\')"' : '') + '>' + (!photo ? '<div class="ci-actor__no-photo">👤</div>' : '') + '</div><div class="ci-actor__name">' + escapeHtml(person.name) + '</div><div class="ci-actor__role">' + (person.character ? escapeHtml(person.character) : '&nbsp;') + '</div></div>');
       $card.on('hover:enter', function () {
-        Lampa.Modal.close();
-        Lampa.Controller.toggle('content');
+        Lampa.Activity.close();
         try { Lampa.Activity.push({ url: 'person/' + person.id, title: person.name, component: 'actor', id: person.id, source: 'tmdb' }); } 
         catch (e) { Lampa.Noty.show(person.name); }
       });
@@ -176,8 +195,7 @@
       var method = item.media_type === 'tv' || item.media_type === 'movie' ? item.media_type : (item.first_air_date || item.name ? 'tv' : defaultMethod);
       var $card = $('<div class="ci-card selector"><div class="ci-card__poster"' + (posterUrl ? ' style="background-image:url(\'' + posterUrl + '\')"' : '') + '>' + (!posterUrl ? '<div class="ci-card__no-poster">🎬</div>' : '') + (rating ? '<div class="ci-card__rating">★ ' + rating + '</div>' : '') + '</div><div class="ci-card__info"><div class="ci-card__title">' + escapeHtml(item.title || item.name || 'Без названия') + '</div><div class="ci-card__year">' + (item.release_date || item.first_air_date || '').substring(0, 4) + '</div></div></div>');
       $card.on('hover:enter', function () {
-        Lampa.Modal.close();
-        Lampa.Controller.toggle('content');
+        Lampa.Activity.close();
         Lampa.Activity.push({ url: '', component: 'full', id: item.id, method: method, card: item, source: 'tmdb' });
       });
       $grid.append($card);
@@ -187,33 +205,16 @@
   }
 
   // ====================================================
-  // МОДАЛКА v3.1 — максимально агрессивный ATV-фикс
+  // ACTIVITY (главное изменение v4.0)
   // ====================================================
-  function openModal(movie, method) {
-    var scroll = new Lampa.Scroll({ mask: true, over: true, step: 250 });
-    var $body = $('<div class="ci-body"><div class="ci-loading">Загрузка…</div></div>');
-    scroll.append($body);
-
-    Lampa.Modal.open({
-      title: movie.title || movie.name || 'Подробнее',
-      html: scroll.render(),
-      size: 'large',
-      mask: true,
-      onBack: function () {
-        if (window.ciScrollInterval) clearInterval(window.ciScrollInterval);
-        Lampa.Modal.close();
-        scroll.destroy();
-        Lampa.Controller.toggle('full_start');
-      }
-    });
-
+  function openActivity(movie, method) {
     fetchFullData(method, movie.id, function (err, data) {
       if (err || !data) {
-        $body.html('<div class="ci-error">Не удалось загрузить данные TMDB</div>');
+        Lampa.Noty.show('Не удалось загрузить данные');
         return;
       }
 
-      $body.empty();
+      var $body = $('<div class="ci-body"></div>');
       var $hero = renderHero(data); if ($hero) $body.append($hero);
       $body.append(renderOverview(data));
       var $facts = renderFactsSection(buildFacts(data)); if ($facts) $body.append($facts);
@@ -224,50 +225,43 @@
       if (!recs.length) { recs = (data.similar && data.similar.results) || []; recTitle = 'Похожие (по жанру)'; }
       if (recs.length) $body.append(renderRecsSection(recs.slice(0, 30), method, recTitle));
 
-      scroll.reset();
+      // Открываем Activity
+      Lampa.Activity.push({
+        title: movie.title || movie.name || 'Подробнее',
+        url: '',
+        component: 'html',
+        html: '<div id="ci-activity-container"></div>',
+        onReady: function (activity) {
+          var scroll = new Lampa.Scroll({ mask: true, over: true, step: 250 });
+          scroll.append($body);
+          activity.render().find('#ci-activity-container').append(scroll.render());
+          scroll.reset();
 
-      var setup = function () {
-        Lampa.Controller.collectionSet(scroll.render());
-        Lampa.Controller.collectionFocus(0, scroll.render());
-      };
-      setup();
-      Lampa.Controller.toggle('modal');
-      setTimeout(setup, 50);
-      setTimeout(setup, 200);
-      setTimeout(setup, 450);
-
-      // ================================================
-      // АГРЕССИВНЫЙ ATV-СКРОЛЛ (главное изменение v3.1)
-      // ================================================
-      var container = scroll.render()[0];
-      var scrollBody = scroll.render().find('.scroll__body, .scroll-content, .scroll__content, .ci-body').first()[0] || container;
-
-      function autoScrollToFocus() {
-        var focused = $('.selector.focus').first();
-        if (!focused.length || !scrollBody) return;
-
-        // Более точный расчёт позиции (jQuery .position() + scrollTop)
-        var offset = focused.position().top + scrollBody.scrollTop - 120; // 120px отступ сверху
-        scrollBody.scrollTop = Math.max(0, offset);
-      }
-
-      // Очень частая проверка — именно это спасает на ATV
-      window.ciScrollInterval = setInterval(autoScrollToFocus, 60);
-
-      // Дополнительные запуски сразу после загрузки
-      setTimeout(autoScrollToFocus, 250);
-      setTimeout(autoScrollToFocus, 600);
-      setTimeout(autoScrollToFocus, 1200);
+          Lampa.Controller.collectionSet(scroll.render());
+          Lampa.Controller.collectionFocus(0, scroll.render());
+        },
+        onBack: function () {
+          Lampa.Controller.toggle('full_start');
+        }
+      });
     });
   }
 
-  // Кнопка и инициализация (без изменений)
+  // ====================================================
+  // КНОПКА НА КАРТОЧКЕ
+  // ====================================================
   function appendButton($buttons, movie, method) {
     if (!$buttons || !$buttons.length) return;
     if ($buttons.find('.view--ci').length) return;
-    var svgIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2" ry="2"></rect><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>';
+
+    var svgIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+      '<rect x="3" y="4" width="18" height="16" rx="2" ry="2"></rect>' +
+      '<line x1="12" y1="8" x2="12" y2="12"></line>' +
+      '<line x1="12" y1="16" x2="12.01" y2="16"></line>' +
+    '</svg>';
+
     var $btn = $('<div class="full-start__button selector view--ci">' + svgIcon + '<span>Подробнее</span></div>');
-    $btn.on('hover:enter', function () { openModal(movie, method); });
+    $btn.on('hover:enter', function () { openActivity(movie, method); });
     $buttons.append($btn);
   }
 
@@ -277,6 +271,7 @@
       var data = e.data; if (!data) return;
       var movie = data.movie || data; if (!movie || !movie.id) return;
       var method = (e.object && e.object.method) || data.method || movie.method || (movie.first_air_date || movie.name ? 'tv' : 'movie');
+
       var $render = e.object.activity.render();
       var attempts = 0;
       function tryAppend() {
@@ -288,6 +283,9 @@
     });
   }
 
+  // ====================================================
+  // ИНИЦИАЛИЗАЦИЯ
+  // ====================================================
   function initialize() {
     if (!window.Lampa || !Lampa.Listener) return setTimeout(initialize, 500);
     injectStyles();
