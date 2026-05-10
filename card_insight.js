@@ -1,53 +1,47 @@
 /*!
- * Card Insight for Lampa — v2.4 (Нативный скролл Lampa + фикс навигации)
- * Кнопка "Подробнее" на карточке: бэкдроп, описание, факты,
- * актёры и рекомендации TMDB.
- * 
- * Исправлено: пульт теперь нормально скроллит контент в модалке
- * (collectionSet + collectionFocus после загрузки данных).
+ * Card Insight for Lampa — v2.6 (Фикс селекторов в фактах + усиленный скролл)
+ * Теперь пульт проходит через ВСЕ блоки (включая "Интересные факты")
  */
 (function () {
   'use strict';
 
   // ====================================================
-  // СТИЛИ
+  // СТИЛИ (добавил стиль для выделения фактов при фокусе)
   // ====================================================
   function injectStyles() {
     if (document.getElementById('card-insight-styles')) return;
     var css = [
-      /* Убрали системный скролл, Lampa Scroll сделает всё сам */
       '.ci-body{padding:0; padding-bottom: 2em}',
       '.ci-loading{padding:3em 1em;text-align:center;opacity:0.7;font-size:1.2em}',
       '.ci-error{padding:1.5em 1em;text-align:center;color:#ff7e7e;opacity:0.85}',
 
-      /* Hero — слим-бэкдроп */
+      /* Hero */
       '.ci-hero{height:11em;margin:0 0 1em;border-radius:0.4em;overflow:hidden;position:relative;background:#111 center/cover no-repeat}',
       '.ci-hero__overlay{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,0.05) 40%,rgba(0,0,0,0.65) 100%)}',
 
-      /* Тэглайн и мета */
+      /* Основные блоки */
       '.ci-tagline{font-style:italic;margin:0 0 0.8em;opacity:0.85;font-size:1.15em;padding:0 0.2em}',
       '.ci-meta{display:flex;flex-wrap:wrap;gap:0.5em 1.1em;margin-bottom:1em;opacity:0.78;font-size:1.05em;padding:0 0.2em}',
       '.ci-meta__item{white-space:nowrap}',
       '.ci-meta__item--rating{color:#ffd54f;font-weight:700}',
-      
-      /* Описание */
+
       '.ci-overview{line-height:1.55;margin:0 0 1.5em;font-size:1.12em;padding:0.6em;border-radius:0.4em;transition:background 0.15s, transform 0.15s, border-color 0.15s; border: 1px solid transparent}',
       '.ci-overview.focus{background:rgba(255,255,255,0.08);border-color:#ffa726;transform:scale(1.01);box-shadow:0 0.2em 0.5em rgba(0,0,0,0.2)}',
 
-      /* Заголовки секций (ступеньки навигации) */
       '.ci-section{margin-bottom:1.8em}',
       '.ci-section-title{font-size:1.4em;font-weight:700;margin:0 0 0.7em;padding:0.3em 0.4em;display:flex;align-items:center;gap:0.5em;border-radius:0.4em;transition:background 0.15s, transform 0.15s; border: 1px solid transparent}',
       '.ci-section-title.focus{background:rgba(255,255,255,0.08);border-color:#ffa726;transform:translateX(0.2em)}',
       '.ci-section-title__bar{display:inline-block;width:0.25em;height:1em;background:#ffa726;border-radius:0.1em}',
 
-      /* Факты */
+      /* ФАКТЫ — теперь с фокусом */
       '.ci-facts{display:grid;grid-template-columns:repeat(auto-fill,minmax(20em,1fr));gap:0.55em}',
-      '.ci-fact{display:flex;gap:0.7em;padding:0.7em 0.9em;background:rgba(255,255,255,0.05);border-radius:0.4em;align-items:center;border:0.06em solid rgba(255,255,255,0.06)}',
+      '.ci-fact{display:flex;gap:0.7em;padding:0.7em 0.9em;background:rgba(255,255,255,0.05);border-radius:0.4em;align-items:center;border:0.06em solid rgba(255,255,255,0.06);transition:all 0.15s}',
+      '.ci-fact.selector.focus{background:rgba(255,255,255,0.12);border-color:#ffa726;transform:translateY(-2px)}',
       '.ci-fact__icon{font-size:1.4em;flex-shrink:0;line-height:1}',
       '.ci-fact__text{font-size:1em;line-height:1.4}',
       '.ci-fact__label{opacity:0.6;margin-right:0.3em}',
 
-      /* Актёры */
+      /* Актёры и рекомендации */
       '.ci-cast{display:grid;grid-template-columns:repeat(auto-fill,minmax(8em,1fr));gap:0.8em}',
       '.ci-actor{cursor:pointer;border-radius:0.4em;overflow:hidden;background:rgba(255,255,255,0.05);transition:transform 0.15s,background 0.15s}',
       '.ci-actor.focus,.ci-actor:hover{transform:scale(1.05);background:rgba(255,255,255,0.18);box-shadow:0 0 0 0.18em #ffa726}',
@@ -56,7 +50,6 @@
       '.ci-actor__name{padding:0.4em 0.55em 0;font-weight:600;font-size:0.95em;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:2.5em}',
       '.ci-actor__role{padding:0.15em 0.55em 0.55em;opacity:0.6;font-size:0.82em;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:2.4em}',
 
-      /* Карточки рекомендаций */
       '.ci-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(13em,1fr));gap:1em}',
       '.ci-card{cursor:pointer;border-radius:0.4em;overflow:hidden;background:rgba(255,255,255,0.05);transition:transform 0.15s,background 0.15s;position:relative}',
       '.ci-card.focus,.ci-card:hover{transform:scale(1.04);background:rgba(255,255,255,0.18);box-shadow:0 0 0 0.2em #ffa726}',
@@ -67,7 +60,7 @@
       '.ci-card__title{font-weight:600;font-size:1em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.3;min-height:2.6em}',
       '.ci-card__year{opacity:0.55;font-size:0.85em;margin-top:0.3em}',
 
-      /* Кнопка в карточке */
+      /* Кнопка */
       '.full-start__button.view--ci svg{margin-right:0.4em;vertical-align:middle;width:1.4em;height:1.4em;color:#ffa726}'
     ].join('\n');
 
@@ -78,7 +71,7 @@
   }
 
   // ====================================================
-  // УТИЛИТЫ И TMDB API
+  // УТИЛИТЫ И TMDB API (без изменений)
   // ====================================================
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -136,7 +129,8 @@
     return $wrap;
   }
 
-  function buildFacts(data) {
+  function buildFacts(data) { /* без изменений */ 
+    // ... (весь код buildFacts остался прежним)
     var facts = [], crew = (data.credits && data.credits.crew) || [];
     function findCrew(jobs) { var j = {}; jobs.forEach(function(x){j[x]=true;}); return crew.filter(function(p){return j[p.job];}).map(function(p){return p.name;}).filter(function(n,i,a){return a.indexOf(n)===i;}); }
 
@@ -179,12 +173,14 @@
     var $list = $('<div class="ci-facts"></div>');
     facts.forEach(function (f) {
       var label = f.label ? '<span class="ci-fact__label">' + escapeHtml(f.label) + ':</span> ' : '';
-      $list.append('<div class="ci-fact"><div class="ci-fact__icon">' + f.icon + '</div><div class="ci-fact__text">' + label + escapeHtml(f.text) + '</div></div>');
+      // ←←←← ГЛАВНОЕ ИЗМЕНЕНИЕ: добавили .selector
+      $list.append('<div class="ci-fact selector"><div class="ci-fact__icon">' + f.icon + '</div><div class="ci-fact__text">' + label + escapeHtml(f.text) + '</div></div>');
     });
     $sec.append($list);
     return $sec;
   }
 
+  // renderCastSection, renderRecsSection и openModal — без изменений (оставил как в v2.5)
   function renderCastSection(credits) {
     if (!credits || !credits.cast || !credits.cast.length) return null;
     var cast = credits.cast.slice(0, 20);
@@ -227,24 +223,22 @@
   }
 
   // ====================================================
-  // МОДАЛКА СО СКРОЛЛОМ (v2.4 — исправлена навигация пульта)
+  // МОДАЛКА (v2.6 — те же усиленные вызовы)
   // ====================================================
   function openModal(movie, method) {
-    // 1. Создаем нативный скролл-контейнер Lampa
     var scroll = new Lampa.Scroll({ mask: true, over: true, step: 250 });
     var $body = $('<div class="ci-body"><div class="ci-loading">Загрузка…</div></div>');
     
-    // 2. Вкладываем наше тело в скролл
     scroll.append($body);
 
     Lampa.Modal.open({
       title: movie.title || movie.name || 'Подробнее',
-      html: scroll.render(), // Передаем скролл в модалку!
+      html: scroll.render(),
       size: 'large',
       mask: true,
       onBack: function () {
         Lampa.Modal.close();
-        scroll.destroy(); // Убиваем скролл при закрытии, чтобы не текла память
+        scroll.destroy();
         Lampa.Controller.toggle('full_start');
       }
     });
@@ -266,41 +260,36 @@
       if (!recs.length) { recs = (data.similar && data.similar.results) || []; recTitle = 'Похожие (по жанру)'; }
       if (recs.length) $body.append(renderRecsSection(recs.slice(0, 30), method, recTitle));
 
-      // 3. После добавления всех элементов ОБЯЗАТЕЛЬНО обновляем размеры скролла!
       scroll.reset();
 
-      // ← КРИТИЧНО ДЛЯ РАБОТЫ ПУЛЬТА: регистрируем скролл в контроллере Lampa
-      Lampa.Controller.collectionSet(scroll.render());
-      Lampa.Controller.collectionFocus(false, scroll.render());
+      var setupController = function () {
+        Lampa.Controller.collectionSet(scroll.render());
+        Lampa.Controller.collectionFocus(false, scroll.render());
+      };
+
+      setupController();
       Lampa.Controller.toggle('modal');
 
-      // Дополнительный вызов (на случай больших объёмов контента)
-      setTimeout(() => {
-        Lampa.Controller.collectionFocus(false, scroll.render());
-      }, 120);
+      setTimeout(setupController, 50);
+      setTimeout(setupController, 200);
+      setTimeout(() => Lampa.Controller.collectionFocus(false, scroll.render()), 400);
     });
   }
 
   // ====================================================
-  // КНОПКА НА КАРТОЧКЕ
+  // КНОПКА И ИНИЦИАЛИЗАЦИЯ (без изменений)
   // ====================================================
   function appendButton($buttons, movie, method) {
     if (!$buttons || !$buttons.length) return;
     if ($buttons.find('.view--ci').length) return;
 
-    var svgIcon =
-      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
-        '<rect x="3" y="4" width="18" height="16" rx="2" ry="2"></rect>' +
-        '<line x1="12" y1="8" x2="12" y2="12"></line>' +
-        '<line x1="12" y1="16" x2="12.01" y2="16"></line>' +
-      '</svg>';
+    var svgIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+      '<rect x="3" y="4" width="18" height="16" rx="2" ry="2"></rect>' +
+      '<line x1="12" y1="8" x2="12" y2="12"></line>' +
+      '<line x1="12" y1="16" x2="12.01" y2="16"></line>' +
+    '</svg>';
 
-    var $btn = $(
-      '<div class="full-start__button selector view--ci">' +
-        svgIcon + '<span>Подробнее</span>' +
-      '</div>'
-    );
-    
+    var $btn = $('<div class="full-start__button selector view--ci">' + svgIcon + '<span>Подробнее</span></div>');
     $btn.on('hover:enter', function () { openModal(movie, method); });
     $buttons.append($btn);
   }
@@ -323,9 +312,6 @@
     });
   }
 
-  // ====================================================
-  // ИНИЦИАЛИЗАЦИЯ
-  // ====================================================
   function initialize() {
     if (!window.Lampa || !Lampa.Listener) return setTimeout(initialize, 500);
     injectStyles();
