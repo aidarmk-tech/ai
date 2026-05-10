@@ -1,7 +1,10 @@
 /*!
- * Card Insight for Lampa — v2.3 (Нативный скролл Lampa)
+ * Card Insight for Lampa — v2.4 (Нативный скролл Lampa + фикс навигации)
  * Кнопка "Подробнее" на карточке: бэкдроп, описание, факты,
  * актёры и рекомендации TMDB.
+ * 
+ * Исправлено: пульт теперь нормально скроллит контент в модалке
+ * (collectionSet + collectionFocus после загрузки данных).
  */
 (function () {
   'use strict';
@@ -86,8 +89,8 @@
   function formatNum(n) { return n == null ? '' : String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); }
   function formatMoney(n) {
     if (!n || n < 100) return '';
-    if (n >= 1e9) return '$' + (n / 1e9).toFixed(2).replace(/\.?0+$/, '') + ' млрд';
-    if (n >= 1e6) return '$' + (n / 1e6).toFixed(1).replace(/\.0$/, '') + ' млн';
+    if (n >= 1e9) return '\( ' + (n / 1e9).toFixed(2).replace(/\.?0+ \)/, '') + ' млрд';
+    if (n >= 1e6) return '\( ' + (n / 1e6).toFixed(1).replace(/\.0 \)/, '') + ' млн';
     if (n >= 1e3) return '$' + Math.round(n / 1e3) + ' тыс';
     return '$' + n;
   }
@@ -117,7 +120,7 @@
     var year = (data.release_date || data.first_air_date || '').substring(0, 4);
     if (year) meta.push({ text: year });
     if (data.runtime) meta.push({ text: data.runtime + ' мин' });
-    if (data.episode_run_time && data.episode_run_time[0]) meta.push({ text: '~' + data.episode_run_time[0] + ' мин/серия' });
+    if (data.episode_run_time && data.episode_run_time[0]) meta.push({ text: '\~' + data.episode_run_time[0] + ' мин/серия' });
     if (data.number_of_seasons) meta.push({ text: 'сезонов: ' + data.number_of_seasons });
     if (data.number_of_episodes) meta.push({ text: 'серий: ' + data.number_of_episodes });
     if (data.genres && data.genres.length) meta.push({ text: data.genres.map(function (g) { return g.name; }).join(', ') });
@@ -224,7 +227,7 @@
   }
 
   // ====================================================
-  // МОДАЛКА СО СКРОЛЛОМ (Исправлено!)
+  // МОДАЛКА СО СКРОЛЛОМ (v2.4 — исправлена навигация пульта)
   // ====================================================
   function openModal(movie, method) {
     // 1. Создаем нативный скролл-контейнер Lampa
@@ -266,8 +269,15 @@
       // 3. После добавления всех элементов ОБЯЗАТЕЛЬНО обновляем размеры скролла!
       scroll.reset();
 
-      // Обновляем контроллер, Lampa Scroll сам поймает новые элементы
-      try { Lampa.Controller.toggle('modal'); } catch (e) {}
+      // ← КРИТИЧНО ДЛЯ РАБОТЫ ПУЛЬТА: регистрируем скролл в контроллере Lampa
+      Lampa.Controller.collectionSet(scroll.render());
+      Lampa.Controller.collectionFocus(false, scroll.render());
+      Lampa.Controller.toggle('modal');
+
+      // Дополнительный вызов (на случай больших объёмов контента)
+      setTimeout(() => {
+        Lampa.Controller.collectionFocus(false, scroll.render());
+      }, 120);
     });
   }
 
