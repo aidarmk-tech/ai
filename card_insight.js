@@ -400,79 +400,51 @@
     return $sec;
   }
 
-  function parseWikiExtract(data) {
-    if (!data || !data.query || !data.query.pages) return [];
-    var pages = data.query.pages;
-    var keys = Object.keys(pages);
-    if (!keys.length || keys[0] === '-1') return [];
-    var page = pages[keys[0]];
-    if (!page || !page.extract) return [];
-    var text = page.extract;
-
-    var sectionKeywords = [
-      'Производство', 'Съёмки', 'История создания', 'Разработка фильма',
-      'Создание фильма', 'За кулисами', 'Интересные факты', 'Факты',
-      'Предыстория', 'Кастинг', 'Разработка'
-    ];
-
-    // With explaintext=1 (default exsectionformat=wiki), section headers look like:
-    // \n\n== Заголовок ==\n\n
-    var chunks = text.split(/\n==\s*/);
+  function parseAIResponse(text) {
     var facts = [];
-
-    chunks.forEach(function (chunk) {
-      var nl = chunk.indexOf('\n');
-      var heading = nl > -1 ? chunk.substring(0, nl).replace(/\s*=+\s*$/, '').trim() : '';
-      var content  = nl > -1 ? chunk.substring(nl + 1) : chunk;
-
-      var relevant = sectionKeywords.some(function (kw) { return heading.indexOf(kw) !== -1; });
-      if (!relevant) return;
-
-      var raw = content.replace(/\n+/g, ' ').trim();
-      var sentences = raw.replace(/([.!?])\s+([А-ЯЁA-Z])/g, '$1\n$2').split('\n');
-
-      sentences.forEach(function (s) {
-        s = s.replace(/\s+/g, ' ').trim();
-        if (s.length >= 80 && s.length <= 600 && facts.indexOf(s) === -1) {
-          facts.push(s);
-        }
-      });
+    text.split('\n').forEach(function (line) {
+      line = line.replace(/^[\s•\-\*]+/, '').replace(/^\d+[\.)\]\s*/, '').trim();
+      if (line.length >= 40 && line.length <= 700 && facts.indexOf(line) === -1) facts.push(line);
     });
-
     return facts.slice(0, 8);
   }
 
-  function fetchWikiTrivia(title, year, callback) {
-    if (!title) { callback(null, []); return; }
-    var searchQuery = encodeURIComponent(title + (year ? ' ' + year : ''));
-    var searchUrl = 'https://ru.wikipedia.org/w/api.php?action=opensearch&search=' + searchQuery + '&limit=3&namespace=0&format=json&origin=*';
+  function fetchAITrivia(title, year, genres, callback) {
+    var apiKey = '';
+    try { apiKey = Lampa.Storage.get('ci_openrouter_key', ''); } catch (e) {}
+    if (!apiKey) { callback(null, []); return; }
 
-    var xhr1 = new XMLHttpRequest();
-    xhr1.open('GET', searchUrl, true);
-    xhr1.timeout = 6000;
-    xhr1.onload = function () {
-      if (xhr1.status !== 200) { callback(null, []); return; }
+    var model = 'mistralai/mistral-7b-instruct:free';
+    try { model = Lampa.Storage.get('ci_openrouter_model', model) || model; } catch (e) {}
+
+    var genreText = genres && genres.length ? ' (жанр: ' + genres.slice(0, 3).join(', ') + ')' : '';
+    var prompt =
+      'Напиши 6 интересных закулисных фактов о фильме "' + title + '"' +
+      (year ? ' ' + year + ' года' : '') + genreText + '. ' +
+      'Пиши о съёмочном процессе, кастинге, неожиданных историях создания, курьёзах на площадке. ' +
+      'Каждый факт — отдельная строка, начинается с символа "•". Без заголовков и предисловий. Только на русском языке.';
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', 'https://openrouter.ai/api/v1/chat/completions', true);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.setRequestHeader('Authorization', 'Bearer ' + apiKey);
+    xhr.setRequestHeader('HTTP-Referer', 'https://lampa.mx');
+    xhr.timeout = 25000;
+    xhr.onload = function () {
+      if (xhr.status !== 200) { callback(null, []); return; }
       try {
-        var results = JSON.parse(xhr1.responseText);
-        if (!results || !results[1] || !results[1].length) { callback(null, []); return; }
-        var pageTitle = results[1][0];
-        // No exsectionformat param — defaults to 'wiki', which preserves == heading == markers
-        var extractUrl = 'https://ru.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&titles=' +
-          encodeURIComponent(pageTitle) + '&format=json&origin=*';
-        var xhr2 = new XMLHttpRequest();
-        xhr2.open('GET', extractUrl, true);
-        xhr2.timeout = 6000;
-        xhr2.onload = function () {
-          if (xhr2.status !== 200) { callback(null, []); return; }
-          try { callback(null, parseWikiExtract(JSON.parse(xhr2.responseText))); }
-          catch (e) { callback(null, []); }
-        };
-        xhr2.onerror = xhr2.ontimeout = function () { callback(null, []); };
-        xhr2.send();
+        var resp = JSON.parse(xhr.responseText);
+        var content = resp.choices && resp.choices[0] && resp.choices[0].message && resp.choices[0].message.content;
+        callback(null, content ? parseAIResponse(content) : []);
       } catch (e) { callback(null, []); }
     };
-    xhr1.onerror = xhr1.ontimeout = function () { callback(null, []); };
-    xhr1.send();
+    xhr.onerror = xhr.ontimeout = function () { callback(null, []); };
+    xhr.send(JSON.stringify({
+      model: model,
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 900,
+      temperature: 0.75
+    }));
   }
 
   function renderWikiTriviaSection(facts) {
@@ -532,7 +504,7 @@
       var $facts = renderFactsSection(buildFacts(data));
       if ($facts) $page.append($facts);
 
-      // Placeholder for Wikipedia trivia (filled async)
+      // Placeholder for AI trivia (filled async)
       var $triviaPlaceholder = $('<div></div>');
       $page.append($triviaPlaceholder);
 
@@ -572,10 +544,11 @@
         $colPlaceholder.remove();
       }
 
-      // Async: Wikipedia trivia
-      var wikiTitle = data.title || data.name || '';
-      var wikiYear = (data.release_date || data.first_air_date || '').substring(0, 4);
-      fetchWikiTrivia(wikiTitle, wikiYear, function (err, triviaFacts) {
+      // Async: AI trivia via OpenRouter (only if API key configured)
+      var aiTitle  = data.title || data.name || '';
+      var aiYear   = (data.release_date || data.first_air_date || '').substring(0, 4);
+      var aiGenres = (data.genres || []).map(function (g) { return g.name; });
+      fetchAITrivia(aiTitle, aiYear, aiGenres, function (err, triviaFacts) {
         if (!$page) return;
         var $trivia = renderWikiTriviaSection(triviaFacts);
         if ($trivia) $triviaPlaceholder.replaceWith($trivia);
@@ -696,6 +669,46 @@
   }
 
   // ====================================================
+  // НАСТРОЙКИ — OpenRouter
+  // ====================================================
+  function registerSettings() {
+    try {
+      if (!Lampa.SettingsApi || typeof Lampa.SettingsApi.addParam !== 'function') return;
+      Lampa.SettingsApi.addParam({
+        component: 'interface',
+        param: { name: 'ci_openrouter_key', type: 'input', default: '' },
+        field: {
+          name: 'Подробнее: OpenRouter API ключ',
+          description: 'Введите ключ с openrouter.ai — появится раздел "За кулисами"'
+        }
+      });
+      Lampa.SettingsApi.addParam({
+        component: 'interface',
+        param: {
+          name: 'ci_openrouter_model',
+          type: 'select',
+          values: {
+            'mistralai/mistral-7b-instruct:free':      'Mistral 7B (бесплатно)',
+            'google/gemma-2-9b-it:free':               'Gemma 2 9B (бесплатно)',
+            'meta-llama/llama-3.1-8b-instruct:free':   'Llama 3.1 8B (бесплатно)',
+            'qwen/qwen-2-7b-instruct:free':            'Qwen 2 7B (бесплатно)',
+            'google/gemini-flash-1.5':                 'Gemini Flash 1.5',
+            'openai/gpt-4o-mini':                      'GPT-4o Mini',
+            'anthropic/claude-3-haiku':                'Claude 3 Haiku',
+            'google/gemini-pro-1.5':                   'Gemini Pro 1.5',
+            'openai/gpt-4o':                           'GPT-4o'
+          },
+          default: 'mistralai/mistral-7b-instruct:free'
+        },
+        field: {
+          name: 'Подробнее: AI модель',
+          description: 'Модель OpenRouter для генерации закулисных фактов'
+        }
+      });
+    } catch (e) {}
+  }
+
+  // ====================================================
   // РЕГИСТРАЦИЯ КОМПОНЕНТА
   // ====================================================
   function registerComponent() {
@@ -761,6 +774,7 @@
   function initialize() {
     if (!window.Lampa || !Lampa.Listener || !Lampa.Component) return setTimeout(initialize, 500);
     injectStyles();
+    registerSettings();
     registerComponent();
     injectButton();
   }
