@@ -8,14 +8,22 @@
 
   // ─── НАСТРОЕНИЯ ───────────────────────────────────────────────────────────
   var MOODS = [
-    { id: 'noir',   label: '🕵️ Тёмный нуар',  color: '#aaa',    genres: [80, 53],        minVotes: 300, minRating: 6.5 },
-    { id: 'cyber',  label: '🤖 Киберпанк',     color: '#00e5ff', genres: [878, 28],       minVotes: 200, minRating: 6.0 },
-    { id: 'horror', label: '👁️ Тревога',       color: '#bf00ff', genres: [27, 9648],      minVotes: 200, minRating: 6.0 },
-    { id: 'dream',  label: '🌙 Сновидение',    color: '#9b7fea', genres: [14, 18],        minVotes: 300, minRating: 7.0 },
-    { id: 'epic',   label: '⚔️ Эпос',          color: '#ffa726', genres: [12, 28, 36],   minVotes: 300, minRating: 6.5 },
-    { id: 'retro',  label: '📼 Ретро',          color: '#ff006e', genres: [35, 10749],    minVotes: 200, minRating: 6.5 },
-    { id: 'space',  label: '🚀 Космос',        color: '#00bcd4', genres: [878],           minVotes: 300, minRating: 6.5 },
-    { id: 'crime',  label: '🔫 Криминал',      color: '#f44336', genres: [80, 53],        minVotes: 500, minRating: 7.0 }
+    { id: 'noir',     label: '🕵️ Тёмный нуар',   color: '#aaa',    genres: [80, 53],             minVotes: 300, minRating: 6.5 },
+    { id: 'cyber',    label: '🤖 Киберпанк',      color: '#00e5ff', genres: [878, 28],            minVotes: 200, minRating: 6.0 },
+    { id: 'horror',   label: '👁️ Тревога',        color: '#bf00ff', genres: [27, 9648],           minVotes: 200, minRating: 6.0 },
+    { id: 'dream',    label: '🌙 Сновидение',     color: '#9b7fea', genres: [14, 18],             minVotes: 300, minRating: 7.0 },
+    { id: 'epic',     label: '⚔️ Эпос',           color: '#ffa726', genres: [12, 28, 36],        minVotes: 300, minRating: 6.5 },
+    { id: 'retro',    label: '📼 Ретро',           color: '#ff006e', genres: [35, 10749],         minVotes: 200, minRating: 6.5 },
+    { id: 'space',    label: '🚀 Космос',         color: '#00bcd4', genres: [878],               minVotes: 300, minRating: 6.5 },
+    { id: 'crime',    label: '🔫 Криминал',       color: '#f44336', genres: [80, 53],            minVotes: 500, minRating: 7.0 },
+    { id: 'comedy',   label: '😂 Комедия',        color: '#ffeb3b', genres: [35],                minVotes: 300, minRating: 7.0 },
+    { id: 'romance',  label: '💕 Романтика',      color: '#f48fb1', genres: [10749, 18],         minVotes: 200, minRating: 6.5 },
+    { id: 'action',   label: '🥊 Чистый экшн',   color: '#ff6f00', genres: [28],               minVotes: 400, minRating: 6.5 },
+    { id: 'drama',    label: '💔 Драма',          color: '#80cbc4', genres: [18],               minVotes: 500, minRating: 7.5 },
+    { id: 'anim',     label: '🎨 Анимация',       color: '#ce93d8', genres: [16],               minVotes: 200, minRating: 7.0 },
+    { id: 'family',   label: '👨‍👩‍👧 Семейное',     color: '#a5d6a7', genres: [10751, 16, 12],    minVotes: 200, minRating: 6.5 },
+    { id: 'docu',     label: '📚 Документалки',   color: '#b0bec5', genres: [99],               minVotes: 100, minRating: 7.0 },
+    { id: 'music',    label: '🎸 Музыкальные',    color: '#ffe082', genres: [10402, 18],        minVotes: 100, minRating: 7.0 }
   ];
 
   // ─── СТИЛИ ────────────────────────────────────────────────────────────────
