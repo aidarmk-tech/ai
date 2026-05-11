@@ -18,9 +18,8 @@
   function injectStyles() {
     if (document.getElementById('card-insight-styles')) return;
     var css = [
-      /* Корневой контейнер. БЕЗ position:absolute — диагностика */
-      '.ci-root{width:100%;min-height:100vh;background:#1a0033;color:#fff;overflow-y:auto;overflow-x:hidden}',
-      '.ci-page{padding:1.5em 2em 6em;min-height:100vh}',
+      '.ci-root{position:absolute;top:0;left:0;right:0;bottom:0;background:#1a0033;color:#fff;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;outline:none}',
+      '.ci-page{padding:1.5em 2em 6em}',
       '.ci-loading{padding:4em 1em;text-align:center;font-size:2em;color:#ffff00;font-weight:bold}',
       '.ci-error{padding:2em 1em;text-align:center;color:#ff7e7e;opacity:0.85;font-size:1.2em}',
 
@@ -416,42 +415,57 @@
       console.log('[CI] build() закончил, селекторов:', $root.find('.selector').length);
 
       setTimeout(function () {
+        if (!$root) return;
         try {
-          console.log('[CI] toggle("content")');
           Lampa.Controller.toggle('content');
         } catch (e) {
           console.error('[CI] toggle error:', e);
         }
-      }, 30);
+      }, 150);
     };
 
-    // КЛЮЧЕВАЯ ФУНКЦИЯ: скролл за фокусом через нативный API
-    function scrollToFocus() {
+    function scrollToEl(el) {
+      if (!el || !$root || !$root[0]) return;
+      var rootEl = $root[0];
       var raf = window.requestAnimationFrame || function (cb) { return setTimeout(cb, 16); };
       raf(function () {
-        var focused = $root.find('.selector.focus')[0];
-        if (!focused) return;
-        lastFocused = focused;
-        try {
-          focused.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'nearest' });
-        } catch (e) {
-          // Древние WebView без scrollIntoView с options
-          try { focused.scrollIntoView(false); } catch (er) {}
+        if (!$root) return;
+        var margin = 60;
+        var elTop    = el.offsetTop;
+        var elBottom = elTop + el.offsetHeight;
+        var cur      = rootEl.scrollTop;
+        var viewH    = rootEl.clientHeight;
+        if (elTop - margin < cur) {
+          rootEl.scrollTop = Math.max(0, elTop - margin);
+        } else if (elBottom + margin > cur + viewH) {
+          rootEl.scrollTop = elBottom + margin - viewH;
         }
       });
     }
 
+    function scrollToFocus() {
+      var focused = ($root && $root.find('.selector.focus')[0]) || lastFocused;
+      if (focused) scrollToEl(focused);
+    }
+
+    // Скролл при любом переключении фокуса пультом или мышью
+    $root.on('hover:focus', '.selector', function () {
+      lastFocused = this;
+      scrollToEl(this);
+    });
+
     this.start = function () {
+      var back = this.back;
       Lampa.Controller.add('content', {
         toggle: function () {
           Lampa.Controller.collectionSet($root);
           if (contentReady) {
-            var target = (lastFocused && $.contains($root[0], lastFocused))
+            var target = (lastFocused && $root[0] && $.contains($root[0], lastFocused))
               ? lastFocused
               : $root.find('.selector').first()[0];
             if (target) {
               Lampa.Controller.collectionFocus(target, $root);
-              scrollToFocus();
+              scrollToEl(target);
             }
           }
         },
@@ -461,32 +475,24 @@
         left: function () {
           if (typeof Navigator !== 'undefined' && Navigator.canmove && Navigator.canmove('left')) {
             Navigator.move('left');
-            scrollToFocus();
           } else {
             Lampa.Controller.toggle('menu');
           }
         },
         right: function () {
-          if (typeof Navigator !== 'undefined' && Navigator.move) {
-            Navigator.move('right');
-            scrollToFocus();
-          }
+          if (typeof Navigator !== 'undefined' && Navigator.move) Navigator.move('right');
         },
         up: function () {
           if (typeof Navigator !== 'undefined' && Navigator.canmove && Navigator.canmove('up')) {
             Navigator.move('up');
-            scrollToFocus();
           } else {
             Lampa.Controller.toggle('head');
           }
         },
         down: function () {
-          if (typeof Navigator !== 'undefined' && Navigator.move) {
-            Navigator.move('down');
-            scrollToFocus();
-          }
+          if (typeof Navigator !== 'undefined' && Navigator.move) Navigator.move('down');
         },
-        back: this.back
+        back: back
       });
       Lampa.Controller.toggle('content');
     };
