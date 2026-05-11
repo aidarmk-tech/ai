@@ -18,8 +18,8 @@
   function injectStyles() {
     if (document.getElementById('card-insight-styles')) return;
     var css = [
-      '.ci-root{width:100%;min-height:100vh;background:#1a0033;color:#fff;overflow-x:hidden}',
-      '.ci-page{padding:1.5em 2em 6em;min-height:100vh}',
+      '.ci-root{width:100%;background:#1a0033;color:#fff;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch}',
+      '.ci-page{padding:1.5em 2em 6em}',
       '.ci-loading{padding:4em 1em;text-align:center;font-size:2em;color:#ffff00;font-weight:bold}',
       '.ci-error{padding:2em 1em;text-align:center;color:#ff7e7e;opacity:0.85;font-size:1.2em}',
 
@@ -347,7 +347,7 @@
   }
 
   // ====================================================
-  // КОМПОНЕНТ ACTIVITY (БЕЗ Lampa.Scroll, на чистом CSS)
+  // КОМПОНЕНТ ACTIVITY
   // ====================================================
   function CardInsightActivity(object) {
     var network = new Lampa.Reguest();
@@ -407,27 +407,30 @@
 
       setTimeout(function () {
         if (!$root) return;
-        try {
-          Lampa.Controller.toggle('content');
-        } catch (e) {}
+        try { Lampa.Controller.toggle('content'); } catch (e) {}
       }, 150);
     };
 
+    // Скролл через прямой scrollTop — работает даже когда Lampa-контейнер overflow:hidden
     function scrollToEl(el) {
-      if (!el) return;
+      if (!el || !$root || !$root[0]) return;
       var raf = window.requestAnimationFrame || function (cb) { return setTimeout(cb, 16); };
       raf(function () {
-        try {
-          el.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'nearest' });
-        } catch (e) {
-          try { el.scrollIntoView(false); } catch (er) {}
+        if (!$root || !$root[0]) return;
+        var rootEl = $root[0];
+        var viewH = rootEl.clientHeight;
+        if (!viewH) return;
+        var rootRect = rootEl.getBoundingClientRect();
+        var elRect   = el.getBoundingClientRect();
+        var elTop    = elRect.top - rootRect.top + rootEl.scrollTop;
+        var elBottom = elTop + elRect.height;
+        var margin   = 80;
+        if (elTop - margin < rootEl.scrollTop) {
+          rootEl.scrollTop = Math.max(0, elTop - margin);
+        } else if (elBottom + margin > rootEl.scrollTop + viewH) {
+          rootEl.scrollTop = elBottom + margin - viewH;
         }
       });
-    }
-
-    function scrollToFocus() {
-      var focused = ($root && $root.find('.selector.focus')[0]) || lastFocused;
-      if (focused) scrollToEl(focused);
     }
 
     $root.on('hover:focus', '.selector', function () {
@@ -437,6 +440,11 @@
 
     this.start = function () {
       var back = this.back;
+      // Высота через JS — 100vh ненадёжен в Android WebView
+      if ($root && $root[0]) {
+        var h = window.innerHeight || document.documentElement.clientHeight || 600;
+        $root[0].style.height = h + 'px';
+      }
       Lampa.Controller.add('content', {
         toggle: function () {
           Lampa.Controller.collectionSet($root);
