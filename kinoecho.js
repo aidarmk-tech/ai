@@ -433,6 +433,7 @@
     var self        = this;
     var $tabEls     = [];
     var $tabContents = [];
+    var switchTab    = null;
 
     this.create  = function () { this.load(); return this.render(); };
     this.render  = function () { return $root; };
@@ -498,7 +499,7 @@
         $tabContents.push($tc);
       }
 
-      function switchTab(idx) {
+      switchTab = function (idx) {
         activeTab = idx;
         $tabEls.forEach(function ($t, i) {
           if (i === idx) $t.addClass('ke-tab--active'); else $t.removeClass('ke-tab--active');
@@ -591,6 +592,30 @@
       if (focused) scrollTo(focused);
     }
 
+    function getFocusedTab() {
+      if (!lastFocused) return -1;
+      for (var i = 0; i < $tabEls.length; i++) {
+        if ($tabEls[i] && $tabEls[i][0] === lastFocused) return i;
+      }
+      return -1;
+    }
+
+    function focusTab(idx) {
+      if (!$tabEls[idx] || !$tabEls[idx][0]) return;
+      if (switchTab) switchTab(idx);
+      Lampa.Controller.collectionFocus($tabEls[idx][0], $root);
+      scrollTo($tabEls[idx][0]);
+    }
+
+    function focusFirstContent() {
+      if (!$tabContents[activeTab]) return false;
+      var $first = $tabContents[activeTab].find('.selector').first();
+      if (!$first.length) return false;
+      Lampa.Controller.collectionFocus($first[0], $root);
+      scrollTo($first[0]);
+      return true;
+    }
+
     $root.on('hover:focus', '.selector', function () { lastFocused = this; scrollTo(this); });
 
     // ── Controller ──
@@ -607,12 +632,23 @@
       Lampa.Controller.add('content', {
         toggle: function () {
           Lampa.Controller.collectionSet($root);
-          var target = (lastFocused && $root[0] && $.contains($root[0], lastFocused))
-            ? lastFocused : $root.find('.selector').first()[0];
+          var target;
+          if (lastFocused && $root[0] && $.contains($root[0], lastFocused)) {
+            target = lastFocused;
+          } else if ($tabEls.length && $tabEls[0] && $tabEls[0][0]) {
+            target = $tabEls[0][0];
+          } else {
+            target = $root.find('.selector').first()[0];
+          }
           if (target) { Lampa.Controller.collectionFocus(target, $root); scrollTo(target); }
         },
         update: function () { Lampa.Controller.collectionSet($root); },
         left: function () {
+          var ti = getFocusedTab();
+          if (ti >= 0) {
+            if (ti > 0) focusTab(ti - 1);
+            return;
+          }
           if (typeof Navigator !== 'undefined' && Navigator.canmove && Navigator.canmove('left')) {
             Navigator.move('left');
             setTimeout(scrollToFocus, 50);
@@ -621,20 +657,38 @@
           }
         },
         right: function () {
+          var ti = getFocusedTab();
+          if (ti >= 0) {
+            if (ti < $tabEls.length - 1) focusTab(ti + 1);
+            return;
+          }
           if (typeof Navigator !== 'undefined' && Navigator.move) {
             Navigator.move('right');
             setTimeout(scrollToFocus, 50);
           }
         },
         up: function () {
+          if (getFocusedTab() >= 0) {
+            Lampa.Controller.toggle('head');
+            return;
+          }
           if (typeof Navigator !== 'undefined' && Navigator.canmove && Navigator.canmove('up')) {
             Navigator.move('up');
             setTimeout(scrollToFocus, 50);
           } else {
-            Lampa.Controller.toggle('head');
+            focusTab(activeTab);
           }
         },
         down: function () {
+          if (getFocusedTab() >= 0) {
+            if (!focusFirstContent()) {
+              if (typeof Navigator !== 'undefined' && Navigator.move) {
+                Navigator.move('down');
+                setTimeout(scrollToFocus, 50);
+              }
+            }
+            return;
+          }
           if (typeof Navigator !== 'undefined' && Navigator.move) {
             Navigator.move('down');
             setTimeout(scrollToFocus, 50);
