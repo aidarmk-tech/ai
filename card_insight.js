@@ -414,7 +414,7 @@
     try { apiKey = Lampa.Storage.get('ci_openrouter_key', ''); } catch (e) {}
     if (!apiKey) { callback(null, []); return; }
 
-    var model = 'mistralai/mistral-7b-instruct:free';
+    var model = AI_DEFAULT_MODEL;
     try { model = Lampa.Storage.get('ci_openrouter_model', model) || model; } catch (e) {}
 
     var genreText = genres && genres.length ? ' (жанр: ' + genres.slice(0, 3).join(', ') + ')' : '';
@@ -671,19 +671,28 @@
   }
 
   var AI_MODELS = {
-    'mistralai/mistral-7b-instruct:free':    'Mistral 7B (бесплатно)',
-    'google/gemma-2-9b-it:free':             'Gemma 2 9B (бесплатно)',
-    'meta-llama/llama-3.1-8b-instruct:free': 'Llama 3.1 8B (бесплатно)',
-    'qwen/qwen-2-7b-instruct:free':          'Qwen 2 7B (бесплатно)',
-    'google/gemini-flash-1.5':               'Gemini Flash 1.5',
-    'openai/gpt-4o-mini':                    'GPT-4o Mini',
-    'anthropic/claude-3-haiku':              'Claude 3 Haiku',
-    'google/gemini-pro-1.5':                 'Gemini Pro 1.5',
-    'openai/gpt-4o':                         'GPT-4o'
+    // Бесплатные
+    'meta-llama/llama-3.3-70b-instruct:free': '[FREE] Llama 3.3 70B',
+    'deepseek/deepseek-chat-v3-0324:free':    '[FREE] DeepSeek V3',
+    // Дёшево и качественно
+    'deepseek/deepseek-chat':                 'DeepSeek V3 ★ лучший за цену',
+    'qwen/qwen-2.5-72b-instruct':             'Qwen 2.5 72B',
+    'google/gemini-2.5-flash':                'Gemini 2.5 Flash',
+    'openai/gpt-4o-mini':                     'GPT-4o Mini',
+    'anthropic/claude-3.5-haiku':             'Claude 3.5 Haiku',
+    'mistralai/mistral-large-2411':           'Mistral Large',
+    // Рассуждение
+    'deepseek/deepseek-r1':                   'DeepSeek R1 (думает)',
+    // Премиум
+    'openai/gpt-4o':                          'GPT-4o',
+    'google/gemini-2.5-pro':                  'Gemini 2.5 Pro',
+    'anthropic/claude-sonnet-4':              'Claude Sonnet 4'
   };
 
+  var AI_DEFAULT_MODEL = 'meta-llama/llama-3.3-70b-instruct:free';
+
   function getAIKey()   { try { return Lampa.Storage.get('ci_openrouter_key', '') || ''; } catch(e) { return ''; } }
-  function getAIModel() { try { return Lampa.Storage.get('ci_openrouter_model', 'mistralai/mistral-7b-instruct:free') || 'mistralai/mistral-7b-instruct:free'; } catch(e) { return 'mistralai/mistral-7b-instruct:free'; } }
+  function getAIModel() { try { return Lampa.Storage.get('ci_openrouter_model', AI_DEFAULT_MODEL) || AI_DEFAULT_MODEL; } catch(e) { return AI_DEFAULT_MODEL; } }
   function setAIKey(v)  { try { Lampa.Storage.set('ci_openrouter_key', v); } catch(e) {} }
   function setAIModel(v){ try { Lampa.Storage.set('ci_openrouter_model', v); } catch(e) {} }
 
