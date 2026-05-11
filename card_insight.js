@@ -496,6 +496,8 @@
     this.build = function (data) {
       $page.empty();
 
+      $page.append(renderAISettingsSection());
+
       var $hero = renderHero(data);
       if ($hero) $page.append($hero);
 
@@ -668,44 +670,60 @@
     };
   }
 
-  // ====================================================
-  // НАСТРОЙКИ — OpenRouter
-  // ====================================================
-  function registerSettings() {
-    try {
-      if (!Lampa.SettingsApi || typeof Lampa.SettingsApi.addParam !== 'function') return;
-      Lampa.SettingsApi.addParam({
-        component: 'interface',
-        param: { name: 'ci_openrouter_key', type: 'input', default: '' },
-        field: {
-          name: 'AI Инфо: OpenRouter API ключ',
-          description: 'Введите ключ с openrouter.ai — появится раздел "За кулисами" в карточке фильма'
-        }
-      });
-      Lampa.SettingsApi.addParam({
-        component: 'interface',
-        param: {
-          name: 'ci_openrouter_model',
-          type: 'select',
-          values: {
-            'mistralai/mistral-7b-instruct:free':      'Mistral 7B (бесплатно)',
-            'google/gemma-2-9b-it:free':               'Gemma 2 9B (бесплатно)',
-            'meta-llama/llama-3.1-8b-instruct:free':   'Llama 3.1 8B (бесплатно)',
-            'qwen/qwen-2-7b-instruct:free':            'Qwen 2 7B (бесплатно)',
-            'google/gemini-flash-1.5':                 'Gemini Flash 1.5',
-            'openai/gpt-4o-mini':                      'GPT-4o Mini',
-            'anthropic/claude-3-haiku':                'Claude 3 Haiku',
-            'google/gemini-pro-1.5':                   'Gemini Pro 1.5',
-            'openai/gpt-4o':                           'GPT-4o'
-          },
-          default: 'mistralai/mistral-7b-instruct:free'
-        },
-        field: {
-          name: 'AI Инфо: модель OpenRouter',
-          description: 'Модель для генерации закулисных фактов'
-        }
-      });
-    } catch (e) {}
+  var AI_MODELS = {
+    'mistralai/mistral-7b-instruct:free':    'Mistral 7B (бесплатно)',
+    'google/gemma-2-9b-it:free':             'Gemma 2 9B (бесплатно)',
+    'meta-llama/llama-3.1-8b-instruct:free': 'Llama 3.1 8B (бесплатно)',
+    'qwen/qwen-2-7b-instruct:free':          'Qwen 2 7B (бесплатно)',
+    'google/gemini-flash-1.5':               'Gemini Flash 1.5',
+    'openai/gpt-4o-mini':                    'GPT-4o Mini',
+    'anthropic/claude-3-haiku':              'Claude 3 Haiku',
+    'google/gemini-pro-1.5':                 'Gemini Pro 1.5',
+    'openai/gpt-4o':                         'GPT-4o'
+  };
+
+  function getAIKey()   { try { return Lampa.Storage.get('ci_openrouter_key', '') || ''; } catch(e) { return ''; } }
+  function getAIModel() { try { return Lampa.Storage.get('ci_openrouter_model', 'mistralai/mistral-7b-instruct:free') || 'mistralai/mistral-7b-instruct:free'; } catch(e) { return 'mistralai/mistral-7b-instruct:free'; } }
+  function setAIKey(v)  { try { Lampa.Storage.set('ci_openrouter_key', v); } catch(e) {} }
+  function setAIModel(v){ try { Lampa.Storage.set('ci_openrouter_model', v); } catch(e) {} }
+
+  // Панель настроек AI внутри плагина (вместо Lampa.SettingsApi, который падает в bylampa)
+  function renderAISettingsSection() {
+    var key   = getAIKey();
+    var model = getAIModel();
+    var modelLabel = AI_MODELS[model] || model;
+
+    var $sec = $('<div class="ci-section"></div>');
+    $sec.append('<div class="ci-section-title"><span class="ci-section-title__bar"></span>Настройки AI Инфо</div>');
+    var $list = $('<div class="ci-facts"></div>');
+
+    // Строка — ключ
+    var keyText = key ? '●●●●●●' + key.slice(-4) : 'Не задан — нажмите для ввода';
+    var $keyRow = $('<div class="ci-fact selector" tabindex="0"><div class="ci-fact__icon">🔑</div><div class="ci-fact__text"><span class="ci-fact__label">API ключ:</span> ' + escapeHtml(keyText) + '</div></div>');
+    $keyRow.on('hover:enter', function () {
+      var newKey = window.prompt('OpenRouter API ключ (openrouter.ai):', key);
+      if (newKey !== null) {
+        setAIKey(newKey.trim());
+        var disp = newKey.trim() ? '●●●●●●' + newKey.trim().slice(-4) : 'Не задан';
+        $keyRow.find('.ci-fact__text').html('<span class="ci-fact__label">API ключ:</span> ' + escapeHtml(disp));
+      }
+    });
+    $list.append($keyRow);
+
+    // Строка — модель (перебор по клику)
+    var modelKeys = Object.keys(AI_MODELS);
+    var $modelRow = $('<div class="ci-fact selector" tabindex="0"><div class="ci-fact__icon">🤖</div><div class="ci-fact__text"><span class="ci-fact__label">Модель:</span> ' + escapeHtml(modelLabel) + '</div></div>');
+    $modelRow.on('hover:enter', function () {
+      var cur = getAIModel();
+      var idx = modelKeys.indexOf(cur);
+      var next = modelKeys[(idx + 1) % modelKeys.length];
+      setAIModel(next);
+      $modelRow.find('.ci-fact__text').html('<span class="ci-fact__label">Модель:</span> ' + escapeHtml(AI_MODELS[next]));
+    });
+    $list.append($modelRow);
+
+    $sec.append($list);
+    return $sec;
   }
 
   // ====================================================
@@ -774,7 +792,6 @@
   function initialize() {
     if (!window.Lampa || !Lampa.Listener || !Lampa.Component) return setTimeout(initialize, 500);
     injectStyles();
-    registerSettings();
     registerComponent();
     injectButton();
   }
