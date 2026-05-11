@@ -171,7 +171,7 @@
     // Fallback: numbered pagination — ищем ссылку "page/2" или "?page=2"
     if (!nextUrl) {
       var pageLinks = Array.from(doc.querySelectorAll('.pagination a, .pages a, [class*="pag"] a'));
-      var currentPage = parseInt((object && object.page) || 1, 10);
+      var currentPage = 1;
       pageLinks.forEach(function (a) {
         var h = a.getAttribute('href') || '';
         if (h.includes('page/' + (currentPage + 1)) || h.includes('?page=' + (currentPage + 1))) {
@@ -201,7 +201,7 @@
     var scripts = Array.from(doc.querySelectorAll('script:not([src])'));
     // Типичные хосты плееров
     var playerHosts = ['kodik', 'video', 'iframe', 'player', 'embed', 'voidboost', 'hdvb', 'videocdn', 'bazon'];
-    var urlRe = /['"]((?:https?:)?\/\/[^\s'"<>]{15,})['"]/g;
+    var urlRe = new RegExp('[\'"]' + '((?:https?:)?//[^\\s\'"<>]{15,})' + '[\'"]', 'g');
 
     for (var s = 0; s < scripts.length; s++) {
       var code = scripts[s].textContent;
@@ -218,7 +218,7 @@
     }
 
     // 3. В сыром HTML — строки вида //hostname/path
-    var rawRe = /['"](\/\/[a-z0-9-]+\.[a-z]{2,}\/[^'"<>\s]{10,})['"]/gi;
+    var rawRe = new RegExp('[\'"]' + '(//[a-z0-9-]+\\.[a-z]{2,}/[^\'"<>\\s]{10,})' + '[\'"]', 'gi');
     var rawM  = rawRe.exec(html);
     if (rawM) return 'https:' + rawM[1];
 
