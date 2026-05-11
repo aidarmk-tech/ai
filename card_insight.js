@@ -18,7 +18,7 @@
   function injectStyles() {
     if (document.getElementById('card-insight-styles')) return;
     var css = [
-      '.ci-root{position:absolute;top:0;left:0;right:0;bottom:0;background:#1a0033;color:#fff;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;outline:none}',
+      '.ci-root{width:100%;height:100vh;background:#1a0033;color:#fff;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;outline:none;box-sizing:border-box}',
       '.ci-page{padding:1.5em 2em 6em}',
       '.ci-loading{padding:4em 1em;text-align:center;font-size:2em;color:#ffff00;font-weight:bold}',
       '.ci-error{padding:2em 1em;text-align:center;color:#ff7e7e;opacity:0.85;font-size:1.2em}',
@@ -70,6 +70,7 @@
       '.ci-card__year{opacity:0.55;font-size:0.9em;margin-top:0.3em}',
 
       /* Кнопка в карточке */
+      '.full-start__button.view--ci{color:#ffa726}',
       '.full-start__button.view--ci svg{margin-right:0.4em;vertical-align:middle}'
     ].join('\n');
 
@@ -524,8 +525,8 @@
 
     var svgIcon =
       '<svg width="36" height="36" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">' +
-        '<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/>' +
-        '<path d="M12 8v4M12 16h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' +
+        '<circle cx="12" cy="12" r="9" stroke="#ffa726" stroke-width="2"/>' +
+        '<path d="M12 8v4M12 16h.01" stroke="#ffa726" stroke-width="2" stroke-linecap="round"/>' +
       '</svg>';
 
     var $btn = $(
