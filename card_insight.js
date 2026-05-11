@@ -224,8 +224,7 @@
     var url = Lampa.TMDB.image('t/p/w1280' + data.backdrop_path);
     var title = data.title || data.name || '';
     return $(
-      '<div class="ci-hero" style="background-image:url(\'' + url + '\')">'+
-        '<div class="ci-hero__overlay"></div>' +
+      '<div class="ci-hero" style="background-image:url(\'' + url + '\')">'+'<div class="ci-hero__overlay"></div>' +
         (title ? '<div class="ci-hero__title">' + escapeHtml(title) + '</div>' : '') +
       '</div>'
     );
@@ -403,7 +402,7 @@
   function parseAIResponse(text) {
     var facts = [];
     text.split('\n').forEach(function (line) {
-      line = line.replace(/^[\s•\-\*]+/, '').replace(/^\d+[\.)\]\s*/, '').trim();
+      line = line.replace(/^[\s•\-\*]+/, '').replace(/^\d+[\.\.\)\]]\s*/, '').trim();
       if (line.length >= 40 && line.length <= 700 && facts.indexOf(line) === -1) facts.push(line);
     });
     return facts.slice(0, 8);
