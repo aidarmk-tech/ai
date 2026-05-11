@@ -18,8 +18,8 @@
   function injectStyles() {
     if (document.getElementById('card-insight-styles')) return;
     var css = [
-      '.ci-root{width:100%;min-height:100vh;background:#1a0033;color:#fff;overflow-x:hidden}',
-      '.ci-page{padding:1.5em 2em 6em;min-height:100vh}',
+      '.ci-root{width:100%;background:#1a0033;color:#fff;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch}',
+      '.ci-page{padding:1.5em 2em 6em}',
       '.ci-loading{padding:4em 1em;text-align:center;font-size:2em;color:#ffff00;font-weight:bold}',
       '.ci-error{padding:2em 1em;text-align:center;color:#ff7e7e;opacity:0.85;font-size:1.2em}',
 
@@ -68,6 +68,15 @@
       '.ci-card__info{padding:0.65em 0.75em 0.85em}',
       '.ci-card__title{font-weight:600;font-size:1.05em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.3;min-height:2.7em}',
       '.ci-card__year{opacity:0.55;font-size:0.9em;margin-top:0.3em}',
+
+      /* Коллекция — текущий фильм */
+      '.ci-card--current{opacity:0.72}',
+      '.ci-card__current-badge{position:absolute;top:0.4em;left:0.4em;background:rgba(255,166,38,0.9);padding:0.15em 0.5em;border-radius:0.2em;font-size:0.85em;font-weight:700;color:#1a0033;z-index:1}',
+
+      /* За кулисами */
+      '.ci-trivia{display:flex;flex-direction:column;gap:0.7em}',
+      '.ci-trivia__item{padding:0.85em 1em 0.85em 1.2em;background:rgba(255,255,255,0.05);border-radius:0.4em;line-height:1.55;font-size:1.1em;border-left:0.25em solid #ffa726;outline:none}',
+      '.ci-trivia__item.focus{background:rgba(255,255,255,0.15);box-shadow:0 0 0 0.2em #ffa726}',
 
       /* Кнопка в карточке */
       '.full-start__button.view--ci{color:#ffa726}',
@@ -215,7 +224,7 @@
     var url = Lampa.TMDB.image('t/p/w1280' + data.backdrop_path);
     var title = data.title || data.name || '';
     return $(
-      '<div class="ci-hero" style="background-image:url(\'' + url + '\')">' +
+      '<div class="ci-hero" style="background-image:url(\'' + url + '\')">'+
         '<div class="ci-hero__overlay"></div>' +
         (title ? '<div class="ci-hero__title">' + escapeHtml(title) + '</div>' : '') +
       '</div>'
@@ -346,13 +355,116 @@
     return $sec;
   }
 
+  function renderCollectionSection(colData, currentId) {
+    if (!colData || !colData.parts || !colData.parts.length) return null;
+    var parts = colData.parts.slice().sort(function (a, b) {
+      var da = a.release_date || '';
+      var db = b.release_date || '';
+      return da < db ? -1 : da > db ? 1 : 0;
+    });
+    var $sec = $('<div class="ci-section"></div>');
+    var colName = colData.name ? escapeHtml(colData.name) : 'Коллекция';
+    $sec.append('<div class="ci-section-title"><span class="ci-section-title__bar"></span>' + colName + '</div>');
+    var $grid = $('<div class="ci-grid"></div>');
+    parts.forEach(function (item) {
+      var isCurrent = item.id === currentId;
+      var posterUrl = item.poster_path ? Lampa.TMDB.image('t/p/w200' + item.poster_path) : '';
+      var year = (item.release_date || '').substring(0, 4);
+      var title = item.title || item.name || 'Без названия';
+      var rating = item.vote_average && item.vote_average > 0 ? Number(item.vote_average).toFixed(1) : '';
+      var $card = $(
+        '<div class="ci-card' + (isCurrent ? ' ci-card--current' : '') + ' selector" tabindex="0">' +
+          '<div class="ci-card__poster"' +
+            (posterUrl ? ' style="background-image:url(\'' + posterUrl + '\')"' : '') + '>' +
+            (!posterUrl ? '<div class="ci-card__no-poster">🎬</div>' : '') +
+            (rating ? '<div class="ci-card__rating">★ ' + rating + '</div>' : '') +
+            (isCurrent ? '<div class="ci-card__current-badge">▶ Сейчас</div>' : '') +
+          '</div>' +
+          '<div class="ci-card__info">' +
+            '<div class="ci-card__title">' + escapeHtml(title) + '</div>' +
+            (year ? '<div class="ci-card__year">' + year + '</div>' : '') +
+          '</div>' +
+        '</div>'
+      );
+      if (!isCurrent) {
+        $card.on('hover:enter', function () {
+          Lampa.Activity.push({
+            url: '', component: 'full', id: item.id, method: 'movie',
+            card: item, source: 'tmdb'
+          });
+        });
+      }
+      $grid.append($card);
+    });
+    $sec.append($grid);
+    return $sec;
+  }
+
+  function parseAIResponse(text) {
+    var facts = [];
+    text.split('\n').forEach(function (line) {
+      line = line.replace(/^[\s•\-\*]+/, '').replace(/^\d+[\.)\]\s*/, '').trim();
+      if (line.length >= 40 && line.length <= 700 && facts.indexOf(line) === -1) facts.push(line);
+    });
+    return facts.slice(0, 8);
+  }
+
+  function fetchAITrivia(title, year, genres, callback) {
+    var apiKey = '';
+    try { apiKey = Lampa.Storage.get('ci_openrouter_key', ''); } catch (e) {}
+    if (!apiKey) { callback(null, []); return; }
+
+    var model = 'mistralai/mistral-7b-instruct:free';
+    try { model = Lampa.Storage.get('ci_openrouter_model', model) || model; } catch (e) {}
+
+    var genreText = genres && genres.length ? ' (жанр: ' + genres.slice(0, 3).join(', ') + ')' : '';
+    var prompt =
+      'Напиши 6 интересных закулисных фактов о фильме "' + title + '"' +
+      (year ? ' ' + year + ' года' : '') + genreText + '. ' +
+      'Пиши о съёмочном процессе, кастинге, неожиданных историях создания, курьёзах на площадке. ' +
+      'Каждый факт — отдельная строка, начинается с символа "•". Без заголовков и предисловий. Только на русском языке.';
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', 'https://openrouter.ai/api/v1/chat/completions', true);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.setRequestHeader('Authorization', 'Bearer ' + apiKey);
+    xhr.setRequestHeader('HTTP-Referer', 'https://lampa.mx');
+    xhr.timeout = 25000;
+    xhr.onload = function () {
+      if (xhr.status !== 200) { callback(null, []); return; }
+      try {
+        var resp = JSON.parse(xhr.responseText);
+        var content = resp.choices && resp.choices[0] && resp.choices[0].message && resp.choices[0].message.content;
+        callback(null, content ? parseAIResponse(content) : []);
+      } catch (e) { callback(null, []); }
+    };
+    xhr.onerror = xhr.ontimeout = function () { callback(null, []); };
+    xhr.send(JSON.stringify({
+      model: model,
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 900,
+      temperature: 0.75
+    }));
+  }
+
+  function renderWikiTriviaSection(facts) {
+    if (!facts || !facts.length) return null;
+    var $sec = $('<div class="ci-section"></div>');
+    $sec.append('<div class="ci-section-title"><span class="ci-section-title__bar"></span>За кулисами</div>');
+    var $list = $('<div class="ci-trivia"></div>');
+    facts.forEach(function (f) {
+      $list.append('<div class="ci-trivia__item selector" tabindex="0">' + escapeHtml(f) + '</div>');
+    });
+    $sec.append($list);
+    return $sec;
+  }
+
   // ====================================================
-  // КОМПОНЕНТ ACTIVITY (БЕЗ Lampa.Scroll, на чистом CSS)
+  // КОМПОНЕНТ ACTIVITY
   // ====================================================
   function CardInsightActivity(object) {
-    console.log('[CI] === constructor вызван ===', object);
     var network = new Lampa.Reguest();
-    var $root = $('<div class="ci-root"><div class="ci-page"><div class="ci-loading">ЗАГРУЗКА...<br>method=' + (object.method || '?') + ' id=' + (object.id || '?') + '</div></div></div>');
+    var $root = $('<div class="ci-root"><div class="ci-page"><div class="ci-loading">Загрузка...</div></div></div>');
     var $page = $root.find('.ci-page');
     var loaded = false;
     var contentReady = false;
@@ -360,26 +472,19 @@
     var self = this;
 
     this.create = function () {
-      console.log('[CI] create() вызван');
       this.load();
       return this.render();
     };
 
     this.render = function () {
-      console.log('[CI] render() вызван, $root существует:', !!$root, 'детей:', $root ? $root.children().length : 0);
       return $root;
     };
 
     this.load = function () {
-      console.log('[CI] load() начало fetch');
       fetchFullData(object.method, object.id, function (err, data) {
-        console.log('[CI] fetch завершён. err:', err, 'data:', !!data);
         if (loaded) return;
         loaded = true;
-        if (!$page) {
-          console.warn('[CI] $page null — пропуск');
-          return;
-        }
+        if (!$page) return;
         if (err || !data) {
           $page.html('<div class="ci-error">Не удалось загрузить TMDB: ' + (err && err.message ? err.message : 'нет данных') + '</div>');
           return;
@@ -389,7 +494,6 @@
     };
 
     this.build = function (data) {
-      console.log('[CI] build() начало рендера. title:', data.title || data.name);
       $page.empty();
 
       var $hero = renderHero(data);
@@ -400,8 +504,16 @@
       var $facts = renderFactsSection(buildFacts(data));
       if ($facts) $page.append($facts);
 
+      // Placeholder for AI trivia (filled async)
+      var $triviaPlaceholder = $('<div></div>');
+      $page.append($triviaPlaceholder);
+
       var $cast = renderCastSection(data.credits);
       if ($cast) $page.append($cast);
+
+      // Placeholder for collection/franchise (filled async)
+      var $colPlaceholder = $('<div></div>');
+      $page.append($colPlaceholder);
 
       var recs = (data.recommendations && data.recommendations.results) || [];
       var recTitle = 'Похожие';
@@ -413,36 +525,73 @@
       if ($recs) $page.append($recs);
 
       contentReady = true;
-      console.log('[CI] build() закончил, селекторов:', $root.find('.selector').length);
+
+      // Async: collection parts
+      if (data.belongs_to_collection && data.belongs_to_collection.id) {
+        var colNet = new Lampa.Reguest();
+        var colUrl = Lampa.TMDB.api(
+          'collection/' + data.belongs_to_collection.id +
+          '?api_key=' + Lampa.TMDB.key() + '&language=ru'
+        );
+        colNet.silent(colUrl, function (colData) {
+          if (!$page) return;
+          var $col = renderCollectionSection(colData, data.id);
+          if ($col) $colPlaceholder.replaceWith($col);
+          else $colPlaceholder.remove();
+          try { Lampa.Controller.collectionSet($root); } catch (e) {}
+        }, function () { $colPlaceholder.remove(); });
+      } else {
+        $colPlaceholder.remove();
+      }
+
+      // Async: AI trivia via OpenRouter (only if API key configured)
+      var aiTitle  = data.title || data.name || '';
+      var aiYear   = (data.release_date || data.first_air_date || '').substring(0, 4);
+      var aiGenres = (data.genres || []).map(function (g) { return g.name; });
+      fetchAITrivia(aiTitle, aiYear, aiGenres, function (err, triviaFacts) {
+        if (!$page) return;
+        var $trivia = renderWikiTriviaSection(triviaFacts);
+        if ($trivia) $triviaPlaceholder.replaceWith($trivia);
+        else $triviaPlaceholder.remove();
+        try { Lampa.Controller.collectionSet($root); } catch (e) {}
+      });
 
       setTimeout(function () {
         if (!$root) return;
-        try {
-          Lampa.Controller.toggle('content');
-        } catch (e) {
-          console.error('[CI] toggle error:', e);
-        }
+        try { Lampa.Controller.toggle('content'); } catch (e) {}
       }, 150);
     };
 
     function scrollToEl(el) {
-      if (!el) return;
+      if (!el || !$root || !$root[0]) return;
       var raf = window.requestAnimationFrame || function (cb) { return setTimeout(cb, 16); };
       raf(function () {
-        try {
-          el.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'nearest' });
-        } catch (e) {
-          try { el.scrollIntoView(false); } catch (er) {}
+        if (!$root || !$root[0]) return;
+        var rootEl = $root[0];
+        var viewH  = rootEl.clientHeight;
+        if (viewH > 0) {
+          var elTop = 0, node = el;
+          while (node && node !== rootEl) { elTop += node.offsetTop; node = node.offsetParent; }
+          var elBottom = elTop + el.offsetHeight;
+          var margin = 80;
+          if (elTop - margin < rootEl.scrollTop) {
+            rootEl.scrollTop = Math.max(0, elTop - margin);
+          } else if (elBottom + margin > rootEl.scrollTop + viewH) {
+            rootEl.scrollTop = elBottom + margin - viewH;
+          }
+        } else {
+          try { el.scrollIntoView({ behavior: 'auto', block: 'nearest' }); }
+          catch (e) { try { el.scrollIntoView(false); } catch (er) {} }
         }
       });
     }
 
     function scrollToFocus() {
-      var focused = ($root && $root.find('.selector.focus')[0]) || lastFocused;
+      if (!$root) return;
+      var focused = $root.find('.selector.focus')[0] || lastFocused;
       if (focused) scrollToEl(focused);
     }
 
-    // Скролл при любом переключении фокуса пультом или мышью
     $root.on('hover:focus', '.selector', function () {
       lastFocused = this;
       scrollToEl(this);
@@ -450,6 +599,15 @@
 
     this.start = function () {
       var back = this.back;
+      function applyHeight() {
+        if (!$root || !$root[0]) return;
+        var h = window.innerHeight || document.documentElement.clientHeight
+              || screen.availHeight || screen.height || 0;
+        if (h > 100) $root[0].style.height = h + 'px';
+      }
+      applyHeight();
+      setTimeout(applyHeight, 300);
+
       Lampa.Controller.add('content', {
         toggle: function () {
           Lampa.Controller.collectionSet($root);
@@ -469,22 +627,30 @@
         left: function () {
           if (typeof Navigator !== 'undefined' && Navigator.canmove && Navigator.canmove('left')) {
             Navigator.move('left');
+            setTimeout(scrollToFocus, 50);
           } else {
             Lampa.Controller.toggle('menu');
           }
         },
         right: function () {
-          if (typeof Navigator !== 'undefined' && Navigator.move) Navigator.move('right');
+          if (typeof Navigator !== 'undefined' && Navigator.move) {
+            Navigator.move('right');
+            setTimeout(scrollToFocus, 50);
+          }
         },
         up: function () {
           if (typeof Navigator !== 'undefined' && Navigator.canmove && Navigator.canmove('up')) {
             Navigator.move('up');
+            setTimeout(scrollToFocus, 50);
           } else {
             Lampa.Controller.toggle('head');
           }
         },
         down: function () {
-          if (typeof Navigator !== 'undefined' && Navigator.move) Navigator.move('down');
+          if (typeof Navigator !== 'undefined' && Navigator.move) {
+            Navigator.move('down');
+            setTimeout(scrollToFocus, 50);
+          }
         },
         back: back
       });
@@ -500,6 +666,46 @@
       $root = null;
       $page = null;
     };
+  }
+
+  // ====================================================
+  // НАСТРОЙКИ — OpenRouter
+  // ====================================================
+  function registerSettings() {
+    try {
+      if (!Lampa.SettingsApi || typeof Lampa.SettingsApi.addParam !== 'function') return;
+      Lampa.SettingsApi.addParam({
+        component: 'interface',
+        param: { name: 'ci_openrouter_key', type: 'input', default: '' },
+        field: {
+          name: 'Подробнее: OpenRouter API ключ',
+          description: 'Введите ключ с openrouter.ai — появится раздел "За кулисами"'
+        }
+      });
+      Lampa.SettingsApi.addParam({
+        component: 'interface',
+        param: {
+          name: 'ci_openrouter_model',
+          type: 'select',
+          values: {
+            'mistralai/mistral-7b-instruct:free':      'Mistral 7B (бесплатно)',
+            'google/gemma-2-9b-it:free':               'Gemma 2 9B (бесплатно)',
+            'meta-llama/llama-3.1-8b-instruct:free':   'Llama 3.1 8B (бесплатно)',
+            'qwen/qwen-2-7b-instruct:free':            'Qwen 2 7B (бесплатно)',
+            'google/gemini-flash-1.5':                 'Gemini Flash 1.5',
+            'openai/gpt-4o-mini':                      'GPT-4o Mini',
+            'anthropic/claude-3-haiku':                'Claude 3 Haiku',
+            'google/gemini-pro-1.5':                   'Gemini Pro 1.5',
+            'openai/gpt-4o':                           'GPT-4o'
+          },
+          default: 'mistralai/mistral-7b-instruct:free'
+        },
+        field: {
+          name: 'Подробнее: AI модель',
+          description: 'Модель OpenRouter для генерации закулисных фактов'
+        }
+      });
+    } catch (e) {}
   }
 
   // ====================================================
@@ -568,9 +774,9 @@
   function initialize() {
     if (!window.Lampa || !Lampa.Listener || !Lampa.Component) return setTimeout(initialize, 500);
     injectStyles();
+    registerSettings();
     registerComponent();
     injectButton();
-    console.log('[Card Insight v4] готов');
   }
 
   if (window.appready) initialize();
