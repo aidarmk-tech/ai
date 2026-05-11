@@ -18,8 +18,8 @@
   function injectStyles() {
     if (document.getElementById('card-insight-styles')) return;
     var css = [
-      '.ci-root{width:100%;height:100vh;background:#1a0033;color:#fff;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;outline:none;box-sizing:border-box}',
-      '.ci-page{padding:1.5em 2em 6em}',
+      '.ci-root{width:100%;min-height:100vh;background:#1a0033;color:#fff;overflow-x:hidden}',
+      '.ci-page{padding:1.5em 2em 6em;min-height:100vh}',
       '.ci-loading{padding:4em 1em;text-align:center;font-size:2em;color:#ffff00;font-weight:bold}',
       '.ci-error{padding:2em 1em;text-align:center;color:#ff7e7e;opacity:0.85;font-size:1.2em}',
 
@@ -426,20 +426,13 @@
     };
 
     function scrollToEl(el) {
-      if (!el || !$root || !$root[0]) return;
-      var rootEl = $root[0];
+      if (!el) return;
       var raf = window.requestAnimationFrame || function (cb) { return setTimeout(cb, 16); };
       raf(function () {
-        if (!$root) return;
-        var margin = 60;
-        var elTop    = el.offsetTop;
-        var elBottom = elTop + el.offsetHeight;
-        var cur      = rootEl.scrollTop;
-        var viewH    = rootEl.clientHeight;
-        if (elTop - margin < cur) {
-          rootEl.scrollTop = Math.max(0, elTop - margin);
-        } else if (elBottom + margin > cur + viewH) {
-          rootEl.scrollTop = elBottom + margin - viewH;
+        try {
+          el.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'nearest' });
+        } catch (e) {
+          try { el.scrollIntoView(false); } catch (er) {}
         }
       });
     }
