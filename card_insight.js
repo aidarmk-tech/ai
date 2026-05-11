@@ -674,25 +674,16 @@
   function registerSettings() {
     try {
       if (!Lampa.SettingsApi || typeof Lampa.SettingsApi.addParam !== 'function') return;
-
-      if (typeof Lampa.SettingsApi.addComponent === 'function') {
-        Lampa.SettingsApi.addComponent({
-          component: 'ai_info',
-          name: 'AI Инфо',
-          icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 8v4M12 16h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>'
-        });
-      }
-
       Lampa.SettingsApi.addParam({
-        component: 'ai_info',
+        component: 'interface',
         param: { name: 'ci_openrouter_key', type: 'input', default: '' },
         field: {
-          name: 'OpenRouter API ключ',
+          name: 'AI Инфо: OpenRouter API ключ',
           description: 'Введите ключ с openrouter.ai — появится раздел "За кулисами" в карточке фильма'
         }
       });
       Lampa.SettingsApi.addParam({
-        component: 'ai_info',
+        component: 'interface',
         param: {
           name: 'ci_openrouter_model',
           type: 'select',
@@ -710,8 +701,8 @@
           default: 'mistralai/mistral-7b-instruct:free'
         },
         field: {
-          name: 'AI модель',
-          description: 'Модель OpenRouter для генерации закулисных фактов'
+          name: 'AI Инфо: модель OpenRouter',
+          description: 'Модель для генерации закулисных фактов'
         }
       });
     } catch (e) {}
