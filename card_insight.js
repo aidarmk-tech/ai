@@ -22,34 +22,24 @@
       '.ci-page{padding:1.5em 2em 6em}',
       '.ci-loading{padding:4em 1em;text-align:center;font-size:2em;color:#ffff00;font-weight:bold}',
       '.ci-error{padding:2em 1em;text-align:center;color:#ff7e7e;opacity:0.85;font-size:1.2em}',
-
-      /* Hero — широкий бэкдроп */
       '.ci-hero{height:18em;margin:0 0 1.3em;border-radius:0.5em;overflow:hidden;position:relative;background:#111 center/cover no-repeat}',
       '.ci-hero__overlay{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,0.05) 40%,rgba(0,0,0,0.7) 100%)}',
       '.ci-hero__title{position:absolute;left:1.2em;right:1.2em;bottom:1em;font-size:2.4em;font-weight:800;line-height:1.1;text-shadow:0 0.1em 0.5em rgba(0,0,0,0.8)}',
-
-      /* Тэглайн и описание */
       '.ci-tagline{font-style:italic;margin:0 0 0.8em;opacity:0.85;font-size:1.3em;padding:0 0.2em}',
       '.ci-meta{display:flex;flex-wrap:wrap;gap:0.5em 1.3em;margin-bottom:1.2em;opacity:0.8;font-size:1.15em;padding:0 0.2em}',
       '.ci-meta__item{white-space:nowrap}',
       '.ci-meta__item--rating{color:#ffd54f;font-weight:700}',
       '.ci-overview{line-height:1.6;margin:0 0 2em;font-size:1.2em;padding:0.3em 0.4em;max-width:65em;border-radius:0.4em;outline:none}',
       '.ci-overview.focus{background:rgba(255,255,255,0.06)}',
-
-      /* Заголовки секций */
       '.ci-section{margin-bottom:2em}',
       '.ci-section-title{font-size:1.6em;font-weight:700;margin:0 0 0.8em;padding:0 0.2em;display:flex;align-items:center;gap:0.55em}',
       '.ci-section-title__bar{display:inline-block;width:0.28em;height:1em;background:#ffa726;border-radius:0.1em}',
-
-      /* Факты */
       '.ci-facts{display:grid;grid-template-columns:repeat(auto-fill,minmax(22em,1fr));gap:0.6em}',
       '.ci-fact{display:flex;gap:0.8em;padding:0.85em 1em;background:rgba(255,255,255,0.05);border-radius:0.4em;align-items:center;border:0.06em solid rgba(255,255,255,0.06);outline:none}',
       '.ci-fact.focus{background:rgba(255,255,255,0.18);box-shadow:0 0 0 0.2em #ffa726}',
       '.ci-fact__icon{font-size:1.5em;flex-shrink:0;line-height:1}',
       '.ci-fact__text{font-size:1.1em;line-height:1.4}',
       '.ci-fact__label{opacity:0.6;margin-right:0.3em}',
-
-      /* Актёры */
       '.ci-cast{display:grid;grid-template-columns:repeat(auto-fill,minmax(9em,1fr));gap:0.9em}',
       '.ci-actor{cursor:pointer;border-radius:0.4em;overflow:hidden;background:rgba(255,255,255,0.05);outline:none;transition:transform 0.15s,background 0.15s}',
       '.ci-actor.focus{transform:scale(1.05);background:rgba(255,255,255,0.2);box-shadow:0 0 0 0.2em #ffa726}',
@@ -57,8 +47,6 @@
       '.ci-actor__no-photo{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:2.4em;opacity:0.3}',
       '.ci-actor__name{padding:0.5em 0.6em 0;font-weight:600;font-size:1em;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:2.6em}',
       '.ci-actor__role{padding:0.18em 0.6em 0.6em;opacity:0.6;font-size:0.88em;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:2.5em}',
-
-      /* Карточки рекомендаций */
       '.ci-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(14em,1fr));gap:1.1em}',
       '.ci-card{cursor:pointer;border-radius:0.4em;overflow:hidden;background:rgba(255,255,255,0.05);outline:none;transition:transform 0.15s,background 0.15s;position:relative}',
       '.ci-card.focus{transform:scale(1.05);background:rgba(255,255,255,0.2);box-shadow:0 0 0 0.22em #ffa726}',
@@ -68,21 +56,14 @@
       '.ci-card__info{padding:0.65em 0.75em 0.85em}',
       '.ci-card__title{font-weight:600;font-size:1.05em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.3;min-height:2.7em}',
       '.ci-card__year{opacity:0.55;font-size:0.9em;margin-top:0.3em}',
-
-      /* Коллекция — текущий фильм */
       '.ci-card--current{opacity:0.72}',
       '.ci-card__current-badge{position:absolute;top:0.4em;left:0.4em;background:rgba(255,166,38,0.9);padding:0.15em 0.5em;border-radius:0.2em;font-size:0.85em;font-weight:700;color:#1a0033;z-index:1}',
-
-      /* За кулисами */
       '.ci-trivia{display:flex;flex-direction:column;gap:0.7em}',
       '.ci-trivia__item{padding:0.85em 1em 0.85em 1.2em;background:rgba(255,255,255,0.05);border-radius:0.4em;line-height:1.55;font-size:1.1em;border-left:0.25em solid #ffa726;outline:none}',
       '.ci-trivia__item.focus{background:rgba(255,255,255,0.15);box-shadow:0 0 0 0.2em #ffa726}',
-
-      /* Кнопка в карточке */
       '.full-start__button.view--ci{color:#ffa726}',
       '.full-start__button.view--ci svg{margin-right:0.4em;vertical-align:middle}'
     ].join('\n');
-
     var style = document.createElement('style');
     style.id = 'card-insight-styles';
     style.textContent = css;
@@ -235,7 +216,6 @@
     var $wrap = $('<div></div>');
     if (data.tagline)
       $wrap.append('<div class="ci-tagline">«' + escapeHtml(data.tagline) + '»</div>');
-
     var meta = [];
     if (data.vote_average && data.vote_average > 0)
       meta.push({ cls: 'ci-meta__item ci-meta__item--rating', text: '★ ' + Number(data.vote_average).toFixed(1) });
@@ -248,7 +228,6 @@
     if (data.number_of_episodes) meta.push({ text: 'серий: ' + data.number_of_episodes });
     if (data.genres && data.genres.length)
       meta.push({ text: data.genres.map(function (g) { return g.name; }).join(', ') });
-
     if (meta.length) {
       var $meta = $('<div class="ci-meta"></div>');
       meta.forEach(function (m) {
@@ -256,7 +235,6 @@
       });
       $wrap.append($meta);
     }
-
     var overview = data.overview && data.overview.trim() ? data.overview : 'Описание отсутствует.';
     $wrap.append('<div class="ci-overview selector" tabindex="0">' + escapeHtml(overview) + '</div>');
     return $wrap;
@@ -286,7 +264,6 @@
     var $sec = $('<div class="ci-section"></div>');
     $sec.append('<div class="ci-section-title"><span class="ci-section-title__bar"></span>В ролях</div>');
     var $row = $('<div class="ci-cast"></div>');
-
     cast.forEach(function (person) {
       var photo = person.profile_path ? Lampa.TMDB.image('t/p/w185' + person.profile_path) : '';
       var $card = $(
@@ -324,12 +301,10 @@
       var posterUrl = item.poster_path ? Lampa.TMDB.image('t/p/w200' + item.poster_path) : '';
       var year = (item.release_date || item.first_air_date || '').substring(0, 4);
       var title = item.title || item.name || 'Без названия';
-      var rating = item.vote_average && item.vote_average > 0
-        ? Number(item.vote_average).toFixed(1) : '';
+      var rating = item.vote_average && item.vote_average > 0 ? Number(item.vote_average).toFixed(1) : '';
       var method = item.media_type === 'tv' || item.media_type === 'movie'
         ? item.media_type
         : (item.first_air_date || item.name ? 'tv' : defaultMethod);
-
       var $card = $(
         '<div class="ci-card selector" tabindex="0">' +
           '<div class="ci-card__poster"' +
@@ -344,10 +319,7 @@
         '</div>'
       );
       $card.on('hover:enter', function () {
-        Lampa.Activity.push({
-          url: '', component: 'full', id: item.id, method: method,
-          card: item, source: 'tmdb'
-        });
+        Lampa.Activity.push({ url: '', component: 'full', id: item.id, method: method, card: item, source: 'tmdb' });
       });
       $grid.append($card);
     });
@@ -358,8 +330,7 @@
   function renderCollectionSection(colData, currentId) {
     if (!colData || !colData.parts || !colData.parts.length) return null;
     var parts = colData.parts.slice().sort(function (a, b) {
-      var da = a.release_date || '';
-      var db = b.release_date || '';
+      var da = a.release_date || '', db = b.release_date || '';
       return da < db ? -1 : da > db ? 1 : 0;
     });
     var $sec = $('<div class="ci-section"></div>');
@@ -388,10 +359,7 @@
       );
       if (!isCurrent) {
         $card.on('hover:enter', function () {
-          Lampa.Activity.push({
-            url: '', component: 'full', id: item.id, method: 'movie',
-            card: item, source: 'tmdb'
-          });
+          Lampa.Activity.push({ url: '', component: 'full', id: item.id, method: 'movie', card: item, source: 'tmdb' });
         });
       }
       $grid.append($card);
@@ -413,17 +381,14 @@
     var apiKey = '';
     try { apiKey = Lampa.Storage.get('ci_openrouter_key', ''); } catch (e) {}
     if (!apiKey) { callback(null, []); return; }
-
     var model = 'mistralai/mistral-7b-instruct:free';
     try { model = Lampa.Storage.get('ci_openrouter_model', model) || model; } catch (e) {}
-
     var genreText = genres && genres.length ? ' (жанр: ' + genres.slice(0, 3).join(', ') + ')' : '';
     var prompt =
       'Напиши 6 интересных закулисных фактов о фильме "' + title + '"' +
       (year ? ' ' + year + ' года' : '') + genreText + '. ' +
       'Пиши о съёмочном процессе, кастинге, неожиданных историях создания, курьёзах на площадке. ' +
       'Каждый факт — отдельная строка, начинается с символа "•". Без заголовков и предисловий. Только на русском языке.';
-
     var xhr = new XMLHttpRequest();
     xhr.open('POST', 'https://openrouter.ai/api/v1/chat/completions', true);
     xhr.setRequestHeader('Content-Type', 'application/json');
@@ -439,12 +404,7 @@
       } catch (e) { callback(null, []); }
     };
     xhr.onerror = xhr.ontimeout = function () { callback(null, []); };
-    xhr.send(JSON.stringify({
-      model: model,
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 900,
-      temperature: 0.75
-    }));
+    xhr.send(JSON.stringify({ model: model, messages: [{ role: 'user', content: prompt }], max_tokens: 900, temperature: 0.75 }));
   }
 
   function renderWikiTriviaSection(facts) {
@@ -471,14 +431,8 @@
     var lastFocused = null;
     var self = this;
 
-    this.create = function () {
-      this.load();
-      return this.render();
-    };
-
-    this.render = function () {
-      return $root;
-    };
+    this.create = function () { this.load(); return this.render(); };
+    this.render = function () { return $root; };
 
     this.load = function () {
       fetchFullData(object.method, object.id, function (err, data) {
@@ -495,44 +449,32 @@
 
     this.build = function (data) {
       $page.empty();
-
       var $hero = renderHero(data);
       if ($hero) $page.append($hero);
-
       $page.append(renderOverview(data));
-
       var $facts = renderFactsSection(buildFacts(data));
       if ($facts) $page.append($facts);
 
-      // Placeholder for AI trivia (filled async)
       var $triviaPlaceholder = $('<div></div>');
       $page.append($triviaPlaceholder);
 
       var $cast = renderCastSection(data.credits);
       if ($cast) $page.append($cast);
 
-      // Placeholder for collection/franchise (filled async)
       var $colPlaceholder = $('<div></div>');
       $page.append($colPlaceholder);
 
       var recs = (data.recommendations && data.recommendations.results) || [];
       var recTitle = 'Похожие';
-      if (!recs.length) {
-        recs = (data.similar && data.similar.results) || [];
-        recTitle = 'Похожие (по жанру)';
-      }
+      if (!recs.length) { recs = (data.similar && data.similar.results) || []; recTitle = 'Похожие (по жанру)'; }
       var $recs = renderRecsSection(recs.slice(0, 30), object.method, recTitle);
       if ($recs) $page.append($recs);
 
       contentReady = true;
 
-      // Async: collection parts
       if (data.belongs_to_collection && data.belongs_to_collection.id) {
         var colNet = new Lampa.Reguest();
-        var colUrl = Lampa.TMDB.api(
-          'collection/' + data.belongs_to_collection.id +
-          '?api_key=' + Lampa.TMDB.key() + '&language=ru'
-        );
+        var colUrl = Lampa.TMDB.api('collection/' + data.belongs_to_collection.id + '?api_key=' + Lampa.TMDB.key() + '&language=ru');
         colNet.silent(colUrl, function (colData) {
           if (!$page) return;
           var $col = renderCollectionSection(colData, data.id);
@@ -544,7 +486,6 @@
         $colPlaceholder.remove();
       }
 
-      // Async: AI trivia via OpenRouter (only if API key configured)
       var aiTitle  = data.title || data.name || '';
       var aiYear   = (data.release_date || data.first_air_date || '').substring(0, 4);
       var aiGenres = (data.genres || []).map(function (g) { return g.name; });
@@ -601,56 +542,36 @@
       var back = this.back;
       function applyHeight() {
         if (!$root || !$root[0]) return;
-        var h = window.innerHeight || document.documentElement.clientHeight
-              || screen.availHeight || screen.height || 0;
+        var h = window.innerHeight || document.documentElement.clientHeight || screen.availHeight || screen.height || 0;
         if (h > 100) $root[0].style.height = h + 'px';
       }
       applyHeight();
       setTimeout(applyHeight, 300);
-
       Lampa.Controller.add('content', {
         toggle: function () {
           Lampa.Controller.collectionSet($root);
           if (contentReady) {
             var target = (lastFocused && $root[0] && $.contains($root[0], lastFocused))
-              ? lastFocused
-              : $root.find('.selector').first()[0];
-            if (target) {
-              Lampa.Controller.collectionFocus(target, $root);
-              scrollToEl(target);
-            }
+              ? lastFocused : $root.find('.selector').first()[0];
+            if (target) { Lampa.Controller.collectionFocus(target, $root); scrollToEl(target); }
           }
         },
-        update: function () {
-          Lampa.Controller.collectionSet($root);
-        },
+        update: function () { Lampa.Controller.collectionSet($root); },
         left: function () {
           if (typeof Navigator !== 'undefined' && Navigator.canmove && Navigator.canmove('left')) {
-            Navigator.move('left');
-            setTimeout(scrollToFocus, 50);
-          } else {
-            Lampa.Controller.toggle('menu');
-          }
+            Navigator.move('left'); setTimeout(scrollToFocus, 50);
+          } else { Lampa.Controller.toggle('menu'); }
         },
         right: function () {
-          if (typeof Navigator !== 'undefined' && Navigator.move) {
-            Navigator.move('right');
-            setTimeout(scrollToFocus, 50);
-          }
+          if (typeof Navigator !== 'undefined' && Navigator.move) { Navigator.move('right'); setTimeout(scrollToFocus, 50); }
         },
         up: function () {
           if (typeof Navigator !== 'undefined' && Navigator.canmove && Navigator.canmove('up')) {
-            Navigator.move('up');
-            setTimeout(scrollToFocus, 50);
-          } else {
-            Lampa.Controller.toggle('head');
-          }
+            Navigator.move('up'); setTimeout(scrollToFocus, 50);
+          } else { Lampa.Controller.toggle('head'); }
         },
         down: function () {
-          if (typeof Navigator !== 'undefined' && Navigator.move) {
-            Navigator.move('down');
-            setTimeout(scrollToFocus, 50);
-          }
+          if (typeof Navigator !== 'undefined' && Navigator.move) { Navigator.move('down'); setTimeout(scrollToFocus, 50); }
         },
         back: back
       });
@@ -663,8 +584,7 @@
     this.destroy = function () {
       network.clear();
       if ($root) $root.remove();
-      $root = null;
-      $page = null;
+      $root = null; $page = null;
     };
   }
 
@@ -674,25 +594,16 @@
   function registerSettings() {
     try {
       if (!Lampa.SettingsApi || typeof Lampa.SettingsApi.addParam !== 'function') return;
-
-      if (typeof Lampa.SettingsApi.addComponent === 'function') {
-        Lampa.SettingsApi.addComponent({
-          component: 'ai_info',
-          name: 'AI Инфо',
-          icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 8v4M12 16h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>'
-        });
-      }
-
       Lampa.SettingsApi.addParam({
-        component: 'ai_info',
+        component: 'interface',
         param: { name: 'ci_openrouter_key', type: 'input', default: '' },
         field: {
-          name: 'OpenRouter API ключ',
+          name: 'AI Инфо: OpenRouter API ключ',
           description: 'Введите ключ с openrouter.ai — появится раздел "За кулисами" в карточке фильма'
         }
       });
       Lampa.SettingsApi.addParam({
-        component: 'ai_info',
+        component: 'interface',
         param: {
           name: 'ci_openrouter_model',
           type: 'select',
@@ -710,8 +621,8 @@
           default: 'mistralai/mistral-7b-instruct:free'
         },
         field: {
-          name: 'AI модель',
-          description: 'Модель OpenRouter для генерации закулисных фактов'
+          name: 'AI Инфо: модель OpenRouter',
+          description: 'Модель для генерации закулисных фактов'
         }
       });
     } catch (e) {}
@@ -730,26 +641,16 @@
   function appendButton($buttons, movie, method) {
     if (!$buttons || !$buttons.length) return;
     if ($buttons.find('.view--ci').length) return;
-
     var svgIcon =
       '<svg width="36" height="36" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">' +
         '<circle cx="12" cy="12" r="9" stroke="#ffa726" stroke-width="2"/>' +
         '<path d="M12 8v4M12 16h.01" stroke="#ffa726" stroke-width="2" stroke-linecap="round"/>' +
       '</svg>';
-
-    var $btn = $(
-      '<div class="full-start__button selector view--ci">' +
-        svgIcon + '<span>Подробнее</span>' +
-      '</div>'
-    );
+    var $btn = $('<div class="full-start__button selector view--ci">' + svgIcon + '<span>Подробнее</span></div>');
     $btn.on('hover:enter', function () {
       Lampa.Activity.push({
-        url:       '',
-        title:     'Подробнее: ' + (movie.title || movie.name || ''),
-        component: COMPONENT_NAME,
-        id:        movie.id,
-        method:    method,
-        source:    'tmdb'
+        url: '', title: 'Подробнее: ' + (movie.title || movie.name || ''),
+        component: COMPONENT_NAME, id: movie.id, method: method, source: 'tmdb'
       });
     });
     $buttons.append($btn);
@@ -762,10 +663,8 @@
       if (!data) return;
       var movie = data.movie || data;
       if (!movie || !movie.id) return;
-
       var method = (e.object && e.object.method) || data.method || movie.method ||
                    (movie.first_air_date || movie.name ? 'tv' : 'movie');
-
       var $render = e.object.activity.render();
       var attempts = 0;
       function tryAppend() {
