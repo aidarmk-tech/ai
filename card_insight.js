@@ -415,6 +415,8 @@
       'Предыстория', 'Кастинг', 'Разработка'
     ];
 
+    // With explaintext=1 (default exsectionformat=wiki), section headers look like:
+    // \n\n== Заголовок ==\n\n
     var chunks = text.split(/\n==\s*/);
     var facts = [];
 
@@ -454,7 +456,8 @@
         var results = JSON.parse(xhr1.responseText);
         if (!results || !results[1] || !results[1].length) { callback(null, []); return; }
         var pageTitle = results[1][0];
-        var extractUrl = 'https://ru.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&exsectionformat=plain&titles=' +
+        // No exsectionformat param — defaults to 'wiki', which preserves == heading == markers
+        var extractUrl = 'https://ru.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&titles=' +
           encodeURIComponent(pageTitle) + '&format=json&origin=*';
         var xhr2 = new XMLHttpRequest();
         xhr2.open('GET', extractUrl, true);
