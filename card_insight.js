@@ -403,7 +403,7 @@
   function parseAIResponse(text) {
     var facts = [];
     text.split('\n').forEach(function (line) {
-      line = line.replace(/^[\s•\-\*]+/, '').replace(/^\d+[\.)\]\s*/, '').trim();
+      line = line.replace(/^[\s•\-\*]+/, '').replace(/^\d+[\.\)\]]\s*/, '').trim();
       if (line.length >= 40 && line.length <= 700 && facts.indexOf(line) === -1) facts.push(line);
     });
     return facts.slice(0, 8);
