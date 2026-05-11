@@ -69,6 +69,15 @@
       '.ci-card__title{font-weight:600;font-size:1.05em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.3;min-height:2.7em}',
       '.ci-card__year{opacity:0.55;font-size:0.9em;margin-top:0.3em}',
 
+      /* Коллекция — текущий фильм */
+      '.ci-card--current{opacity:0.72}',
+      '.ci-card__current-badge{position:absolute;top:0.4em;left:0.4em;background:rgba(255,166,38,0.9);padding:0.15em 0.5em;border-radius:0.2em;font-size:0.85em;font-weight:700;color:#1a0033;z-index:1}',
+
+      /* За кулисами */
+      '.ci-trivia{display:flex;flex-direction:column;gap:0.7em}',
+      '.ci-trivia__item{padding:0.85em 1em 0.85em 1.2em;background:rgba(255,255,255,0.05);border-radius:0.4em;line-height:1.55;font-size:1.1em;border-left:0.25em solid #ffa726;outline:none}',
+      '.ci-trivia__item.focus{background:rgba(255,255,255,0.15);box-shadow:0 0 0 0.2em #ffa726}',
+
       /* Кнопка в карточке */
       '.full-start__button.view--ci{color:#ffa726}',
       '.full-start__button.view--ci svg{margin-right:0.4em;vertical-align:middle}'
@@ -215,7 +224,7 @@
     var url = Lampa.TMDB.image('t/p/w1280' + data.backdrop_path);
     var title = data.title || data.name || '';
     return $(
-      '<div class="ci-hero" style="background-image:url(\'' + url + '\')">' +
+      '<div class="ci-hero" style="background-image:url(\'' + url + '\')">'+
         '<div class="ci-hero__overlay"></div>' +
         (title ? '<div class="ci-hero__title">' + escapeHtml(title) + '</div>' : '') +
       '</div>'
@@ -346,6 +355,135 @@
     return $sec;
   }
 
+  function renderCollectionSection(colData, currentId) {
+    if (!colData || !colData.parts || !colData.parts.length) return null;
+    var parts = colData.parts.slice().sort(function (a, b) {
+      var da = a.release_date || '';
+      var db = b.release_date || '';
+      return da < db ? -1 : da > db ? 1 : 0;
+    });
+    var $sec = $('<div class="ci-section"></div>');
+    var colName = colData.name ? escapeHtml(colData.name) : 'Коллекция';
+    $sec.append('<div class="ci-section-title"><span class="ci-section-title__bar"></span>' + colName + '</div>');
+    var $grid = $('<div class="ci-grid"></div>');
+    parts.forEach(function (item) {
+      var isCurrent = item.id === currentId;
+      var posterUrl = item.poster_path ? Lampa.TMDB.image('t/p/w200' + item.poster_path) : '';
+      var year = (item.release_date || '').substring(0, 4);
+      var title = item.title || item.name || 'Без названия';
+      var rating = item.vote_average && item.vote_average > 0 ? Number(item.vote_average).toFixed(1) : '';
+      var $card = $(
+        '<div class="ci-card' + (isCurrent ? ' ci-card--current' : '') + ' selector" tabindex="0">' +
+          '<div class="ci-card__poster"' +
+            (posterUrl ? ' style="background-image:url(\'' + posterUrl + '\')"' : '') + '>' +
+            (!posterUrl ? '<div class="ci-card__no-poster">🎬</div>' : '') +
+            (rating ? '<div class="ci-card__rating">★ ' + rating + '</div>' : '') +
+            (isCurrent ? '<div class="ci-card__current-badge">▶ Сейчас</div>' : '') +
+          '</div>' +
+          '<div class="ci-card__info">' +
+            '<div class="ci-card__title">' + escapeHtml(title) + '</div>' +
+            (year ? '<div class="ci-card__year">' + year + '</div>' : '') +
+          '</div>' +
+        '</div>'
+      );
+      if (!isCurrent) {
+        $card.on('hover:enter', function () {
+          Lampa.Activity.push({
+            url: '', component: 'full', id: item.id, method: 'movie',
+            card: item, source: 'tmdb'
+          });
+        });
+      }
+      $grid.append($card);
+    });
+    $sec.append($grid);
+    return $sec;
+  }
+
+  function parseWikiExtract(data) {
+    if (!data || !data.query || !data.query.pages) return [];
+    var pages = data.query.pages;
+    var keys = Object.keys(pages);
+    if (!keys.length || keys[0] === '-1') return [];
+    var page = pages[keys[0]];
+    if (!page || !page.extract) return [];
+    var text = page.extract;
+
+    var sectionKeywords = [
+      'Производство', 'Съёмки', 'История создания', 'Разработка фильма',
+      'Создание фильма', 'За кулисами', 'Интересные факты', 'Факты',
+      'Предыстория', 'Кастинг', 'Разработка'
+    ];
+
+    var chunks = text.split(/\n==\s*/);
+    var facts = [];
+
+    chunks.forEach(function (chunk) {
+      var nl = chunk.indexOf('\n');
+      var heading = nl > -1 ? chunk.substring(0, nl).replace(/\s*=+\s*$/, '').trim() : '';
+      var content  = nl > -1 ? chunk.substring(nl + 1) : chunk;
+
+      var relevant = sectionKeywords.some(function (kw) { return heading.indexOf(kw) !== -1; });
+      if (!relevant) return;
+
+      var raw = content.replace(/\n+/g, ' ').trim();
+      var sentences = raw.replace(/([.!?])\s+([А-ЯЁA-Z])/g, '$1\n$2').split('\n');
+
+      sentences.forEach(function (s) {
+        s = s.replace(/\s+/g, ' ').trim();
+        if (s.length >= 80 && s.length <= 600 && facts.indexOf(s) === -1) {
+          facts.push(s);
+        }
+      });
+    });
+
+    return facts.slice(0, 8);
+  }
+
+  function fetchWikiTrivia(title, year, callback) {
+    if (!title) { callback(null, []); return; }
+    var searchQuery = encodeURIComponent(title + (year ? ' ' + year : ''));
+    var searchUrl = 'https://ru.wikipedia.org/w/api.php?action=opensearch&search=' + searchQuery + '&limit=3&namespace=0&format=json&origin=*';
+
+    var xhr1 = new XMLHttpRequest();
+    xhr1.open('GET', searchUrl, true);
+    xhr1.timeout = 6000;
+    xhr1.onload = function () {
+      if (xhr1.status !== 200) { callback(null, []); return; }
+      try {
+        var results = JSON.parse(xhr1.responseText);
+        if (!results || !results[1] || !results[1].length) { callback(null, []); return; }
+        var pageTitle = results[1][0];
+        var extractUrl = 'https://ru.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&exsectionformat=plain&titles=' +
+          encodeURIComponent(pageTitle) + '&format=json&origin=*';
+        var xhr2 = new XMLHttpRequest();
+        xhr2.open('GET', extractUrl, true);
+        xhr2.timeout = 6000;
+        xhr2.onload = function () {
+          if (xhr2.status !== 200) { callback(null, []); return; }
+          try { callback(null, parseWikiExtract(JSON.parse(xhr2.responseText))); }
+          catch (e) { callback(null, []); }
+        };
+        xhr2.onerror = xhr2.ontimeout = function () { callback(null, []); };
+        xhr2.send();
+      } catch (e) { callback(null, []); }
+    };
+    xhr1.onerror = xhr1.ontimeout = function () { callback(null, []); };
+    xhr1.send();
+  }
+
+  function renderWikiTriviaSection(facts) {
+    if (!facts || !facts.length) return null;
+    var $sec = $('<div class="ci-section"></div>');
+    $sec.append('<div class="ci-section-title"><span class="ci-section-title__bar"></span>За кулисами</div>');
+    var $list = $('<div class="ci-trivia"></div>');
+    facts.forEach(function (f) {
+      $list.append('<div class="ci-trivia__item selector" tabindex="0">' + escapeHtml(f) + '</div>');
+    });
+    $sec.append($list);
+    return $sec;
+  }
+
   // ====================================================
   // КОМПОНЕНТ ACTIVITY
   // ====================================================
@@ -391,8 +529,16 @@
       var $facts = renderFactsSection(buildFacts(data));
       if ($facts) $page.append($facts);
 
+      // Placeholder for Wikipedia trivia (filled async)
+      var $triviaPlaceholder = $('<div></div>');
+      $page.append($triviaPlaceholder);
+
       var $cast = renderCastSection(data.credits);
       if ($cast) $page.append($cast);
+
+      // Placeholder for collection/franchise (filled async)
+      var $colPlaceholder = $('<div></div>');
+      $page.append($colPlaceholder);
 
       var recs = (data.recommendations && data.recommendations.results) || [];
       var recTitle = 'Похожие';
@@ -404,6 +550,35 @@
       if ($recs) $page.append($recs);
 
       contentReady = true;
+
+      // Async: collection parts
+      if (data.belongs_to_collection && data.belongs_to_collection.id) {
+        var colNet = new Lampa.Reguest();
+        var colUrl = Lampa.TMDB.api(
+          'collection/' + data.belongs_to_collection.id +
+          '?api_key=' + Lampa.TMDB.key() + '&language=ru'
+        );
+        colNet.silent(colUrl, function (colData) {
+          if (!$page) return;
+          var $col = renderCollectionSection(colData, data.id);
+          if ($col) $colPlaceholder.replaceWith($col);
+          else $colPlaceholder.remove();
+          try { Lampa.Controller.collectionSet($root); } catch (e) {}
+        }, function () { $colPlaceholder.remove(); });
+      } else {
+        $colPlaceholder.remove();
+      }
+
+      // Async: Wikipedia trivia
+      var wikiTitle = data.title || data.name || '';
+      var wikiYear = (data.release_date || data.first_air_date || '').substring(0, 4);
+      fetchWikiTrivia(wikiTitle, wikiYear, function (err, triviaFacts) {
+        if (!$page) return;
+        var $trivia = renderWikiTriviaSection(triviaFacts);
+        if ($trivia) $triviaPlaceholder.replaceWith($trivia);
+        else $triviaPlaceholder.remove();
+        try { Lampa.Controller.collectionSet($root); } catch (e) {}
+      });
 
       setTimeout(function () {
         if (!$root) return;
@@ -419,7 +594,6 @@
         var rootEl = $root[0];
         var viewH  = rootEl.clientHeight;
         if (viewH > 0) {
-          // offsetTop-обход надёжнее getBoundingClientRect в Android TV WebView
           var elTop = 0, node = el;
           while (node && node !== rootEl) { elTop += node.offsetTop; node = node.offsetParent; }
           var elBottom = elTop + el.offsetHeight;
@@ -430,7 +604,6 @@
             rootEl.scrollTop = elBottom + margin - viewH;
           }
         } else {
-          // clientHeight=0 → контейнер не scroll-box, scrollIntoView как fallback
           try { el.scrollIntoView({ behavior: 'auto', block: 'nearest' }); }
           catch (e) { try { el.scrollIntoView(false); } catch (er) {} }
         }
@@ -450,7 +623,6 @@
 
     this.start = function () {
       var back = this.back;
-      // Высота через JS — 100vh ненадёжен в Android WebView; повтор через 300ms для ATV
       function applyHeight() {
         if (!$root || !$root[0]) return;
         var h = window.innerHeight || document.documentElement.clientHeight
