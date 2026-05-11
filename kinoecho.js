@@ -253,7 +253,7 @@
     var $card = $(
       '<div class="ke-card selector" tabindex="0">' +
         '<div class="ke-card__poster"' +
-          (poster ? ' style="background-image:url(\'' + poster + '\')"`' : '') + '>' +
+          (poster ? ' style="background-image:url(\'' + poster + '\')"' : '') + '>' +
           (!poster ? '<div class="ke-card__no-poster">🎬</div>' : '') +
           (rating  ? '<div class="ke-card__rating">★ ' + rating + '</div>' : '') +
           (tagLabel ? '<div class="ke-card__tag ' + (tagClass || '') + '">' + tagLabel + '</div>' : '') +
@@ -326,7 +326,7 @@
     var $hub = $(
       '<div class="ke-map-hub">' +
         '<div class="ke-map-hub__poster"' +
-          (poster ? ' style="background-image:url(\'' + poster + '\')"`' : '') + '></div>' +
+          (poster ? ' style="background-image:url(\'' + poster + '\')"' : '') + '></div>' +
         '<div class="ke-map-hub__title">' + esc(title) + '</div>' +
       '</div>'
     );
@@ -428,6 +428,7 @@
     var $root = $('<div class="ke-root"><div class="ke-page"><div class="ke-loading">🔮 Строим кинолабиринт...</div></div></div>');
     var $page = $root.find('.ke-page');
     var loaded      = false;
+    var activeTab   = 0;
     var lastFocused = null;
     var self        = this;
     var $tabEls     = [];
@@ -461,7 +462,7 @@
 
       // Hero
       $page.append(
-        '<div class="ke-hero"' + (bg ? ' style="background-image:url(\'' + bg + '\')"`' : '') + '>' +
+        '<div class="ke-hero"' + (bg ? ' style="background-image:url(\'' + bg + '\')"' : '') + '>' +
           '<div class="ke-hero__glow"></div>' +
           '<div class="ke-hero__overlay"></div>' +
           '<div class="ke-hero__content">' +
@@ -498,6 +499,7 @@
       }
 
       function switchTab(idx) {
+        activeTab = idx;
         $tabEls.forEach(function ($t, i) {
           if (i === idx) $t.addClass('ke-tab--active'); else $t.removeClass('ke-tab--active');
         });
@@ -528,18 +530,25 @@
       // ── Tab 3: Mood ──
       $tabContents[2].append(renderMoodTab(data));
 
-      // ── Async: hidden chain ──
+      // ── Async: hidden chain (shared between tab 1 and tab 2) ──
+      var hiddenLoaded  = false;
       var hiddenEntries = [];
 
-      chainHidden(data, directIds, function (entries) {
-        hiddenEntries = entries;
-
-        var $secH = renderChainSection('✨', 'Скрытая эхо-цепочка', 'hidden', entries, 'ke-tag--hidden', 'скрытое');
-        if ($secH) $hiddenPH.replaceWith($secH); else $hiddenPH.remove();
-
+      function tryBuildMap() {
+        if (!hiddenLoaded) return;
         $t2.empty();
         $t2.append(renderMapTab(data, directEntries, hiddenEntries));
         try { Lampa.Controller.collectionSet($root); } catch (e) {}
+      }
+
+      chainHidden(data, directIds, function (entries) {
+        hiddenEntries = entries;
+        hiddenLoaded  = true;
+
+        var $secH = renderChainSection('✨', 'Скрытая эхо-цепочка', 'hidden', entries, 'ke-tag--hidden', 'скрытое');
+        if ($secH) $hiddenPH.replaceWith($secH); else $hiddenPH.remove();
+        try { Lampa.Controller.collectionSet($root); } catch (e) {}
+        tryBuildMap();
       });
 
       // ── Async: alternative chain ──
@@ -560,19 +569,26 @@
       var raf = window.requestAnimationFrame || function (cb) { setTimeout(cb, 16); };
       raf(function () {
         if (!$root || !$root[0]) return;
-        var root   = $root[0];
-        var viewH  = root.clientHeight;
+        var root  = $root[0];
+        var viewH = root.clientHeight;
         if (viewH > 0) {
           var top = 0, node = el;
           while (node && node !== root) { top += node.offsetTop; node = node.offsetParent; }
           var bottom = top + el.offsetHeight;
           var margin = 80;
-          if (top - margin < root.scrollTop)               root.scrollTop = Math.max(0, top - margin);
-          else if (bottom + margin > root.scrollTop + viewH) root.scrollTop = bottom + margin - viewH;
+          if (top - margin < root.scrollTop)                  root.scrollTop = Math.max(0, top - margin);
+          else if (bottom + margin > root.scrollTop + viewH)  root.scrollTop = bottom + margin - viewH;
         } else {
-          try { el.scrollIntoView({ behavior: 'auto', block: 'nearest' }); } catch (e) {}
+          try { el.scrollIntoView({ behavior: 'auto', block: 'nearest' }); }
+          catch (e) { try { el.scrollIntoView(false); } catch (er) {} }
         }
       });
+    }
+
+    function scrollToFocus() {
+      if (!$root) return;
+      var focused = $root.find('.selector.focus')[0] || lastFocused;
+      if (focused) scrollTo(focused);
     }
 
     $root.on('hover:focus', '.selector', function () { lastFocused = this; scrollTo(this); });
@@ -581,10 +597,10 @@
     this.start = function () {
       var back = this.back;
       function applyH() {
-        if ($root && $root[0]) {
-          var h = window.innerHeight || screen.height || 0;
-          if (h > 100) $root[0].style.height = h + 'px';
-        }
+        if (!$root || !$root[0]) return;
+        var h = window.innerHeight || document.documentElement.clientHeight
+              || screen.availHeight || screen.height || 0;
+        if (h > 100) $root[0].style.height = h + 'px';
       }
       applyH(); setTimeout(applyH, 300);
 
@@ -597,15 +613,33 @@
         },
         update: function () { Lampa.Controller.collectionSet($root); },
         left: function () {
-          if (typeof Navigator !== 'undefined' && Navigator.canmove && Navigator.canmove('left')) Navigator.move('left');
-          else Lampa.Controller.toggle('menu');
+          if (typeof Navigator !== 'undefined' && Navigator.canmove && Navigator.canmove('left')) {
+            Navigator.move('left');
+            setTimeout(scrollToFocus, 50);
+          } else {
+            Lampa.Controller.toggle('menu');
+          }
         },
-        right: function () { if (typeof Navigator !== 'undefined' && Navigator.move) Navigator.move('right'); },
+        right: function () {
+          if (typeof Navigator !== 'undefined' && Navigator.move) {
+            Navigator.move('right');
+            setTimeout(scrollToFocus, 50);
+          }
+        },
         up: function () {
-          if (typeof Navigator !== 'undefined' && Navigator.canmove && Navigator.canmove('up')) Navigator.move('up');
-          else Lampa.Controller.toggle('head');
+          if (typeof Navigator !== 'undefined' && Navigator.canmove && Navigator.canmove('up')) {
+            Navigator.move('up');
+            setTimeout(scrollToFocus, 50);
+          } else {
+            Lampa.Controller.toggle('head');
+          }
         },
-        down: function () { if (typeof Navigator !== 'undefined' && Navigator.move) Navigator.move('down'); },
+        down: function () {
+          if (typeof Navigator !== 'undefined' && Navigator.move) {
+            Navigator.move('down');
+            setTimeout(scrollToFocus, 50);
+          }
+        },
         back: back
       });
       Lampa.Controller.toggle('content');
