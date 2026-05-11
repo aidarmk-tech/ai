@@ -18,8 +18,8 @@
   function injectStyles() {
     if (document.getElementById('card-insight-styles')) return;
     var css = [
-      '.ci-root{position:absolute;top:0;left:0;right:0;bottom:0;background:#1a0033;color:#fff;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;outline:none}',
-      '.ci-page{padding:1.5em 2em 6em}',
+      '.ci-root{width:100%;min-height:100vh;background:#1a0033;color:#fff;overflow-x:hidden}',
+      '.ci-page{padding:1.5em 2em 6em;min-height:100vh}',
       '.ci-loading{padding:4em 1em;text-align:center;font-size:2em;color:#ffff00;font-weight:bold}',
       '.ci-error{padding:2em 1em;text-align:center;color:#ff7e7e;opacity:0.85;font-size:1.2em}',
 
@@ -70,6 +70,7 @@
       '.ci-card__year{opacity:0.55;font-size:0.9em;margin-top:0.3em}',
 
       /* Кнопка в карточке */
+      '.full-start__button.view--ci{color:#ffa726}',
       '.full-start__button.view--ci svg{margin-right:0.4em;vertical-align:middle}'
     ].join('\n');
 
@@ -349,9 +350,8 @@
   // КОМПОНЕНТ ACTIVITY (БЕЗ Lampa.Scroll, на чистом CSS)
   // ====================================================
   function CardInsightActivity(object) {
-    console.log('[CI] === constructor вызван ===', object);
     var network = new Lampa.Reguest();
-    var $root = $('<div class="ci-root"><div class="ci-page"><div class="ci-loading">ЗАГРУЗКА...<br>method=' + (object.method || '?') + ' id=' + (object.id || '?') + '</div></div></div>');
+    var $root = $('<div class="ci-root"><div class="ci-page"><div class="ci-loading">Загрузка...</div></div></div>');
     var $page = $root.find('.ci-page');
     var loaded = false;
     var contentReady = false;
@@ -359,26 +359,19 @@
     var self = this;
 
     this.create = function () {
-      console.log('[CI] create() вызван');
       this.load();
       return this.render();
     };
 
     this.render = function () {
-      console.log('[CI] render() вызван, $root существует:', !!$root, 'детей:', $root ? $root.children().length : 0);
       return $root;
     };
 
     this.load = function () {
-      console.log('[CI] load() начало fetch');
       fetchFullData(object.method, object.id, function (err, data) {
-        console.log('[CI] fetch завершён. err:', err, 'data:', !!data);
         if (loaded) return;
         loaded = true;
-        if (!$page) {
-          console.warn('[CI] $page null — пропуск');
-          return;
-        }
+        if (!$page) return;
         if (err || !data) {
           $page.html('<div class="ci-error">Не удалось загрузить TMDB: ' + (err && err.message ? err.message : 'нет данных') + '</div>');
           return;
@@ -388,7 +381,6 @@
     };
 
     this.build = function (data) {
-      console.log('[CI] build() начало рендера. title:', data.title || data.name);
       $page.empty();
 
       var $hero = renderHero(data);
@@ -412,33 +404,23 @@
       if ($recs) $page.append($recs);
 
       contentReady = true;
-      console.log('[CI] build() закончил, селекторов:', $root.find('.selector').length);
 
       setTimeout(function () {
         if (!$root) return;
         try {
           Lampa.Controller.toggle('content');
-        } catch (e) {
-          console.error('[CI] toggle error:', e);
-        }
+        } catch (e) {}
       }, 150);
     };
 
     function scrollToEl(el) {
-      if (!el || !$root || !$root[0]) return;
-      var rootEl = $root[0];
+      if (!el) return;
       var raf = window.requestAnimationFrame || function (cb) { return setTimeout(cb, 16); };
       raf(function () {
-        if (!$root) return;
-        var margin = 60;
-        var elTop    = el.offsetTop;
-        var elBottom = elTop + el.offsetHeight;
-        var cur      = rootEl.scrollTop;
-        var viewH    = rootEl.clientHeight;
-        if (elTop - margin < cur) {
-          rootEl.scrollTop = Math.max(0, elTop - margin);
-        } else if (elBottom + margin > cur + viewH) {
-          rootEl.scrollTop = elBottom + margin - viewH;
+        try {
+          el.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'nearest' });
+        } catch (e) {
+          try { el.scrollIntoView(false); } catch (er) {}
         }
       });
     }
@@ -448,7 +430,6 @@
       if (focused) scrollToEl(focused);
     }
 
-    // Скролл при любом переключении фокуса пультом или мышью
     $root.on('hover:focus', '.selector', function () {
       lastFocused = this;
       scrollToEl(this);
@@ -524,8 +505,8 @@
 
     var svgIcon =
       '<svg width="36" height="36" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">' +
-        '<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/>' +
-        '<path d="M12 8v4M12 16h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' +
+        '<circle cx="12" cy="12" r="9" stroke="#ffa726" stroke-width="2"/>' +
+        '<path d="M12 8v4M12 16h.01" stroke="#ffa726" stroke-width="2" stroke-linecap="round"/>' +
       '</svg>';
 
     var $btn = $(
@@ -576,7 +557,6 @@
     injectStyles();
     registerComponent();
     injectButton();
-    console.log('[Card Insight v4] готов');
   }
 
   if (window.appready) initialize();
