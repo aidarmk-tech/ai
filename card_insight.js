@@ -292,7 +292,7 @@
       var $card = $(
         '<div class="ci-actor selector" tabindex="0">' +
           '<div class="ci-actor__photo"' +
-            (photo ? ' style="background-image:url(\'' + photo + '\')"}' : '') + '>' +
+            (photo ? ' style="background-image:url(\'' + photo + '\')"`' : '') + '>' +
             (!photo ? '<div class="ci-actor__no-photo">👤</div>' : '') +
           '</div>' +
           '<div class="ci-actor__name">' + escapeHtml(person.name) + '</div>' +
@@ -333,7 +333,7 @@
       var $card = $(
         '<div class="ci-card selector" tabindex="0">' +
           '<div class="ci-card__poster"' +
-            (posterUrl ? ' style="background-image:url(\'' + posterUrl + '\')"}' : '') + '>' +
+            (posterUrl ? ' style="background-image:url(\'' + posterUrl + '\')"`' : '') + '>' +
             (!posterUrl ? '<div class="ci-card__no-poster">🎬</div>' : '') +
             (rating ? '<div class="ci-card__rating">★ ' + rating + '</div>' : '') +
           '</div>' +
@@ -375,7 +375,7 @@
       var $card = $(
         '<div class="ci-card' + (isCurrent ? ' ci-card--current' : '') + ' selector" tabindex="0">' +
           '<div class="ci-card__poster"' +
-            (posterUrl ? ' style="background-image:url(\'' + posterUrl + '\')"}' : '') + '>' +
+            (posterUrl ? ' style="background-image:url(\'' + posterUrl + '\')"`' : '') + '>' +
             (!posterUrl ? '<div class="ci-card__no-poster">🎬</div>' : '') +
             (rating ? '<div class="ci-card__rating">★ ' + rating + '</div>' : '') +
             (isCurrent ? '<div class="ci-card__current-badge">▶ Сейчас</div>' : '') +
@@ -403,7 +403,7 @@
   function parseAIResponse(text) {
     var facts = [];
     text.split('\n').forEach(function (line) {
-      line = line.replace(/^[\s•\-\*]+/, '').replace(/^\d+[\.)\]]\s*/, '').trim();
+      line = line.replace(/^[\s•\-\*]+/, '').replace(/^\d+[\.\)\]]\s*/, '').trim();
       if (line.length >= 40 && line.length <= 700 && facts.indexOf(line) === -1) facts.push(line);
     });
     return facts.slice(0, 8);
@@ -460,6 +460,118 @@
   }
 
   // ====================================================
+  // СТАТУС ПРОДОЛЖЕНИЯ (из данных TMDB)
+  // ====================================================
+  function renderContinuationSection(data, method) {
+    var items = [];
+
+    if (method === 'tv') {
+      var statusMap = {
+        'Returning Series': { icon: '🔄', text: 'Сериал продолжается' },
+        'In Production':    { icon: '🎬', text: 'Сезон снимается' },
+        'Post Production':  { icon: '✂️', text: 'Постпродакшн нового сезона' },
+        'Planned':          { icon: '📋', text: 'Сезон запланирован' },
+        'Ended':            { icon: '🏁', text: 'Сериал завершён' },
+        'Canceled':         { icon: '❌', text: 'Сериал отменён' },
+        'Cancelled':        { icon: '❌', text: 'Сериал отменён' }
+      };
+      if (statusMap[data.status]) items.push(statusMap[data.status]);
+
+      if (data.next_episode_to_air) {
+        var ep = data.next_episode_to_air;
+        var epDate = '';
+        if (ep.air_date) {
+          try {
+            var d = new Date(ep.air_date);
+            epDate = d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+          } catch (e) { epDate = ep.air_date; }
+        }
+        var epText = 'Сезон ' + ep.season_number + ', эпизод ' + ep.episode_number;
+        if (ep.name) epText += ' — «' + ep.name + '»';
+        if (epDate) epText += ' (' + epDate + ')';
+        items.push({ icon: '📅', label: 'Следующий эпизод', text: epText });
+      }
+
+      if (data.number_of_seasons) {
+        var s = data.number_of_seasons;
+        var sLabel = s === 1 ? 'сезон' : s < 5 ? 'сезона' : 'сезонов';
+        var e = data.number_of_episodes || 0;
+        var eLabel = e === 1 ? 'серия' : e < 5 ? 'серии' : 'серий';
+        items.push({ icon: '🇯️', label: 'Всего', text: s + ' ' + sLabel + (e ? ', ' + e + ' ' + eLabel : '') });
+      }
+    } else {
+      if (data.status === 'Post Production') items.push({ icon: '✂️', text: 'Фильм в постпродакшне' });
+      else if (data.status === 'In Production') items.push({ icon: '🎬', text: 'Фильм снимается' });
+    }
+
+    if (!items.length) return null;
+    var $sec = $('<div class="ci-section"></div>');
+    $sec.append('<div class="ci-section-title"><span class="ci-section-title__bar"></span>Статус выхода</div>');
+    var $list = $('<div class="ci-facts"></div>');
+    items.forEach(function (f) {
+      var label = f.label ? '<span class="ci-fact__label">' + escapeHtml(f.label) + ':</span> ' : '';
+      $list.append(
+        '<div class="ci-fact selector" tabindex="0">' +
+          '<div class="ci-fact__icon">' + f.icon + '</div>' +
+          '<div class="ci-fact__text">' + label + escapeHtml(f.text) + '</div>' +
+        '</div>'
+      );
+    });
+    $sec.append($list);
+    return $sec;
+  }
+
+  // ====================================================
+  // НОВОСТИ И СЛУХИ (Google News RSS)
+  // ====================================================
+  function fetchNewsRSS(title, callback) {
+    var query = encodeURIComponent('"' + title + '" продолжение сезон');
+    var url = 'https://news.google.com/rss/search?q=' + query + '&hl=ru&gl=RU&ceid=RU:ru';
+    var done = false;
+    var tid = setTimeout(function () { if (!done) { done = true; callback(null, []); } }, 8000);
+
+    fetch(url)
+      .then(function (r) { return r.text(); })
+      .then(function (xml) {
+        if (done) return;
+        done = true;
+        clearTimeout(tid);
+        var items = [];
+        try {
+          var doc = (new DOMParser()).parseFromString(xml, 'text/xml');
+          var nodes = doc.querySelectorAll('item');
+          for (var i = 0; i < nodes.length && items.length < 5; i++) {
+            var tEl = nodes[i].querySelector('title');
+            var dEl = nodes[i].querySelector('pubDate');
+            if (!tEl) continue;
+            var t = tEl.textContent.replace(/\s*-\s*[^-–—]+$/, '').trim();
+            if (t.length > 15) {
+              items.push({
+                text: t,
+                date: dEl ? dEl.textContent.substring(5, 17) : ''
+              });
+            }
+          }
+        } catch (e) {}
+        callback(null, items);
+      })
+      .catch(function () { if (!done) { done = true; clearTimeout(tid); callback(null, []); } });
+  }
+
+  function renderNewsSection(items) {
+    if (!items || !items.length) return null;
+    var $sec = $('<div class="ci-section"></div>');
+    $sec.append('<div class="ci-section-title"><span class="ci-section-title__bar"></span>Новости и слухи</div>');
+    var $list = $('<div class="ci-trivia"></div>');
+    items.forEach(function (item) {
+      var date = item.date ? '<span style="opacity:0.45;font-size:0.82em;float:right;padding-left:0.5em">' + item.date + '</span>' : '';
+      $list.append('<div class="ci-trivia__item selector" tabindex="0">' + date + escapeHtml(item.text) + '</div>');
+    });
+    $sec.append($list);
+    return $sec;
+  }
+
+  // ====================================================
   // КОМПОНЕНТ ACTIVITY
   // ====================================================
   function CardInsightActivity(object) {
@@ -506,12 +618,20 @@
       var $facts = renderFactsSection(buildFacts(data));
       if ($facts) $page.append($facts);
 
+      // Статус выхода (из TMDB, синхронно)
+      var $cont = renderContinuationSection(data, object.method);
+      if ($cont) $page.append($cont);
+
       // Placeholder for AI trivia (filled async)
       var $triviaPlaceholder = $('<div></div>');
       $page.append($triviaPlaceholder);
 
       var $cast = renderCastSection(data.credits);
       if ($cast) $page.append($cast);
+
+      // Placeholder for news (filled async)
+      var $newsPlaceholder = $('<div></div>');
+      $page.append($newsPlaceholder);
 
       // Placeholder for collection/franchise (filled async)
       var $colPlaceholder = $('<div></div>');
@@ -545,6 +665,16 @@
       } else {
         $colPlaceholder.remove();
       }
+
+      // Async: новости Google News RSS
+      var newsTitle = data.title || data.name || '';
+      fetchNewsRSS(newsTitle, function (err, newsItems) {
+        if (!$page) return;
+        var $news = renderNewsSection(newsItems);
+        if ($news) $newsPlaceholder.replaceWith($news);
+        else $newsPlaceholder.remove();
+        try { Lampa.Controller.collectionSet($root); } catch (e) {}
+      });
 
       // Async: AI trivia via OpenRouter (only if API key configured)
       var aiTitle  = data.title || data.name || '';
@@ -737,7 +867,6 @@
     $sec.append('<div class="ci-section-title"><span class="ci-section-title__bar"></span>Настройки AI Инфо</div>');
     var $list = $('<div class="ci-facts"></div>');
 
-    // Строка — ключ
     var keyText = key ? '●●●●●●' + key.slice(-4) : 'Не задан — нажмите для ввода';
     var $keyRow = $('<div class="ci-fact selector" tabindex="0"><div class="ci-fact__icon">🔑</div><div class="ci-fact__text"><span class="ci-fact__label">API ключ:</span> ' + escapeHtml(keyText) + '</div></div>');
     $keyRow.on('hover:enter', function () {
@@ -750,7 +879,6 @@
     });
     $list.append($keyRow);
 
-    // Строка — модель (перебор по клику)
     var modelKeys = Object.keys(AI_MODELS);
     var $modelRow = $('<div class="ci-fact selector" tabindex="0"><div class="ci-fact__icon">🤖</div><div class="ci-fact__text"><span class="ci-fact__label">Модель:</span> ' + escapeHtml(modelLabel) + '</div></div>');
     $modelRow.on('hover:enter', function () {
