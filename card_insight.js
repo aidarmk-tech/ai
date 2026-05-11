@@ -292,7 +292,7 @@
       var $card = $(
         '<div class="ci-actor selector" tabindex="0">' +
           '<div class="ci-actor__photo"' +
-            (photo ? ' style="background-image:url(\'' + photo + '\')"`' : '') + '>' +
+            (photo ? ' style="background-image:url(\'' + photo + '\')"}' : '') + '>' +
             (!photo ? '<div class="ci-actor__no-photo">👤</div>' : '') +
           '</div>' +
           '<div class="ci-actor__name">' + escapeHtml(person.name) + '</div>' +
@@ -333,7 +333,7 @@
       var $card = $(
         '<div class="ci-card selector" tabindex="0">' +
           '<div class="ci-card__poster"' +
-            (posterUrl ? ' style="background-image:url(\'' + posterUrl + '\')"`' : '') + '>' +
+            (posterUrl ? ' style="background-image:url(\'' + posterUrl + '\')"}' : '') + '>' +
             (!posterUrl ? '<div class="ci-card__no-poster">🎬</div>' : '') +
             (rating ? '<div class="ci-card__rating">★ ' + rating + '</div>' : '') +
           '</div>' +
@@ -375,7 +375,7 @@
       var $card = $(
         '<div class="ci-card' + (isCurrent ? ' ci-card--current' : '') + ' selector" tabindex="0">' +
           '<div class="ci-card__poster"' +
-            (posterUrl ? ' style="background-image:url(\'' + posterUrl + '\')"`' : '') + '>' +
+            (posterUrl ? ' style="background-image:url(\'' + posterUrl + '\')"}' : '') + '>' +
             (!posterUrl ? '<div class="ci-card__no-poster">🎬</div>' : '') +
             (rating ? '<div class="ci-card__rating">★ ' + rating + '</div>' : '') +
             (isCurrent ? '<div class="ci-card__current-badge">▶ Сейчас</div>' : '') +
@@ -403,7 +403,7 @@
   function parseAIResponse(text) {
     var facts = [];
     text.split('\n').forEach(function (line) {
-      line = line.replace(/^[\s•\-\*]+/, '').replace(/^\d+[\.\)\]]\s*/, '').trim();
+      line = line.replace(/^[\s•\-\*]+/, '').replace(/^\d+[\.)\]]\s*/, '').trim();
       if (line.length >= 40 && line.length <= 700 && facts.indexOf(line) === -1) facts.push(line);
     });
     return facts.slice(0, 8);
@@ -496,7 +496,7 @@
     this.build = function (data) {
       $page.empty();
 
-      $page.append(renderAISettingsSection());
+      if (!window.Lampa || !Lampa.SettingsApi) $page.append(renderAISettingsSection());
 
       var $hero = renderHero(data);
       if ($hero) $page.append($hero);
@@ -696,7 +696,38 @@
   function setAIKey(v)  { try { Lampa.Storage.set('ci_openrouter_key', v); } catch(e) {} }
   function setAIModel(v){ try { Lampa.Storage.set('ci_openrouter_model', v); } catch(e) {} }
 
-  // Панель настроек AI внутри плагина (вместо Lampa.SettingsApi, который падает в bylampa)
+  // ====================================================
+  // НАСТРОЙКИ ЧЕРЕЗ Lampa.SettingsApi
+  // ====================================================
+  function registerSettings() {
+    if (!Lampa.SettingsApi) return;
+
+    Lampa.SettingsApi.addComponent({
+      component: 'ai_info',
+      name: 'AI Инфо',
+      icon: '<svg width="64" height="64" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 8v4M12 16h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>'
+    });
+
+    Lampa.SettingsApi.addParam({
+      component: 'ai_info',
+      param: { name: 'ci_openrouter_key', type: 'input', values: '', default: '' },
+      field: {
+        name: 'OpenRouter API ключ',
+        description: 'sk-or-v1-… — получить на openrouter.ai/keys'
+      }
+    });
+
+    Lampa.SettingsApi.addParam({
+      component: 'ai_info',
+      param: { name: 'ci_openrouter_model', type: 'select', values: AI_MODELS, default: AI_DEFAULT_MODEL },
+      field: {
+        name: 'Модель AI',
+        description: 'Модель OpenRouter для генерации фактов о фильме'
+      }
+    });
+  }
+
+  // Fallback-панель внутри плагина — только если SettingsApi недоступен
   function renderAISettingsSection() {
     var key   = getAIKey();
     var model = getAIModel();
@@ -802,6 +833,7 @@
     if (!window.Lampa || !Lampa.Listener || !Lampa.Component) return setTimeout(initialize, 500);
     injectStyles();
     registerComponent();
+    registerSettings();
     injectButton();
   }
 
