@@ -411,26 +411,36 @@
       }, 150);
     };
 
-    // Скролл через прямой scrollTop — работает даже когда Lampa-контейнер overflow:hidden
     function scrollToEl(el) {
       if (!el || !$root || !$root[0]) return;
       var raf = window.requestAnimationFrame || function (cb) { return setTimeout(cb, 16); };
       raf(function () {
         if (!$root || !$root[0]) return;
         var rootEl = $root[0];
-        var viewH = rootEl.clientHeight;
-        if (!viewH) return;
-        var rootRect = rootEl.getBoundingClientRect();
-        var elRect   = el.getBoundingClientRect();
-        var elTop    = elRect.top - rootRect.top + rootEl.scrollTop;
-        var elBottom = elTop + elRect.height;
-        var margin   = 80;
-        if (elTop - margin < rootEl.scrollTop) {
-          rootEl.scrollTop = Math.max(0, elTop - margin);
-        } else if (elBottom + margin > rootEl.scrollTop + viewH) {
-          rootEl.scrollTop = elBottom + margin - viewH;
+        var viewH  = rootEl.clientHeight;
+        if (viewH > 0) {
+          // offsetTop-обход надёжнее getBoundingClientRect в Android TV WebView
+          var elTop = 0, node = el;
+          while (node && node !== rootEl) { elTop += node.offsetTop; node = node.offsetParent; }
+          var elBottom = elTop + el.offsetHeight;
+          var margin = 80;
+          if (elTop - margin < rootEl.scrollTop) {
+            rootEl.scrollTop = Math.max(0, elTop - margin);
+          } else if (elBottom + margin > rootEl.scrollTop + viewH) {
+            rootEl.scrollTop = elBottom + margin - viewH;
+          }
+        } else {
+          // clientHeight=0 → контейнер не scroll-box, scrollIntoView как fallback
+          try { el.scrollIntoView({ behavior: 'auto', block: 'nearest' }); }
+          catch (e) { try { el.scrollIntoView(false); } catch (er) {} }
         }
       });
+    }
+
+    function scrollToFocus() {
+      if (!$root) return;
+      var focused = $root.find('.selector.focus')[0] || lastFocused;
+      if (focused) scrollToEl(focused);
     }
 
     $root.on('hover:focus', '.selector', function () {
@@ -440,11 +450,16 @@
 
     this.start = function () {
       var back = this.back;
-      // Высота через JS — 100vh ненадёжен в Android WebView
-      if ($root && $root[0]) {
-        var h = window.innerHeight || document.documentElement.clientHeight || 600;
-        $root[0].style.height = h + 'px';
+      // Высота через JS — 100vh ненадёжен в Android WebView; повтор через 300ms для ATV
+      function applyHeight() {
+        if (!$root || !$root[0]) return;
+        var h = window.innerHeight || document.documentElement.clientHeight
+              || screen.availHeight || screen.height || 0;
+        if (h > 100) $root[0].style.height = h + 'px';
       }
+      applyHeight();
+      setTimeout(applyHeight, 300);
+
       Lampa.Controller.add('content', {
         toggle: function () {
           Lampa.Controller.collectionSet($root);
@@ -464,22 +479,30 @@
         left: function () {
           if (typeof Navigator !== 'undefined' && Navigator.canmove && Navigator.canmove('left')) {
             Navigator.move('left');
+            setTimeout(scrollToFocus, 50);
           } else {
             Lampa.Controller.toggle('menu');
           }
         },
         right: function () {
-          if (typeof Navigator !== 'undefined' && Navigator.move) Navigator.move('right');
+          if (typeof Navigator !== 'undefined' && Navigator.move) {
+            Navigator.move('right');
+            setTimeout(scrollToFocus, 50);
+          }
         },
         up: function () {
           if (typeof Navigator !== 'undefined' && Navigator.canmove && Navigator.canmove('up')) {
             Navigator.move('up');
+            setTimeout(scrollToFocus, 50);
           } else {
             Lampa.Controller.toggle('head');
           }
         },
         down: function () {
-          if (typeof Navigator !== 'undefined' && Navigator.move) Navigator.move('down');
+          if (typeof Navigator !== 'undefined' && Navigator.move) {
+            Navigator.move('down');
+            setTimeout(scrollToFocus, 50);
+          }
         },
         back: back
       });
