@@ -218,6 +218,10 @@
     if (directors.length)
       facts.push({ icon: '🎬', text: 'Режиссёр ' + directors.map(function (d) { return d.name; }).join(', ') + '. Скрытая цепочка построена на его/её тематических предпочтениях.' });
 
+    var writers = crew.filter(function (p) { return p.job === 'Screenplay' || p.job === 'Writer' || p.job === 'Story'; });
+    if (writers.length)
+      facts.push({ icon: '✍️', text: 'Сценарий — ' + writers.slice(0, 2).map(function (w) { return w.name; }).join(', ') + '. Сценарист определяет структуру и темп — именно по нему строится скрытая цепочка тематических связей.' });
+
     var composers = crew.filter(function (p) { return p.job === 'Original Music Composer'; });
     if (composers.length)
       facts.push({ icon: '🎵', text: 'Саундтрек — ' + composers[0].name + '. Один и тот же композитор создаёт невидимую связь между разными фильмами через музыкальный почерк.' });
@@ -570,6 +574,25 @@
       var raf = window.requestAnimationFrame || function (cb) { setTimeout(cb, 16); };
       raf(function () {
         if (!$root || !$root[0]) return;
+
+        // Horizontal scroll for cards inside .ke-strip
+        var strip = null, sp = el.parentNode;
+        while (sp && sp !== $root[0]) {
+          if (sp.className && sp.className.indexOf('ke-strip') >= 0) { strip = sp; break; }
+          sp = sp.parentNode;
+        }
+        if (strip) {
+          var elRect  = el.getBoundingClientRect();
+          var stRect  = strip.getBoundingClientRect();
+          var hm      = 20;
+          if (elRect.left - hm < stRect.left) {
+            strip.scrollLeft -= stRect.left - elRect.left + hm;
+          } else if (elRect.right + hm > stRect.right) {
+            strip.scrollLeft += elRect.right + hm - stRect.right;
+          }
+        }
+
+        // Vertical scroll
         var root  = $root[0];
         var viewH = root.clientHeight;
         if (viewH > 0) {
@@ -652,6 +675,8 @@
           if (typeof Navigator !== 'undefined' && Navigator.canmove && Navigator.canmove('left')) {
             Navigator.move('left');
             setTimeout(scrollToFocus, 50);
+          } else if (lastFocused && $(lastFocused).closest('.ke-strip, .ke-moods, .ke-map-nodes, .ke-facts').length) {
+            // at left edge of content grid — do nothing
           } else {
             Lampa.Controller.toggle('menu');
           }
@@ -681,12 +706,7 @@
         },
         down: function () {
           if (getFocusedTab() >= 0) {
-            if (!focusFirstContent()) {
-              if (typeof Navigator !== 'undefined' && Navigator.move) {
-                Navigator.move('down');
-                setTimeout(scrollToFocus, 50);
-              }
-            }
+            focusFirstContent();
             return;
           }
           if (typeof Navigator !== 'undefined' && Navigator.move) {
@@ -697,6 +717,14 @@
         back: back
       });
       Lampa.Controller.toggle('content');
+      setTimeout(function () {
+        if (!$root || !$root[0]) return;
+        try { Lampa.Controller.collectionSet($root); } catch (e) {}
+        var tgt = (lastFocused && $.contains($root[0], lastFocused))
+          ? lastFocused
+          : ($tabEls[0] && $tabEls[0][0] ? $tabEls[0][0] : null);
+        if (tgt) { try { Lampa.Controller.collectionFocus(tgt, $root); scrollTo(tgt); } catch (e) {} }
+      }, 100);
     };
 
     this.pause   = function () {};
