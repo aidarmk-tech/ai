@@ -68,6 +68,8 @@
       '.ke-chain--hidden .ke-section-title{color:#d580ff}',
       '.ke-chain--alt .ke-section-bar{background:#ff006e}',
       '.ke-chain--alt .ke-section-title{color:#ff6ea0}',
+      '.ke-chain--author .ke-section-bar{background:#ffab40}',
+      '.ke-chain--author .ke-section-title{color:#ffab40}',
 
       /* Horizontal film strip */
       '.ke-strip{display:flex;gap:0.9em;overflow-x:auto;padding-bottom:0.8em;scrollbar-width:none}',
@@ -89,6 +91,8 @@
       '.ke-tag--hidden{background:rgba(191,0,255,0.22);color:#e0aaff;border:1px solid rgba(191,0,255,0.35)}',
       '.ke-tag--alt{background:rgba(255,0,110,0.22);color:#ffb3ca;border:1px solid rgba(255,0,110,0.35)}',
       '.ke-tag--mood{background:rgba(0,188,212,0.2);color:#80deea;border:1px solid rgba(0,188,212,0.3)}',
+      '.ke-tag--author-strong{background:rgba(255,171,64,0.25);color:#ffe0b2;border:1px solid rgba(255,171,64,0.55)}',
+      '.ke-tag--author-weak{background:rgba(255,171,64,0.1);color:#ffe0b2;border:1px solid rgba(255,171,64,0.25)}',
 
       /* Crew / easter-egg facts */
       '.ke-facts{display:flex;flex-direction:column;gap:0.55em}',
@@ -207,6 +211,69 @@
     });
   }
 
+  // ─── АВТОРСКОЕ ЭХО ────────────────────────────────────────────────────────
+  function chainAuthor(data, excludeIds, callback) {
+    var crew   = (data.credits && data.credits.crew) || [];
+    var method = data.first_air_date ? 'tv' : 'movie';
+    var excl   = excludeIds.concat([data.id]);
+
+    var director = null, writer = null;
+    crew.forEach(function (p) {
+      if (!director && p.job === 'Director') director = p;
+      if (!writer && (p.job === 'Screenplay' || p.job === 'Writer' || p.job === 'Story')) writer = p;
+    });
+
+    if (!writer && !director) { callback([]); return; }
+
+    var strongItems = [], weakItems = [];
+    var pending = 0;
+
+    function finish() {
+      if (--pending > 0) return;
+      var seen = excl.slice(), out = [];
+      strongItems.forEach(function (e) {
+        if (seen.indexOf(e.item.id) < 0) { seen.push(e.item.id); out.push(e); }
+      });
+      weakItems.forEach(function (e) {
+        if (seen.indexOf(e.item.id) < 0) { seen.push(e.item.id); out.push(e); }
+      });
+      callback(out.slice(0, 8));
+    }
+
+    // Сильная связь: режиссёр + сценарист вместе
+    if (director && writer && director.id !== writer.id) {
+      pending++;
+      tmdbGet(
+        'discover/' + method + '?with_people=' + director.id + ',' + writer.id +
+        '&sort_by=vote_average.desc&vote_count.gte=100',
+        function (err, d) {
+          if (!err && d && d.results)
+            strongItems = d.results
+              .filter(function (r) { return excl.indexOf(r.id) < 0; })
+              .slice(0, 4)
+              .map(function (r) { return { item: r, method: method, tagClass: 'ke-tag--author-strong', tagLabel: 'дуэт' }; });
+          finish();
+        }
+      );
+    }
+
+    // Слабая связь: только сценарист (или режиссёр если сценариста нет)
+    var anchor = writer || director;
+    pending++;
+    tmdbGet(
+      'discover/' + method + '?with_people=' + anchor.id +
+      '&sort_by=vote_average.desc&vote_count.gte=100',
+      function (err, d) {
+        if (!err && d && d.results)
+          weakItems = d.results
+            .filter(function (r) { return excl.indexOf(r.id) < 0; })
+            .slice(0, 4)
+            .map(function (r) { return { item: r, method: method, tagClass: 'ke-tag--author-weak', tagLabel: writer ? 'сценарист' : 'режиссёр' }; });
+        finish();
+      }
+    );
+  }
+
   // ─── ПАСХАЛКИ / СВЯЗИ КОМАНДЫ ─────────────────────────────────────────────
   function buildCrewFacts(data) {
     var facts = [];
@@ -247,6 +314,8 @@
 
   // ─── РЕНДЕР КАРТОЧКИ ──────────────────────────────────────────────────────
   function renderCard(entry, tagClass, tagLabel) {
+    var tClass = entry.tagClass !== undefined ? entry.tagClass : (tagClass || '');
+    var tLabel = entry.tagLabel !== undefined ? entry.tagLabel : tagLabel;
     var item   = entry.item;
     var method = entry.method;
     var poster = tmdbImg(item.poster_path, 'w200');
@@ -260,7 +329,7 @@
           (poster ? ' style="background-image:url(\'' + poster + '\')"' : '') + '>' +
           (!poster ? '<div class="ke-card__no-poster">🎬</div>' : '') +
           (rating  ? '<div class="ke-card__rating">★ ' + rating + '</div>' : '') +
-          (tagLabel ? '<div class="ke-card__tag ' + (tagClass || '') + '">' + tagLabel + '</div>' : '') +
+          (tLabel ? '<div class="ke-card__tag ' + tClass + '">' + tLabel + '</div>' : '') +
         '</div>' +
         '<div class="ke-card__info">' +
           '<div class="ke-card__title">' + esc(title) + '</div>' +
@@ -526,7 +595,8 @@
 
       var $hiddenPH = $('<div></div>');
       var $altPH    = $('<div></div>');
-      $t1.append($hiddenPH).append($altPH);
+      var $authorPH = $('<div></div>');
+      $t1.append($hiddenPH).append($altPH).append($authorPH);
 
       // ── Tab 2: Map placeholder ──
       var $t2 = $tabContents[1];
@@ -560,6 +630,13 @@
       chainAlternative(data, function (entries) {
         var $secA = renderChainSection('🌀', 'Альтернативная реальность', 'alt', entries, 'ke-tag--alt', 'альт');
         if ($secA) $altPH.replaceWith($secA); else $altPH.remove();
+        try { Lampa.Controller.collectionSet($root); } catch (e) {}
+      });
+
+      // ── Async: author chain ──
+      chainAuthor(data, directIds, function (entries) {
+        var $secAu = renderChainSection('✍️', 'Авторское эхо', 'author', entries);
+        if ($secAu) $authorPH.replaceWith($secAu); else $authorPH.remove();
         try { Lampa.Controller.collectionSet($root); } catch (e) {}
       });
 
