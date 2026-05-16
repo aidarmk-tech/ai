@@ -47,11 +47,11 @@ jobs:
           echo "Create response: $CREATE"
 
           KV_ID=$(echo "$CREATE" | python3 -c "
-          import sys,json
-          d=json.load(sys.stdin)
-          if d.get('success') and d.get('result'):
-              print(d['result']['id'])
-          " 2>/dev/null || echo "")
+import sys,json
+d=json.load(sys.stdin)
+if d.get('success') and d.get('result'):
+    print(d['result']['id'])
+" 2>/dev/null || echo "")
 
           if [ -z "$KV_ID" ]; then
             LIST=$(curl -sf -X GET \
@@ -59,13 +59,13 @@ jobs:
               -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN")
             echo "List response: $LIST"
             KV_ID=$(echo "$LIST" | python3 -c "
-          import sys,json
-          d=json.load(sys.stdin)
-          for ns in d.get('result', []):
-              if 'TG_BRIDGE_KV' in ns.get('title',''):
-                  print(ns['id'])
-                  break
-          " 2>/dev/null || echo "")
+import sys,json
+d=json.load(sys.stdin)
+for ns in d.get('result', []):
+    if 'TG_BRIDGE_KV' in ns.get('title',''):
+        print(ns['id'])
+        break
+" 2>/dev/null || echo "")
           fi
 
           echo "KV_ID: $KV_ID"
@@ -94,17 +94,20 @@ jobs:
         run: |
           DEPLOY_OUT=$(npx wrangler deploy 2>&1)
           echo "$DEPLOY_OUT"
-          # Extract the actual workers.dev URL from deploy output
-          WORKER_URL=$(echo "$DEPLOY_OUT" | grep -oE 'https://[a-z0-9_-]+\.[a-z0-9_-]+\.workers\.dev' | head -1)
-          # Fallback: try single-segment URL
+          # Strip ANSI escape codes before parsing
+          CLEAN_OUT=$(echo "$DEPLOY_OUT" | sed 's/\x1b\[[0-9;]*[mGKHF]//g')
+          # Extract workers.dev URL (handles name.account.workers.dev format)
+          WORKER_URL=$(echo "$CLEAN_OUT" | grep -oE 'https://[a-z0-9_-]+\.[a-z0-9_-]+\.workers\.dev' | head -1)
+          # Fallback: single-segment subdomain
           if [ -z "$WORKER_URL" ]; then
-            WORKER_URL=$(echo "$DEPLOY_OUT" | grep -oE 'https://[a-z0-9_-]+\.workers\.dev' | head -1)
+            WORKER_URL=$(echo "$CLEAN_OUT" | grep -oE 'https://[a-z0-9_-]+\.workers\.dev' | head -1)
+          fi
+          # Fallback: use the known correct URL
+          if [ -z "$WORKER_URL" ]; then
+            echo "WARNING: Could not extract URL from wrangler output, using known URL"
+            WORKER_URL="https://filmkenttg.aidar-m-k.workers.dev"
           fi
           echo "Worker URL: $WORKER_URL"
-          if [ -z "$WORKER_URL" ]; then
-            echo "WARNING: Could not extract URL, using default"
-            WORKER_URL="https://filmkenttg.workers.dev"
-          fi
           echo "WORKER_URL=$WORKER_URL" >> $GITHUB_ENV
 
       - name: Update Lampa plugin with correct API_BASE
