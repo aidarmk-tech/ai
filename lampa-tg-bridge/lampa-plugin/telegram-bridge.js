@@ -2,7 +2,7 @@
     'use strict';
 
     var API_BASE = 'https://filmkenttg.workers.dev';
-    var BOT_NAME = '@FilmKentBot';
+    var BOT_NAME = '@Filmkent_bot';
     var POLL_INTERVAL = 30000;
     var pollTimer = null;
 

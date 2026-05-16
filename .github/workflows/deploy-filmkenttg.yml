@@ -1,0 +1,92 @@
+name: Deploy FilmKent Telegram Bridge
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/new-session-Gqrfp]
+    paths:
+      - 'lampa-tg-bridge/worker/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        working-directory: lampa-tg-bridge/worker
+        run: npm install
+
+      - name: Create or reuse KV namespace
+        working-directory: lampa-tg-bridge/worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          # Try creating namespace, capture output
+          CREATE_OUT=$(npx wrangler kv namespace create "TG_BRIDGE_KV" 2>&1) || true
+          echo "$CREATE_OUT"
+
+          # Extract ID from output (wrangler prints: id = "XXXXXXXX")
+          KV_ID=$(echo "$CREATE_OUT" | grep -oE '"[a-f0-9]{32}"' | tr -d '"' | head -1)
+
+          # If creation failed (already exists), list and find it
+          if [ -z "$KV_ID" ]; then
+            LIST_OUT=$(npx wrangler kv namespace list 2>&1)
+            echo "$LIST_OUT"
+            KV_ID=$(echo "$LIST_OUT" | python3 -c "
+          import sys, json, re
+          text = sys.stdin.read()
+          # Try parsing as JSON array
+          try:
+              data = json.loads(text)
+              for ns in data:
+                  if 'TG_BRIDGE_KV' in ns.get('title', ''):
+                      print(ns['id'])
+                      break
+          except:
+              # Fallback: regex
+              m = re.search(r'TG_BRIDGE_KV.*?\"id\":\s*\"([a-f0-9]+)\"', text, re.DOTALL)
+              if m: print(m.group(1))
+          " 2>/dev/null || echo "")
+          fi
+
+          echo "KV_ID: $KV_ID"
+
+          if [ -z "$KV_ID" ]; then
+            echo "ERROR: Could not get KV namespace ID"
+            exit 1
+          fi
+
+          # Patch wrangler.toml
+          sed -i "s/REPLACE_WITH_KV_NAMESPACE_ID/$KV_ID/" wrangler.toml
+          sed -i "s/REPLACE_WITH_KV_PREVIEW_ID/$KV_ID/" wrangler.toml
+          cat wrangler.toml
+
+      - name: Set Worker secrets
+        working-directory: lampa-tg-bridge/worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          echo "${{ secrets.BOT_TOKEN }}" | npx wrangler secret put BOT_TOKEN
+          echo "${{ secrets.TMDB_KEY }}" | npx wrangler secret put TMDB_KEY
+
+      - name: Deploy Worker
+        working-directory: lampa-tg-bridge/worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx wrangler deploy
+
+      - name: Set Telegram webhook
+        run: |
+          RESPONSE=$(curl -s "https://api.telegram.org/bot${{ secrets.BOT_TOKEN }}/setWebhook?url=https://filmkenttg.workers.dev")
+          echo "Webhook response: $RESPONSE"
+          echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if d.get('ok') else 1)"
+
+      - name: Health check
+        run: |
+          sleep 5
+          curl -sf "https://filmkenttg.workers.dev/api/health" && echo "✅ Worker is live!"
