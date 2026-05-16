@@ -319,7 +319,12 @@
 
     function doRight() {
       var m = queue[0]; if (!m) return;
-      try { Lampa.Favorite.add('book', m); Lampa.Noty.show('Добавлено в Книгу'); } catch (e) {}
+      try {
+        var card = { source: 'tmdb', type: 'movie' };
+        for (var k in m) { if (m.hasOwnProperty(k)) card[k] = m[k]; }
+        Lampa.Favorite.add('book', card);
+        Lampa.Noty.show('Добавлено в Книгу');
+      } catch (e) {}
       advance('right');
     }
     function doLeft() { advance('left'); }
@@ -466,8 +471,7 @@
     '.mr-card__year{font-size:22px;color:#777;font-weight:400}',
     '.mr-card__rating{font-size:20px;color:#e5a00d;margin-bottom:4px;flex-shrink:0}',
     '.mr-card__genres{font-size:16px;color:#888;margin-bottom:8px;flex-shrink:0}',
-    // Overview fills all remaining space — no line-clamp, clips naturally at boundary
-    '.mr-card__overview{font-size:18px;color:#bbb;line-height:1.55;flex:1;overflow:hidden;min-height:0}',
+    '.mr-card__overview{font-size:18px;color:#bbb;line-height:1.55;flex:1;overflow:hidden;min-height:0;display:-webkit-box;-webkit-line-clamp:10;-webkit-box-orient:vertical}',
     // Cast — single line at bottom, appears after async credits fetch
     '.mr-card__cast{font-size:15px;color:#666;padding-top:8px;margin-top:6px;border-top:1px solid rgba(255,255,255,0.06);flex-shrink:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;min-height:26px}',
     '.mr-cast__label{color:#aaa;font-weight:500}',
