@@ -246,15 +246,30 @@
             (rating  ? '<div class="mr-card__rating">★ ' + rating + '</div>' : '') +
             (genres  ? '<div class="mr-card__genres">' + esc(genres) + '</div>' : '') +
             (overview ? '<div class="mr-card__overview">' + esc(overview) + '</div>' : '') +
-          '</div>' +
-          '<div class="mr-card__hints">' +
-            '<span class="mr-hint mr-hint--skip">← Пропустить</span>' +
-            '<span class="mr-hint mr-hint--detail">↑ Подробнее</span>' +
-            '<span class="mr-hint mr-hint--book">→ В Книгу</span>' +
-            '<span class="mr-hint mr-hint--hide">↓ Скрыть</span>' +
+            '<div class="mr-card__cast"></div>' +
+            '<div class="mr-card__hints">' +
+              '<span class="mr-hint mr-hint--skip">← Пропустить</span>' +
+              '<span class="mr-hint mr-hint--detail">↑ Подробнее</span>' +
+              '<span class="mr-hint mr-hint--book">→ В Книгу</span>' +
+              '<span class="mr-hint mr-hint--hide">↓ Скрыть</span>' +
+            '</div>' +
           '</div>' +
         '</div>'
       );
+
+      // Load cast asynchronously — update cast div when ready
+      tmdbGet('movie/' + movie.id + '/credits', function (err, data) {
+        if (err || !data || !data.cast || !$cardScreen) return;
+        var names = [];
+        for (var i = 0; i < data.cast.length && names.length < 5; i++) {
+          if (data.cast[i].name) names.push(esc(data.cast[i].name));
+        }
+        if (names.length) {
+          $cardScreen.find('.mr-card__cast').html(
+            '<span class="mr-cast__label">В ролях: </span>' + names.join(', ')
+          );
+        }
+      });
     }
 
     function showMsg(type) {
@@ -430,30 +445,34 @@
     '.mr-mood-btn__icon{font-size:48px;margin-bottom:10px;line-height:1}',
     '.mr-mood-btn__label{font-size:22px;color:#fff;font-weight:500;text-align:center}',
 
-    // Card container — padding so card doesn't touch edges
-    '.mr-cards{width:100%;height:100%;display:flex;align-items:center;justify-content:center;padding:32px 60px;box-sizing:border-box}',
+    // Card container — fills activity height, padding on all sides
+    '.mr-cards{width:100%;height:100%;display:flex;align-items:center;justify-content:center;padding:20px 40px;box-sizing:border-box}',
 
-    // Card — horizontal layout: poster left, content right
-    '.mr-card{display:flex;flex-direction:row;width:100%;max-width:1100px;height:480px;background:#1c1c1c;border-radius:18px;overflow:hidden;box-shadow:0 16px 50px rgba(0,0,0,0.85);animation:mr-in .2s ease;flex-shrink:0}',
+    // Card — horizontal layout, fills container height
+    '.mr-card{display:flex;flex-direction:row;width:100%;height:100%;background:#1c1c1c;border-radius:18px;overflow:hidden;box-shadow:0 16px 50px rgba(0,0,0,0.85);animation:mr-in .2s ease}',
     '@keyframes mr-in{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:none}}',
     '.mr-card--out-left{animation:mr-outl .18s ease forwards}',
     '.mr-card--out-right{animation:mr-outr .18s ease forwards}',
     '@keyframes mr-outl{to{opacity:0;transform:translateX(-60px) scale(.95)}}',
     '@keyframes mr-outr{to{opacity:0;transform:translateX(60px) scale(.95)}}',
 
-    // Poster — left column, fills card height
+    // Poster — left column, fills full card height
     '.mr-card__poster{width:300px;min-width:300px;height:100%;background:#1a1a1a center/cover no-repeat;flex-shrink:0}',
     '.mr-card__no-poster{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:64px;color:#333}',
 
-    // Body — right column, flex column so overview expands and hints stick to bottom
-    '.mr-card__body{flex:1;display:flex;flex-direction:column;padding:28px 32px;overflow:hidden;min-width:0}',
-    '.mr-card__title{font-size:28px;color:#fff;font-weight:600;line-height:1.3;margin-bottom:8px;flex-shrink:0}',
+    // Body — right column, flex column: overview grows, cast + hints stick to bottom
+    '.mr-card__body{flex:1;display:flex;flex-direction:column;padding:24px 28px;overflow:hidden;min-width:0}',
+    '.mr-card__title{font-size:30px;color:#fff;font-weight:600;line-height:1.3;margin-bottom:6px;flex-shrink:0}',
     '.mr-card__year{font-size:22px;color:#777;font-weight:400}',
-    '.mr-card__rating{font-size:20px;color:#e5a00d;margin-bottom:6px;flex-shrink:0}',
-    '.mr-card__genres{font-size:17px;color:#888;margin-bottom:10px;flex-shrink:0}',
-    '.mr-card__overview{font-size:18px;color:#bbb;line-height:1.55;flex:1;overflow:hidden;display:-webkit-box;-webkit-line-clamp:8;-webkit-box-orient:vertical}',
-    '.mr-card__hints{display:flex;justify-content:space-around;padding:12px 0 0;border-top:1px solid rgba(255,255,255,0.07);margin-top:10px;flex-shrink:0}',
-    '.mr-hint{font-size:15px;color:#555}',
+    '.mr-card__rating{font-size:20px;color:#e5a00d;margin-bottom:4px;flex-shrink:0}',
+    '.mr-card__genres{font-size:16px;color:#888;margin-bottom:8px;flex-shrink:0}',
+    // Overview fills all remaining space — no line-clamp, clips naturally at boundary
+    '.mr-card__overview{font-size:18px;color:#bbb;line-height:1.55;flex:1;overflow:hidden;min-height:0}',
+    // Cast — single line at bottom, appears after async credits fetch
+    '.mr-card__cast{font-size:15px;color:#666;padding-top:8px;margin-top:6px;border-top:1px solid rgba(255,255,255,0.06);flex-shrink:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;min-height:26px}',
+    '.mr-cast__label{color:#aaa;font-weight:500}',
+    '.mr-card__hints{display:flex;justify-content:space-around;padding:10px 0 0;border-top:1px solid rgba(255,255,255,0.07);margin-top:8px;flex-shrink:0}',
+    '.mr-hint{font-size:14px;color:#555}',
     '.mr-hint--book{color:#e5a00d}',
 
     // Loading / empty / error
