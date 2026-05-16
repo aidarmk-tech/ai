@@ -228,8 +228,6 @@
     function renderMovie(movie) {
       var poster   = movie.poster_path
         ? 'https://image.tmdb.org/t/p/w500' + movie.poster_path : '';
-      var backdrop = movie.backdrop_path
-        ? 'https://image.tmdb.org/t/p/w1280' + movie.backdrop_path : poster;
       var year     = (movie.release_date || '').substring(0, 4);
       var rating   = movie.vote_average ? Number(movie.vote_average).toFixed(1) : '';
       var overview = movie.overview || '';
@@ -238,22 +236,15 @@
 
       $cardScreen.empty().append(
         '<div class="mr-card">' +
-          // Banner: backdrop image as full-width header
-          '<div class="mr-card__banner"' +
-            (backdrop ? ' style="background-image:url(\'' + backdrop + '\')"' : '') + '>' +
-            '<div class="mr-card__banner-fade"></div>' +
-            (!backdrop ? '<div class="mr-card__no-poster">🎬</div>' : '') +
+          '<div class="mr-card__poster"' +
+            (poster ? ' style="background-image:url(\'' + poster + '\')"' : '') + '>' +
+            (!poster ? '<div class="mr-card__no-poster">🎬</div>' : '') +
           '</div>' +
           '<div class="mr-card__body">' +
-            '<div class="mr-card__meta">' +
-              '<div class="mr-card__title">' + esc(movie.title || 'Без названия') +
-                (year ? ' <span class="mr-card__year">(' + year + ')</span>' : '') + '</div>' +
-              '<div class="mr-card__sub">' +
-                (rating  ? '<span class="mr-card__rating">★ ' + rating + '</span>' : '') +
-                (genres  ? '<span class="mr-card__genres">' + esc(genres) + '</span>' : '') +
-              '</div>' +
-            '</div>' +
-            // Overview with gradient fade if overflows
+            '<div class="mr-card__title">' + esc(movie.title || 'Без названия') +
+              (year ? ' <span class="mr-card__year">(' + year + ')</span>' : '') + '</div>' +
+            (rating  ? '<div class="mr-card__rating">★ ' + rating + '</div>' : '') +
+            (genres  ? '<div class="mr-card__genres">' + esc(genres) + '</div>' : '') +
             '<div class="mr-card__overview-wrap">' +
               (overview ? '<div class="mr-card__overview">' + esc(overview) + '</div>' : '') +
             '</div>' +
@@ -462,44 +453,39 @@
     '.mr-mood-btn__label{font-size:22px;color:#fff;font-weight:500;text-align:center}',
 
     // Card container
-    '.mr-cards{width:100%;height:100%;display:flex;align-items:center;justify-content:center;padding:16px 32px;box-sizing:border-box}',
+    '.mr-cards{width:100%;height:100%;display:flex;align-items:center;justify-content:center;padding:20px 40px;box-sizing:border-box}',
 
-    // Card — vertical layout: banner on top, text below
-    '.mr-card{display:flex;flex-direction:column;width:100%;max-width:1400px;height:100%;background:#1c1c1c;border-radius:18px;overflow:hidden;box-shadow:0 16px 50px rgba(0,0,0,0.85);animation:mr-in .2s ease}',
-    '@keyframes mr-in{from{opacity:0;transform:scale(.97)}to{opacity:1;transform:none}}',
+    // Card — horizontal: poster left, content right
+    '.mr-card{display:flex;flex-direction:row;width:100%;height:100%;background:#1c1c1c;border-radius:18px;overflow:hidden;box-shadow:0 16px 50px rgba(0,0,0,0.85);animation:mr-in .2s ease}',
+    '@keyframes mr-in{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:none}}',
     '.mr-card--out-left{animation:mr-outl .18s ease forwards}',
     '.mr-card--out-right{animation:mr-outr .18s ease forwards}',
     '@keyframes mr-outl{to{opacity:0;transform:translateX(-60px) scale(.95)}}',
     '@keyframes mr-outr{to{opacity:0;transform:translateX(60px) scale(.95)}}',
 
-    // Banner — backdrop image, fixed height, gradient fade at bottom
-    '.mr-card__banner{width:100%;height:200px;flex-shrink:0;background:#111 center/cover no-repeat;position:relative}',
-    '.mr-card__banner-fade{position:absolute;bottom:0;left:0;right:0;height:80px;background:linear-gradient(to bottom,transparent,#1c1c1c)}',
+    // Poster — left column
+    '.mr-card__poster{width:300px;min-width:300px;height:100%;background:#1a1a1a center/cover no-repeat;flex-shrink:0}',
     '.mr-card__no-poster{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:64px;color:#333}',
 
-    // Body — fills remaining height, flex column
-    '.mr-card__body{flex:1;display:flex;flex-direction:column;padding:16px 32px 20px;overflow:hidden;min-height:0}',
-
-    // Meta row: title + rating + genres in one compact block
-    '.mr-card__meta{flex-shrink:0;margin-bottom:12px}',
-    '.mr-card__title{font-size:28px;color:#fff;font-weight:600;line-height:1.25;margin-bottom:4px}',
+    // Body — right column, flex column
+    '.mr-card__body{flex:1;display:flex;flex-direction:column;padding:24px 28px;overflow:hidden;min-width:0}',
+    '.mr-card__title{font-size:26px;color:#fff;font-weight:600;line-height:1.3;margin-bottom:5px;flex-shrink:0}',
     '.mr-card__year{font-size:20px;color:#777;font-weight:400}',
-    '.mr-card__sub{display:flex;align-items:center;gap:16px}',
-    '.mr-card__rating{font-size:19px;color:#e5a00d}',
-    '.mr-card__genres{font-size:16px;color:#888}',
+    '.mr-card__rating{font-size:19px;color:#e5a00d;margin-bottom:3px;flex-shrink:0}',
+    '.mr-card__genres{font-size:15px;color:#888;margin-bottom:10px;flex-shrink:0}',
 
-    // Overview wrapper with gradient fade on overflow
-    '.mr-card__overview-wrap{flex:1;min-height:0;position:relative;overflow:hidden;margin-bottom:10px}',
-    '.mr-card__overview{font-size:18px;color:#ccc;line-height:1.6}',
-    '.mr-card__overview-wrap:after{content:"";position:absolute;bottom:0;left:0;right:0;height:48px;background:linear-gradient(to bottom,transparent,#1c1c1c);pointer-events:none}',
+    // Overview — fills remaining space, gradient fade if text overflows
+    '.mr-card__overview-wrap{flex:1;min-height:0;position:relative;overflow:hidden;margin-bottom:8px}',
+    '.mr-card__overview{font-size:16px;color:#ccc;line-height:1.6}',
+    '.mr-card__overview-wrap:after{content:"";position:absolute;bottom:0;left:0;right:0;height:40px;background:linear-gradient(to bottom,transparent,#1c1c1c);pointer-events:none}',
 
     // Cast
-    '.mr-card__cast{font-size:15px;color:#666;flex-shrink:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;min-height:22px;margin-bottom:10px}',
+    '.mr-card__cast{font-size:14px;color:#666;flex-shrink:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;min-height:20px;margin-bottom:8px}',
     '.mr-cast__label{color:#999;font-weight:500}',
 
     // Hints
     '.mr-card__hints{display:flex;justify-content:space-around;padding:10px 0 0;border-top:1px solid rgba(255,255,255,0.07);flex-shrink:0}',
-    '.mr-hint{font-size:15px;color:#555}',
+    '.mr-hint{font-size:14px;color:#555}',
     '.mr-hint--book{color:#e5a00d}',
 
     // Loading / empty / error
