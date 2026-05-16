@@ -3,9 +3,12 @@ name: Deploy FilmKent Telegram Bridge
 on:
   workflow_dispatch:
   push:
-    branches: [claude/new-session-Gqrfp]
+    branches: [main]
     paths:
       - 'lampa-tg-bridge/worker/**'
+
+permissions:
+  contents: write
 
 jobs:
   deploy:
@@ -21,49 +24,59 @@ jobs:
         working-directory: lampa-tg-bridge/worker
         run: npm install
 
-      - name: Create or reuse KV namespace
+      - name: Create or reuse KV namespace via Cloudflare API
         working-directory: lampa-tg-bridge/worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
-          # Try creating namespace, capture output
-          CREATE_OUT=$(npx wrangler kv namespace create "TG_BRIDGE_KV" 2>&1) || true
-          echo "$CREATE_OUT"
+          set -e
 
-          # Extract ID from output (wrangler prints: id = "XXXXXXXX")
-          KV_ID=$(echo "$CREATE_OUT" | grep -oE '"[a-f0-9]{32}"' | tr -d '"' | head -1)
+          ACCOUNTS=$(curl -sf -X GET "https://api.cloudflare.com/client/v4/accounts" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            -H "Content-Type: application/json")
+          echo "Accounts: $ACCOUNTS"
+          ACCOUNT_ID=$(echo "$ACCOUNTS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['result'][0]['id'])")
+          echo "Account ID: $ACCOUNT_ID"
+          echo "ACCOUNT_ID=$ACCOUNT_ID" >> $GITHUB_ENV
 
-          # If creation failed (already exists), list and find it
+          CREATE=$(curl -s -X POST \
+            "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/storage/kv/namespaces" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"title":"filmkenttg-TG_BRIDGE_KV"}')
+          echo "Create response: $CREATE"
+
+          KV_ID=$(echo "$CREATE" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+if d.get('success') and d.get('result'):
+    print(d['result']['id'])
+" 2>/dev/null || echo "")
+
           if [ -z "$KV_ID" ]; then
-            LIST_OUT=$(npx wrangler kv namespace list 2>&1)
-            echo "$LIST_OUT"
-            KV_ID=$(echo "$LIST_OUT" | python3 -c "
-          import sys, json, re
-          text = sys.stdin.read()
-          # Try parsing as JSON array
-          try:
-              data = json.loads(text)
-              for ns in data:
-                  if 'TG_BRIDGE_KV' in ns.get('title', ''):
-                      print(ns['id'])
-                      break
-          except:
-              # Fallback: regex
-              m = re.search(r'TG_BRIDGE_KV.*?\"id\":\s*\"([a-f0-9]+)\"', text, re.DOTALL)
-              if m: print(m.group(1))
-          " 2>/dev/null || echo "")
+            LIST=$(curl -sf -X GET \
+              "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/storage/kv/namespaces?per_page=100" \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN")
+            echo "List response: $LIST"
+            KV_ID=$(echo "$LIST" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+for ns in d.get('result', []):
+    if 'TG_BRIDGE_KV' in ns.get('title',''):
+        print(ns['id'])
+        break
+" 2>/dev/null || echo "")
           fi
 
           echo "KV_ID: $KV_ID"
-
           if [ -z "$KV_ID" ]; then
-            echo "ERROR: Could not get KV namespace ID"
+            echo "ERROR: Could not create or find KV namespace"
             exit 1
           fi
 
-          # Patch wrangler.toml
-          sed -i "s/REPLACE_WITH_KV_NAMESPACE_ID/$KV_ID/" wrangler.toml
-          sed -i "s/REPLACE_WITH_KV_PREVIEW_ID/$KV_ID/" wrangler.toml
+          sed -i "s/REPLACE_WITH_KV_NAMESPACE_ID/$KV_ID/g" wrangler.toml
+          sed -i "s/REPLACE_WITH_KV_PREVIEW_ID/$KV_ID/g" wrangler.toml
+          echo "=== wrangler.toml ==="
           cat wrangler.toml
 
       - name: Set Worker secrets
@@ -71,22 +84,59 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
-          echo "${{ secrets.BOT_TOKEN }}" | npx wrangler secret put BOT_TOKEN
-          echo "${{ secrets.TMDB_KEY }}" | npx wrangler secret put TMDB_KEY
+          printf '%s' "${{ secrets.BOT_TOKEN }}" | npx wrangler secret put BOT_TOKEN
+          printf '%s' "${{ secrets.TMDB_KEY }}" | npx wrangler secret put TMDB_KEY
 
-      - name: Deploy Worker
+      - name: Deploy Worker and capture URL
         working-directory: lampa-tg-bridge/worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: npx wrangler deploy
+        run: |
+          DEPLOY_OUT=$(npx wrangler deploy 2>&1)
+          echo "$DEPLOY_OUT"
+          # Strip ANSI escape codes before parsing
+          CLEAN_OUT=$(echo "$DEPLOY_OUT" | sed 's/\x1b\[[0-9;]*[mGKHF]//g')
+          # Extract workers.dev URL (handles name.account.workers.dev format)
+          WORKER_URL=$(echo "$CLEAN_OUT" | grep -oE 'https://[a-z0-9_-]+\.[a-z0-9_-]+\.workers\.dev' | head -1)
+          # Fallback: single-segment subdomain
+          if [ -z "$WORKER_URL" ]; then
+            WORKER_URL=$(echo "$CLEAN_OUT" | grep -oE 'https://[a-z0-9_-]+\.workers\.dev' | head -1)
+          fi
+          # Fallback: use the known correct URL
+          if [ -z "$WORKER_URL" ]; then
+            echo "WARNING: Could not extract URL from wrangler output, using known URL"
+            WORKER_URL="https://filmkenttg.aidar-m-k.workers.dev"
+          fi
+          echo "Worker URL: $WORKER_URL"
+          echo "WORKER_URL=$WORKER_URL" >> $GITHUB_ENV
+
+      - name: Update Lampa plugin with correct API_BASE
+        run: |
+          echo "Updating plugin API_BASE to: $WORKER_URL"
+          sed -i "s|var API_BASE = '[^']*';|var API_BASE = '$WORKER_URL';|" lampa-tg-bridge/lampa-plugin/telegram-bridge.js
+          git config user.email "github-actions@github.com"
+          git config user.name "GitHub Actions"
+          git add lampa-tg-bridge/lampa-plugin/telegram-bridge.js
+          git diff --staged --quiet || git commit -m "chore: update Lampa plugin API_BASE to $WORKER_URL [skip ci]"
+          git push
 
       - name: Set Telegram webhook
         run: |
-          RESPONSE=$(curl -s "https://api.telegram.org/bot${{ secrets.BOT_TOKEN }}/setWebhook?url=https://filmkenttg.workers.dev")
+          echo "Setting webhook: $WORKER_URL"
+          RESPONSE=$(curl -s "https://api.telegram.org/bot${{ secrets.BOT_TOKEN }}/setWebhook?url=$WORKER_URL")
           echo "Webhook response: $RESPONSE"
           echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if d.get('ok') else 1)"
 
       - name: Health check
         run: |
           sleep 5
-          curl -sf "https://filmkenttg.workers.dev/api/health" && echo "✅ Worker is live!"
+          echo "Health check: $WORKER_URL/api/health"
+          curl -sf "$WORKER_URL/api/health" && echo "Worker is live!"
+
+      - name: Print summary
+        run: |
+          echo "==============================="
+          echo "DEPLOY COMPLETE"
+          echo "Worker URL: $WORKER_URL"
+          echo "Bot: @Filmkent_bot"
+          echo "==============================="
