@@ -43,8 +43,11 @@
   ];
 
   // ─── Helpers ─────────────────────────────────────────────────────────────
-  function tmdbGet(path, onOk, onErr) {
-    Lampa.TMDB.api(path, onOk, onErr || function () {});
+  function tmdbGet(path, cb) {
+    var net = new Lampa.Reguest();
+    var sep = path.indexOf('?') >= 0 ? '&' : '?';
+    var url = Lampa.TMDB.api(path + sep + 'api_key=' + Lampa.TMDB.key() + '&language=ru');
+    net.silent(url, function (d) { cb(null, d); }, function (e) { cb(e); });
   }
 
   function esc(s) {
@@ -166,18 +169,17 @@
           if (screen === 'card') showMsg('error');
         }, 12000);
 
-        tmdbGet('discover/movie?' + query, function (data) {
+        tmdbGet('discover/movie?' + query, function (err, data) {
           clearTimeout(timer);
           fetching = false;
-          if (!data || !data.results) { tryShowCard(); return; }
+          if (err || !data || !data.results) {
+            if (screen === 'card') showMsg('error');
+            return;
+          }
           data.results.forEach(function (m) {
             if (!isSkipped(m.id) && !isInBook(m.id) && !queueHas(m.id)) queue.push(m);
           });
           tryShowCard();
-        }, function () {
-          clearTimeout(timer);
-          fetching = false;
-          if (screen === 'card') showMsg('error');
         });
       } catch (e) {
         fetching = false;
