@@ -153,22 +153,29 @@
     function refillQueue() {
       if (fetching || !currentMood || queue.length >= 5) return;
       fetching = true;
-      var page  = Math.floor(Math.random() * 20) + 1;
-      var p     = Object.assign({}, currentMood.params, { page: page });
-      var query = Object.keys(p).map(function (k) {
-        return encodeURIComponent(k) + '=' + encodeURIComponent(p[k]);
-      }).join('&');
-      tmdbGet('discover/movie?' + query, function (data) {
-        fetching = false;
-        if (!data || !data.results) { tryShowCard(); return; }
-        data.results.forEach(function (m) {
-          if (!isSkipped(m.id) && !isInBook(m.id) && !queueHas(m.id)) queue.push(m);
+      try {
+        var page  = Math.floor(Math.random() * 20) + 1;
+        var src   = currentMood.params;
+        var p     = { page: page };
+        for (var k in src) { if (src.hasOwnProperty(k)) p[k] = src[k]; }
+        var parts = [];
+        for (var key in p) { if (p.hasOwnProperty(key)) parts.push(encodeURIComponent(key) + '=' + encodeURIComponent(p[key])); }
+        var query = parts.join('&');
+        tmdbGet('discover/movie?' + query, function (data) {
+          fetching = false;
+          if (!data || !data.results) { tryShowCard(); return; }
+          data.results.forEach(function (m) {
+            if (!isSkipped(m.id) && !isInBook(m.id) && !queueHas(m.id)) queue.push(m);
+          });
+          tryShowCard();
+        }, function () {
+          fetching = false;
+          if (screen === 'card') showMsg('error');
         });
-        tryShowCard();
-      }, function () {
+      } catch (e) {
         fetching = false;
         if (screen === 'card') showMsg('error');
-      });
+      }
     }
 
     function queueHas(id) {
