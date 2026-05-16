@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var API_BASE = 'https://filmkenttg.workers.dev';
+    var API_BASE = 'https://filmkenttg.aidar-m-k.workers.dev';
     var BOT_NAME = '@Filmkent_bot';
     var POLL_INTERVAL = 30000;
     var pollTimer = null;
