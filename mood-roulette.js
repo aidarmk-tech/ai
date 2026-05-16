@@ -156,12 +156,18 @@
       try {
         var page  = Math.floor(Math.random() * 20) + 1;
         var src   = currentMood.params;
-        var p     = { page: page };
-        for (var k in src) { if (src.hasOwnProperty(k)) p[k] = src[k]; }
-        var parts = [];
-        for (var key in p) { if (p.hasOwnProperty(key)) parts.push(encodeURIComponent(key) + '=' + encodeURIComponent(p[key])); }
+        var parts = ['page=' + page];
+        for (var k in src) { if (src.hasOwnProperty(k)) parts.push(k + '=' + src[k]); }
         var query = parts.join('&');
+
+        var timer = setTimeout(function () {
+          if (!fetching) return;
+          fetching = false;
+          if (screen === 'card') showMsg('error');
+        }, 12000);
+
         tmdbGet('discover/movie?' + query, function (data) {
+          clearTimeout(timer);
           fetching = false;
           if (!data || !data.results) { tryShowCard(); return; }
           data.results.forEach(function (m) {
@@ -169,6 +175,7 @@
           });
           tryShowCard();
         }, function () {
+          clearTimeout(timer);
           fetching = false;
           if (screen === 'card') showMsg('error');
         });
