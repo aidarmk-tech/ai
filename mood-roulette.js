@@ -58,8 +58,11 @@
 
   // ─── Skip-list storage ───────────────────────────────────────────────────
   function getSkipList() {
-    try { return JSON.parse(Lampa.Storage.get('mr_skip_list', '[]')); }
-    catch (e) { return []; }
+    try {
+      var raw  = Lampa.Storage.get('mr_skip_list', '[]');
+      var list = JSON.parse(raw || '[]');
+      return (list && typeof list.push === 'function') ? list : [];
+    } catch (e) { return []; }
   }
   function addToSkipList(id) {
     var list = getSkipList();
@@ -208,9 +211,7 @@
         ? 'https://image.tmdb.org/t/p/w500' + movie.poster_path : '';
       var year     = (movie.release_date || '').substring(0, 4);
       var rating   = movie.vote_average ? Number(movie.vote_average).toFixed(1) : '';
-      var overview = movie.overview
-        ? (movie.overview.length > 280 ? movie.overview.substring(0, 280) + '…' : movie.overview)
-        : '';
+      var overview = movie.overview || '';
       var genres   = (movie.genre_ids || []).slice(0, 3)
         .map(function (id) { return GENRE_NAMES[id] || ''; }).filter(Boolean).join(', ');
 
@@ -399,7 +400,7 @@
 
   // ─── CSS ─────────────────────────────────────────────────────────────────
   var CSS = [
-    '.mr-root{position:relative;width:100%;min-height:100%;background:#0f0f0f;display:flex;align-items:center;justify-content:center}',
+    '.mr-root{position:relative;width:100%;height:100%;min-height:100%;background:#0f0f0f;display:flex;align-items:center;justify-content:center}',
 
     // Mood screen
     '.mr-moods{width:100%;max-width:860px;padding:40px 48px}',
@@ -410,25 +411,29 @@
     '.mr-mood-btn__icon{font-size:48px;margin-bottom:10px;line-height:1}',
     '.mr-mood-btn__label{font-size:22px;color:#fff;font-weight:500;text-align:center}',
 
-    // Card container
-    '.mr-cards{width:100%;height:100%;display:flex;align-items:center;justify-content:center}',
+    // Card container — padding so card doesn't touch edges
+    '.mr-cards{width:100%;height:100%;display:flex;align-items:center;justify-content:center;padding:32px 60px;box-sizing:border-box}',
 
-    // Card
-    '.mr-card{display:flex;flex-direction:column;width:480px;max-width:90vw;background:#1c1c1c;border-radius:18px;overflow:hidden;box-shadow:0 16px 50px rgba(0,0,0,0.85);animation:mr-in .2s ease}',
-    '@keyframes mr-in{from{opacity:0;transform:scale(.96) translateY(8px)}to{opacity:1;transform:none}}',
+    // Card — horizontal layout: poster left, content right
+    '.mr-card{display:flex;flex-direction:row;width:100%;max-width:1100px;height:480px;background:#1c1c1c;border-radius:18px;overflow:hidden;box-shadow:0 16px 50px rgba(0,0,0,0.85);animation:mr-in .2s ease;flex-shrink:0}',
+    '@keyframes mr-in{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:none}}',
     '.mr-card--out-left{animation:mr-outl .18s ease forwards}',
     '.mr-card--out-right{animation:mr-outr .18s ease forwards}',
-    '@keyframes mr-outl{to{opacity:0;transform:translateX(-50px) scale(.95)}}',
-    '@keyframes mr-outr{to{opacity:0;transform:translateX(50px) scale(.95)}}',
-    '.mr-card__poster{width:100%;height:300px;background:#1a1a1a center/cover no-repeat;flex-shrink:0}',
+    '@keyframes mr-outl{to{opacity:0;transform:translateX(-60px) scale(.95)}}',
+    '@keyframes mr-outr{to{opacity:0;transform:translateX(60px) scale(.95)}}',
+
+    // Poster — left column, fills card height
+    '.mr-card__poster{width:300px;min-width:300px;height:100%;background:#1a1a1a center/cover no-repeat;flex-shrink:0}',
     '.mr-card__no-poster{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:64px;color:#333}',
-    '.mr-card__body{padding:20px 24px;flex:1}',
-    '.mr-card__title{font-size:26px;color:#fff;font-weight:600;line-height:1.3;margin-bottom:6px}',
+
+    // Body — right column, flex column so overview expands and hints stick to bottom
+    '.mr-card__body{flex:1;display:flex;flex-direction:column;padding:28px 32px;overflow:hidden;min-width:0}',
+    '.mr-card__title{font-size:28px;color:#fff;font-weight:600;line-height:1.3;margin-bottom:8px;flex-shrink:0}',
     '.mr-card__year{font-size:22px;color:#777;font-weight:400}',
-    '.mr-card__rating{font-size:20px;color:#e5a00d;margin-bottom:5px}',
-    '.mr-card__genres{font-size:17px;color:#888;margin-bottom:8px}',
-    '.mr-card__overview{font-size:18px;color:#bbb;line-height:1.5;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}',
-    '.mr-card__hints{display:flex;justify-content:space-around;padding:12px;background:rgba(255,255,255,0.04);flex-shrink:0}',
+    '.mr-card__rating{font-size:20px;color:#e5a00d;margin-bottom:6px;flex-shrink:0}',
+    '.mr-card__genres{font-size:17px;color:#888;margin-bottom:10px;flex-shrink:0}',
+    '.mr-card__overview{font-size:18px;color:#bbb;line-height:1.55;flex:1;overflow:hidden;display:-webkit-box;-webkit-line-clamp:8;-webkit-box-orient:vertical}',
+    '.mr-card__hints{display:flex;justify-content:space-around;padding:12px 0 0;border-top:1px solid rgba(255,255,255,0.07);margin-top:10px;flex-shrink:0}',
     '.mr-hint{font-size:15px;color:#555}',
     '.mr-hint--book{color:#e5a00d}',
 
