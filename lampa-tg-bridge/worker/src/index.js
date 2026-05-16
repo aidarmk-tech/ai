@@ -8,12 +8,12 @@ export default {
             const url = new URL(request.url);
 
             if (url.pathname.startsWith('/api/')) {
-                return handleApi(request, env);
+                return await handleApi(request, env);
             }
 
             const bot = new Bot(env.BOT_TOKEN);
             setupBot(bot, env);
-            return webhookCallback(bot, 'cloudflare-mod')(request);
+            return await webhookCallback(bot, 'cloudflare-mod')(request);
         } catch (err) {
             return new Response(JSON.stringify({ error: err.message }), {
                 status: 500,

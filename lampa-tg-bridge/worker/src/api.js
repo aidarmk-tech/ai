@@ -88,7 +88,7 @@ async function handleFeed(request, env) {
 
     const items = since > 0 ? feed.filter(r => r.ts > since) : feed;
 
-    return json({ items, chat_name: chatData.name || tokenData.name || 'Chat' });
+    return json({ items, chat_name: chatData.name || tokenData.name || 'Чат' });
 }
 
 async function handleShare(request, env) {
@@ -108,7 +108,7 @@ async function handleShare(request, env) {
     let message = '';
 
     if (type === 'added_to_book') {
-        message = `📚 ${user_name || 'Someone'} added «${title}» to the watchlist.`;
+        message = `📚 ${user_name || 'Кто-то'} добавил «${title}» в книгу.`;
     }
 
     if (message && env.BOT_TOKEN) {
@@ -156,11 +156,11 @@ export async function handleApi(request, env) {
     }
 
     const linkMatch = path.match(/^\/api\/link\/(\d{6})$/);
-    if (linkMatch) return handleLink(request, env, linkMatch[1]);
+    if (linkMatch) return await handleLink(request, env, linkMatch[1]);
 
-    if (path === '/api/feed') return handleFeed(request, env);
-    if (path === '/api/share') return handleShare(request, env);
-    if (path === '/api/unlink') return handleUnlink(request, env);
+    if (path === '/api/feed') return await handleFeed(request, env);
+    if (path === '/api/share') return await handleShare(request, env);
+    if (path === '/api/unlink') return await handleUnlink(request, env);
 
     return json({ error: 'Not found' }, 404);
 }
