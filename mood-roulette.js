@@ -57,22 +57,41 @@
   }
 
   // ─── Skip-list storage ───────────────────────────────────────────────────
-  function getSkipList() {
+  var _skipList = null; // module-level cache; loaded once from storage
+
+  function loadSkipList() {
+    _skipList = [];
     try {
-      var raw  = Lampa.Storage.get('mr_skip_list', '[]');
-      var list = JSON.parse(raw || '[]');
-      return (list && typeof list.push === 'function') ? list : [];
-    } catch (e) { return []; }
+      var raw = Lampa.Storage.get('mr_skip_list', '[]');
+      var list;
+      if (typeof raw === 'string') {
+        list = JSON.parse(raw || '[]');
+      } else {
+        list = raw; // Storage already parsed the JSON
+      }
+      if (list && typeof list.length === 'number') _skipList = list;
+    } catch (e) {}
   }
+
+  function saveSkipList() {
+    try { Lampa.Storage.set('mr_skip_list', JSON.stringify(_skipList)); } catch (e) {}
+  }
+
+  function listHas(id) {
+    if (!_skipList) loadSkipList();
+    for (var i = 0; i < _skipList.length; i++) { if (_skipList[i] === id) return true; }
+    return false;
+  }
+
   function addToSkipList(id) {
-    var list = getSkipList();
-    if (list.indexOf(id) < 0) {
-      list.push(id);
-      if (list.length > 500) list = list.slice(-400);
-      Lampa.Storage.set('mr_skip_list', JSON.stringify(list));
-    }
+    if (!_skipList) loadSkipList();
+    if (listHas(id)) return;
+    _skipList.push(id);
+    if (_skipList.length > 500) _skipList = _skipList.slice(-400);
+    saveSkipList();
   }
-  function isSkipped(id) { return getSkipList().indexOf(id) >= 0; }
+
+  function isSkipped(id) { return listHas(id); }
 
   function isInBook(id) {
     try { var f = Lampa.Favorite.check(id); return !!(f && f.book); }
