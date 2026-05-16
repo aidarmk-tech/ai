@@ -18,19 +18,19 @@
   var MOODS = [
     {
       id: 'sad', title: 'Грустно', icon: '😔',
-      params: { with_genres: '18,10749', 'vote_average.gte': 7.0, 'vote_count.gte': 500, sort_by: 'vote_average.desc' }
+      params: { with_genres: '18|10749', 'vote_average.gte': 7.0, 'vote_count.gte': 300, sort_by: 'vote_average.desc' }
     },
     {
       id: 'tired', title: 'Устал', icon: '😴',
-      params: { with_genres: '35,16,10751', 'with_runtime.lte': 110, 'vote_average.gte': 6.5, sort_by: 'popularity.desc' }
+      params: { with_genres: '35|16|10751', 'with_runtime.lte': 110, 'vote_average.gte': 6.5, sort_by: 'popularity.desc' }
     },
     {
       id: 'think', title: 'Хочу думать', icon: '🧠',
-      params: { with_genres: '9648,878,53,99', 'vote_average.gte': 7.5, 'vote_count.gte': 1000, sort_by: 'vote_average.desc' }
+      params: { with_genres: '9648|878|53', 'vote_average.gte': 7.5, 'vote_count.gte': 500, sort_by: 'vote_average.desc' }
     },
     {
       id: 'adrenaline', title: 'Адреналин', icon: '⚡',
-      params: { with_genres: '28,53,80', 'vote_average.gte': 6.5, 'vote_count.gte': 300, sort_by: 'popularity.desc' }
+      params: { with_genres: '28|53|80', 'vote_average.gte': 6.5, 'vote_count.gte': 200, sort_by: 'popularity.desc' }
     },
     {
       id: 'laugh', title: 'Смеяться', icon: '😂',
@@ -38,7 +38,7 @@
     },
     {
       id: 'fresh', title: 'Что-то новое', icon: '✨',
-      params: { 'primary_release_date.gte': _freshDate, 'vote_count.gte': 200, sort_by: 'popularity.desc' }
+      params: { 'primary_release_date.gte': _freshDate, 'vote_count.gte': 100, sort_by: 'popularity.desc' }
     }
   ];
 
