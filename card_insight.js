@@ -409,7 +409,7 @@
     return facts.slice(0, 8);
   }
 
-  function fetchAITrivia(title, year, genres, callback) {
+  function fetchAITrivia(movieInfo, callback) {
     var apiKey = '';
     try { apiKey = Lampa.Storage.get('ci_openrouter_key', ''); } catch (e) {}
     if (!apiKey) { callback(null, []); return; }
@@ -417,12 +417,29 @@
     var model = AI_DEFAULT_MODEL;
     try { model = Lampa.Storage.get('ci_openrouter_model', model) || model; } catch (e) {}
 
-    var genreText = genres && genres.length ? ' (жанр: ' + genres.slice(0, 3).join(', ') + ')' : '';
+    // Build a precise identification block so the AI writes about THIS specific film
+    var lines = [];
+    lines.push('Фильм: «' + movieInfo.title + '»' + (movieInfo.year ? ' (' + movieInfo.year + ')' : ''));
+    if (movieInfo.originalTitle && movieInfo.originalTitle !== movieInfo.title)
+      lines.push('Оригинальное название: «' + movieInfo.originalTitle + '»');
+    if (movieInfo.director)
+      lines.push('Режиссёр: ' + movieInfo.director);
+    if (movieInfo.cast && movieInfo.cast.length)
+      lines.push('В главных ролях: ' + movieInfo.cast.join(', '));
+    if (movieInfo.genres && movieInfo.genres.length)
+      lines.push('Жанр: ' + movieInfo.genres.slice(0, 3).join(', '));
+    if (movieInfo.overview)
+      lines.push('Краткое описание: ' + movieInfo.overview.substring(0, 200));
+
+    var context = lines.join('\n');
+
     var prompt =
-      'Напиши 6 интересных закулисных фактов о фильме "' + title + '"' +
-      (year ? ' ' + year + ' года' : '') + genreText + '. ' +
-      'Пиши о съёмочном процессе, кастинге, неожиданных историях создания, курьёзах на площадке. ' +
-      'Каждый факт — отдельная строка, начинается с символа "•". Без заголовков и предисловий. Только на русском языке.';
+      context + '\n\n' +
+      'Напиши 6 конкретных закулисных фактов именно об этом фильме: ' +
+      'интересные истории со съёмок, кастинг, курьёзы на площадке, ' +
+      'решения режиссёра, реакция актёров. ' +
+      'Пиши ТОЛЬКО о реальных фактах этого конкретного фильма — не выдумывай и не путай с другими. ' +
+      'Каждый факт — отдельная строка, начинается с «•». Без заголовков и вступлений. Только на русском.';
 
     var xhr = new XMLHttpRequest();
     xhr.open('POST', 'https://openrouter.ai/api/v1/chat/completions', true);
@@ -443,7 +460,7 @@
       model: model,
       messages: [{ role: 'user', content: prompt }],
       max_tokens: 900,
-      temperature: 0.75
+      temperature: 0.6
     }));
   }
 
@@ -677,10 +694,22 @@
       });
 
       // Async: AI trivia via OpenRouter (only if API key configured)
-      var aiTitle  = data.title || data.name || '';
-      var aiYear   = (data.release_date || data.first_air_date || '').substring(0, 4);
-      var aiGenres = (data.genres || []).map(function (g) { return g.name; });
-      fetchAITrivia(aiTitle, aiYear, aiGenres, function (err, triviaFacts) {
+      var crew = (data.credits && data.credits.crew) || [];
+      var directorObj = null;
+      for (var ci = 0; ci < crew.length; ci++) {
+        if (crew[ci].job === 'Director') { directorObj = crew[ci]; break; }
+      }
+      var topCast = (data.credits && data.credits.cast || []).slice(0, 4).map(function (a) { return a.name; });
+      var movieInfo = {
+        title:         data.title || data.name || '',
+        originalTitle: data.original_title || data.original_name || '',
+        year:          (data.release_date || data.first_air_date || '').substring(0, 4),
+        genres:        (data.genres || []).map(function (g) { return g.name; }),
+        director:      directorObj ? directorObj.name : '',
+        cast:          topCast,
+        overview:      data.overview || ''
+      };
+      fetchAITrivia(movieInfo, function (err, triviaFacts) {
         if (!$page) return;
         var $trivia = renderWikiTriviaSection(triviaFacts);
         if ($trivia) $triviaPlaceholder.replaceWith($trivia);
