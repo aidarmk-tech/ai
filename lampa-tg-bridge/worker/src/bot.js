@@ -24,7 +24,7 @@ async function pushToFeed(chatId, rec, env) {
     const key = `feed:${chatId}`;
     const existing = JSON.parse(await env.KV.get(key) || '[]');
 
-    // Deduplicate: same tmdb_id -> aggregate comments instead of duplicating
+    // Deduplicate: same tmdb_id → aggregate comments instead of duplicating
     const idx = existing.findIndex(r => r.tmdb_id === rec.tmdb_id);
     if (idx !== -1) {
         const prev = existing[idx];
@@ -79,7 +79,7 @@ async function processRec(ctx, rawText, comment, env) {
     }
 
     if (!movie) {
-        return ctx.reply(`❌ Не нашёл «${rawText}». Попробуй уточнить название или вставь ссылку.`);
+        return ctx.reply(`❌ Не нашёл «${rawText}». Попробуй уточнить название или вставь ссылку на TMDB/IMDB.`);
     }
 
     const rec = {
@@ -110,19 +110,22 @@ async function processRec(ctx, rawText, comment, env) {
 
 export function setupBot(bot, env) {
     bot.command('start', ctx => {
+        const isPrivate = ctx.chat.type === 'private';
         ctx.reply(
-            '👋 Привет! Я бот-мост между Telegram и Lampa.\n\n' +
-            '📱 Как использовать:\n' +
-            '1. Добавь меня в чат с друзьями\n' +
-            '2. Напиши /link чтобы привязать Lampa\n' +
-            '3. Рекомендуй фильмы командой /rec\n\n' +
-            'Команды:\n' +
-            '/link — привязать Lampa\n' +
-            '/rec <название> — рекомендовать фильм\n' +
-            '/rec <название> — <комментарий> — с комментарием\n' +
-            '/feed — последние рекомендации\n' +
-            '/who — кто привязан в чате\n' +
-            '/unlink — отвязать Lampa'
+            `👋 Привет! Я бот-мост между Telegram и Lampa.\n\n` +
+            `📱 Как использовать:\n` +
+            `1. Добавь меня в чат с друзьями\n` +
+            `2. Напиши /link чтобы привязать Lampa\n` +
+            `3. Рекомендуй фильмы!\n\n` +
+            (isPrivate
+                ? `💬 В личке достаточно написать название:\n   Дюна 2\n   Интерстеллар — шедевр!\n\n`
+                : `💬 В чате используй команду:\n   /rec Дюна 2\n   /rec Интерстеллар — шедевр!\n\n`) +
+            `Команды:\n` +
+            `/link — привязать Lampa\n` +
+            `/rec <название> — рекомендовать фильм\n` +
+            `/feed — последние рекомендации\n` +
+            `/who — кто привязан в чате\n` +
+            `/unlink — отвязать Lampa`
         );
     });
 
@@ -144,7 +147,7 @@ export function setupBot(bot, env) {
 
         await ctx.reply(
             `🔗 Введи этот код в Lampa в течение 10 минут:\n\n<code>${code}</code>\n\n` +
-            'Путь в Lampa: Настройки → Плагины → Telegram Bridge → вставь код',
+            `Путь в Lampa: Настройки → Плагины → Telegram Bridge → вставь код`,
             { parse_mode: 'HTML' }
         );
     });
@@ -160,6 +163,7 @@ export function setupBot(bot, env) {
             );
         }
 
+        // Split on — – or standalone -
         const parts = text.split(/\s*[—–]\s*|\s+-\s+/);
         const titlePart = parts[0].trim();
         const comment = parts.slice(1).join(' — ').trim();
@@ -200,5 +204,16 @@ export function setupBot(bot, env) {
         }
 
         await ctx.reply(`📱 Привязанные Lampa в чате:\n${names.map(n => `• ${n}`).join('\n')}`);
+    });
+
+    // In private chat, plain text = recommendation (no /rec needed)
+    bot.on('message:text', async ctx => {
+        if (ctx.message.text.startsWith('/')) return;
+        if (ctx.chat.type !== 'private') return;
+        const parts = ctx.message.text.split(/\s*[—–]\s*|\s+-\s+/);
+        const titlePart = parts[0].trim();
+        const comment = parts.slice(1).join(' — ').trim();
+        if (!titlePart) return;
+        await processRec(ctx, titlePart, comment, env);
     });
 }

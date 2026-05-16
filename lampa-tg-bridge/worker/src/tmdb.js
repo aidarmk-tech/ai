@@ -1,6 +1,6 @@
 const TMDB_BASE = 'https://api.themoviedb.org/3';
 
-export async function searchMovie(query, apiKey) {
+async function tmdbSearch(query, apiKey) {
     const url = `${TMDB_BASE}/search/multi?api_key=${apiKey}&language=ru-RU&query=${encodeURIComponent(query)}&include_adult=false`;
     const res = await fetch(url);
     if (!res.ok) return null;
@@ -8,6 +8,21 @@ export async function searchMovie(query, apiKey) {
     if (!data.results || data.results.length === 0) return null;
     const items = data.results.filter(r => r.media_type === 'movie' || r.media_type === 'tv');
     return items[0] || null;
+}
+
+export async function searchMovie(query, apiKey) {
+    // Try original query
+    let result = await tmdbSearch(query, apiKey);
+    if (result) return result;
+
+    // TMDB Russian index usually stores titles without ё — retry with ё→е
+    const normalized = query.replace(/ё/g, 'е').replace(/Ё/g, 'Е');
+    if (normalized !== query) {
+        result = await tmdbSearch(normalized, apiKey);
+        if (result) return result;
+    }
+
+    return null;
 }
 
 export async function findByImdbId(imdbId, apiKey) {
