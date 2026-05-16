@@ -156,11 +156,11 @@ export async function handleApi(request, env) {
     }
 
     const linkMatch = path.match(/^\/api\/link\/(\d{6})$/);
-    if (linkMatch) return handleLink(request, env, linkMatch[1]);
+    if (linkMatch) return await handleLink(request, env, linkMatch[1]);
 
-    if (path === '/api/feed') return handleFeed(request, env);
-    if (path === '/api/share') return handleShare(request, env);
-    if (path === '/api/unlink') return handleUnlink(request, env);
+    if (path === '/api/feed') return await handleFeed(request, env);
+    if (path === '/api/share') return await handleShare(request, env);
+    if (path === '/api/unlink') return await handleUnlink(request, env);
 
     return json({ error: 'Not found' }, 404);
 }
