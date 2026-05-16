@@ -121,11 +121,10 @@
 
     // ── Feed Component ─────────────────────────────────────────────────────────
     function TgFeedComponent(object) {
-        // create fresh DOM element — never use Lampa.Template for the root to avoid jQuery vs Node confusion
         var el = document.createElement('div');
         el.className = 'tg-bridge-feed';
 
-        function render() {
+        function buildContent() {
             el.innerHTML = '';
             var cache = getCache();
 
@@ -183,7 +182,6 @@
                     card.querySelector('[data-action="open"]').addEventListener('click', function () { openMovie(r); });
                     card.querySelector('[data-action="book"]').addEventListener('click', function () { addToBook(r); });
                     card.querySelector('[data-action="hide"]').addEventListener('click', function () { hideRec(r.id, card); });
-                    // Lampa remote control
                     $(card).on('hover:enter', function () {
                         var a = card.querySelector('.tg-rec__btn.focus');
                         if (a) a.click();
@@ -197,18 +195,21 @@
             el.appendChild(list);
         }
 
+        // Lampa calls render() to get the root element for appending to the slide
+        this.render = function () { return el; };
+
+        // Lampa calls create() to initialize after render()
         this.create = function () {
             if (!getToken()) {
-                // Redirect to settings — still must return a valid node
                 setTimeout(function () {
                     Lampa.Activity.replace({ component: 'tg_bridge_settings' });
                 }, 0);
                 return el;
             }
             clearBadge();
-            render();
+            buildContent();
             this.activity.loader(false);
-            return el; // always return a real DOM node
+            return el;
         };
 
         this.start = function () {
@@ -355,10 +356,14 @@
             body.appendChild(unlinkRow);
         }
 
+        // Lampa calls render() to get the root element
+        this.render = function () { return el; };
+
+        // Lampa calls create() to initialize
         this.create = function () {
             build();
             this.activity.loader(false);
-            return el; // real DOM node
+            return el;
         };
 
         this.start = function () {
