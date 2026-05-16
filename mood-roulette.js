@@ -397,7 +397,7 @@
     '.mr-moods__title{font-size:36px;color:#fff;text-align:center;margin:0 0 36px;font-weight:600}',
     '.mr-moods__grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}',
     '.mr-mood-btn{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:28px 16px;background:rgba(255,255,255,0.06);border-radius:14px;border:2px solid transparent;transition:background .12s,border-color .12s,transform .12s;cursor:pointer}',
-    '.mr-mood-btn.focused,.mr-mood-btn:focus{background:rgba(229,160,13,0.15);border-color:#e5a00d;transform:scale(1.04);outline:none}',
+    '.mr-mood-btn.focus,.mr-mood-btn:focus{background:rgba(229,160,13,0.15);border-color:#e5a00d;transform:scale(1.04);outline:none}',
     '.mr-mood-btn__icon{font-size:48px;margin-bottom:10px;line-height:1}',
     '.mr-mood-btn__label{font-size:22px;color:#fff;font-weight:500;text-align:center}',
 
@@ -429,7 +429,7 @@
     '.mr-msg__icon{font-size:56px;margin-bottom:16px}',
     '.mr-msg__text{font-size:22px;color:#888;margin-bottom:24px;line-height:1.4}',
     '.mr-msg__btn{display:inline-block;padding:14px 36px;background:#e5a00d;color:#000;border-radius:10px;font-size:20px;font-weight:700;cursor:pointer;transition:transform .12s}',
-    '.mr-msg__btn.focused,.mr-msg__btn:focus{transform:scale(1.06);outline:3px solid #fff;outline-offset:3px}',
+    '.mr-msg__btn.focus,.mr-msg__btn:focus{transform:scale(1.06);outline:3px solid #fff;outline-offset:3px}',
   ].join('');
 
   // ─── Bootstrap ───────────────────────────────────────────────────────────
