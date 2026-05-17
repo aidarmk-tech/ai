@@ -33,7 +33,8 @@
     var css = [
         '.tg-badge { background: #e74c3c; color: #fff; border-radius: 10px; font-size: 11px;',
         '  padding: 1px 6px; margin-left: 5px; display: none; }',
-        '.tg-bridge-feed { padding: 1.5em; }',
+        '.tg-bridge-feed { padding: 1.5em; height: 100%; overflow-y: auto; overflow-x: hidden;',
+        '  -webkit-overflow-scrolling: touch; box-sizing: border-box; }',
         '.tg-bridge-feed__head { margin-bottom: 1em; }',
         '.tg-bridge-feed__title { font-size: 1.4em; font-weight: bold; }',
         '.tg-bridge-feed__subtitle { opacity: .6; font-size: .9em; margin-top: .3em; }',
@@ -187,7 +188,9 @@
 
     function TgFeedComponent(object) {
         var el = document.createElement('div');
-        var scroll = new Lampa.Scroll({ mask: true, over: true });
+        el.className = 'tg-bridge-feed';
+        var lastFocused = null;
+        var raf = window.requestAnimationFrame || function (cb) { setTimeout(cb, 16); };
 
         this.render = function () { return $(el); };
 
@@ -210,12 +213,40 @@
 
             var $list = $('<div class="tg-bridge-feed__list"></div>');
             buildFeedList($list);
-            scroll.render().find('.scroll__body').append($list);
-            $(el).append(scroll.render());
+            $(el).append($list);
+
+            $(el).on('hover:focus', '.selector', function () {
+                lastFocused = this;
+                scrollTo(this);
+            });
 
             this.activity.loader(false);
             return $(el);
         };
+
+        function scrollTo(elem) {
+            if (!elem || !el) return;
+            raf(function () {
+                var root = el;
+                var viewH = root.clientHeight;
+                if (viewH > 0) {
+                    var top = 0, node = elem;
+                    while (node && node !== root) { top += node.offsetTop; node = node.offsetParent; }
+                    var bottom = top + elem.offsetHeight;
+                    var margin = 80;
+                    if (top - margin < root.scrollTop) root.scrollTop = Math.max(0, top - margin);
+                    else if (bottom + margin > root.scrollTop + viewH) root.scrollTop = bottom + margin - viewH;
+                } else {
+                    try { elem.scrollIntoView({ behavior: 'auto', block: 'nearest' }); }
+                    catch (e) { try { elem.scrollIntoView(false); } catch (er) {} }
+                }
+            });
+        }
+
+        function scrollToFocus() {
+            var focused = el && el.querySelector('.selector.focus') || lastFocused;
+            if (focused) scrollTo(focused);
+        }
 
         function buildFeedList($list) {
             $list.empty();
@@ -268,13 +299,13 @@
         this.start = function () {
             Lampa.Controller.add('tg_bridge_feed', {
                 toggle: function () {
-                    Lampa.Controller.collectionSet(scroll.render());
-                    Lampa.Controller.collectionFocus(false, scroll.render());
+                    Lampa.Controller.collectionSet($(el));
+                    Lampa.Controller.collectionFocus(false, $(el));
                 },
-                up: function () { Navigator.move('up'); },
-                down: function () { Navigator.move('down'); },
-                left: function () { Navigator.move('left'); },
-                right: function () { Navigator.move('right'); },
+                up: function () { Navigator.move('up'); setTimeout(scrollToFocus, 50); },
+                down: function () { Navigator.move('down'); setTimeout(scrollToFocus, 50); },
+                left: function () { Navigator.move('left'); setTimeout(scrollToFocus, 50); },
+                right: function () { Navigator.move('right'); setTimeout(scrollToFocus, 50); },
                 back: function () { Lampa.Activity.backward(); }
             });
             Lampa.Controller.toggle('tg_bridge_feed');
@@ -282,7 +313,7 @@
 
         this.pause = function () {};
         this.stop = function () {};
-        this.destroy = function () { scroll.destroy(); };
+        this.destroy = function () {};
     }
 
     // ─── Settings component ────────────────────────────────────────────────────
