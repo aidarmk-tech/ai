@@ -1,22 +1,12 @@
 (function () {
     'use strict';
 
-    var API_BASE = 'https://filmkenttg.workers.dev';
+    var API_BASE = 'https://filmkenttg.aidar-m-k.workers.dev';
     var BOT_NAME = '@Filmkent_bot';
     var POLL_INTERVAL = 30000;
     var pollTimer = null;
 
     // ─── Templates ────────────────────────────────────────────────────────────
-
-    Lampa.Template.add('tg_bridge_feed', [
-        '<div class="tg-bridge-feed">',
-        '  <div class="tg-bridge-feed__head">',
-        '    <div class="tg-bridge-feed__title"></div>',
-        '    <div class="tg-bridge-feed__subtitle"></div>',
-        '  </div>',
-        '  <div class="tg-bridge-feed__list"></div>',
-        '</div>'
-    ].join(''));
 
     Lampa.Template.add('tg_bridge_card', [
         '<div class="tg-rec selector" data-id="{id}">',
@@ -35,27 +25,6 @@
         '      <div class="tg-rec__btn selector" data-action="hide">Скрыть</div>',
         '    </div>',
         '  </div>',
-        '</div>'
-    ].join(''));
-
-    Lampa.Template.add('tg_bridge_settings', [
-        '<div class="tg-bridge-settings">',
-        '  <div class="tg-bridge-settings__title">Telegram Bridge</div>',
-        '  <div class="tg-bridge-settings__body"></div>',
-        '</div>'
-    ].join(''));
-
-    Lampa.Template.add('tg_bridge_link', [
-        '<div class="tg-bridge-link">',
-        '  <div class="tg-bridge-link__title">Подключи Telegram-чат</div>',
-        '  <div class="tg-bridge-link__step">1. Открой <b>{bot}</b> в Telegram</div>',
-        '  <div class="tg-bridge-link__step">2. Отправь команду: <code>/link</code></div>',
-        '  <div class="tg-bridge-link__step">3. Получишь 6-значный код. Введи его ниже:</div>',
-        '  <div class="tg-bridge-link__input-wrap">',
-        '    <input class="tg-bridge-link__input selector" type="text" maxlength="6" placeholder="000000">',
-        '  </div>',
-        '  <div class="tg-bridge-link__btn selector">Подтвердить</div>',
-        '  <div class="tg-bridge-link__error" style="display:none"></div>',
         '</div>'
     ].join(''));
 
@@ -84,19 +53,24 @@
         '.tg-rec__btn { padding: .3em .8em; border-radius: 4px; background: rgba(255,255,255,.1);',
         '  font-size: .85em; cursor: pointer; transition: background .2s; }',
         '.tg-rec__btn.focus { background: #3498db; }',
-        '.tg-bridge-link { max-width: 400px; padding: 2em; }',
+        '.tg-bridge-link { max-width: 420px; padding: 2em; }',
         '.tg-bridge-link__title { font-size: 1.3em; font-weight: bold; margin-bottom: 1.5em; }',
         '.tg-bridge-link__step { margin: .6em 0; line-height: 1.5; }',
         '.tg-bridge-link__step code { background: rgba(255,255,255,.15); padding: 2px 6px; border-radius: 3px; }',
-        '.tg-bridge-link__input-wrap { margin: 1.2em 0; }',
-        '.tg-bridge-link__input { width: 160px; padding: .5em; font-size: 1.4em; letter-spacing: .2em;',
-        '  text-align: center; border-radius: 4px; border: 2px solid rgba(255,255,255,.3);',
-        '  background: rgba(0,0,0,.4); color: #fff; }',
-        '.tg-bridge-link__input:focus { border-color: #3498db; outline: none; }',
-        '.tg-bridge-link__btn { display: inline-block; margin-top: .5em; padding: .6em 1.5em;',
-        '  background: #3498db; border-radius: 4px; cursor: pointer; }',
-        '.tg-bridge-link__btn.focus { background: #2980b9; }',
         '.tg-bridge-link__error { color: #e74c3c; margin-top: .8em; font-size: .9em; }',
+        '.tg-code-display { display: flex; gap: .4em; justify-content: center; margin: 1.2em 0; }',
+        '.tg-code-slot { display: inline-block; width: 2em; height: 2.4em; line-height: 2.4em;',
+        '  text-align: center; font-size: 1.4em; border-radius: 4px;',
+        '  border: 2px solid rgba(255,255,255,.3); background: rgba(0,0,0,.4); color: rgba(255,255,255,.4); }',
+        '.tg-code-slot.filled { border-color: #3498db; color: #fff; }',
+        '.tg-numpad { display: flex; flex-direction: column; gap: .4em; align-items: flex-start; margin: .6em 0; }',
+        '.tg-numpad-row { display: flex; gap: .4em; }',
+        '.tg-numpad-btn { width: 3em; height: 3em; line-height: 3em; text-align: center;',
+        '  font-size: 1.1em; border-radius: 4px; background: rgba(255,255,255,.1);',
+        '  cursor: pointer; transition: background .15s; }',
+        '.tg-numpad-btn.focus { background: #3498db; }',
+        '.tg-numpad-ok { width: 6.8em; font-size: .9em; }',
+        '.tg-numpad-del { font-size: .9em; }',
         '.tg-bridge-settings { padding: 1.5em; max-width: 400px; }',
         '.tg-bridge-settings__title { font-size: 1.3em; font-weight: bold; margin-bottom: 1.5em; }',
         '.tg-bridge-settings__row { display: flex; justify-content: space-between; align-items: center;',
@@ -153,7 +127,6 @@
         fetch(API_BASE + '/api/feed?token=' + encodeURIComponent(token) + '&since=' + since)
             .then(function (r) {
                 if (r.status === 401) {
-                    // Token invalid — clear and show re-link screen
                     Lampa.Storage.set('tg_bridge_token', '');
                     Lampa.Storage.set('tg_bridge_chat_name', '');
                     clearBadge();
@@ -177,7 +150,7 @@
                 }
                 updateBadge(data.items.length);
             })
-            .catch(function () { /* silent fail, retry on next poll */ });
+            .catch(function () {});
     }
 
     function startPolling() {
@@ -213,28 +186,40 @@
     // ─── Feed component ────────────────────────────────────────────────────────
 
     function TgFeedComponent(object) {
-        var comp = Lampa.Template.get('tg_bridge_feed', {});
+        var el = document.createElement('div');
         var scroll = new Lampa.Scroll({ mask: true, over: true });
+
+        this.render = function () { return $(el); };
 
         this.create = function () {
             if (!getToken()) {
                 Lampa.Activity.replace({ component: 'tg_bridge_settings' });
-                return;
+                return $(el);
             }
 
             clearBadge();
-            this.render();
+
+            var $head = $(
+                '<div class="tg-bridge-feed__head">' +
+                '<div class="tg-bridge-feed__title">Рекомендации от друзей</div>' +
+                '<div class="tg-bridge-feed__subtitle"></div>' +
+                '</div>'
+            );
+            $head.find('.tg-bridge-feed__subtitle').text(getChatName() || '');
+            $(el).append($head);
+
+            var $list = $('<div class="tg-bridge-feed__list"></div>');
+            buildFeedList($list);
+            scroll.render().find('.scroll__body').append($list);
+            $(el).append(scroll.render());
+
             this.activity.loader(false);
-            return comp;
+            return $(el);
         };
 
-        this.render = function () {
-            var cache = getCache();
-            var $list = comp.find('.tg-bridge-feed__list');
+        function buildFeedList($list) {
             $list.empty();
-
-            comp.find('.tg-bridge-feed__title').text('Рекомендации от друзей');
-            comp.find('.tg-bridge-feed__subtitle').text(getChatName() || '');
+            var cache = getCache();
 
             if (cache.length === 0) {
                 $list.append('<div class="tg-empty">📭 Пока пусто.<br>Попроси друзей написать /rec в чате с ботом.</div>');
@@ -272,21 +257,13 @@
                 card.on('hover:focus', function () { card.addClass('focus'); });
                 card.on('hover:blur', function () { card.removeClass('focus'); });
 
-                card.find('[data-action="open"]').on('hover:enter', function () {
-                    openMovie(rec);
-                });
-                card.find('[data-action="book"]').on('hover:enter', function () {
-                    addToBook(rec);
-                });
-                card.find('[data-action="hide"]').on('hover:enter', function () {
-                    hideRec(rec.id);
-                });
+                card.find('[data-action="open"]').on('hover:enter', function () { openMovie(rec); });
+                card.find('[data-action="book"]').on('hover:enter', function () { addToBook(rec); });
+                card.find('[data-action="hide"]').on('hover:enter', function () { hideRec(rec.id); });
 
                 $list.append(card);
             });
-
-            scroll.render().find('.scroll__body').append($list);
-        };
+        }
 
         this.start = function () {
             Lampa.Controller.add('tg_bridge_feed', {
@@ -311,78 +288,130 @@
     // ─── Settings component ────────────────────────────────────────────────────
 
     function TgSettingsComponent(object) {
-        var comp = Lampa.Template.get('tg_bridge_settings', {});
+        var el = document.createElement('div');
+
+        this.render = function () { return $(el); };
 
         this.create = function () {
-            renderContent.call(this);
-            this.activity.loader(false);
-            return comp;
-        };
-
-        function renderContent() {
-            var $body = comp.find('.tg-bridge-settings__body');
-            $body.empty();
+            var $wrap = $(el);
+            $wrap.addClass('tg-bridge-settings');
+            $wrap.append('<div class="tg-bridge-settings__title">Telegram Bridge</div>');
+            var $body = $('<div class="tg-bridge-settings__body"></div>');
+            $wrap.append($body);
 
             var token = getToken();
-
             if (!token) {
                 renderLinkForm($body);
             } else {
                 renderLinked($body, token);
             }
-        }
+
+            this.activity.loader(false);
+            return $wrap;
+        };
 
         function renderLinkForm($body) {
-            var form = Lampa.Template.get('tg_bridge_link', { bot: BOT_NAME });
+            var digits = [];
 
-            form.find('.tg-bridge-link__btn').on('hover:enter click', function () {
-                var code = form.find('.tg-bridge-link__input').val().trim();
-                if (!/^\d{6}$/.test(code)) {
-                    form.find('.tg-bridge-link__error').text('Введи 6-значный код.').show();
+            var wrap = document.createElement('div');
+            wrap.className = 'tg-bridge-link';
+
+            $(wrap).append('<div class="tg-bridge-link__title">Подключи Telegram-чат</div>');
+            $(wrap).append('<div class="tg-bridge-link__step">1. Открой <b>' + BOT_NAME + '</b> в Telegram</div>');
+            $(wrap).append('<div class="tg-bridge-link__step">2. Отправь команду: <code>/link</code></div>');
+            $(wrap).append('<div class="tg-bridge-link__step">3. Получи 6-значный код и введи его ниже:</div>');
+
+            // 6-slot code display
+            var $display = $('<div class="tg-code-display"></div>');
+            var slots = [];
+            for (var i = 0; i < 6; i++) {
+                var $slot = $('<span class="tg-code-slot">_</span>');
+                slots.push($slot);
+                $display.append($slot);
+            }
+            $(wrap).append($display);
+
+            function updateDisplay() {
+                for (var j = 0; j < 6; j++) {
+                    if (digits[j] !== undefined) {
+                        slots[j].text(digits[j]).addClass('filled');
+                    } else {
+                        slots[j].text('_').removeClass('filled');
+                    }
+                }
+            }
+
+            var $err = $('<div class="tg-bridge-link__error" style="display:none"></div>');
+
+            function makeBtn(label, extraClass, onEnter) {
+                var $btn = $('<div class="tg-numpad-btn selector"></div>');
+                if (extraClass) $btn.addClass(extraClass);
+                $btn.text(label);
+                $btn.on('hover:enter click', onEnter);
+                $btn.on('hover:focus', function () { $btn.addClass('focus'); });
+                $btn.on('hover:blur', function () { $btn.removeClass('focus'); });
+                return $btn;
+            }
+
+            var $numpad = $('<div class="tg-numpad"></div>');
+
+            [[1,2,3],[4,5,6],[7,8,9]].forEach(function (row) {
+                var $row = $('<div class="tg-numpad-row"></div>');
+                row.forEach(function (d) {
+                    $row.append(makeBtn(String(d), '', function () {
+                        if (digits.length < 6) { digits.push(String(d)); updateDisplay(); }
+                    }));
+                });
+                $numpad.append($row);
+            });
+
+            var $bottom = $('<div class="tg-numpad-row"></div>');
+            $bottom.append(makeBtn('⌫', 'tg-numpad-del', function () {
+                if (digits.length > 0) { digits.pop(); updateDisplay(); }
+            }));
+            $bottom.append(makeBtn('0', '', function () {
+                if (digits.length < 6) { digits.push('0'); updateDisplay(); }
+            }));
+
+            var $ok = makeBtn('✓ Подтвердить', 'tg-numpad-ok', function () {
+                if (digits.length !== 6) {
+                    $err.text('Введи все 6 цифр.').show();
                     return;
                 }
-                submitCode(code, form);
+                $ok.text('...');
+                $err.hide();
+                fetch(API_BASE + '/api/link/' + digits.join(''), { method: 'POST' })
+                    .then(function (r) { return r.json(); })
+                    .then(function (data) {
+                        if (data.token) {
+                            Lampa.Storage.set('tg_bridge_token', data.token);
+                            Lampa.Storage.set('tg_bridge_chat_name', data.chat_name);
+                            Lampa.Noty.show('✅ Подключено к «' + data.chat_name + '»');
+                            startPolling();
+                            Lampa.Activity.replace({ component: 'tg_bridge_feed' });
+                        } else {
+                            $err.text('Неверный или просроченный код. Попробуй снова.').show();
+                            $ok.text('✓ Подтвердить');
+                            digits = [];
+                            updateDisplay();
+                        }
+                    })
+                    .catch(function () {
+                        $err.text('Ошибка соединения. Проверь интернет.').show();
+                        $ok.text('✓ Подтвердить');
+                        digits = [];
+                        updateDisplay();
+                    });
             });
+            $bottom.append($ok);
+            $numpad.append($bottom);
 
-            form.find('.tg-bridge-link__btn').on('hover:focus', function () {
-                $(this).addClass('focus');
-            });
-            form.find('.tg-bridge-link__btn').on('hover:blur', function () {
-                $(this).removeClass('focus');
-            });
-
-            $body.append(form);
-        }
-
-        function submitCode(code, form) {
-            var $err = form.find('.tg-bridge-link__error');
-            var $btn = form.find('.tg-bridge-link__btn');
-            $btn.text('Проверяю...');
-            $err.hide();
-
-            fetch(API_BASE + '/api/link/' + code, { method: 'POST' })
-                .then(function (r) { return r.json(); })
-                .then(function (data) {
-                    if (data.token) {
-                        Lampa.Storage.set('tg_bridge_token', data.token);
-                        Lampa.Storage.set('tg_bridge_chat_name', data.chat_name);
-                        Lampa.Noty.show('✅ Подключено к «' + data.chat_name + '»');
-                        startPolling();
-                        Lampa.Activity.replace({ component: 'tg_bridge_feed' });
-                    } else {
-                        $err.text('Неверный или просроченный код. Попробуй снова.').show();
-                        $btn.text('Подтвердить');
-                    }
-                })
-                .catch(function () {
-                    $err.text('Ошибка соединения. Проверь интернет.').show();
-                    $btn.text('Подтвердить');
-                });
+            $(wrap).append($numpad).append($err);
+            $body.append(wrap);
         }
 
         function renderLinked($body, token) {
             var chatName = getChatName();
-            var settings = getSettings();
 
             function row(label, value) {
                 return $('<div class="tg-bridge-settings__row"><span>' + label + '</span><span>' + value + '</span></div>');
@@ -440,8 +469,8 @@
         this.start = function () {
             Lampa.Controller.add('tg_bridge_settings', {
                 toggle: function () {
-                    Lampa.Controller.collectionSet(comp);
-                    Lampa.Controller.collectionFocus(false, comp);
+                    Lampa.Controller.collectionSet($(el));
+                    Lampa.Controller.collectionFocus(false, $(el));
                 },
                 up: function () { Navigator.move('up'); },
                 down: function () { Navigator.move('down'); },
@@ -505,7 +534,6 @@
         var cache = getCache().filter(function (r) { return r.id !== id; });
         Lampa.Storage.set('tg_bridge_cache', cache);
         Lampa.Noty.show('Рекомендация скрыта');
-        // Remove card from DOM without re-render
         $('[data-id="' + id + '"]').fadeOut(200, function () { $(this).remove(); });
     }
 
@@ -563,5 +591,4 @@
             if (getToken()) startPolling();
         }
     });
-
 })();
