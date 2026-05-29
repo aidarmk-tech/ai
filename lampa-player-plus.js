@@ -201,10 +201,12 @@
         _attachHls: function (video, url, cfg, resumeTo) {
             var prof = BUFFER_PROFILES[cfg.buffer] || BUFFER_PROFILES.medium;
 
+            // Сброс видеоэлемента — иначе hls.js не может взять управление у нативного плеера
+            try { video.pause(); video.removeAttribute('src'); video.load(); } catch (e) {}
+
             var hls = new window.Hls({
                 enableWorker: true,
                 lowLatencyMode: false,
-                startPosition: resumeTo > 0 ? resumeTo : -1,
                 maxBufferLength: prof.maxBufferLength,
                 maxMaxBufferLength: prof.maxMaxBufferLength,
                 maxBufferSize: prof.maxBufferSize,
@@ -215,7 +217,6 @@
                 fragLoadingMaxRetryTimeout: 64000,
                 manifestLoadingMaxRetry: 4,
                 levelLoadingMaxRetry: 6,
-                // проброс заголовков (referer/UA) если источник требует
                 xhrSetup: function (xhr) {
                     try {
                         var hdr = Engine.currentCard && Engine.currentCard.headers;
@@ -229,10 +230,17 @@
             });
 
             this.hls = hls;
-            hls.loadSource(url);
+
+            // Правильный порядок по документации hls.js: сначала attachMedia, потом loadSource
             hls.attachMedia(video);
+            hls.on(window.Hls.Events.MEDIA_ATTACHED, function () {
+                hls.loadSource(url);
+            });
 
             hls.on(window.Hls.Events.MANIFEST_PARSED, function () {
+                if (resumeTo > 0) {
+                    try { video.currentTime = resumeTo; } catch (e) {}
+                }
                 video.play().catch(function () {});
             });
 
@@ -583,7 +591,8 @@
         if (!window.Lampa || !Lampa.Player) return;
 
         Lampa.Player.listener.follow('start', function (e) {
-            var data = e || {};
+            // Lampa может передавать URL как e.url или как e.data.url
+            var data = (e && e.data) ? e.data : (e || {});
             var url  = data.url
                     || (data.timeline && data.timeline.url)
                     || (data.file && data.file.url)
@@ -597,8 +606,11 @@
                 var check = setInterval(function () {
                     var video = document.querySelector('video');
                     tries++;
-                    if (video) { clearInterval(check); Engine.attach(video, url, card); }
-                    else if (tries > 30) clearInterval(check);
+                    if (video) {
+                        clearInterval(check);
+                        // URL из события надёжнее чем video.src (там может быть blob или native URL)
+                        Engine.attach(video, url, card);
+                    } else if (tries > 50) clearInterval(check);
                 }, 100);
             });
         });
