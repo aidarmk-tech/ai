@@ -199,6 +199,9 @@
             this._startAutosave();
             this._hookEnded();
             if (cfg.diag) this._startDiag();
+
+            PlayerSkin.inject();
+            HUD.start();
         },
 
         _attachHls: function (video, url, cfg, resumeTo) {
@@ -466,6 +469,7 @@
             }
             this._stopAutosave();
             this._stopDiag();
+            HUD.stop();
             if (this.hls) {
                 try { this.hls.destroy(); } catch (e) {}
                 this.hls = null;
@@ -532,18 +536,233 @@
     };
 
     // =====================================================================
+    //  СТИЛЬ ПЛЕЕРА (CSS-инъекция)
+    // =====================================================================
+
+    var PlayerSkin = {
+        _el: null,
+        inject: function () {
+            if (this._el) return;
+            var css = [
+                // Нижняя панель — тёмный градиент вместо сплошного тёмного фона
+                '.player-panel{',
+                    'background:linear-gradient(to top,rgba(0,0,0,.94) 0%,rgba(0,0,0,0) 100%)!important;',
+                '}',
+                // Прогресс-бар — синий градиент
+                '.player-timeline,.player-panel__timeline{height:4px!important;}',
+                '.player-timeline__peding,.player-timeline--peding{',
+                    'background:rgba(255,255,255,.15)!important;border-radius:4px!important;',
+                '}',
+                '.player-timeline__buffer,.player-timeline--buffer{',
+                    'background:rgba(255,255,255,.28)!important;border-radius:4px!important;',
+                '}',
+                '.player-timeline__position,.player-timeline--position{',
+                    'background:linear-gradient(90deg,#3b82f6 0%,#8b5cf6 100%)!important;',
+                    'border-radius:4px!important;',
+                '}',
+                // Маркер — светящийся кружок
+                '.player-timeline__marker,.player-timeline--marker{',
+                    'width:14px!important;height:14px!important;top:-5px!important;',
+                    'background:#fff!important;border-radius:50%!important;',
+                    'box-shadow:0 0 0 3px rgba(139,92,246,.45),0 0 12px rgba(59,130,246,.9)!important;',
+                '}',
+                // Время
+                '.player-panel__time,.player-panel--time{',
+                    'font-weight:600!important;opacity:.8!important;',
+                    'font-variant-numeric:tabular-nums!important;',
+                '}',
+                // Заголовок
+                '.player-panel__title,.player-panel--title,.player-info__title{',
+                    'font-weight:700!important;letter-spacing:.03em!important;',
+                    'text-shadow:0 1px 10px rgba(0,0,0,.9)!important;',
+                '}',
+                // Фокус на кнопке — синий glow
+                '.player-panel .focus svg,.player-panel .active svg,',
+                '.player-panel .selector.focus svg{',
+                    'filter:drop-shadow(0 0 5px #60a5fa) drop-shadow(0 0 2px #3b82f6)!important;',
+                '}',
+                // Убираем рамку у кнопок
+                '.player-panel button:focus{outline:none!important;}',
+            ].join('');
+            var el = document.createElement('style');
+            el.id = 'pp-skin';
+            el.textContent = css;
+            document.head.appendChild(el);
+            this._el = el;
+        },
+        remove: function () {
+            if (this._el) { try { this._el.remove(); } catch (e) {} this._el = null; }
+        }
+    };
+
+    // =====================================================================
+    //  HUD — качество / скорость / пропустить интро
+    // =====================================================================
+
+    var HUD = {
+        _el: null,
+        _badge: null,
+        _speedBadge: null,
+        _introBadge: null,
+        _hideTimer: null,
+        _qualLoop: null,
+        _active: false,
+        speeds: [0.5, 0.75, 1, 1.25, 1.5, 2],
+        speedIdx: 2,    // индекс = 1×
+
+        _badgeCSS: [
+            'display:inline-flex;align-items:center;',
+            'padding:.22rem .55rem;border-radius:.35rem;',
+            'font-size:.7rem;font-weight:700;letter-spacing:.06em;',
+            'font-family:system-ui,-apple-system,sans-serif;',
+            'background:rgba(0,0,0,.72);color:rgba(255,255,255,.88);',
+            'border:1px solid rgba(255,255,255,.12);',
+            'backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);',
+        ].join(''),
+
+        _build: function () {
+            if (this._el) return;
+            var wrap = document.createElement('div');
+            wrap.id = 'pp-hud';
+            wrap.style.cssText = [
+                'position:fixed;top:1.3rem;right:1.5rem;',
+                'display:flex;align-items:center;gap:.45rem;',
+                'z-index:9998;transition:opacity .35s;pointer-events:none;',
+            ].join('');
+
+            var qual = document.createElement('span');
+            qual.id = 'pp-hud-qual';
+            qual.style.cssText = this._badgeCSS;
+            qual.textContent = '···';
+
+            var spd = document.createElement('span');
+            spd.id = 'pp-hud-speed';
+            spd.style.cssText = this._badgeCSS + 'display:none;background:rgba(59,130,246,.7);border-color:transparent;';
+            spd.textContent = '1×';
+
+            var intro = document.createElement('span');
+            intro.id = 'pp-hud-intro';
+            intro.style.cssText = this._badgeCSS + [
+                'display:none;cursor:pointer;pointer-events:auto;',
+                'background:linear-gradient(90deg,rgba(59,130,246,.8),rgba(139,92,246,.8));',
+                'border-color:transparent;color:#fff;',
+            ].join('');
+            intro.textContent = '▶▶  ПРОПУСТИТЬ ИНТРО';
+            intro.addEventListener('click', function () { Engine.skipIntro(); });
+
+            wrap.appendChild(qual);
+            wrap.appendChild(spd);
+            wrap.appendChild(intro);
+            document.body.appendChild(wrap);
+
+            this._el = wrap;
+            this._badge = qual;
+            this._speedBadge = spd;
+            this._introBadge = intro;
+        },
+
+        start: function () {
+            this._active = true;
+            this.speedIdx = 2;
+            this._build();
+            this._el.style.opacity = '1';
+            this._updateQuality();
+            this._schedHide();
+            this._startLoop();
+        },
+
+        stop: function () {
+            this._active = false;
+            this._stopLoop();
+            clearTimeout(this._hideTimer);
+            if (this._el) { try { this._el.remove(); } catch (e) {} }
+            this._el = this._badge = this._speedBadge = this._introBadge = null;
+        },
+
+        peek: function () {
+            if (!this._active || !this._el) return;
+            this._el.style.opacity = '1';
+            this._schedHide();
+        },
+
+        _schedHide: function () {
+            clearTimeout(this._hideTimer);
+            this._hideTimer = setTimeout(function () {
+                if (HUD._el) HUD._el.style.opacity = '0';
+            }, 4000);
+        },
+
+        cycleSpeed: function () {
+            this.speedIdx = (this.speedIdx + 1) % this.speeds.length;
+            var s = this.speeds[this.speedIdx];
+            Engine.setRate(s);
+            if (this._speedBadge) {
+                this._speedBadge.textContent = s + '×';
+                this._speedBadge.style.display = (s === 1) ? 'none' : '';
+            }
+            try { Lampa.Noty.show('Скорость: ' + s + '×'); } catch (e) {}
+            this.peek();
+        },
+
+        _updateQuality: function () {
+            if (!this._badge) return;
+            var txt = '';
+            if (Engine.hls && Engine.hls.levels && Engine.hls.currentLevel >= 0) {
+                var L = Engine.hls.levels[Engine.hls.currentLevel];
+                if (L) {
+                    var h = L.height || 0;
+                    var kbps = Math.round((L.bitrate || 0) / 1000);
+                    var lbl = h >= 2160 ? '4K' : h >= 1440 ? '2K' : h >= 1080 ? 'FHD' : h >= 720 ? 'HD' : h ? h + 'p' : '';
+                    txt = (lbl || 'AUTO') + (kbps ? '  ·  ' + kbps + ' kbps' : '');
+                }
+            } else if (Engine.video) {
+                var vw = Engine.video.videoWidth, vh = Engine.video.videoHeight;
+                if (vh) {
+                    txt = vh >= 2160 ? '4K' : vh >= 1440 ? '2K' : vh >= 1080 ? 'FHD' : vh >= 720 ? 'HD' : vh + 'p';
+                }
+            }
+            this._badge.textContent = txt || 'HLS';
+        },
+
+        _checkIntro: function () {
+            if (!this._introBadge || !Engine.currentCard) return;
+            var show = Store.getShow(Engine.currentCard);
+            var v = Engine.video;
+            var visible = !!(show.intro_end && v && v.currentTime < show.intro_end - 2 && v.currentTime > 2);
+            this._introBadge.style.display = visible ? '' : 'none';
+        },
+
+        _startLoop: function () {
+            var self = this;
+            this._stopLoop();
+            this._qualLoop = setInterval(function () {
+                self._updateQuality();
+                self._checkIntro();
+            }, 2000);
+        },
+        _stopLoop: function () {
+            if (this._qualLoop) { clearInterval(this._qualLoop); this._qualLoop = null; }
+        }
+    };
+
+    // =====================================================================
     //  ПУЛЬТ (D-pad перемотка + горячие действия)
     // =====================================================================
 
     function bindRemote() {
         Lampa.Controller.listener.follow('keydown', function (e) {
             if (!Engine.video) return;
+            var k = e.keyCode || e.which || 0;
             switch (e.code) {
-                case 'ArrowLeft':  Engine.seekBy(-10); break;
-                case 'ArrowRight': Engine.seekBy(10);  break;
-                // долгое нажатие / каналы — крупная перемотка
-                case 'PageUp':     Engine.seekBy(30);  break;
-                case 'PageDown':   Engine.seekBy(-30); break;
+                case 'ArrowLeft':  Engine.seekBy(-10); HUD.peek(); break;
+                case 'ArrowRight': Engine.seekBy(10);  HUD.peek(); break;
+                case 'PageUp':     Engine.seekBy(30);  HUD.peek(); break;
+                case 'PageDown':   Engine.seekBy(-30); HUD.peek(); break;
+                default:           HUD.peek();         break;
+            }
+            // Info / Guide (457) или жёлтая кнопка (405) — смена скорости
+            if (k === 457 || k === 405) {
+                HUD.cycleSpeed();
             }
         });
     }
