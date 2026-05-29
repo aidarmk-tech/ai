@@ -568,6 +568,7 @@
             down:  function () { Navigator.move('down'); },
             left:  function () { Navigator.move('left'); },
             right: function () { Navigator.move('right'); },
+            enter: function () { Navigator.enter(); },
             back:  function () { close(); cb(false); }
         });
         Lampa.Controller.toggle('pp_select');
