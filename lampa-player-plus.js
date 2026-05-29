@@ -485,24 +485,120 @@
     }
 
     // =====================================================================
+    //  ДИАЛОГ ВЫБОРА ПЛЕЕРА
+    // =====================================================================
+
+    function showPlayerSelect(cb) {
+        var overlay = document.createElement('div');
+        overlay.id = 'pp-select-overlay';
+        overlay.style.cssText = [
+            'position:fixed;top:0;left:0;width:100%;height:100%;',
+            'background:rgba(0,0,0,.82);z-index:99999;',
+            'display:flex;flex-direction:column;align-items:center;justify-content:center;',
+            'font-family:system-ui,sans-serif;'
+        ].join('');
+
+        var box = document.createElement('div');
+        box.style.cssText = 'background:#1a1a2e;border-radius:1rem;padding:2rem 2.5rem;min-width:340px;max-width:90vw;';
+
+        var title = document.createElement('div');
+        title.textContent = 'Выберите плеер';
+        title.style.cssText = 'color:#fff;font-size:1.2rem;font-weight:600;margin-bottom:1.5rem;text-align:center;';
+        box.appendChild(title);
+
+        function makeBtn(label, sub, primary) {
+            var btn = document.createElement('div');
+            btn.className = 'selector pp-player-btn';
+            btn.style.cssText = [
+                'border-radius:.6rem;padding:1rem 1.2rem;margin-bottom:.8rem;cursor:pointer;',
+                'border:2px solid ' + (primary ? '#3b82f6' : 'rgba(255,255,255,.15)') + ';',
+                'background:' + (primary ? 'rgba(59,130,246,.15)' : 'rgba(255,255,255,.05)') + ';'
+            ].join('');
+            var lbl = document.createElement('div');
+            lbl.textContent = label;
+            lbl.style.cssText = 'color:#fff;font-size:.95rem;font-weight:600;';
+            var desc = document.createElement('div');
+            desc.textContent = sub;
+            desc.style.cssText = 'color:rgba(255,255,255,.5);font-size:.78rem;margin-top:.2rem;';
+            btn.appendChild(lbl);
+            btn.appendChild(desc);
+            return btn;
+        }
+
+        var btnPlus = makeBtn('▶ Player Plus (hls.js)', 'Без зависаний на ATV · продолжение с места', true);
+        var btnNative = makeBtn('Встроенный Lampa', 'Стандартный нативный плеер', false);
+        box.appendChild(btnPlus);
+        box.appendChild(btnNative);
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+
+        // focus styling
+        var style = document.createElement('style');
+        style.textContent = '.pp-player-btn.focus{outline:none;border-color:#60a5fa!important;background:rgba(96,165,250,.25)!important;}';
+        document.head.appendChild(style);
+
+        function close() {
+            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            if (style.parentNode) style.parentNode.removeChild(style);
+            try { Lampa.Controller.toggle(prevCtrl); } catch (ex) {}
+        }
+
+        var prevCtrl = '';
+        try { prevCtrl = Lampa.Controller.current(); } catch (ex) {}
+
+        $(overlay).on('hover:focus', '.pp-player-btn', function () {
+            $('.pp-player-btn', overlay).removeClass('focus');
+            $(this).addClass('focus');
+        });
+        $(overlay).on('hover:blur', '.pp-player-btn', function () {
+            $(this).removeClass('focus');
+        });
+        $(overlay).on('hover:enter', '.pp-player-btn', function () {
+            var usePlus = this === btnPlus;
+            close();
+            cb(usePlus);
+        });
+
+        Lampa.Controller.add('pp_select', {
+            toggle: function () {
+                Lampa.Controller.collectionSet($(overlay));
+                Lampa.Controller.collectionFocus(false, $(overlay));
+            },
+            up:    function () { Navigator.move('up'); },
+            down:  function () { Navigator.move('down'); },
+            left:  function () { Navigator.move('left'); },
+            right: function () { Navigator.move('right'); },
+            back:  function () { close(); cb(false); }
+        });
+        Lampa.Controller.toggle('pp_select');
+    }
+
+    // =====================================================================
     //  ИНТЕГРАЦИЯ С ПЛЕЕРОМ LAMPA
     // =====================================================================
 
     function hookPlayer() {
         if (!window.Lampa || !Lampa.Player) return;
 
-        // Перехват старта воспроизведения
         Lampa.Player.listener.follow('start', function (e) {
-            var data = e && e.data ? e.data : (e.payload || {});
-            var url = data.url || (data.timeline && data.timeline.url);
-            var card = data.card || Lampa.Player.card || null;
-            if (!url) return;
+            var data = e || {};
+            var url  = data.url
+                    || (data.timeline && data.timeline.url)
+                    || (data.file && data.file.url)
+                    || '';
+            var card = data.card || (data.file && data.file.card) || Lampa.Player.card || null;
+            if (!url || !Engine.isHls(url) || !hlsReady) return;
 
-            // Дать Lampa создать <video>, затем подменить движок
-            setTimeout(function () {
-                var video = document.querySelector('video');
-                if (video) Engine.attach(video, url, card);
-            }, 100);
+            showPlayerSelect(function (usePlus) {
+                if (!usePlus) return;
+                var tries = 0;
+                var check = setInterval(function () {
+                    var video = document.querySelector('video');
+                    tries++;
+                    if (video) { clearInterval(check); Engine.attach(video, url, card); }
+                    else if (tries > 30) clearInterval(check);
+                }, 100);
+            });
         });
 
         Lampa.Player.listener.follow('destroy', function () {
