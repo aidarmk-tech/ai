@@ -173,7 +173,8 @@
         },
 
         // Подмена воспроизведения: вызывается при старте плеера Lampa
-        attach: function (video, url, card) {
+        // forceHls=true — пробуем hls.js даже если URL не содержит .m3u8 (для нестандартных балансеров)
+        attach: function (video, url, card, forceHls) {
             this.detach();
 
             this.video = video;
@@ -186,7 +187,8 @@
             var saved = Store.getPosition(url);
             var resumeTo = (saved && saved.time && (!saved.watched)) ? saved.time : 0;
 
-            if (cfg.engine === 'hls' && this.isHls(url) && hlsReady && window.Hls.isSupported()) {
+            var tryHls = forceHls || (cfg.engine === 'hls' && this.isHls(url));
+            if (tryHls && hlsReady && window.Hls.isSupported()) {
                 this._attachHls(video, url, cfg, resumeTo);
             } else {
                 this._attachNative(video, url, resumeTo);
@@ -497,48 +499,127 @@
     // =====================================================================
 
     function showPlayerSelect(cb) {
+        // Задержка 450мс: Enter от запуска фильма не должен сразу выбрать пункт
+        var readyAt = Date.now() + 450;
+
+        var style = document.createElement('style');
+        style.textContent = [
+            '@keyframes pp-in{from{opacity:0;transform:translateY(24px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}',
+            '#pp-dialog{animation:pp-in .22s cubic-bezier(.22,.61,.36,1) both;}',
+            '.pp-btn{',
+                'display:flex;align-items:center;gap:1.1rem;',
+                'border-radius:.8rem;padding:1.1rem 1.4rem;margin-bottom:.65rem;cursor:pointer;',
+                'border:2px solid transparent;',
+                'transition:border-color .12s,background .12s,box-shadow .12s,transform .08s;}',
+            '.pp-btn.ppfocus{',
+                'border-color:#60a5fa;',
+                'background:rgba(59,130,246,.18)!important;',
+                'box-shadow:0 0 0 3px rgba(96,165,250,.2),0 12px 40px rgba(0,0,0,.6);',
+                'transform:scale(1.02);}',
+            '.pp-ico{width:3rem;height:3rem;border-radius:.6rem;',
+                'display:flex;align-items:center;justify-content:center;',
+                'font-size:1.4rem;flex-shrink:0;font-style:normal;}',
+            '.pp-txt{flex:1;min-width:0;}',
+            '.pp-ttl{color:#fff;font-size:1rem;font-weight:700;letter-spacing:.01em;}',
+            '.pp-sub{color:rgba(255,255,255,.4);font-size:.76rem;margin-top:.18rem;}'
+        ].join('');
+        document.head.appendChild(style);
+
         var overlay = document.createElement('div');
         overlay.id = 'pp-select-overlay';
         overlay.style.cssText = [
             'position:fixed;top:0;left:0;width:100%;height:100%;',
-            'background:rgba(0,0,0,.85);z-index:2147483647;',
-            'display:flex;flex-direction:column;align-items:center;justify-content:center;',
-            'font-family:system-ui,sans-serif;'
+            'background:rgba(0,0,0,.72);',
+            'backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);',
+            'z-index:2147483647;',
+            'display:flex;align-items:center;justify-content:center;',
+            'font-family:system-ui,-apple-system,sans-serif;'
         ].join('');
 
         var box = document.createElement('div');
-        box.style.cssText = 'background:#1a1a2e;border-radius:1rem;padding:2rem 2.5rem;min-width:340px;max-width:90vw;';
+        box.id = 'pp-dialog';
+        box.style.cssText = [
+            'background:linear-gradient(160deg,rgba(15,15,28,.97) 0%,rgba(8,8,18,.97) 100%);',
+            'border:1px solid rgba(255,255,255,.09);',
+            'border-radius:1.2rem;padding:1.8rem 1.8rem 1.4rem;',
+            'min-width:360px;max-width:92vw;',
+            'box-shadow:0 40px 100px rgba(0,0,0,.85),0 0 0 .5px rgba(255,255,255,.04) inset;'
+        ].join('');
 
-        var title = document.createElement('div');
-        title.textContent = 'Выберите плеер';
-        title.style.cssText = 'color:#fff;font-size:1.2rem;font-weight:600;margin-bottom:1.5rem;text-align:center;';
-        box.appendChild(title);
+        /* Шапка */
+        var head = document.createElement('div');
+        head.style.cssText = [
+            'display:flex;align-items:center;gap:.8rem;',
+            'margin-bottom:1.4rem;padding-bottom:1.2rem;',
+            'border-bottom:1px solid rgba(255,255,255,.07);'
+        ].join('');
+        var headIco = document.createElement('div');
+        headIco.style.cssText = [
+            'width:2.4rem;height:2.4rem;border-radius:.55rem;',
+            'background:linear-gradient(135deg,#3b82f6 0%,#7c3aed 100%);',
+            'display:flex;align-items:center;justify-content:center;',
+            'font-size:1rem;color:#fff;'
+        ].join('');
+        headIco.textContent = '▶';
+        var headLbl = document.createElement('div');
+        headLbl.style.cssText = 'color:#fff;font-size:1.05rem;font-weight:700;letter-spacing:.015em;';
+        headLbl.textContent = 'Выберите плеер';
+        head.appendChild(headIco);
+        head.appendChild(headLbl);
+        box.appendChild(head);
 
-        var style = document.createElement('style');
-        style.textContent = '.pp-player-btn{border-radius:.6rem;padding:1rem 1.2rem;margin-bottom:.8rem;cursor:pointer;}' +
-            '.pp-player-btn.ppfocus{border-color:#60a5fa!important;background:rgba(96,165,250,.3)!important;}';
-        document.head.appendChild(style);
-
-        function makeBtn(label, sub, primary) {
+        function makeBtn(icon, label, sub, grad) {
             var btn = document.createElement('div');
-            btn.className = 'pp-player-btn';
-            btn.style.cssText = 'border:2px solid ' + (primary ? '#3b82f6' : 'rgba(255,255,255,.15)') + ';' +
-                'background:' + (primary ? 'rgba(59,130,246,.15)' : 'rgba(255,255,255,.05)') + ';';
-            var lbl = document.createElement('div');
-            lbl.textContent = label;
-            lbl.style.cssText = 'color:#fff;font-size:.95rem;font-weight:600;';
-            var desc = document.createElement('div');
-            desc.textContent = sub;
-            desc.style.cssText = 'color:rgba(255,255,255,.5);font-size:.78rem;margin-top:.2rem;';
-            btn.appendChild(lbl);
-            btn.appendChild(desc);
+            btn.className = 'pp-btn';
+            btn.style.background = grad
+                ? 'linear-gradient(135deg,rgba(59,130,246,.12),rgba(124,58,237,.08))'
+                : 'rgba(255,255,255,.04)';
+            var ico = document.createElement('i');
+            ico.className = 'pp-ico';
+            ico.style.background = grad
+                ? 'linear-gradient(135deg,#3b82f6,#6366f1)'
+                : 'rgba(255,255,255,.07)';
+            ico.textContent = icon;
+            var txt = document.createElement('div');
+            txt.className = 'pp-txt';
+            var ttl = document.createElement('div');
+            ttl.className = 'pp-ttl';
+            ttl.textContent = label;
+            var dsc = document.createElement('div');
+            dsc.className = 'pp-sub';
+            dsc.textContent = sub;
+            txt.appendChild(ttl);
+            txt.appendChild(dsc);
+            btn.appendChild(ico);
+            btn.appendChild(txt);
+            if (grad) {
+                var badge = document.createElement('div');
+                badge.style.cssText = [
+                    'font-size:.62rem;font-weight:700;letter-spacing:.06em;',
+                    'background:linear-gradient(90deg,#3b82f6,#7c3aed);',
+                    'color:#fff;padding:.18rem .45rem;border-radius:.3rem;',
+                    'white-space:nowrap;flex-shrink:0;'
+                ].join('');
+                badge.textContent = 'РЕКОМЕНДУЮ';
+                btn.appendChild(badge);
+            }
             return btn;
         }
 
-        var btnPlus   = makeBtn('▶ Player Plus (hls.js)', 'Без зависаний на ATV · продолжение с места', true);
-        var btnNative = makeBtn('Встроенный Lampa', 'Стандартный нативный плеер', false);
+        var btnPlus   = makeBtn('▶', 'Player Plus', 'hls.js · без зависаний на ATV · продолжение с места', true);
+        var btnNative = makeBtn('◻', 'Встроенный Lampa', 'Стандартный нативный плеер', false);
         box.appendChild(btnPlus);
         box.appendChild(btnNative);
+
+        /* Подсказка снизу */
+        var hint = document.createElement('div');
+        hint.style.cssText = [
+            'text-align:center;color:rgba(255,255,255,.2);',
+            'font-size:.68rem;letter-spacing:.07em;margin-top:.8rem;'
+        ].join('');
+        hint.textContent = '↑ ↓  НАВИГАЦИЯ   ·   OK  ВЫБРАТЬ   ·   ← НАЗАД';
+        box.appendChild(hint);
+
         overlay.appendChild(box);
         document.body.appendChild(overlay);
 
@@ -560,21 +641,20 @@
             if (style.parentNode) style.parentNode.removeChild(style);
         }
 
-        function choose(usePlus) {
-            cleanup();
-            cb(usePlus);
-        }
+        function choose(usePlus) { cleanup(); cb(usePlus); }
 
-        // Capture-phase: fires before Lampa's own key handlers, blocks them
+        /* Capture-phase: перехватываем до Lampa, e.stopPropagation блокирует плеер */
         function onKey(e) {
             if (!document.getElementById('pp-select-overlay')) { cleanup(); return; }
-            var k = e.keyCode || e.which || 0;
-            var key = e.key || '';
             e.stopPropagation();
             e.preventDefault();
-            if (key === 'ArrowUp' || k === 38)                                { setFocus(focused - 1); }
-            else if (key === 'ArrowDown' || k === 40)                         { setFocus(focused + 1); }
-            else if (key === 'Enter' || k === 13)                             { choose(focused === 0); }
+            /* Первые 450мс — глотаем нажатия, Enter не срабатывает */
+            if (Date.now() < readyAt) return;
+            var k = e.keyCode || e.which || 0;
+            var key = e.key || '';
+            if      (key === 'ArrowUp'   || k === 38)                              { setFocus(focused - 1); }
+            else if (key === 'ArrowDown' || k === 40)                              { setFocus(focused + 1); }
+            else if (key === 'Enter'     || k === 13)                              { choose(focused === 0); }
             else if (key === 'Escape' || key === 'GoBack' || k === 27 || k === 461) { choose(false); }
         }
         document.addEventListener('keydown', onKey, true);
@@ -598,7 +678,9 @@
                     || (data.file && data.file.url)
                     || '';
             var card = data.card || (data.file && data.file.card) || Lampa.Player.card || null;
-            if (!url || !Engine.isHls(url) || !hlsReady) return;
+            // Показываем диалог для любого URL (не только .m3u8): некоторые балансеры
+            // отдают HLS без m3u8 в пути. isHls используется только внутри Engine.attach.
+            if (!url || !hlsReady) return;
 
             showPlayerSelect(function (usePlus) {
                 if (!usePlus) return;
@@ -608,8 +690,8 @@
                     tries++;
                     if (video) {
                         clearInterval(check);
-                        // URL из события надёжнее чем video.src (там может быть blob или native URL)
-                        Engine.attach(video, url, card);
+                        // forceHls=true: пробуем hls.js даже без .m3u8 в URL
+                        Engine.attach(video, url, card, true);
                     } else if (tries > 50) clearInterval(check);
                 }, 100);
             });
