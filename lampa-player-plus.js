@@ -76,6 +76,7 @@
             Lampa.Storage.set(this._root, data);
         },
 
+        // Ключ ресурса = хэш url (стабильный между сессиями)
         keyOf: function (url) {
             var h = 0, s = String(url || '');
             for (var i = 0; i < s.length; i++) {
@@ -85,6 +86,7 @@
             return 'r' + Math.abs(h);
         },
 
+        // Ключ сериала (для общих настроек дорожек/интро)
         showKey: function (card) {
             if (!card) return null;
             var id = card.id || card.tmdb_id || card.imdb_id || card.original_title || card.title;
@@ -113,6 +115,7 @@
             this._save(d);
         },
 
+        // Настройки сериала: аудио, субтитры, точка интро
         getShow: function (card) {
             var k = this.showKey(card);
             if (!k) return {};
@@ -170,6 +173,8 @@
             return /\.m3u8(\?|$)/i.test(String(url || ''));
         },
 
+        // Подмена воспроизведения: вызывается при старте плеера Lampa
+        // forceHls=true — пробуем hls.js даже если URL не содержит .m3u8 (для нестандартных балансеров)
         attach: function (video, url, card, forceHls) {
             this.detach();
 
@@ -179,6 +184,7 @@
 
             var cfg = settings();
 
+            // Восстановление позиции
             var saved = Store.getPosition(url);
             var resumeTo = (saved && saved.time && (!saved.watched)) ? saved.time : 0;
 
@@ -193,33 +199,41 @@
             this._startAutosave();
             this._hookEnded();
             if (cfg.diag) this._startDiag();
+
+            PlayerSkin.inject();
+            HUD.start();
         },
 
         _attachHls: function (video, url, cfg, resumeTo) {
             var prof = BUFFER_PROFILES[cfg.buffer] || BUFFER_PROFILES.medium;
 
+            // Сброс видеоэлемента — иначе hls.js не может взять управление у нативного плеера
             try { video.pause(); video.removeAttribute('src'); video.load(); } catch (e) {}
 
             var hls = new window.Hls({
                 enableWorker: true,
                 lowLatencyMode: false,
+                // Буфер
                 maxBufferLength: prof.maxBufferLength,
                 maxMaxBufferLength: prof.maxMaxBufferLength,
                 maxBufferSize: prof.maxBufferSize,
                 backBufferLength: prof.backBufferLength,
+                // Стабильность воспроизведения
                 maxBufferHole: 0.5,
                 highBufferWatchdogPeriod: 3,
                 nudgeOffset: 0.2,
                 nudgeMaxRetry: 10,
+                // Загрузка фрагментов
                 fragLoadingMaxRetry: 10,
                 fragLoadingMaxRetryTimeout: 64000,
                 manifestLoadingMaxRetry: 5,
                 levelLoadingMaxRetry: 8,
                 levelLoadingRetryDelay: 500,
-                // ABR: предполагаем высокий битрейт чтобы не начинать с низкого
-                abrEwmaDefaultEstimate: 30 * 1000 * 1000,
+                // ABR: предполагаем высокий битрейт — hls.js сразу выберет 4K если доступен
+                abrEwmaDefaultEstimate: 30 * 1000 * 1000,  // 30 Мбит/с по умолчанию
                 abrMaxWithRealBitrate: true,
-                startLevel: -1,
+                startLevel: -1,  // авто, но с учётом abrEwmaDefaultEstimate стартует высоко
+                // Совместимость с ATV WebView
                 preferManagedMediaSource: false,
                 xhrSetup: function (xhr) {
                     try {
@@ -235,32 +249,44 @@
 
             this.hls = hls;
 
+            // Правильный порядок по документации hls.js: сначала attachMedia, потом loadSource
             hls.attachMedia(video);
             hls.on(window.Hls.Events.MEDIA_ATTACHED, function () {
                 hls.loadSource(url);
             });
 
             hls.on(window.Hls.Events.MANIFEST_PARSED, function (ev, data) {
-                // Выбираем лучший уровень с поддерживаемым кодеком.
-                // 4K обычно HEVC, WebView на ATV не декодирует H.265 аппаратно.
-                // Внешний плеер (ExoPlayer) поддерживает HEVC через аппаратный декодер.
+                // Двухпроходный выбор уровня качества без HEVC-треков.
+                // WebView на ATV не декодирует H.265 аппаратно — 4K-треки почти
+                // всегда HEVC, поэтому их нужно явно пропустить.
                 if (data && data.levels && data.levels.length > 1) {
+                    var levels = data.levels;
                     var bestLevel = -1;
-                    for (var i = data.levels.length - 1; i >= 0; i--) {
-                        var lvl = data.levels[i];
-                        var codec = (lvl.videoCodec || lvl.codecs || '').toLowerCase();
-                        var isAvc = !codec || codec.indexOf('avc') >= 0 || codec.indexOf('h264') >= 0;
-                        var canPlay = isAvc;
-                        if (!canPlay && codec) {
-                            try {
-                                var mime = 'video/mp4; codecs="' + codec + '"';
-                                var cp = document.createElement('video').canPlayType(mime);
-                                canPlay = (cp === 'probably' || cp === 'maybe');
-                            } catch (ex) { canPlay = false; }
-                        }
-                        if (canPlay) { bestLevel = i; break; }
+
+                    // Проход 1: ищем явный AVC-трек сверху вниз (пропускаем HEVC и без codec-инфо)
+                    for (var i = levels.length - 1; i >= 0; i--) {
+                        var codec = (levels[i].videoCodec || levels[i].codecs || '').toLowerCase();
+                        if (!codec) continue; // без инфо — пропускаем в первом проходе
+                        if (/hev|hvc|h\.?265|hevc/.test(codec)) continue; // явный HEVC — пропуск
+                        if (/avc|h\.?264/.test(codec)) { bestLevel = i; break; } // явный AVC
+                        // Неизвестный кодек — проверяем canPlayType
+                        try {
+                            var cp = document.createElement('video').canPlayType('video/mp4; codecs="' + codec + '"');
+                            if (cp === 'probably' || cp === 'maybe') { bestLevel = i; break; }
+                        } catch (ex) {}
                     }
+
+                    // Проход 2: нет codec-инфо ни в одном уровне — ограничиваем 1080p.
+                    // На ATV без явного кодека 4K-уровень почти всегда HEVC.
+                    if (bestLevel < 0) {
+                        for (var j = levels.length - 1; j >= 0; j--) {
+                            if ((levels[j].height || 9999) <= 1080) { bestLevel = j; break; }
+                        }
+                    }
+
                     if (bestLevel >= 0) hls.currentLevel = bestLevel;
+                    // bestLevel = -1 только если у всех уровней height > 1080 и нет codec-инфо
+                    // → ABR выберет сам, MEDIA_ERROR-хендлер понизит при ошибке
                 }
                 if (resumeTo > 0) {
                     try { video.currentTime = resumeTo; } catch (e) {}
@@ -268,6 +294,7 @@
                 video.play().catch(function () {});
             });
 
+            // Автовосстановление ошибок (главное против зависаний)
             var _mediaErrCount = 0;
             hls.on(window.Hls.Events.ERROR, function (event, data) {
                 if (!data.fatal) return;
@@ -279,13 +306,16 @@
                     case window.Hls.ErrorTypes.MEDIA_ERROR:
                         _mediaErrCount++;
                         if (_mediaErrCount === 1) {
+                            // Первая попытка: стандартное восстановление
                             Engine._notify('Медиа: восстановление…');
                             hls.recoverMediaError();
                         } else if (_mediaErrCount <= 3 && hls.currentLevel > 0) {
+                            // Повторные ошибки — понижаем качество (кодек несовместим)
                             hls.currentLevel = hls.currentLevel - 1;
                             Engine._notify('Кодек несовместим, понижаю качество…');
                             hls.recoverMediaError();
                         } else {
+                            // Сдаёмся — переключаем на нативный
                             Engine._notify('Ошибка декодера, нативный режим');
                             Engine._attachNative(video, url, video.currentTime || 0);
                             hls.destroy(); Engine.hls = null;
@@ -312,6 +342,7 @@
             video.addEventListener('loadedmetadata', onMeta);
         },
 
+        // Применить запомненные дорожки сериала
         _applyShowTracks: function () {
             if (!settings().remember_tracks || !this.hls || !this.currentCard) return;
             var show = Store.getShow(this.currentCard);
@@ -339,6 +370,7 @@
             }
         },
 
+        // Периодическое сохранение позиции
         _startAutosave: function () {
             var self = this;
             this._stopAutosave();
@@ -353,6 +385,7 @@
             if (this.saveTimer) { clearInterval(this.saveTimer); this.saveTimer = null; }
         },
 
+        // Финальное сохранение + автопереход
         _hookEnded: function () {
             var self = this;
             if (!this.video || this.endedHooked) return;
@@ -361,6 +394,7 @@
             this.video.addEventListener('timeupdate', function () {
                 var v = self.video;
                 if (!v || !isFinite(v.duration)) return;
+                // показать кнопку автоперехода за autonext_delay сек до конца
                 if (settings().autonext && (v.duration - v.currentTime) <= settings().autonext_delay) {
                     UI.showAutoNext();
                 }
@@ -380,6 +414,7 @@
             } catch (e) {}
         },
 
+        // Перемотка
         seekBy: function (sec) {
             if (this.video && isFinite(this.video.duration)) {
                 this.video.currentTime = Math.max(0, Math.min(
@@ -392,6 +427,7 @@
             if (this.video) this.video.playbackRate = rate;
         },
 
+        // Отметить точку интро (для пропуска на следующих сериях)
         markIntro: function () {
             if (this.video && this.currentCard) {
                 Store.patchShow(this.currentCard, { intro_end: this.video.currentTime });
@@ -405,6 +441,7 @@
             }
         },
 
+        // Диагностика
         _startDiag: function () {
             var self = this;
             this._stopDiag();
@@ -438,6 +475,7 @@
             }
             this._stopAutosave();
             this._stopDiag();
+            HUD.stop();
             if (this.hls) {
                 try { this.hls.destroy(); } catch (e) {}
                 this.hls = null;
@@ -504,17 +542,266 @@
     };
 
     // =====================================================================
+    //  СТИЛЬ ПЛЕЕРА (CSS-инъекция)
+    // =====================================================================
+
+    var PlayerSkin = {
+        _el: null,
+        inject: function () {
+            if (this._el) return;
+            var css = [
+                // ── Нижняя панель ────────────────────────────────────────────
+                // Убираем сплошной чёрный фон — заменяем на градиент-тень снизу
+                '.player-panel{',
+                    'background:linear-gradient(to top,rgba(0,0,0,.92) 0%,rgba(0,0,0,.55) 55%,transparent 100%)!important;',
+                    'padding-bottom:.4em!important;',
+                '}',
+                // Верхняя "плашка" если есть (название + время сверху)
+                '.player-panel--top,.player-panel__top{',
+                    'background:linear-gradient(to bottom,rgba(0,0,0,.75) 0%,transparent 100%)!important;',
+                '}',
+
+                // ── Прогресс-бар ──────────────────────────────────────────────
+                '.player-timeline,.player-panel__timeline{',
+                    'height:4px!important;margin:.6em 0!important;',
+                '}',
+                // Фоновая дорожка
+                '.player-timeline__peding,.player-timeline--peding,.player-timeline > i:first-child{',
+                    'background:rgba(255,255,255,.14)!important;border-radius:4px!important;',
+                '}',
+                // Буфер
+                '.player-timeline__buffer,.player-timeline--buffer{',
+                    'background:rgba(255,255,255,.3)!important;border-radius:4px!important;',
+                '}',
+                // Просмотрено — синий/фиолетовый градиент
+                '.player-timeline__position,.player-timeline--position,.player-timeline__progress{',
+                    'background:linear-gradient(90deg,#3b82f6 0%,#8b5cf6 100%)!important;',
+                    'border-radius:4px!important;',
+                '}',
+                // Маркер — светящийся белый кружок
+                '.player-timeline__marker,.player-timeline--marker{',
+                    'width:14px!important;height:14px!important;top:-5px!important;',
+                    'background:#fff!important;border-radius:50%!important;',
+                    'box-shadow:0 0 0 3px rgba(139,92,246,.5),0 0 12px rgba(59,130,246,.95)!important;',
+                    'transition:transform .1s!important;',
+                '}',
+                '.player-timeline:hover .player-timeline__marker{transform:scale(1.35)!important;}',
+
+                // ── Время ─────────────────────────────────────────────────────
+                '.player-panel__time,.player-panel--time,.player-panel .time{',
+                    'font-weight:600!important;opacity:.75!important;',
+                    'font-variant-numeric:tabular-nums!important;',
+                    'font-size:.85em!important;letter-spacing:.01em!important;',
+                '}',
+
+                // ── Название эпизода ──────────────────────────────────────────────
+                '.player-panel__title,.player-panel--title,.player-info__title,.player-panel .title{',
+                    'font-weight:700!important;letter-spacing:.02em!important;',
+                    'text-shadow:0 1px 12px rgba(0,0,0,.95)!important;',
+                '}',
+
+                // ── Кнопки: нормальное состояние ─────────────────────────────────
+                '.player-panel svg,.player-panel .icon{',
+                    'opacity:.75!important;transition:opacity .15s,filter .15s!important;',
+                '}',
+                // Фокус/активная кнопка — синий glow
+                '.player-panel .focus svg,.player-panel .active svg,',
+                '.player-panel .selector.focus svg,.player-panel .focus .icon{',
+                    'opacity:1!important;',
+                    'filter:drop-shadow(0 0 6px #60a5fa) drop-shadow(0 0 2px #3b82f6)!important;',
+                '}',
+
+                // ── Кнопка качества (FHD / HD и т.д.) ───────────────────────────
+                '.player-panel .player-panel__quality,.player-panel__quality{',
+                    'background:linear-gradient(135deg,rgba(59,130,246,.55),rgba(139,92,246,.55))!important;',
+                    'border:1px solid rgba(96,165,250,.5)!important;',
+                    'border-radius:.3rem!important;padding:.1rem .35rem!important;',
+                    'font-weight:700!important;font-size:.72rem!important;letter-spacing:.05em!important;',
+                    'color:#fff!important;',
+                '}',
+
+                // ── Убираем outline у кнопок ────────────────────────────────────
+                '.player-panel *:focus{outline:none!important;}',
+            ].join('');
+            var el = document.createElement('style');
+            el.id = 'pp-skin';
+            el.textContent = css;
+            document.head.appendChild(el);
+            this._el = el;
+        },
+        remove: function () {
+            if (this._el) { try { this._el.remove(); } catch (e) {} this._el = null; }
+        }
+    };
+
+    // =====================================================================
+    //  HUD — качество / скорость / пропустить интро
+    // =====================================================================
+
+    var HUD = {
+        _el: null,
+        _badge: null,
+        _speedBadge: null,
+        _introBadge: null,
+        _hideTimer: null,
+        _qualLoop: null,
+        _active: false,
+        speeds: [0.5, 0.75, 1, 1.25, 1.5, 2],
+        speedIdx: 2,    // индекс = 1×
+
+        _badgeCSS: [
+            'display:inline-flex;align-items:center;',
+            'padding:.22rem .55rem;border-radius:.35rem;',
+            'font-size:.7rem;font-weight:700;letter-spacing:.06em;',
+            'font-family:system-ui,-apple-system,sans-serif;',
+            'background:rgba(0,0,0,.72);color:rgba(255,255,255,.88);',
+            'border:1px solid rgba(255,255,255,.12);',
+            'backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);',
+        ].join(''),
+
+        _build: function () {
+            if (this._el) return;
+            var wrap = document.createElement('div');
+            wrap.id = 'pp-hud';
+            wrap.style.cssText = [
+                'position:fixed;top:1.3rem;right:1.5rem;',
+                'display:flex;align-items:center;gap:.45rem;',
+                'z-index:9998;transition:opacity .35s;pointer-events:none;',
+            ].join('');
+
+            var qual = document.createElement('span');
+            qual.id = 'pp-hud-qual';
+            qual.style.cssText = this._badgeCSS;
+            qual.textContent = '···';
+
+            var spd = document.createElement('span');
+            spd.id = 'pp-hud-speed';
+            spd.style.cssText = this._badgeCSS + 'display:none;background:rgba(59,130,246,.7);border-color:transparent;';
+            spd.textContent = '1×';
+
+            var intro = document.createElement('span');
+            intro.id = 'pp-hud-intro';
+            intro.style.cssText = this._badgeCSS + [
+                'display:none;cursor:pointer;pointer-events:auto;',
+                'background:linear-gradient(90deg,rgba(59,130,246,.8),rgba(139,92,246,.8));',
+                'border-color:transparent;color:#fff;',
+            ].join('');
+            intro.textContent = '▶▶  ПРОПУСТИТЬ ИНТРО';
+            intro.addEventListener('click', function () { Engine.skipIntro(); });
+
+            wrap.appendChild(qual);
+            wrap.appendChild(spd);
+            wrap.appendChild(intro);
+            document.body.appendChild(wrap);
+
+            this._el = wrap;
+            this._badge = qual;
+            this._speedBadge = spd;
+            this._introBadge = intro;
+        },
+
+        start: function () {
+            this._active = true;
+            this.speedIdx = 2;
+            this._build();
+            this._el.style.opacity = '1';
+            this._updateQuality();
+            this._schedHide();
+            this._startLoop();
+        },
+
+        stop: function () {
+            this._active = false;
+            this._stopLoop();
+            clearTimeout(this._hideTimer);
+            if (this._el) { try { this._el.remove(); } catch (e) {} }
+            this._el = this._badge = this._speedBadge = this._introBadge = null;
+        },
+
+        peek: function () {
+            if (!this._active || !this._el) return;
+            this._el.style.opacity = '1';
+            this._schedHide();
+        },
+
+        _schedHide: function () {
+            clearTimeout(this._hideTimer);
+            this._hideTimer = setTimeout(function () {
+                if (HUD._el) HUD._el.style.opacity = '0';
+            }, 4000);
+        },
+
+        cycleSpeed: function () {
+            this.speedIdx = (this.speedIdx + 1) % this.speeds.length;
+            var s = this.speeds[this.speedIdx];
+            Engine.setRate(s);
+            if (this._speedBadge) {
+                this._speedBadge.textContent = s + '×';
+                this._speedBadge.style.display = (s === 1) ? 'none' : '';
+            }
+            try { Lampa.Noty.show('Скорость: ' + s + '×'); } catch (e) {}
+            this.peek();
+        },
+
+        _updateQuality: function () {
+            if (!this._badge) return;
+            var txt = '';
+            if (Engine.hls && Engine.hls.levels && Engine.hls.currentLevel >= 0) {
+                var L = Engine.hls.levels[Engine.hls.currentLevel];
+                if (L) {
+                    var h = L.height || 0;
+                    var kbps = Math.round((L.bitrate || 0) / 1000);
+                    var lbl = h >= 2160 ? '4K' : h >= 1440 ? '2K' : h >= 1080 ? 'FHD' : h >= 720 ? 'HD' : h ? h + 'p' : '';
+                    txt = (lbl || 'AUTO') + (kbps ? '  ·  ' + kbps + ' kbps' : '');
+                }
+            } else if (Engine.video) {
+                var vw = Engine.video.videoWidth, vh = Engine.video.videoHeight;
+                if (vh) {
+                    txt = vh >= 2160 ? '4K' : vh >= 1440 ? '2K' : vh >= 1080 ? 'FHD' : vh >= 720 ? 'HD' : vh + 'p';
+                }
+            }
+            this._badge.textContent = txt || 'HLS';
+        },
+
+        _checkIntro: function () {
+            if (!this._introBadge || !Engine.currentCard) return;
+            var show = Store.getShow(Engine.currentCard);
+            var v = Engine.video;
+            var visible = !!(show.intro_end && v && v.currentTime < show.intro_end - 2 && v.currentTime > 2);
+            this._introBadge.style.display = visible ? '' : 'none';
+        },
+
+        _startLoop: function () {
+            var self = this;
+            this._stopLoop();
+            this._qualLoop = setInterval(function () {
+                self._updateQuality();
+                self._checkIntro();
+            }, 2000);
+        },
+        _stopLoop: function () {
+            if (this._qualLoop) { clearInterval(this._qualLoop); this._qualLoop = null; }
+        }
+    };
+
+    // =====================================================================
     //  ПУЛЬТ (D-pad перемотка + горячие действия)
     // =====================================================================
 
     function bindRemote() {
         Lampa.Controller.listener.follow('keydown', function (e) {
             if (!Engine.video) return;
+            var k = e.keyCode || e.which || 0;
             switch (e.code) {
-                case 'ArrowLeft':  Engine.seekBy(-10); break;
-                case 'ArrowRight': Engine.seekBy(10);  break;
-                case 'PageUp':     Engine.seekBy(30);  break;
-                case 'PageDown':   Engine.seekBy(-30); break;
+                case 'ArrowLeft':  Engine.seekBy(-10); HUD.peek(); break;
+                case 'ArrowRight': Engine.seekBy(10);  HUD.peek(); break;
+                case 'PageUp':     Engine.seekBy(30);  HUD.peek(); break;
+                case 'PageDown':   Engine.seekBy(-30); HUD.peek(); break;
+                default:           HUD.peek();         break;
+            }
+            // Info / Guide (457) или жёлтая кнопка (405) — смена скорости
+            if (k === 457 || k === 405) {
+                HUD.cycleSpeed();
             }
         });
     }
@@ -572,6 +859,7 @@
             'box-shadow:0 40px 100px rgba(0,0,0,.85),0 0 0 .5px rgba(255,255,255,.04) inset;'
         ].join('');
 
+        /* Шапка */
         var head = document.createElement('div');
         head.style.cssText = [
             'display:flex;align-items:center;gap:.8rem;',
@@ -636,6 +924,7 @@
         box.appendChild(btnPlus);
         box.appendChild(btnNative);
 
+        /* Подсказка снизу */
         var hint = document.createElement('div');
         hint.style.cssText = [
             'text-align:center;color:rgba(255,255,255,.2);',
@@ -665,12 +954,23 @@
             if (style.parentNode) style.parentNode.removeChild(style);
         }
 
-        function choose(usePlus) { cleanup(); cb(usePlus); }
+        function choose(usePlus) {
+            cleanup();
+            // После закрытия нашего диалога поглощаем все клавиши ещё 1.5с.
+            // Иначе "хвостовой" Enter (которым пользователь выбрал Player Plus)
+            // попадает в Lampa-диалог "Продолжить с отметки" и автоматически его подтверждает.
+            var sink = function (e) { e.stopPropagation(); e.preventDefault(); };
+            document.addEventListener('keydown', sink, true);
+            setTimeout(function () { document.removeEventListener('keydown', sink, true); }, 1500);
+            cb(usePlus);
+        }
 
+        /* Capture-phase: перехватываем до Lampa, e.stopPropagation блокирует плеер */
         function onKey(e) {
             if (!document.getElementById('pp-select-overlay')) { cleanup(); return; }
             e.stopPropagation();
             e.preventDefault();
+            /* Первые 700мс — глотаем нажатия, Enter не срабатывает */
             if (Date.now() < readyAt) return;
             var k = e.keyCode || e.which || 0;
             var key = e.key || '';
@@ -697,14 +997,18 @@
         var _lastSelectTime = 0;
 
         Lampa.Player.listener.follow('start', function (e) {
+            // Не показываем диалог если он был < 8с назад (защита от двойного срабатывания)
             if (Date.now() - _lastSelectTime < 8000) return;
 
+            // Lampa может передавать URL как e.url или как e.data.url
             var data = (e && e.data) ? e.data : (e || {});
             var url  = data.url
                     || (data.timeline && data.timeline.url)
                     || (data.file && data.file.url)
                     || '';
             var card = data.card || (data.file && data.file.card) || Lampa.Player.card || null;
+            // Показываем диалог для любого URL (не только .m3u8): некоторые балансеры
+            // отдают HLS без m3u8 в пути. isHls используется только внутри Engine.attach.
             if (!url || !hlsReady) return;
 
             _lastSelectTime = Date.now();
@@ -716,6 +1020,7 @@
                     tries++;
                     if (video) {
                         clearInterval(check);
+                        // forceHls=true: пробуем hls.js даже без .m3u8 в URL
                         Engine.attach(video, url, card, true);
                     } else if (tries > 50) clearInterval(check);
                 }, 100);
