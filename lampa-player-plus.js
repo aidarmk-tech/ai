@@ -256,31 +256,37 @@
             });
 
             hls.on(window.Hls.Events.MANIFEST_PARSED, function (ev, data) {
-                // Выбираем лучший уровень с поддерживаемым кодеком.
-                // НЕ форсируем принудительно — 4K обычно HEVC, WebView на ATV
-                // не поддерживает H.265 аппаратно. Находим максимальный H.264 уровень.
+                // Двухпроходный выбор уровня качества без HEVC-треков.
+                // WebView на ATV не декодирует H.265 аппаратно — 4K-треки почти
+                // всегда HEVC, поэтому их нужно явно пропустить.
                 if (data && data.levels && data.levels.length > 1) {
-                    var bestLevel = -1; // -1 = auto (ABR)
-                    for (var i = data.levels.length - 1; i >= 0; i--) {
-                        var lvl = data.levels[i];
-                        var codec = (lvl.videoCodec || lvl.codecs || '').toLowerCase();
-                        // avc = H.264, hev/hvc = HEVC. Предпочитаем AVC если есть
-                        var isAvc = !codec || codec.indexOf('avc') >= 0 || codec.indexOf('h264') >= 0;
-                        // Проверяем через canPlayType если можем
-                        var canPlay = isAvc;
-                        if (!canPlay && codec) {
-                            try {
-                                var mime = 'video/mp4; codecs="' + codec + '"';
-                                var cp = document.createElement('video').canPlayType(mime);
-                                canPlay = (cp === 'probably' || cp === 'maybe');
-                            } catch (ex) { canPlay = false; }
+                    var levels = data.levels;
+                    var bestLevel = -1;
+
+                    // Проход 1: ищем явный AVC-трек сверху вниз (пропускаем HEVC и без codec-инфо)
+                    for (var i = levels.length - 1; i >= 0; i--) {
+                        var codec = (levels[i].videoCodec || levels[i].codecs || '').toLowerCase();
+                        if (!codec) continue; // без инфо — пропускаем в первом проходе
+                        if (/hev|hvc|h\.?265|hevc/.test(codec)) continue; // явный HEVC — пропуск
+                        if (/avc|h\.?264/.test(codec)) { bestLevel = i; break; } // явный AVC
+                        // Неизвестный кодек — проверяем canPlayType
+                        try {
+                            var cp = document.createElement('video').canPlayType('video/mp4; codecs="' + codec + '"');
+                            if (cp === 'probably' || cp === 'maybe') { bestLevel = i; break; }
+                        } catch (ex) {}
+                    }
+
+                    // Проход 2: нет codec-инфо ни в одном уровне — ограничиваем 1080p.
+                    // На ATV без явного кодека 4K-уровень почти всегда HEVC.
+                    if (bestLevel < 0) {
+                        for (var j = levels.length - 1; j >= 0; j--) {
+                            if ((levels[j].height || 9999) <= 1080) { bestLevel = j; break; }
                         }
-                        if (canPlay) { bestLevel = i; break; }
                     }
-                    if (bestLevel >= 0) {
-                        hls.currentLevel = bestLevel;
-                    }
-                    // Если bestLevel = -1 (нет явно совместимого), ABR выберет сам
+
+                    if (bestLevel >= 0) hls.currentLevel = bestLevel;
+                    // bestLevel = -1 только если у всех уровней height > 1080 и нет codec-инфо
+                    // → ABR выберет сам, MEDIA_ERROR-хендлер понизит при ошибке
                 }
                 if (resumeTo > 0) {
                     try { video.currentTime = resumeTo; } catch (e) {}
@@ -544,45 +550,78 @@
         inject: function () {
             if (this._el) return;
             var css = [
-                // Нижняя панель — тёмный градиент вместо сплошного тёмного фона
+                // ── Нижняя панель ────────────────────────────────────────────
+                // Убираем сплошной чёрный фон — заменяем на градиент-тень снизу
                 '.player-panel{',
-                    'background:linear-gradient(to top,rgba(0,0,0,.94) 0%,rgba(0,0,0,0) 100%)!important;',
+                    'background:linear-gradient(to top,rgba(0,0,0,.92) 0%,rgba(0,0,0,.55) 55%,transparent 100%)!important;',
+                    'padding-bottom:.4em!important;',
                 '}',
-                // Прогресс-бар — синий градиент
-                '.player-timeline,.player-panel__timeline{height:4px!important;}',
-                '.player-timeline__peding,.player-timeline--peding{',
-                    'background:rgba(255,255,255,.15)!important;border-radius:4px!important;',
+                // Верхняя "плашка" если есть (название + время сверху)
+                '.player-panel--top,.player-panel__top{',
+                    'background:linear-gradient(to bottom,rgba(0,0,0,.75) 0%,transparent 100%)!important;',
                 '}',
+
+                // ── Прогресс-бар ──────────────────────────────────────────────
+                '.player-timeline,.player-panel__timeline{',
+                    'height:4px!important;margin:.6em 0!important;',
+                '}',
+                // Фоновая дорожка
+                '.player-timeline__peding,.player-timeline--peding,.player-timeline > i:first-child{',
+                    'background:rgba(255,255,255,.14)!important;border-radius:4px!important;',
+                '}',
+                // Буфер
                 '.player-timeline__buffer,.player-timeline--buffer{',
-                    'background:rgba(255,255,255,.28)!important;border-radius:4px!important;',
+                    'background:rgba(255,255,255,.3)!important;border-radius:4px!important;',
                 '}',
-                '.player-timeline__position,.player-timeline--position{',
+                // Просмотрено — синий/фиолетовый градиент
+                '.player-timeline__position,.player-timeline--position,.player-timeline__progress{',
                     'background:linear-gradient(90deg,#3b82f6 0%,#8b5cf6 100%)!important;',
                     'border-radius:4px!important;',
                 '}',
-                // Маркер — светящийся кружок
+                // Маркер — светящийся белый кружок
                 '.player-timeline__marker,.player-timeline--marker{',
                     'width:14px!important;height:14px!important;top:-5px!important;',
                     'background:#fff!important;border-radius:50%!important;',
-                    'box-shadow:0 0 0 3px rgba(139,92,246,.45),0 0 12px rgba(59,130,246,.9)!important;',
+                    'box-shadow:0 0 0 3px rgba(139,92,246,.5),0 0 12px rgba(59,130,246,.95)!important;',
+                    'transition:transform .1s!important;',
                 '}',
-                // Время
-                '.player-panel__time,.player-panel--time{',
-                    'font-weight:600!important;opacity:.8!important;',
+                '.player-timeline:hover .player-timeline__marker{transform:scale(1.35)!important;}',
+
+                // ── Время ────────────────────────────────────────────────────
+                '.player-panel__time,.player-panel--time,.player-panel .time{',
+                    'font-weight:600!important;opacity:.75!important;',
                     'font-variant-numeric:tabular-nums!important;',
+                    'font-size:.85em!important;letter-spacing:.01em!important;',
                 '}',
-                // Заголовок
-                '.player-panel__title,.player-panel--title,.player-info__title{',
-                    'font-weight:700!important;letter-spacing:.03em!important;',
-                    'text-shadow:0 1px 10px rgba(0,0,0,.9)!important;',
+
+                // ── Название эпизода ──────────────────────────────────────────
+                '.player-panel__title,.player-panel--title,.player-info__title,.player-panel .title{',
+                    'font-weight:700!important;letter-spacing:.02em!important;',
+                    'text-shadow:0 1px 12px rgba(0,0,0,.95)!important;',
                 '}',
-                // Фокус на кнопке — синий glow
+
+                // ── Кнопки: нормальное состояние ─────────────────────────────
+                '.player-panel svg,.player-panel .icon{',
+                    'opacity:.75!important;transition:opacity .15s,filter .15s!important;',
+                '}',
+                // Фокус/активная кнопка — синий glow
                 '.player-panel .focus svg,.player-panel .active svg,',
-                '.player-panel .selector.focus svg{',
-                    'filter:drop-shadow(0 0 5px #60a5fa) drop-shadow(0 0 2px #3b82f6)!important;',
+                '.player-panel .selector.focus svg,.player-panel .focus .icon{',
+                    'opacity:1!important;',
+                    'filter:drop-shadow(0 0 6px #60a5fa) drop-shadow(0 0 2px #3b82f6)!important;',
                 '}',
-                // Убираем рамку у кнопок
-                '.player-panel button:focus{outline:none!important;}',
+
+                // ── Кнопка качества (FHD / HD и т.д.) ────────────────────────
+                '.player-panel .player-panel__quality,.player-panel__quality{',
+                    'background:linear-gradient(135deg,rgba(59,130,246,.55),rgba(139,92,246,.55))!important;',
+                    'border:1px solid rgba(96,165,250,.5)!important;',
+                    'border-radius:.3rem!important;padding:.1rem .35rem!important;',
+                    'font-weight:700!important;font-size:.72rem!important;letter-spacing:.05em!important;',
+                    'color:#fff!important;',
+                '}',
+
+                // ── Убираем outline у кнопок ──────────────────────────────────
+                '.player-panel *:focus{outline:none!important;}',
             ].join('');
             var el = document.createElement('style');
             el.id = 'pp-skin';
@@ -915,7 +954,16 @@
             if (style.parentNode) style.parentNode.removeChild(style);
         }
 
-        function choose(usePlus) { cleanup(); cb(usePlus); }
+        function choose(usePlus) {
+            cleanup();
+            // После закрытия нашего диалога поглощаем все клавиши ещё 1.5с.
+            // Иначе "хвостовой" Enter (которым пользователь выбрал Player Plus)
+            // попадает в Lampa-диалог "Продолжить с отметки" и автоматически его подтверждает.
+            var sink = function (e) { e.stopPropagation(); e.preventDefault(); };
+            document.addEventListener('keydown', sink, true);
+            setTimeout(function () { document.removeEventListener('keydown', sink, true); }, 1500);
+            cb(usePlus);
+        }
 
         /* Capture-phase: перехватываем до Lampa, e.stopPropagation блокирует плеер */
         function onKey(e) {
