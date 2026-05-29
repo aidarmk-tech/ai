@@ -76,7 +76,6 @@
             Lampa.Storage.set(this._root, data);
         },
 
-        // Ключ ресурса = хэш url (стабильный между сессиями)
         keyOf: function (url) {
             var h = 0, s = String(url || '');
             for (var i = 0; i < s.length; i++) {
@@ -86,7 +85,6 @@
             return 'r' + Math.abs(h);
         },
 
-        // Ключ сериала (для общих настроек дорожек/интро)
         showKey: function (card) {
             if (!card) return null;
             var id = card.id || card.tmdb_id || card.imdb_id || card.original_title || card.title;
@@ -115,7 +113,6 @@
             this._save(d);
         },
 
-        // Настройки сериала: аудио, субтитры, точка интро
         getShow: function (card) {
             var k = this.showKey(card);
             if (!k) return {};
@@ -173,8 +170,6 @@
             return /\.m3u8(\?|$)/i.test(String(url || ''));
         },
 
-        // Подмена воспроизведения: вызывается при старте плеера Lampa
-        // forceHls=true — пробуем hls.js даже если URL не содержит .m3u8 (для нестандартных балансеров)
         attach: function (video, url, card, forceHls) {
             this.detach();
 
@@ -184,7 +179,6 @@
 
             var cfg = settings();
 
-            // Восстановление позиции
             var saved = Store.getPosition(url);
             var resumeTo = (saved && saved.time && (!saved.watched)) ? saved.time : 0;
 
@@ -204,33 +198,28 @@
         _attachHls: function (video, url, cfg, resumeTo) {
             var prof = BUFFER_PROFILES[cfg.buffer] || BUFFER_PROFILES.medium;
 
-            // Сброс видеоэлемента — иначе hls.js не может взять управление у нативного плеера
             try { video.pause(); video.removeAttribute('src'); video.load(); } catch (e) {}
 
             var hls = new window.Hls({
                 enableWorker: true,
                 lowLatencyMode: false,
-                // Буфер
                 maxBufferLength: prof.maxBufferLength,
                 maxMaxBufferLength: prof.maxMaxBufferLength,
                 maxBufferSize: prof.maxBufferSize,
                 backBufferLength: prof.backBufferLength,
-                // Стабильность воспроизведения
                 maxBufferHole: 0.5,
                 highBufferWatchdogPeriod: 3,
                 nudgeOffset: 0.2,
                 nudgeMaxRetry: 10,
-                // Загрузка фрагментов
                 fragLoadingMaxRetry: 10,
                 fragLoadingMaxRetryTimeout: 64000,
                 manifestLoadingMaxRetry: 5,
                 levelLoadingMaxRetry: 8,
                 levelLoadingRetryDelay: 500,
-                // ABR: предполагаем высокий битрейт — hls.js сразу выберет 4K если доступен
-                abrEwmaDefaultEstimate: 30 * 1000 * 1000,  // 30 Мбит/с по умолчанию
+                // ABR: предполагаем высокий битрейт чтобы не начинать с низкого
+                abrEwmaDefaultEstimate: 30 * 1000 * 1000,
                 abrMaxWithRealBitrate: true,
-                startLevel: -1,  // авто, но с учётом abrEwmaDefaultEstimate стартует высоко
-                // Совместимость с ATV WebView
+                startLevel: -1,
                 preferManagedMediaSource: false,
                 xhrSetup: function (xhr) {
                     try {
@@ -246,17 +235,32 @@
 
             this.hls = hls;
 
-            // Правильный порядок по документации hls.js: сначала attachMedia, потом loadSource
             hls.attachMedia(video);
             hls.on(window.Hls.Events.MEDIA_ATTACHED, function () {
                 hls.loadSource(url);
             });
 
             hls.on(window.Hls.Events.MANIFEST_PARSED, function (ev, data) {
-                // Принудительно переключаем на максимальный уровень качества
-                // abrEwmaDefaultEstimate не всегда достаточно — форсируем явно
+                // Выбираем лучший уровень с поддерживаемым кодеком.
+                // 4K обычно HEVC, WebView на ATV не декодирует H.265 аппаратно.
+                // Внешний плеер (ExoPlayer) поддерживает HEVC через аппаратный декодер.
                 if (data && data.levels && data.levels.length > 1) {
-                    hls.currentLevel = data.levels.length - 1;
+                    var bestLevel = -1;
+                    for (var i = data.levels.length - 1; i >= 0; i--) {
+                        var lvl = data.levels[i];
+                        var codec = (lvl.videoCodec || lvl.codecs || '').toLowerCase();
+                        var isAvc = !codec || codec.indexOf('avc') >= 0 || codec.indexOf('h264') >= 0;
+                        var canPlay = isAvc;
+                        if (!canPlay && codec) {
+                            try {
+                                var mime = 'video/mp4; codecs="' + codec + '"';
+                                var cp = document.createElement('video').canPlayType(mime);
+                                canPlay = (cp === 'probably' || cp === 'maybe');
+                            } catch (ex) { canPlay = false; }
+                        }
+                        if (canPlay) { bestLevel = i; break; }
+                    }
+                    if (bestLevel >= 0) hls.currentLevel = bestLevel;
                 }
                 if (resumeTo > 0) {
                     try { video.currentTime = resumeTo; } catch (e) {}
@@ -264,7 +268,7 @@
                 video.play().catch(function () {});
             });
 
-            // Автовосстановление ошибок (главное против зависаний)
+            var _mediaErrCount = 0;
             hls.on(window.Hls.Events.ERROR, function (event, data) {
                 if (!data.fatal) return;
                 switch (data.type) {
@@ -273,8 +277,19 @@
                         hls.startLoad();
                         break;
                     case window.Hls.ErrorTypes.MEDIA_ERROR:
-                        Engine._notify('Медиа: восстановление…');
-                        hls.recoverMediaError();
+                        _mediaErrCount++;
+                        if (_mediaErrCount === 1) {
+                            Engine._notify('Медиа: восстановление…');
+                            hls.recoverMediaError();
+                        } else if (_mediaErrCount <= 3 && hls.currentLevel > 0) {
+                            hls.currentLevel = hls.currentLevel - 1;
+                            Engine._notify('Кодек несовместим, понижаю качество…');
+                            hls.recoverMediaError();
+                        } else {
+                            Engine._notify('Ошибка декодера, нативный режим');
+                            Engine._attachNative(video, url, video.currentTime || 0);
+                            hls.destroy(); Engine.hls = null;
+                        }
                         break;
                     default:
                         Engine._notify('Ошибка потока, переключаюсь на нативный движок');
@@ -297,7 +312,6 @@
             video.addEventListener('loadedmetadata', onMeta);
         },
 
-        // Применить запомненные дорожки сериала
         _applyShowTracks: function () {
             if (!settings().remember_tracks || !this.hls || !this.currentCard) return;
             var show = Store.getShow(this.currentCard);
@@ -325,7 +339,6 @@
             }
         },
 
-        // Периодическое сохранение позиции
         _startAutosave: function () {
             var self = this;
             this._stopAutosave();
@@ -340,7 +353,6 @@
             if (this.saveTimer) { clearInterval(this.saveTimer); this.saveTimer = null; }
         },
 
-        // Финальное сохранение + автопереход
         _hookEnded: function () {
             var self = this;
             if (!this.video || this.endedHooked) return;
@@ -349,7 +361,6 @@
             this.video.addEventListener('timeupdate', function () {
                 var v = self.video;
                 if (!v || !isFinite(v.duration)) return;
-                // показать кнопку автоперехода за autonext_delay сек до конца
                 if (settings().autonext && (v.duration - v.currentTime) <= settings().autonext_delay) {
                     UI.showAutoNext();
                 }
@@ -369,7 +380,6 @@
             } catch (e) {}
         },
 
-        // Перемотка
         seekBy: function (sec) {
             if (this.video && isFinite(this.video.duration)) {
                 this.video.currentTime = Math.max(0, Math.min(
@@ -382,7 +392,6 @@
             if (this.video) this.video.playbackRate = rate;
         },
 
-        // Отметить точку интро (для пропуска на следующих сериях)
         markIntro: function () {
             if (this.video && this.currentCard) {
                 Store.patchShow(this.currentCard, { intro_end: this.video.currentTime });
@@ -396,7 +405,6 @@
             }
         },
 
-        // Диагностика
         _startDiag: function () {
             var self = this;
             this._stopDiag();
@@ -505,7 +513,6 @@
             switch (e.code) {
                 case 'ArrowLeft':  Engine.seekBy(-10); break;
                 case 'ArrowRight': Engine.seekBy(10);  break;
-                // долгое нажатие / каналы — крупная перемотка
                 case 'PageUp':     Engine.seekBy(30);  break;
                 case 'PageDown':   Engine.seekBy(-30); break;
             }
@@ -517,8 +524,9 @@
     // =====================================================================
 
     function showPlayerSelect(cb) {
-        // Задержка 450мс: Enter от запуска фильма не должен сразу выбрать пункт
-        var readyAt = Date.now() + 450;
+        // Задержка 700мс: Enter от запуска фильма не должен сразу выбрать пункт
+        // (некоторые ATV-пульты дают повтор нажатия — увеличено с 450 до 700)
+        var readyAt = Date.now() + 700;
 
         var style = document.createElement('style');
         style.textContent = [
@@ -564,7 +572,6 @@
             'box-shadow:0 40px 100px rgba(0,0,0,.85),0 0 0 .5px rgba(255,255,255,.04) inset;'
         ].join('');
 
-        /* Шапка */
         var head = document.createElement('div');
         head.style.cssText = [
             'display:flex;align-items:center;gap:.8rem;',
@@ -629,7 +636,6 @@
         box.appendChild(btnPlus);
         box.appendChild(btnNative);
 
-        /* Подсказка снизу */
         var hint = document.createElement('div');
         hint.style.cssText = [
             'text-align:center;color:rgba(255,255,255,.2);',
@@ -661,12 +667,10 @@
 
         function choose(usePlus) { cleanup(); cb(usePlus); }
 
-        /* Capture-phase: перехватываем до Lampa, e.stopPropagation блокирует плеер */
         function onKey(e) {
             if (!document.getElementById('pp-select-overlay')) { cleanup(); return; }
             e.stopPropagation();
             e.preventDefault();
-            /* Первые 450мс — глотаем нажатия, Enter не срабатывает */
             if (Date.now() < readyAt) return;
             var k = e.keyCode || e.which || 0;
             var key = e.key || '';
@@ -688,18 +692,22 @@
     function hookPlayer() {
         if (!window.Lampa || !Lampa.Player) return;
 
+        // Защита от двойного диалога: start может сработать повторно когда hls.js
+        // перехватывает видеоэлемент (Lampa детектирует изменение src → новый start).
+        var _lastSelectTime = 0;
+
         Lampa.Player.listener.follow('start', function (e) {
-            // Lampa может передавать URL как e.url или как e.data.url
+            if (Date.now() - _lastSelectTime < 8000) return;
+
             var data = (e && e.data) ? e.data : (e || {});
             var url  = data.url
                     || (data.timeline && data.timeline.url)
                     || (data.file && data.file.url)
                     || '';
             var card = data.card || (data.file && data.file.card) || Lampa.Player.card || null;
-            // Показываем диалог для любого URL (не только .m3u8): некоторые балансеры
-            // отдают HLS без m3u8 в пути. isHls используется только внутри Engine.attach.
             if (!url || !hlsReady) return;
 
+            _lastSelectTime = Date.now();
             showPlayerSelect(function (usePlus) {
                 if (!usePlus) return;
                 var tries = 0;
@@ -708,7 +716,6 @@
                     tries++;
                     if (video) {
                         clearInterval(check);
-                        // forceHls=true: пробуем hls.js даже без .m3u8 в URL
                         Engine.attach(video, url, card, true);
                     } else if (tries > 50) clearInterval(check);
                 }, 100);
