@@ -253,10 +253,31 @@
             });
 
             hls.on(window.Hls.Events.MANIFEST_PARSED, function (ev, data) {
-                // Принудительно переключаем на максимальный уровень качества
-                // abrEwmaDefaultEstimate не всегда достаточно — форсируем явно
+                // Выбираем лучший уровень с поддерживаемым кодеком.
+                // НЕ форсируем принудительно — 4K обычно HEVC, WebView на ATV
+                // не поддерживает H.265 аппаратно. Находим максимальный H.264 уровень.
                 if (data && data.levels && data.levels.length > 1) {
-                    hls.currentLevel = data.levels.length - 1;
+                    var bestLevel = -1; // -1 = auto (ABR)
+                    for (var i = data.levels.length - 1; i >= 0; i--) {
+                        var lvl = data.levels[i];
+                        var codec = (lvl.videoCodec || lvl.codecs || '').toLowerCase();
+                        // avc = H.264, hev/hvc = HEVC. Предпочитаем AVC если есть
+                        var isAvc = !codec || codec.indexOf('avc') >= 0 || codec.indexOf('h264') >= 0;
+                        // Проверяем через canPlayType если можем
+                        var canPlay = isAvc;
+                        if (!canPlay && codec) {
+                            try {
+                                var mime = 'video/mp4; codecs="' + codec + '"';
+                                var cp = document.createElement('video').canPlayType(mime);
+                                canPlay = (cp === 'probably' || cp === 'maybe');
+                            } catch (ex) { canPlay = false; }
+                        }
+                        if (canPlay) { bestLevel = i; break; }
+                    }
+                    if (bestLevel >= 0) {
+                        hls.currentLevel = bestLevel;
+                    }
+                    // Если bestLevel = -1 (нет явно совместимого), ABR выберет сам
                 }
                 if (resumeTo > 0) {
                     try { video.currentTime = resumeTo; } catch (e) {}
@@ -265,6 +286,7 @@
             });
 
             // Автовосстановление ошибок (главное против зависаний)
+            var _mediaErrCount = 0;
             hls.on(window.Hls.Events.ERROR, function (event, data) {
                 if (!data.fatal) return;
                 switch (data.type) {
@@ -273,8 +295,22 @@
                         hls.startLoad();
                         break;
                     case window.Hls.ErrorTypes.MEDIA_ERROR:
-                        Engine._notify('Медиа: восстановление…');
-                        hls.recoverMediaError();
+                        _mediaErrCount++;
+                        if (_mediaErrCount === 1) {
+                            // Первая попытка: стандартное восстановление
+                            Engine._notify('Медиа: восстановление…');
+                            hls.recoverMediaError();
+                        } else if (_mediaErrCount <= 3 && hls.currentLevel > 0) {
+                            // Повторные ошибки — понижаем качество (кодек несовместим)
+                            hls.currentLevel = hls.currentLevel - 1;
+                            Engine._notify('Кодек несовместим, понижаю качество…');
+                            hls.recoverMediaError();
+                        } else {
+                            // Сдаёмся — переключаем на нативный
+                            Engine._notify('Ошибка декодера, нативный режим');
+                            Engine._attachNative(video, url, video.currentTime || 0);
+                            hls.destroy(); Engine.hls = null;
+                        }
                         break;
                     default:
                         Engine._notify('Ошибка потока, переключаюсь на нативный движок');
@@ -517,8 +553,9 @@
     // =====================================================================
 
     function showPlayerSelect(cb) {
-        // Задержка 450мс: Enter от запуска фильма не должен сразу выбрать пункт
-        var readyAt = Date.now() + 450;
+        // Задержка 700мс: Enter от запуска фильма не должен сразу выбрать пункт
+        // (некоторые ATV-пульты дают повтор нажатия — увеличено с 450 до 700)
+        var readyAt = Date.now() + 700;
 
         var style = document.createElement('style');
         style.textContent = [
@@ -688,7 +725,14 @@
     function hookPlayer() {
         if (!window.Lampa || !Lampa.Player) return;
 
+        // Защита от двойного диалога: start может сработать повторно когда hls.js
+        // перехватывает видеоэлемент (Lampa детектирует изменение src → новый start).
+        var _lastSelectTime = 0;
+
         Lampa.Player.listener.follow('start', function (e) {
+            // Не показываем диалог если он был < 8с назад (защита от двойного срабатывания)
+            if (Date.now() - _lastSelectTime < 8000) return;
+
             // Lampa может передавать URL как e.url или как e.data.url
             var data = (e && e.data) ? e.data : (e || {});
             var url  = data.url
@@ -700,6 +744,7 @@
             // отдают HLS без m3u8 в пути. isHls используется только внутри Engine.attach.
             if (!url || !hlsReady) return;
 
+            _lastSelectTime = Date.now();
             showPlayerSelect(function (usePlus) {
                 if (!usePlus) return;
                 var tries = 0;
