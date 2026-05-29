@@ -540,11 +540,7 @@
         function close() {
             if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
             if (style.parentNode) style.parentNode.removeChild(style);
-            try { Lampa.Controller.toggle(prevCtrl); } catch (ex) {}
         }
-
-        var prevCtrl = '';
-        try { prevCtrl = Lampa.Controller.current(); } catch (ex) {}
 
         $(overlay).on('hover:focus', '.pp-player-btn', function () {
             $('.pp-player-btn', overlay).removeClass('focus');
@@ -568,6 +564,7 @@
             down:  function () { Navigator.move('down'); },
             left:  function () { Navigator.move('left'); },
             right: function () { Navigator.move('right'); },
+            enter: function () { Navigator.enter(); },
             back:  function () { close(); cb(false); }
         });
         Lampa.Controller.toggle('pp_select');
