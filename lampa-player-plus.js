@@ -30,23 +30,24 @@
     var HLS_CDN = 'https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js';
 
     // Профили буфера. Подбираются под мощность устройства.
+    // Для 4K-контента (~25 Мбит/с): нужно ≥200 МБ чтобы держать 60с буфер без прерываний.
     var BUFFER_PROFILES = {
         low: {       // слабые ATV-боксы / старый WebView
-            maxBufferLength: 20,
-            maxMaxBufferLength: 40,
-            maxBufferSize: 30 * 1000 * 1000,
-            backBufferLength: 10
+            maxBufferLength: 40,
+            maxMaxBufferLength: 120,
+            maxBufferSize: 100 * 1000 * 1000,   // 100 МБ
+            backBufferLength: 15
         },
         medium: {    // средние боксы (по умолчанию)
-            maxBufferLength: 30,
-            maxMaxBufferLength: 90,
-            maxBufferSize: 60 * 1000 * 1000,
+            maxBufferLength: 90,
+            maxMaxBufferLength: 300,
+            maxBufferSize: 250 * 1000 * 1000,   // 250 МБ — держит 4K 80+ сек
             backBufferLength: 30
         },
         high: {      // мощные боксы / Shield / TV с хорошим железом
-            maxBufferLength: 60,
-            maxMaxBufferLength: 240,
-            maxBufferSize: 120 * 1000 * 1000,
+            maxBufferLength: 180,
+            maxMaxBufferLength: 600,
+            maxBufferSize: 600 * 1000 * 1000,   // 600 МБ
             backBufferLength: 60
         }
     };
@@ -209,16 +210,28 @@
             var hls = new window.Hls({
                 enableWorker: true,
                 lowLatencyMode: false,
+                // Буфер
                 maxBufferLength: prof.maxBufferLength,
                 maxMaxBufferLength: prof.maxMaxBufferLength,
                 maxBufferSize: prof.maxBufferSize,
                 backBufferLength: prof.backBufferLength,
+                // Стабильность воспроизведения
                 maxBufferHole: 0.5,
-                nudgeMaxRetry: 8,
-                fragLoadingMaxRetry: 8,
+                highBufferWatchdogPeriod: 3,
+                nudgeOffset: 0.2,
+                nudgeMaxRetry: 10,
+                // Загрузка фрагментов
+                fragLoadingMaxRetry: 10,
                 fragLoadingMaxRetryTimeout: 64000,
-                manifestLoadingMaxRetry: 4,
-                levelLoadingMaxRetry: 6,
+                manifestLoadingMaxRetry: 5,
+                levelLoadingMaxRetry: 8,
+                levelLoadingRetryDelay: 500,
+                // ABR: предполагаем высокий битрейт — hls.js сразу выберет 4K если доступен
+                abrEwmaDefaultEstimate: 30 * 1000 * 1000,  // 30 Мбит/с по умолчанию
+                abrMaxWithRealBitrate: true,
+                startLevel: -1,  // авто, но с учётом abrEwmaDefaultEstimate стартует высоко
+                // Совместимость с ATV WebView
+                preferManagedMediaSource: false,
                 xhrSetup: function (xhr) {
                     try {
                         var hdr = Engine.currentCard && Engine.currentCard.headers;
@@ -239,7 +252,12 @@
                 hls.loadSource(url);
             });
 
-            hls.on(window.Hls.Events.MANIFEST_PARSED, function () {
+            hls.on(window.Hls.Events.MANIFEST_PARSED, function (ev, data) {
+                // Принудительно переключаем на максимальный уровень качества
+                // abrEwmaDefaultEstimate не всегда достаточно — форсируем явно
+                if (data && data.levels && data.levels.length > 1) {
+                    hls.currentLevel = data.levels.length - 1;
+                }
                 if (resumeTo > 0) {
                     try { video.currentTime = resumeTo; } catch (e) {}
                 }
