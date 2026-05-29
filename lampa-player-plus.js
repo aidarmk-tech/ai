@@ -493,7 +493,7 @@
         overlay.id = 'pp-select-overlay';
         overlay.style.cssText = [
             'position:fixed;top:0;left:0;width:100%;height:100%;',
-            'background:rgba(0,0,0,.82);z-index:99999;',
+            'background:rgba(0,0,0,.85);z-index:2147483647;',
             'display:flex;flex-direction:column;align-items:center;justify-content:center;',
             'font-family:system-ui,sans-serif;'
         ].join('');
@@ -506,14 +506,16 @@
         title.style.cssText = 'color:#fff;font-size:1.2rem;font-weight:600;margin-bottom:1.5rem;text-align:center;';
         box.appendChild(title);
 
+        var style = document.createElement('style');
+        style.textContent = '.pp-player-btn{border-radius:.6rem;padding:1rem 1.2rem;margin-bottom:.8rem;cursor:pointer;}' +
+            '.pp-player-btn.ppfocus{border-color:#60a5fa!important;background:rgba(96,165,250,.3)!important;}';
+        document.head.appendChild(style);
+
         function makeBtn(label, sub, primary) {
             var btn = document.createElement('div');
-            btn.className = 'selector pp-player-btn';
-            btn.style.cssText = [
-                'border-radius:.6rem;padding:1rem 1.2rem;margin-bottom:.8rem;cursor:pointer;',
-                'border:2px solid ' + (primary ? '#3b82f6' : 'rgba(255,255,255,.15)') + ';',
-                'background:' + (primary ? 'rgba(59,130,246,.15)' : 'rgba(255,255,255,.05)') + ';'
-            ].join('');
+            btn.className = 'pp-player-btn';
+            btn.style.cssText = 'border:2px solid ' + (primary ? '#3b82f6' : 'rgba(255,255,255,.15)') + ';' +
+                'background:' + (primary ? 'rgba(59,130,246,.15)' : 'rgba(255,255,255,.05)') + ';';
             var lbl = document.createElement('div');
             lbl.textContent = label;
             lbl.style.cssText = 'color:#fff;font-size:.95rem;font-weight:600;';
@@ -525,49 +527,52 @@
             return btn;
         }
 
-        var btnPlus = makeBtn('▶ Player Plus (hls.js)', 'Без зависаний на ATV · продолжение с места', true);
+        var btnPlus   = makeBtn('▶ Player Plus (hls.js)', 'Без зависаний на ATV · продолжение с места', true);
         var btnNative = makeBtn('Встроенный Lampa', 'Стандартный нативный плеер', false);
         box.appendChild(btnPlus);
         box.appendChild(btnNative);
         overlay.appendChild(box);
         document.body.appendChild(overlay);
 
-        // focus styling
-        var style = document.createElement('style');
-        style.textContent = '.pp-player-btn.focus{outline:none;border-color:#60a5fa!important;background:rgba(96,165,250,.25)!important;}';
-        document.head.appendChild(style);
+        var focused = 0;
+        var btns = [btnPlus, btnNative];
 
-        function close() {
+        function setFocus(i) {
+            focused = Math.max(0, Math.min(btns.length - 1, i));
+            btns.forEach(function (b, idx) {
+                if (idx === focused) b.classList.add('ppfocus');
+                else b.classList.remove('ppfocus');
+            });
+        }
+        setFocus(0);
+
+        function cleanup() {
+            document.removeEventListener('keydown', onKey, true);
             if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
             if (style.parentNode) style.parentNode.removeChild(style);
         }
 
-        $(overlay).on('hover:focus', '.pp-player-btn', function () {
-            $('.pp-player-btn', overlay).removeClass('focus');
-            $(this).addClass('focus');
-        });
-        $(overlay).on('hover:blur', '.pp-player-btn', function () {
-            $(this).removeClass('focus');
-        });
-        $(overlay).on('hover:enter', '.pp-player-btn', function () {
-            var usePlus = this === btnPlus;
-            close();
+        function choose(usePlus) {
+            cleanup();
             cb(usePlus);
-        });
+        }
 
-        Lampa.Controller.add('pp_select', {
-            toggle: function () {
-                Lampa.Controller.collectionSet($(overlay));
-                Lampa.Controller.collectionFocus(false, $(overlay));
-            },
-            up:    function () { Navigator.move('up'); },
-            down:  function () { Navigator.move('down'); },
-            left:  function () { Navigator.move('left'); },
-            right: function () { Navigator.move('right'); },
-            enter: function () { Navigator.enter(); },
-            back:  function () { close(); cb(false); }
-        });
-        Lampa.Controller.toggle('pp_select');
+        // Capture-phase: fires before Lampa's own key handlers, blocks them
+        function onKey(e) {
+            if (!document.getElementById('pp-select-overlay')) { cleanup(); return; }
+            var k = e.keyCode || e.which || 0;
+            var key = e.key || '';
+            e.stopPropagation();
+            e.preventDefault();
+            if (key === 'ArrowUp' || k === 38)                                { setFocus(focused - 1); }
+            else if (key === 'ArrowDown' || k === 40)                         { setFocus(focused + 1); }
+            else if (key === 'Enter' || k === 13)                             { choose(focused === 0); }
+            else if (key === 'Escape' || key === 'GoBack' || k === 27 || k === 461) { choose(false); }
+        }
+        document.addEventListener('keydown', onKey, true);
+
+        btnPlus.addEventListener('click',   function () { choose(true); });
+        btnNative.addEventListener('click', function () { choose(false); });
     }
 
     // =====================================================================
