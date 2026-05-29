@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lampa Plugins — aidarmk-tech</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #0f0f1a; color: #e0e0e0; padding: 2rem; }
+  h1 { font-size: 1.6rem; margin-bottom: .4rem; color: #fff; }
+  .sub { opacity: .5; font-size: .9rem; margin-bottom: 2rem; }
+  .plugin { background: rgba(255,255,255,.05); border-radius: .75rem; padding: 1.2rem 1.5rem;
+    margin-bottom: 1rem; border: 1px solid rgba(255,255,255,.08); }
+  .plugin h2 { font-size: 1.05rem; font-weight: 600; margin-bottom: .3rem; color: #fff; }
+  .plugin p { font-size: .85rem; opacity: .6; margin-bottom: .7rem; line-height: 1.5; }
+  .url-box { display: flex; align-items: center; gap: .5rem; }
+  .url { font-family: monospace; font-size: .8rem; background: rgba(0,0,0,.4);
+    border: 1px solid rgba(255,255,255,.12); border-radius: .4rem;
+    padding: .45rem .7rem; flex: 1; color: #7dd3fc; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .copy { background: rgba(255,255,255,.1); border: none; border-radius: .4rem;
+    color: #fff; padding: .45rem .9rem; cursor: pointer; font-size: .8rem; white-space: nowrap; }
+  .copy:hover { background: rgba(255,255,255,.2); }
+  .copy.ok { background: #166534; }
+  a { color: #7dd3fc; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<h1>Lampa Plugins</h1>
+<p class="sub">Lampa → Настройки → Расширения → добавить URL плагина</p>
+
+<div class="plugin">
+  <h2>🎬 КиноЭхо</h2>
+  <p>Кинотрип по настроению: 16 настроений, факты о режиссёре и сценаристе, горизонтальные полосы с фильмами.</p>
+  <div class="url-box">
+    <div class="url" id="u1">https://aidarmk-tech.github.io/ai/kinoecho.js</div>
+    <button class="copy" onclick="copy('u1',this)">Копировать</button>
+  </div>
+</div>
+
+<div class="plugin">
+  <h2>📺 KinoGo</h2>
+  <p>Плагин для просмотра русского кино и сериалов с go2.kinogo.cc.</p>
+  <div class="url-box">
+    <div class="url" id="u2">https://aidarmk-tech.github.io/ai/kinogo.js</div>
+    <button class="copy" onclick="copy('u2',this)">Копировать</button>
+  </div>
+</div>
+
+<div class="plugin">
+  <h2>🎲 Mood Roulette</h2>
+  <p>Рулетка по настроению — случайный фильм под твоё состояние.</p>
+  <div class="url-box">
+    <div class="url" id="u3">https://aidarmk-tech.github.io/ai/mood-roulette.js</div>
+    <button class="copy" onclick="copy('u3',this)">Копировать</button>
+  </div>
+</div>
+
+<div class="plugin">
+  <h2>🔍 AI Search</h2>
+  <p>Умный поиск фильмов с помощью AI.</p>
+  <div class="url-box">
+    <div class="url" id="u4">https://aidarmk-tech.github.io/ai/ai_search.js</div>
+    <button class="copy" onclick="copy('u4',this)">Копировать</button>
+  </div>
+</div>
+
+<div class="plugin">
+  <h2>💡 Card Insight</h2>
+  <p>Дополнительная информация на карточке фильма.</p>
+  <div class="url-box">
+    <div class="url" id="u5">https://aidarmk-tech.github.io/ai/card_insight.js</div>
+    <button class="copy" onclick="copy('u5',this)">Копировать</button>
+  </div>
+</div>
+
+<div class="plugin">
+  <h2>▶️ Player Plus</h2>
+  <p>Встроенный плеер на hls.js: убирает зависания на ATV, продолжение с места остановки, автопереход серий, запоминание дорожек, пропуск интро.</p>
+  <div class="url-box">
+    <div class="url" id="u6">https://aidarmk-tech.github.io/ai/lampa-player-plus.js</div>
+    <button class="copy" onclick="copy('u6',this)">Копировать</button>
+  </div>
+</div>
+
+<div class="plugin">
+  <h2>✈️ Telegram Bridge</h2>
+  <p>Мост между Telegram и Lampa: рекомендуй фильмы из чата прямо в плеер друзей.</p>
+  <div class="url-box">
+    <div class="url" id="u7">https://aidarmk-tech.github.io/ai/lampa-tg-bridge/lampa-plugin/telegram-bridge.js</div>
+    <button class="copy" onclick="copy('u7',this)">Копировать</button>
+  </div>
+</div>
+
+<script>
+function copy(id, btn) {
+  var text = document.getElementById(id).textContent;
+  navigator.clipboard.writeText(text).then(function() {
+    var orig = btn.textContent;
+    btn.textContent = '✓ Скопировано';
+    btn.classList.add('ok');
+    setTimeout(function() { btn.textContent = orig; btn.classList.remove('ok'); }, 1500);
+  }).catch(function() {
+    var r = document.createRange();
+    r.selectNode(document.getElementById(id));
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(r);
+    document.execCommand('copy');
+  });
+}
+</script>
+</body>
+</html>
