@@ -16,6 +16,7 @@ import com.bumptech.glide.Glide
 import com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions
 import com.lampa.player.R
 import com.lampa.player.databinding.ActivityPlayerBinding
+import com.lampa.player.domain.model.EpisodeItem
 import com.lampa.player.settings.SettingsActivity
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Job
