@@ -124,11 +124,13 @@ class PlayerViewModel @Inject constructor(
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
 
         val trackSelector = DefaultTrackSelector(context).apply {
-            setParameters(buildUpon()
-                .setPreferredAudioLanguage("ru")
-                .setAllowAudioMixedMimeTypeAdaptiveness(true)
-                .setAllowVideoMixedMimeTypeAdaptiveness(true)
-                .build())
+            setParameters(
+                parameters.buildUpon()
+                    .setPreferredAudioLanguage("ru")
+                    .setAllowAudioMixedMimeTypeAdaptiveness(true)
+                    .setAllowVideoMixedMimeTypeAdaptiveness(true)
+                    .build()
+            )
         }
 
         dataSourceFactory = DefaultHttpDataSource.Factory()
