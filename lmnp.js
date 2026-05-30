@@ -95,9 +95,10 @@
 
     function buildCard(rawCard, fileData, playlist, episodeIndex) {
         var c = rawCard || {};
-        // Lampa иногда оборачивает карточку
-        if (!c.title && !c.name && !c.id) {
-            c = c.movie || c.show || c.card || c;
+        // Разворачиваем обёртку если нет TMDB id — даже если есть title от источника
+        if (!c.id && !c.tmdb_id) {
+            var inner = c.movie || c.show || c.card;
+            if (inner && (inner.id || inner.tmdb_id || inner.title || inner.name)) c = inner;
         }
 
         var file = (fileData && typeof fileData === 'object') ? fileData : {};
@@ -141,6 +142,49 @@
         return card;
     }
 
+    // ── Поиск TMDB-карточки (с id) из всех доступных источников ────────
+
+    function findTmdbCard(data, file) {
+        var candidates = [];
+        // Собираем все возможные источники карточки
+        try { candidates.push(data.card); } catch (_) {}
+        try { candidates.push(typeof file === 'object' && file.card); } catch (_) {}
+        try { candidates.push(Lampa.Player.card); } catch (_) {}
+        try { candidates.push(Lampa.Player.item && Lampa.Player.item.card); } catch (_) {}
+        try {
+            var act = Lampa.Activity.active();
+            candidates.push(act && act.card);
+            candidates.push(act && act.movie);
+        } catch (_) {}
+        try {
+            // Стек активностей — ищем компонент с карточкой перед плеером
+            var all = Lampa.Activity.all ? Lampa.Activity.all() : [];
+            for (var i = all.length - 1; i >= 0; i--) {
+                if (all[i] && all[i].card) candidates.push(all[i].card);
+            }
+        } catch (_) {}
+
+        // Разворачиваем вложенные карточки и ищем ту, у которой есть TMDB id
+        function unwrap(c) {
+            if (!c || typeof c !== 'object') return null;
+            if (c.id || c.tmdb_id) return c;
+            var inner = c.movie || c.show || c.card || c.item;
+            return (inner && inner !== c && (inner.id || inner.tmdb_id)) ? inner : c;
+        }
+
+        // Сначала ищем карточку с TMDB id
+        for (var i = 0; i < candidates.length; i++) {
+            var u = unwrap(candidates[i]);
+            if (u && (u.id || u.tmdb_id)) return u;
+        }
+        // Иначе — любую непустую
+        for (var i = 0; i < candidates.length; i++) {
+            var u = unwrap(candidates[i]);
+            if (u && (u.title || u.name)) return u;
+        }
+        return null;
+    }
+
     // ── Хук на старт плеера ──────────────────────────────────────────────
 
     var _lastLaunch = 0;
@@ -160,11 +204,7 @@
                         || '';
             if (!videoUrl || !/^https?:|^rtsp:|^udp:/.test(videoUrl)) return;
 
-            // Карточка с данными о фильме/сериале
-            var rawCard = data.card
-                       || (typeof file === 'object' && file.card)
-                       || null;
-            try { if (!rawCard && Lampa.Player.card) rawCard = Lampa.Player.card; } catch (_) {}
+            var rawCard = findTmdbCard(data, file);
 
             // Плейлист серий
             var playlist = null, episodeIndex = 0;
