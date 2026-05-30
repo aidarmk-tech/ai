@@ -47,6 +47,7 @@ data class PlayerUiState(
     val showMetadata: Boolean = false,
     // Info panel
     val infoPanelVisible: Boolean = false,
+    val infoOverlayVisible: Boolean = false,
     val infoPanelTab: InfoPanelTab = InfoPanelTab.EPISODES,
     val episodes: List<EpisodeItem> = emptyList(),
     val currentEpisodeIndex: Int = 0,
@@ -166,6 +167,8 @@ class PlayerViewModel @Inject constructor(
         startAutoSave()
         if (settings.diag) startDiag()
 
+        // Show card metadata immediately from intent data, enhance with TMDB if available
+        populateMetadataFromCard(card)
         card.tmdbId?.let { loadMetadata(it, card.isSerial, card) }
     }
 
@@ -215,6 +218,15 @@ class PlayerViewModel @Inject constructor(
 
     fun hideInfoPanel() = _uiState.update { it.copy(infoPanelVisible = false) }
 
+    fun toggleInfoOverlay() {
+        val visible = !_uiState.value.infoOverlayVisible
+        _uiState.update { it.copy(infoOverlayVisible = visible) }
+        if (visible) { refreshTracks(); osdHideJob?.cancel() }
+        else scheduleOsdHide()
+    }
+
+    fun hideInfoOverlay() = _uiState.update { it.copy(infoOverlayVisible = false) }
+
     fun setInfoPanelTab(tab: InfoPanelTab) = _uiState.update { it.copy(infoPanelTab = tab) }
 
     private fun refreshTracks() {
@@ -247,6 +259,22 @@ class PlayerViewModel @Inject constructor(
     }
 
     // ─── TMDB ──────────────────────────────────────────────────────
+
+    private fun populateMetadataFromCard(card: CardMeta) {
+        val year = card.releaseYear?.toString() ?: ""
+        val rating = card.rating?.let { "★ %.1f".format(it) } ?: ""
+        val info = listOfNotNull(year.ifEmpty { null }, rating.ifEmpty { null }, card.quality).joinToString(" · ")
+        _uiState.update { s ->
+            s.copy(metadata = PlayerUiState.MetadataDisplay(
+                title = card.title,
+                info = info,
+                overview = card.overview ?: "",
+                cast = "",
+                posterUrl = card.posterUrl,
+            ))
+        }
+    }
+
     private fun loadMetadata(tmdbId: Int, isSerial: Boolean, card: CardMeta) {
         viewModelScope.launch {
             val meta = tmdbRepository.getMetadata(tmdbId, isSerial) ?: return@launch
@@ -254,12 +282,12 @@ class PlayerViewModel @Inject constructor(
             val year = (meta.release_date ?: meta.first_air_date)?.take(4) ?: ""
             val rating = meta.vote_average?.let { "★ %.1f".format(it) } ?: ""
             val info = listOfNotNull(year.ifEmpty { null }, rating.ifEmpty { null }, card.quality).joinToString(" · ")
-            // Set metadata and show flag atomically so the observer sees both at once
+            // Enhance metadata with TMDB data and show splash overlay
             _uiState.update { s ->
                 s.copy(
                     metadata = PlayerUiState.MetadataDisplay(
                         title = title, info = info,
-                        overview = meta.overview ?: "",
+                        overview = meta.overview ?: s.metadata?.overview ?: "",
                         cast = "",
                         posterUrl = TmdbRepository.posterUrl(meta.poster_path) ?: card.posterUrl,
                     ),

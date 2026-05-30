@@ -16,38 +16,60 @@ object IntentParser {
         val url = intent.dataString ?: return null
         val extras = intent.extras
 
+        // Headers: Bundle or JSON string (from companion plugin)
         val headersBundle = extras?.getBundle("headers")
-        val headers = headersBundle?.keySet()
-            ?.associateWith { headersBundle.getString(it, "") ?: "" }
-            ?: emptyMap()
+        val headersJson = extras?.getString("headers_json")
+        val headers: Map<String, String> = when {
+            headersBundle != null -> headersBundle.keySet()
+                ?.associateWith { headersBundle.getString(it, "") ?: "" } ?: emptyMap()
+            headersJson != null -> try {
+                val obj = JsonParser.parseString(headersJson).asJsonObject
+                obj.entrySet().associate { it.key to it.value.asString }
+            } catch (e: Exception) { emptyMap() }
+            else -> emptyMap()
+        }
 
+        // Timeline: Bundle or flat extras (from companion plugin)
         val timelineBundle = extras?.getBundle("timeline")
+        val timelineTime: Double? = timelineBundle?.getDouble("time")
+            ?: extras?.getDouble("timeline_time", -1.0).takeIf { it != null && it > 0 }
+        val timelineDuration: Double? = timelineBundle?.getDouble("duration")
+            ?: extras?.getDouble("timeline_duration", -1.0).takeIf { it != null && it > 0 }
 
         val genres: List<String> = extras?.getStringArray("genres")?.toList() ?: emptyList()
 
-        // Parse episodes list (Lampa sends JSON string)
         val episodes = parseEpisodes(extras?.getString("episodes"))
         val episodeIndex = extras?.getInt("episode_index", 0) ?: 0
+
+        // tmdb_id can come as int or string from the intent scheme
+        val tmdbId: Int? = try {
+            extras?.getInt("tmdb_id", -1).takeIf { it != null && it > 0 }
+                ?: extras?.getString("tmdb_id")?.toIntOrNull()?.takeIf { it > 0 }
+        } catch (e: Exception) { null }
 
         val card = CardMeta(
             title = extras?.getString("title") ?: extractTitleFromUrl(url),
             originalTitle = extras?.getString("original_title"),
-            tmdbId = extras?.getInt("tmdb_id", -1).takeIf { it != null && it > 0 },
+            tmdbId = tmdbId,
             imdbId = extras?.getString("imdb_id"),
-            seasonNumber = extras?.getInt("season_number", -1).takeIf { it != null && it > 0 },
-            episodeNumber = extras?.getInt("episode_number", -1).takeIf { it != null && it > 0 },
+            seasonNumber = extras?.getInt("season_number", -1).takeIf { it != null && it > 0 }
+                ?: extras?.getString("season_number")?.toIntOrNull()?.takeIf { it > 0 },
+            episodeNumber = extras?.getInt("episode_number", -1).takeIf { it != null && it > 0 }
+                ?: extras?.getString("episode_number")?.toIntOrNull()?.takeIf { it > 0 },
             posterUrl = extras?.getString("poster_url"),
             backdropUrl = extras?.getString("backdrop_url"),
             overview = extras?.getString("overview"),
-            releaseYear = extras?.getInt("release_year", -1).takeIf { it != null && it > 0 },
+            releaseYear = extras?.getInt("release_year", -1).takeIf { it != null && it > 0 }
+                ?: extras?.getString("release_year")?.toIntOrNull()?.takeIf { it > 0 },
             genres = genres,
-            rating = extras?.getFloat("rating", -1f).takeIf { it != null && it > 0 },
+            rating = extras?.getFloat("rating", -1f).takeIf { it != null && it > 0 }
+                ?: extras?.getString("rating")?.toFloatOrNull()?.takeIf { it > 0 },
             ageRating = extras?.getString("age_rating"),
             quality = extras?.getString("quality"),
             translator = extras?.getString("translator"),
             headers = headers,
-            timelineTime = timelineBundle?.getDouble("time"),
-            timelineDuration = timelineBundle?.getDouble("duration"),
+            timelineTime = timelineTime,
+            timelineDuration = timelineDuration,
             episodes = episodes,
             currentEpisodeIndex = episodeIndex,
             epgTitle = extras?.getString("epg_title"),
