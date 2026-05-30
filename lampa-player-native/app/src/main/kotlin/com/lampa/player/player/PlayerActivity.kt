@@ -48,14 +48,13 @@ class PlayerActivity : AppCompatActivity() {
     // Seek preview state
     private var seekTargetMs = -1L
     private var seekDebounceJob: Job? = null
-    private var hideSeekPreviewJob: Job? = null
 
     // Turbo rewind
     private var turboJob: Job? = null
     private var turboSpeed = 1
 
-    // When true, OSD was opened by a seek key — ←/→ continue seeking.
-    // When false, OSD was opened by OK/↓ — ←/→ navigate OSD buttons.
+    // When true: OSD opened by seek → ←/→ continue seeking.
+    // When false: OSD opened by OK/↓ → ←/→ navigate OSD buttons.
     private var osdFromSeek = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -73,56 +72,25 @@ class PlayerActivity : AppCompatActivity() {
         binding.playerView.player = vm.player
         binding.playerView.useController = false
 
-        setupInfoPanel()
+        setupLists()
         setupOsdClicks()
         observeState()
     }
 
-    // ─── Info overlay setup ────────────────────────────────────────
+    // ─── List setup ────────────────────────────────────────────────
 
-    private fun setupInfoPanel() {
+    private fun setupLists() {
         binding.rvInfoList.layoutManager = LinearLayoutManager(this)
         binding.rvInfoList.adapter = episodeAdapter
 
-        binding.tabEpisodes.setOnClickListener { vm.setInfoPanelTab(InfoPanelTab.EPISODES) }
-        binding.tabAudio.setOnClickListener { vm.setInfoPanelTab(InfoPanelTab.AUDIO) }
-        binding.tabSubtitles.setOnClickListener { vm.setInfoPanelTab(InfoPanelTab.SUBTITLES) }
-        binding.tabEpg.setOnClickListener { vm.setInfoPanelTab(InfoPanelTab.EPG) }
+        binding.rvAudioList.layoutManager = LinearLayoutManager(this)
+        binding.rvAudioList.adapter = audioAdapter
+
+        binding.rvSubtitleList.layoutManager = LinearLayoutManager(this)
+        binding.rvSubtitleList.adapter = subtitleAdapter
     }
 
-    private fun applyInfoOverlay(s: PlayerUiState) {
-        // Video format section
-        binding.tvOverlayVideoInfo.text = s.videoInfo
-        binding.tvOverlayVideoInfo.isVisible = s.videoInfo.isNotEmpty()
-
-        // TMDB section inside overlay
-        val meta = s.metadata
-        binding.overlayMetaSection.isVisible = meta != null
-        if (meta != null) {
-            binding.tvOverlayMetaTitle.text = meta.title
-            binding.tvOverlayMetaInfo.text = meta.info
-            binding.tvOverlayMetaOverview.text = meta.overview
-            if (!meta.posterUrl.isNullOrEmpty()) {
-                Glide.with(this).load(meta.posterUrl)
-                    .transition(DrawableTransitionOptions.withCrossFade())
-                    .into(binding.ivOverlayPoster)
-            }
-        }
-
-        // Tab list section (episodes / audio / subs / EPG)
-        applyPanelTab(s)
-
-        // EPG section
-        val epgText = buildString {
-            s.card?.epgTitle?.let { append(it) }
-            s.card?.epgStart?.let { append("\n$it") }
-            s.card?.epgEnd?.let { append(" — $it") }
-        }
-        binding.tvOverlayEpg.text = epgText
-        binding.tvOverlayEpg.isVisible = epgText.isNotBlank()
-    }
-
-    // ─── OSD button clicks (when focused) ──────────────────────────
+    // ─── OSD button clicks ─────────────────────────────────────────
 
     private fun setupOsdClicks() {
         binding.btnPlayPause.setOnClickListener { vm.onKeyOk(); vm.showOsd() }
@@ -163,16 +131,19 @@ class PlayerActivity : AppCompatActivity() {
                 binding.tvEpisodeBadge.isVisible = s.episodes.size > 1
                 binding.tvEpisodeBadge.text = "${s.currentEpisodeIndex + 1}/${s.episodes.size}"
 
-                // OSD visibility
+                // OSD
                 val osdWasHidden = !binding.osdContainer.isVisible
                 binding.osdContainer.isVisible = s.osdVisible
                 if (s.osdVisible && osdWasHidden && !osdFromSeek) {
-                    // OSD opened by OK/↓ — focus play/pause so ←/→ navigates buttons
                     binding.btnPlayPause.requestFocus()
                 }
-                // Info overlay visibility
+
+                // Overlays
                 binding.infoOverlay.isVisible = s.infoOverlayVisible
                 if (s.infoOverlayVisible) applyInfoOverlay(s)
+
+                binding.tracksOverlay.isVisible = s.tracksOverlayVisible
+                if (s.tracksOverlayVisible) applyTracksOverlay(s)
 
                 binding.progressBuffering.isVisible = s.isLoading && !s.isPlaying && !s.hasError
                 binding.errorContainer.isVisible = s.hasError
@@ -186,7 +157,7 @@ class PlayerActivity : AppCompatActivity() {
                 if (showNext) binding.tvAutoNextCountdown.text =
                     getString(R.string.autonext_countdown, s.autoNextCountdown)
 
-                // TMDB splash overlay (auto-show on start, fades in/out)
+                // TMDB splash overlay
                 s.metadata?.let { meta ->
                     if (s.showMetadata && !binding.metadataOverlay.isVisible) {
                         binding.metadataOverlay.alpha = 0f
@@ -222,13 +193,55 @@ class PlayerActivity : AppCompatActivity() {
                     binding.progressBar.progress = ((pos.toFloat() / dur) * 1000).toInt()
                     binding.tvCurrentTime.text = formatTime(pos)
                     binding.tvDuration.text = formatTime(dur)
-                    // Update seek indicator position
                     if (seekTargetMs >= 0) {
                         binding.seekIndicator.progress = ((seekTargetMs.toFloat() / dur) * 1000).toInt()
                     }
                 }
             }
         }
+    }
+
+    private fun applyInfoOverlay(s: PlayerUiState) {
+        val meta = s.metadata
+        binding.overlayMetaSection.isVisible = meta != null || s.title.isNotEmpty()
+        binding.tvOverlayMetaTitle.text = meta?.title ?: s.title
+        binding.tvOverlayMetaInfo.text = meta?.info ?: ""
+        binding.tvOverlayMetaOverview.text = meta?.overview ?: ""
+        if (!meta?.posterUrl.isNullOrEmpty()) {
+            Glide.with(this).load(meta!!.posterUrl)
+                .transition(DrawableTransitionOptions.withCrossFade())
+                .into(binding.ivOverlayPoster)
+        }
+
+        // EPG
+        val epgText = buildString {
+            s.card?.epgTitle?.let { append(it) }
+            s.card?.epgStart?.let { if (isNotEmpty()) append("\n"); append(it) }
+            s.card?.epgEnd?.let { append(" — $it") }
+        }
+        binding.tvOverlayEpg.text = epgText
+        binding.tvOverlayEpg.isVisible = epgText.isNotBlank()
+
+        // Video format
+        binding.tvOverlayVideoInfo.text = s.videoInfo
+        binding.tvOverlayVideoInfo.isVisible = s.videoInfo.isNotEmpty()
+
+        // Episodes or EPG content on the right
+        val hasEpisodes = s.episodes.size > 1
+        binding.rvInfoList.isVisible = hasEpisodes
+        binding.tvEpgContent.isVisible = !hasEpisodes && s.card?.epgTitle != null
+
+        if (hasEpisodes) {
+            episodeAdapter.setItems(s.episodes, s.currentEpisodeIndex)
+            binding.rvInfoList.scrollToPosition(s.currentEpisodeIndex)
+        } else {
+            binding.tvEpgContent.text = epgText
+        }
+    }
+
+    private fun applyTracksOverlay(s: PlayerUiState) {
+        audioAdapter.setItems(s.audioTracks, s.selectedAudioIndex)
+        subtitleAdapter.setItems(s.subtitleTracks, s.selectedSubtitleIndex)
     }
 
     private fun hideMetadataOverlay() {
@@ -238,53 +251,22 @@ class PlayerActivity : AppCompatActivity() {
         }.start()
     }
 
-    private fun applyPanelTab(s: PlayerUiState) {
-        val accent = getColor(R.color.accent_primary)
-        val secondary = getColor(R.color.text_secondary)
-        listOf(
-            binding.tabEpisodes to InfoPanelTab.EPISODES,
-            binding.tabAudio to InfoPanelTab.AUDIO,
-            binding.tabSubtitles to InfoPanelTab.SUBTITLES,
-            binding.tabEpg to InfoPanelTab.EPG,
-        ).forEach { (tv, tab) -> tv.setTextColor(if (s.infoPanelTab == tab) accent else secondary) }
-
-        binding.tabEpisodes.isVisible = s.episodes.isNotEmpty()
-        binding.tabEpg.isVisible = s.card?.epgTitle != null
-
-        when (s.infoPanelTab) {
-            InfoPanelTab.EPISODES -> {
-                binding.rvInfoList.adapter = episodeAdapter
-                episodeAdapter.setItems(s.episodes, s.currentEpisodeIndex)
-                binding.rvInfoList.scrollToPosition(s.currentEpisodeIndex)
-            }
-            InfoPanelTab.AUDIO -> {
-                binding.rvInfoList.adapter = audioAdapter
-                audioAdapter.setItems(s.audioTracks, s.selectedAudioIndex)
-            }
-            InfoPanelTab.SUBTITLES -> {
-                binding.rvInfoList.adapter = subtitleAdapter
-                subtitleAdapter.setItems(s.subtitleTracks, s.selectedSubtitleIndex)
-            }
-            InfoPanelTab.EPG -> {
-                binding.tvEpgContent.text = buildString {
-                    append(s.card?.epgTitle ?: "")
-                    s.card?.epgStart?.let { append("\n$it") }
-                    s.card?.epgEnd?.let { append(" — $it") }
-                }
-            }
-        }
-        binding.rvInfoList.isVisible = s.infoPanelTab != InfoPanelTab.EPG
-        binding.tvEpgContent.isVisible = s.infoPanelTab == InfoPanelTab.EPG
-    }
-
     // ─── Key handling ──────────────────────────────────────────────
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         val s = vm.uiState.value
-        val panelVisible = s.infoPanelVisible
         val osdVisible = s.osdVisible
 
-        // ── Info overlay open: BACK/UP closes it ──────────────────
+        // ── Tracks overlay (↑): BACK закрывает ────────────────────
+        if (s.tracksOverlayVisible) {
+            return when (keyCode) {
+                KeyEvent.KEYCODE_BACK,
+                KeyEvent.KEYCODE_DPAD_UP -> { vm.hideTracksOverlay(); true }
+                else -> super.onKeyDown(keyCode, event)
+            }
+        }
+
+        // ── Info overlay (↓↓): BACK/↑ закрывает ──────────────────
         if (s.infoOverlayVisible) {
             return when (keyCode) {
                 KeyEvent.KEYCODE_BACK,
@@ -293,16 +275,7 @@ class PlayerActivity : AppCompatActivity() {
             }
         }
 
-        // ── Side panel open (legacy fallback): BACK/LEFT closes ───
-        if (panelVisible) {
-            return when (keyCode) {
-                KeyEvent.KEYCODE_BACK,
-                KeyEvent.KEYCODE_DPAD_LEFT -> { vm.hideInfoPanel(); true }
-                else -> super.onKeyDown(keyCode, event)
-            }
-        }
-
-        // ── Media keys — always handle ────────────────────────────
+        // ── Медиа-кнопки — всегда обрабатываем ───────────────────
         when (keyCode) {
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
             KeyEvent.KEYCODE_MEDIA_PLAY,
@@ -313,17 +286,21 @@ class PlayerActivity : AppCompatActivity() {
             KeyEvent.KEYCODE_MEDIA_PREVIOUS -> { vm.onPrevEpisode(); return true }
         }
 
-        // ── OSD visible: focus system handles buttons; seek only if in seek mode ──
+        // ── OSD visible ───────────────────────────────────────────
         if (osdVisible) {
             return when (keyCode) {
                 KeyEvent.KEYCODE_BACK -> { vm.onKeyBack(true, false); true }
-                // ↓ while OSD visible → open info overlay (double-down pattern)
+                // ↑ → попап аудио/субтитров
+                KeyEvent.KEYCODE_DPAD_UP -> {
+                    osdFromSeek = false; vm.toggleTracksOverlay(); true
+                }
+                // ↓ → инфо-оверлей
                 KeyEvent.KEYCODE_DPAD_DOWN -> {
                     vm.toggleInfoOverlay(); true
                 }
                 KeyEvent.KEYCODE_INFO,
                 KeyEvent.KEYCODE_MENU -> { vm.toggleInfoOverlay(); true }
-                // ← / → — seek if OSD was opened by a seek key; navigate buttons otherwise
+                // ← / → — перемотка если OSD открылся от перемотки; иначе навигация
                 KeyEvent.KEYCODE_DPAD_LEFT -> {
                     if (osdFromSeek) { doSeek(false); vm.showOsd(); true }
                     else super.onKeyDown(keyCode, event)
@@ -332,42 +309,35 @@ class PlayerActivity : AppCompatActivity() {
                     if (osdFromSeek) { doSeek(true); vm.showOsd(); true }
                     else super.onKeyDown(keyCode, event)
                 }
-                // OK/CENTER while in seek mode = commit seek and stop seeking
+                // OK в режиме перемотки — переходим к навигации по кнопкам
                 KeyEvent.KEYCODE_DPAD_CENTER,
                 KeyEvent.KEYCODE_ENTER -> {
                     if (osdFromSeek) {
-                        osdFromSeek = false
-                        binding.btnPlayPause.requestFocus()
-                        true
+                        osdFromSeek = false; binding.btnPlayPause.requestFocus(); true
                     } else super.onKeyDown(keyCode, event)
                 }
                 else -> super.onKeyDown(keyCode, event)
             }
         }
 
-        // ── OSD hidden: D-Pad controls playback ──────────────────
+        // ── OSD скрыт ─────────────────────────────────────────────
         return when (keyCode) {
             KeyEvent.KEYCODE_DPAD_LEFT -> {
                 doSeek(false, repeatCount = event.repeatCount)
-                osdFromSeek = true; vm.showOsd()
-                true
+                osdFromSeek = true; vm.showOsd(); true
             }
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
                 doSeek(true, repeatCount = event.repeatCount)
-                osdFromSeek = true; vm.showOsd()
-                true
+                osdFromSeek = true; vm.showOsd(); true
             }
             KeyEvent.KEYCODE_PAGE_UP,
             KeyEvent.KEYCODE_CHANNEL_UP -> { vm.onKeyPageUp(); vm.showOsd(); true }
             KeyEvent.KEYCODE_PAGE_DOWN,
             KeyEvent.KEYCODE_CHANNEL_DOWN -> { vm.onKeyPageDown(); vm.showOsd(); true }
-            // OK/↓/↑ when OSD hidden → show OSD with button focus
             KeyEvent.KEYCODE_DPAD_DOWN,
             KeyEvent.KEYCODE_DPAD_UP,
             KeyEvent.KEYCODE_DPAD_CENTER,
-            KeyEvent.KEYCODE_ENTER -> {
-                osdFromSeek = false; vm.showOsd(); true
-            }
+            KeyEvent.KEYCODE_ENTER -> { osdFromSeek = false; vm.showOsd(); true }
             KeyEvent.KEYCODE_INFO,
             KeyEvent.KEYCODE_MENU -> { vm.toggleInfoOverlay(); true }
             KeyEvent.KEYCODE_BACK -> { vm.onKeyBack(false, false); true }
@@ -386,26 +356,21 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun doSeek(forward: Boolean, fast: Boolean = false, repeatCount: Int = 0) {
         val dur = vm.player.duration.takeIf { it > 0 } ?: return
-
         val stepMs = when {
             fast || repeatCount > 8 -> 30_000L
             repeatCount > 3 -> 15_000L
             else -> 10_000L
         }
-
-        // Initialise from current position if first in sequence
         if (seekTargetMs < 0) seekTargetMs = vm.player.currentPosition
         seekTargetMs = if (forward) (seekTargetMs + stepMs).coerceAtMost(dur)
                        else (seekTargetMs - stepMs).coerceAtLeast(0)
 
-        // Show preview
         binding.seekPreviewContainer.isVisible = true
         binding.tvSeekTime.text = formatTime(seekTargetMs)
         binding.tvSeekDelta.text = if (forward) "+${stepMs / 1000}с →" else "← -${stepMs / 1000}с"
         binding.seekIndicator.progress = ((seekTargetMs.toFloat() / dur) * 1000).toInt()
         binding.seekIndicator.isVisible = true
 
-        // Debounce: commit seek after 600ms inactivity
         seekDebounceJob?.cancel()
         seekDebounceJob = lifecycleScope.launch {
             delay(600)

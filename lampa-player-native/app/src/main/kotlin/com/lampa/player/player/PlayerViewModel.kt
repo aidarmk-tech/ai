@@ -48,6 +48,7 @@ data class PlayerUiState(
     // Info panel
     val infoPanelVisible: Boolean = false,
     val infoOverlayVisible: Boolean = false,
+    val tracksOverlayVisible: Boolean = false,
     val infoPanelTab: InfoPanelTab = InfoPanelTab.EPISODES,
     val episodes: List<EpisodeItem> = emptyList(),
     val currentEpisodeIndex: Int = 0,
@@ -227,6 +228,15 @@ class PlayerViewModel @Inject constructor(
 
     fun hideInfoOverlay() = _uiState.update { it.copy(infoOverlayVisible = false) }
 
+    fun toggleTracksOverlay() {
+        val visible = !_uiState.value.tracksOverlayVisible
+        _uiState.update { it.copy(tracksOverlayVisible = visible, infoOverlayVisible = false) }
+        if (visible) { refreshTracks(); osdHideJob?.cancel() }
+        else scheduleOsdHide()
+    }
+
+    fun hideTracksOverlay() = _uiState.update { it.copy(tracksOverlayVisible = false) }
+
     fun setInfoPanelTab(tab: InfoPanelTab) = _uiState.update { it.copy(infoPanelTab = tab) }
 
     private fun refreshTracks() {
@@ -240,7 +250,7 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             saveCurrentPosition()
             currentUrl = episode.url
-            _uiState.update { it.copy(currentEpisodeIndex = episode.index, infoPanelVisible = false) }
+            _uiState.update { it.copy(currentEpisodeIndex = episode.index, infoOverlayVisible = false) }
             player.stop()
             loadUrl(episode.url, currentCard!!)
         }
@@ -306,7 +316,7 @@ class PlayerViewModel @Inject constructor(
         val cur = currentMs / 1000.0; val dur = durationMs / 1000.0
         val showSkip = settings.skipIntro && introSkipManager.shouldShowSkipButton(cur, _uiState.value.introEnd.takeIf { it > 0 })
         _uiState.update { it.copy(showSkipIntro = showSkip) }
-        if (settings.autonext && !_uiState.value.infoPanelVisible) {
+        if (settings.autonext && !_uiState.value.infoOverlayVisible) {
             autoNextManager.checkAndStart(dur, cur, settings.autonextDelay, viewModelScope,
                 onTick = { t -> _uiState.update { it.copy(autoNextCountdown = t) } },
                 onNext = { viewModelScope.launch { navigateNext() } })
@@ -358,7 +368,7 @@ class PlayerViewModel @Inject constructor(
 
     fun onKeyBack(osdVisible: Boolean, panelVisible: Boolean) {
         when {
-            panelVisible -> hideInfoPanel()
+            _uiState.value.infoOverlayVisible -> hideInfoOverlay()
             osdVisible -> _uiState.update { it.copy(osdVisible = false) }
             else -> viewModelScope.launch { _showExitDialog.emit(Unit) }
         }
@@ -373,7 +383,7 @@ class PlayerViewModel @Inject constructor(
         osdHideJob?.cancel()
         osdHideJob = viewModelScope.launch {
             delay(4000)
-            if (player.isPlaying && !_uiState.value.infoPanelVisible)
+            if (player.isPlaying && !_uiState.value.infoOverlayVisible && !_uiState.value.tracksOverlayVisible)
                 _uiState.update { it.copy(osdVisible = false) }
         }
     }
@@ -410,7 +420,7 @@ class PlayerViewModel @Inject constructor(
             }
             override fun onTracksChanged(tracks: Tracks) {
                 _uiState.update { it.copy(currentTracks = tracks) }
-                if (_uiState.value.infoPanelVisible) refreshTracks()
+                if (_uiState.value.tracksOverlayVisible) refreshTracks()
                 updateVideoInfo()
             }
 

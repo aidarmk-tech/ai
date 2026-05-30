@@ -38,6 +38,7 @@
             android:launchMode="singleTask"
             android:screenOrientation="landscape"
             android:theme="@style/Theme.LampaPlayer.Player">
+            <!-- Standard video intent from any app -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -54,6 +55,13 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:scheme="udp" />
+            </intent-filter>
+            <!-- Custom lmnp:// scheme from companion Lampa plugin — carries full card JSON -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="lmnp" android:host="play" />
             </intent-filter>
         </activity>
 
