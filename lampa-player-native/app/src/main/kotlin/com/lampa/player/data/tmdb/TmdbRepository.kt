@@ -34,7 +34,7 @@ class TmdbRepository @Inject constructor(
 
     companion object {
         // Set your TMDB API key here or via BuildConfig
-        const val API_KEY = ""
+        const val API_KEY = "a0ce3eb86e4197432bac852601427019"
         const val IMAGE_BASE = "https://image.tmdb.org/t/p/"
         fun posterUrl(path: String?) = path?.let { "${IMAGE_BASE}w500$it" }
         fun backdropUrl(path: String?) = path?.let { "${IMAGE_BASE}w1280$it" }
