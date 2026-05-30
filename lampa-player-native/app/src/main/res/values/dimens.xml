@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Spacing -->
+    <dimen name="space_xs">8dp</dimen>
+    <dimen name="space_sm">16dp</dimen>
+    <dimen name="space_md">24dp</dimen>
+    <dimen name="space_lg">48dp</dimen>
+    <dimen name="safe_margin">48dp</dimen>
+
+    <!-- Border radius -->
+    <dimen name="radius_card">12dp</dimen>
+    <dimen name="radius_button">8dp</dimen>
+    <dimen name="radius_osd">16dp</dimen>
+    <dimen name="radius_full">999dp</dimen>
+
+    <!-- Focus -->
+    <dimen name="focus_border">3dp</dimen>
+
+    <!-- Player -->
+    <dimen name="progress_bar_height">6dp</dimen>
+    <dimen name="scrubber_size">16dp</dimen>
+    <dimen name="controls_play_size">64dp</dimen>
+    <dimen name="top_bar_height">72dp</dimen>
+
+    <!-- IPTV -->
+    <dimen name="group_panel_width">320dp</dimen>
+    <dimen name="preview_panel_width">420dp</dimen>
+    <dimen name="channel_logo_size">64dp</dimen>
+
+    <!-- EPG -->
+    <dimen name="epg_time_ruler_height">48dp</dimen>
+    <dimen name="epg_channel_column_width">240dp</dimen>
+    <dimen name="epg_info_panel_height">96dp</dimen>
+    <dimen name="epg_channel_row_height">72dp</dimen>
+
+    <!-- Poster -->
+    <dimen name="poster_width">240dp</dimen>
+    <dimen name="poster_height">360dp</dimen>
+</resources>

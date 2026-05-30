@@ -1,0 +1,548 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg_primary"
+    android:keepScreenOn="true">
+
+    <!-- Video -->
+    <androidx.media3.ui.PlayerView
+        android:id="@+id/player_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:focusable="false" />
+
+    <!-- Buffering -->
+    <ProgressBar
+        android:id="@+id/progress_buffering"
+        android:layout_width="64dp"
+        android:layout_height="64dp"
+        android:layout_gravity="center"
+        android:indeterminateTint="@color/accent_primary"
+        android:visibility="gone" />
+
+    <!-- ═══ OSD ═══ -->
+    <FrameLayout
+        android:id="@+id/osd_container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent">
+
+        <!-- TOP bar -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="160dp"
+            android:layout_gravity="top"
+            android:background="@drawable/bg_osd_gradient_top"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingHorizontal="@dimen/safe_margin"
+            android:paddingTop="@dimen/space_md">
+
+            <TextView
+                android:id="@+id/tv_title"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textColor="@color/text_primary"
+                android:textSize="24sp"
+                android:fontFamily="sans-serif-medium"
+                android:maxLines="1"
+                android:ellipsize="end" />
+
+            <TextView
+                android:id="@+id/tv_quality"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="@dimen/space_xs"
+                android:background="@drawable/bg_pill"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp"
+                android:paddingHorizontal="12dp"
+                android:paddingVertical="6dp"
+                android:focusable="true"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/tv_translator"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="@dimen/space_xs"
+                android:background="@drawable/bg_pill"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp"
+                android:paddingHorizontal="12dp"
+                android:paddingVertical="6dp"
+                android:focusable="true"
+                android:visibility="gone" />
+
+            <!-- ☰ Info/Episodes button (always visible) -->
+            <FrameLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="@dimen/space_sm">
+
+                <ImageButton
+                    android:id="@+id/btn_info"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:src="@android:drawable/ic_menu_agenda"
+                    android:background="@drawable/bg_button"
+                    android:contentDescription="Серии / Дорожки"
+                    android:focusable="true" />
+
+                <TextView
+                    android:id="@+id/tv_episode_badge"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="top|end"
+                    android:background="@drawable/bg_button_accent"
+                    android:textColor="@color/text_primary"
+                    android:textSize="10sp"
+                    android:paddingHorizontal="4dp"
+                    android:visibility="gone" />
+            </FrameLayout>
+
+            <ImageButton
+                android:id="@+id/btn_settings"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:layout_marginStart="@dimen/space_xs"
+                android:src="@android:drawable/ic_menu_preferences"
+                android:background="@drawable/bg_button"
+                android:contentDescription="Настройки"
+                android:focusable="true" />
+        </LinearLayout>
+
+        <!-- BOTTOM controls -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="220dp"
+            android:layout_gravity="bottom"
+            android:background="@drawable/bg_osd_gradient_bottom"
+            android:orientation="vertical"
+            android:paddingHorizontal="@dimen/safe_margin"
+            android:paddingBottom="@dimen/space_md"
+            android:gravity="bottom">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="6dp">
+
+                <TextView android:id="@+id/tv_current_time"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:textColor="@color/text_primary" android:textSize="18sp" android:text="0:00" />
+                <View android:layout_width="0dp" android:layout_height="0dp" android:layout_weight="1" />
+                <TextView android:id="@+id/tv_duration"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:textColor="@color/text_secondary" android:textSize="18sp" android:text="0:00" />
+            </LinearLayout>
+
+            <!-- Progress bar + seek indicator stacked -->
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="@dimen/space_sm">
+
+                <ProgressBar android:id="@+id/progress_bar"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="match_parent" android:layout_height="6dp"
+                    android:layout_gravity="center_vertical"
+                    android:max="1000" android:progressDrawable="@drawable/bg_progress_track" />
+
+                <!-- Seek target indicator (white, semi-transparent) -->
+                <ProgressBar android:id="@+id/seek_indicator"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="match_parent" android:layout_height="6dp"
+                    android:layout_gravity="center_vertical"
+                    android:max="1000"
+                    android:progressTint="#88FFFFFF"
+                    android:progressBackgroundTint="#00000000"
+                    android:visibility="gone" />
+            </FrameLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center">
+
+                <ImageButton android:id="@+id/btn_mark_intro"
+                    android:layout_width="40dp" android:layout_height="40dp"
+                    android:src="@android:drawable/ic_menu_edit"
+                    android:background="@drawable/bg_button"
+                    android:contentDescription="Отметить интро"
+                    android:focusable="true" android:layout_marginHorizontal="6dp" />
+
+                <ImageButton android:id="@+id/btn_prev"
+                    android:layout_width="48dp" android:layout_height="48dp"
+                    android:src="@android:drawable/ic_media_previous"
+                    android:background="@drawable/bg_button"
+                    android:contentDescription="Пред. серия"
+                    android:focusable="true" android:layout_marginHorizontal="6dp" />
+
+                <ImageButton android:id="@+id/btn_rewind"
+                    android:layout_width="48dp" android:layout_height="48dp"
+                    android:src="@android:drawable/ic_media_rew"
+                    android:background="@drawable/bg_button"
+                    android:contentDescription="-10с"
+                    android:focusable="true" android:layout_marginHorizontal="6dp" />
+
+                <ImageButton android:id="@+id/btn_play_pause"
+                    android:layout_width="64dp" android:layout_height="64dp"
+                    android:src="@android:drawable/ic_media_play"
+                    android:background="@drawable/bg_button_accent"
+                    android:contentDescription="Пауза"
+                    android:focusable="true" android:layout_marginHorizontal="6dp" />
+
+                <ImageButton android:id="@+id/btn_forward"
+                    android:layout_width="48dp" android:layout_height="48dp"
+                    android:src="@android:drawable/ic_media_ff"
+                    android:background="@drawable/bg_button"
+                    android:contentDescription="+10с"
+                    android:focusable="true" android:layout_marginHorizontal="6dp" />
+
+                <ImageButton android:id="@+id/btn_next"
+                    android:layout_width="48dp" android:layout_height="48dp"
+                    android:src="@android:drawable/ic_media_next"
+                    android:background="@drawable/bg_button"
+                    android:contentDescription="След. серия"
+                    android:focusable="true" android:layout_marginHorizontal="6dp" />
+            </LinearLayout>
+        </LinearLayout>
+    </FrameLayout>
+
+    <!-- ═══ Seek preview overlay (center) ═══ -->
+    <LinearLayout
+        android:id="@+id/seek_preview_container"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:background="@drawable/bg_button"
+        android:paddingHorizontal="32dp"
+        android:paddingVertical="20dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/tv_seek_delta"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="@color/text_secondary"
+            android:textSize="18sp" />
+
+        <TextView
+            android:id="@+id/tv_seek_time"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="@color/text_primary"
+            android:textSize="48sp"
+            android:fontFamily="sans-serif-medium" />
+    </LinearLayout>
+
+    <!-- Skip Intro -->
+    <Button android:id="@+id/btn_skip_intro"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_marginBottom="100dp" android:layout_marginEnd="@dimen/safe_margin"
+        android:text="@string/skip_intro"
+        android:background="@drawable/bg_button_accent"
+        android:textColor="@color/text_primary" android:textSize="18sp"
+        android:paddingHorizontal="24dp" android:paddingVertical="12dp"
+        android:focusable="true" android:visibility="gone" />
+
+    <!-- Auto-next overlay -->
+    <LinearLayout android:id="@+id/auto_next_overlay"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_marginBottom="56dp" android:layout_marginEnd="@dimen/safe_margin"
+        android:orientation="vertical"
+        android:background="@drawable/bg_button" android:padding="@dimen/space_md"
+        android:visibility="gone">
+        <TextView android:id="@+id/tv_auto_next_countdown"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:textColor="@color/text_primary" android:textSize="18sp" />
+        <Button android:id="@+id/btn_cancel_auto_next"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_xs"
+            android:text="@string/cancel_autonext"
+            android:background="@drawable/bg_button"
+            android:textColor="@color/text_primary" android:focusable="true" />
+    </LinearLayout>
+
+    <!-- Error overlay -->
+    <LinearLayout android:id="@+id/error_container"
+        android:layout_width="match_parent" android:layout_height="match_parent"
+        android:orientation="vertical" android:gravity="center"
+        android:background="@color/bg_overlay" android:visibility="gone">
+        <TextView android:id="@+id/tv_error_message"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:textColor="@color/color_error" android:textSize="22sp"
+            android:gravity="center" android:paddingHorizontal="@dimen/space_lg"
+            android:layout_marginBottom="@dimen/space_md" />
+        <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="horizontal">
+            <Button android:id="@+id/btn_retry"
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="@string/action_retry" android:background="@drawable/bg_button_accent"
+                android:textColor="@color/text_primary" android:textSize="18sp"
+                android:paddingHorizontal="24dp" android:paddingVertical="12dp"
+                android:focusable="true" android:layout_marginEnd="@dimen/space_sm" />
+            <Button android:id="@+id/btn_exit"
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="@string/action_back" android:background="@drawable/bg_button"
+                android:textColor="@color/text_primary" android:textSize="18sp"
+                android:paddingHorizontal="24dp" android:paddingVertical="12dp"
+                android:focusable="true" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Diagnostics -->
+    <TextView android:id="@+id/diag_text"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:layout_gravity="top|start" android:layout_margin="@dimen/safe_margin"
+        android:background="@drawable/bg_diag" android:fontFamily="monospace"
+        android:textColor="@color/text_primary" android:textSize="14sp"
+        android:padding="@dimen/space_xs" android:visibility="gone" />
+
+    <!-- ═══ INFO OVERLAY (double-↓): инфо о контенте + серии ═══ -->
+    <LinearLayout
+        android:id="@+id/info_overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="horizontal"
+        android:background="#E5000000"
+        android:visibility="gone">
+
+        <!-- Left 45%: постер + описание + EPG + формат -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="0.45"
+            android:orientation="vertical"
+            android:background="#FF111118"
+            android:padding="@dimen/safe_margin">
+
+            <!-- Постер + мета текст -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:orientation="horizontal"
+                android:gravity="top">
+
+                <ImageView android:id="@+id/iv_overlay_poster"
+                    android:layout_width="@dimen/poster_width"
+                    android:layout_height="@dimen/poster_height"
+                    android:scaleType="centerCrop"
+                    android:background="@color/bg_surface"
+                    android:layout_marginEnd="@dimen/space_md" />
+
+                <LinearLayout
+                    android:id="@+id/overlay_meta_section"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView android:id="@+id/tv_overlay_meta_title"
+                        android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:textColor="@color/text_primary" android:textSize="24sp"
+                        android:fontFamily="sans-serif-medium"
+                        android:layout_marginBottom="@dimen/space_xs" />
+
+                    <TextView android:id="@+id/tv_overlay_meta_info"
+                        android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:textColor="@color/accent_primary" android:textSize="15sp"
+                        android:layout_marginBottom="@dimen/space_sm" />
+
+                    <TextView android:id="@+id/tv_overlay_meta_overview"
+                        android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:textColor="@color/text_secondary" android:textSize="15sp"
+                        android:maxLines="7" android:ellipsize="end" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- EPG -->
+            <TextView android:id="@+id/tv_overlay_epg"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_sm"
+                android:textColor="@color/text_primary" android:textSize="15sp"
+                android:visibility="gone" />
+
+            <!-- Формат видео -->
+            <TextView android:id="@+id/tv_overlay_video_info"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_sm"
+                android:background="@drawable/bg_diag"
+                android:textColor="@color/text_secondary"
+                android:fontFamily="monospace" android:textSize="12sp"
+                android:padding="@dimen/space_xs"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <!-- Right 55%: список серий (только если есть) -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="0.55"
+            android:orientation="vertical"
+            android:background="@color/bg_elevated">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:text="@string/tab_episodes"
+                android:gravity="center_vertical"
+                android:paddingHorizontal="@dimen/space_md"
+                android:textColor="@color/accent_primary"
+                android:textSize="15sp"
+                android:fontFamily="sans-serif-medium"
+                android:background="@color/bg_surface" />
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/rv_info_list"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:padding="@dimen/space_xs"
+                android:focusable="true"
+                android:descendantFocusability="afterDescendants" />
+
+            <!-- EPG content (только для IPTV когда нет серий) -->
+            <TextView
+                android:id="@+id/tv_epg_content"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:padding="@dimen/space_md"
+                android:textColor="@color/text_primary"
+                android:textSize="17sp"
+                android:visibility="gone" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- ═══ TRACKS OVERLAY (↑): аудио + субтитры ═══ -->
+    <LinearLayout
+        android:id="@+id/tracks_overlay"
+        android:layout_width="600dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="end"
+        android:orientation="horizontal"
+        android:background="@color/bg_elevated"
+        android:visibility="gone">
+
+        <!-- Аудио дорожки -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:text="@string/tab_audio"
+                android:gravity="center_vertical"
+                android:paddingHorizontal="@dimen/space_md"
+                android:textColor="@color/accent_primary"
+                android:textSize="15sp"
+                android:fontFamily="sans-serif-medium"
+                android:background="@color/bg_surface" />
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/rv_audio_list"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:padding="@dimen/space_xs"
+                android:focusable="true"
+                android:descendantFocusability="afterDescendants" />
+        </LinearLayout>
+
+        <!-- Субтитры -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:background="@color/bg_elevated">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:text="@string/tab_subtitles"
+                android:gravity="center_vertical"
+                android:paddingHorizontal="@dimen/space_md"
+                android:textColor="@color/accent_primary"
+                android:textSize="15sp"
+                android:fontFamily="sans-serif-medium"
+                android:background="@color/bg_surface" />
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/rv_subtitle_list"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:padding="@dimen/space_xs"
+                android:focusable="true"
+                android:descendantFocusability="afterDescendants" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- ═══ TMDB Metadata overlay ═══ -->
+    <LinearLayout
+        android:id="@+id/metadata_overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="horizontal"
+        android:background="@color/bg_overlay"
+        android:visibility="gone"
+        android:clickable="true"
+        android:focusable="true">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="0.58"
+            android:background="@drawable/bg_metadata_overlay"
+            android:orientation="horizontal"
+            android:padding="@dimen/safe_margin"
+            android:gravity="center_vertical">
+
+            <ImageView android:id="@+id/iv_meta_poster"
+                android:layout_width="@dimen/poster_width"
+                android:layout_height="@dimen/poster_height"
+                android:scaleType="centerCrop"
+                android:background="@color/bg_elevated"
+                android:layout_marginEnd="@dimen/space_md" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView android:id="@+id/tv_meta_title"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:textColor="@color/text_primary" android:textSize="32sp"
+                    android:fontFamily="sans-serif-medium" android:layout_marginBottom="@dimen/space_xs" />
+
+                <TextView android:id="@+id/tv_meta_info"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:textColor="@color/accent_primary" android:textSize="18sp"
+                    android:layout_marginBottom="@dimen/space_sm" />
+
+                <TextView android:id="@+id/tv_meta_overview"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:textColor="@color/text_secondary" android:textSize="18sp"
+                    android:maxLines="5" android:ellipsize="end" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <View android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="0.42" />
+    </LinearLayout>
+
+</FrameLayout>

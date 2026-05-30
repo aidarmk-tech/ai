@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape>
+            <solid android:color="#0A0A0F" />
+        </shape>
+    </item>
+    <item android:gravity="center">
+        <shape>
+            <solid android:color="#00000000" />
+        </shape>
+    </item>
+    <!-- Play icon centered -->
+    <item android:gravity="center" android:width="80dp" android:height="80dp">
+        <vector xmlns:android="http://schemas.android.com/apk/res/android"
+            android:width="80dp"
+            android:height="80dp"
+            android:viewportWidth="80"
+            android:viewportHeight="80">
+            <path android:fillColor="#3D7EFF"
+                android:pathData="M20,10 L20,70 L70,40 Z" />
+        </vector>
+    </item>
+</layer-list>

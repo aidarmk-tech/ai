@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Lampa Player</string>
+    <string name="error_no_url">Нет URL для воспроизведения</string>
+    <string name="skip_intro">Пропустить интро</string>
+    <string name="mark_intro">Отметить интро</string>
+    <string name="intro_marked">Точка интро сохранена: %1$.0fс</string>
+    <string name="autonext_countdown">Следующая серия через %1$d с</string>
+    <string name="cancel_autonext">Отмена</string>
+    <string name="exit_dialog_title">Выход</string>
+    <string name="exit_dialog_message">Прекратить воспроизведение?</string>
+    <string name="action_exit">Выйти</string>
+    <string name="action_cancel">Отмена</string>
+    <string name="action_retry">Повторить</string>
+    <string name="action_back">Назад</string>
+    <string name="playback_error">Ошибка воспроизведения</string>
+    <string name="settings_title">Настройки плеера</string>
+    <string name="settings_engine">Движок</string>
+    <string name="settings_buffer">Профиль буфера</string>
+    <string name="settings_autonext">Автопереход серий</string>
+    <string name="settings_autonext_delay">Задержка перехода</string>
+    <string name="settings_remember_tracks">Запоминать дорожки</string>
+    <string name="settings_skip_intro">Кнопка пропуска интро</string>
+    <string name="settings_diag">Диагностика</string>
+    <string name="epg_title">Программа передач</string>
+    <string name="iptv_title">Телевидение</string>
+    <string name="label_live">LIVE</string>
+    <string name="label_next">ДАЛЕЕ</string>
+    <string name="tab_episodes">СЕРИИ</string>
+    <string name="tab_audio">АУДИО</string>
+    <string name="tab_subtitles">СУБТИТРЫ</string>
+    <string name="tab_epg">EPG</string>
+</resources>
