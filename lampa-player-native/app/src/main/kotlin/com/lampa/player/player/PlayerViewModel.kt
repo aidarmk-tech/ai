@@ -25,6 +25,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import javax.inject.Inject
 
+enum class InfoPanelTab { EPISODES, AUDIO, SUBTITLES, EPG }
+
 data class PlayerUiState(
     val title: String = "",
     val quality: String = "",
@@ -43,6 +45,15 @@ data class PlayerUiState(
     val settings: AppSettings = AppSettings(),
     val metadata: MetadataDisplay? = null,
     val showMetadata: Boolean = false,
+    // Info panel
+    val infoPanelVisible: Boolean = false,
+    val infoPanelTab: InfoPanelTab = InfoPanelTab.EPISODES,
+    val episodes: List<EpisodeItem> = emptyList(),
+    val currentEpisodeIndex: Int = 0,
+    val audioTracks: List<String> = emptyList(),
+    val subtitleTracks: List<String> = emptyList(),
+    val selectedAudioIndex: Int = -1,
+    val selectedSubtitleIndex: Int = -1,
 ) {
     data class MetadataDisplay(
         val title: String,
@@ -74,11 +85,15 @@ class PlayerViewModel @Inject constructor(
     private val _showExitDialog = MutableSharedFlow<Unit>()
     val showExitDialog: SharedFlow<Unit> = _showExitDialog.asSharedFlow()
 
+    private val _playEpisode = MutableSharedFlow<EpisodeItem>()
+    val playEpisode: SharedFlow<EpisodeItem> = _playEpisode.asSharedFlow()
+
     lateinit var player: ExoPlayer
         private set
 
     private var currentUrl = ""
     private var currentCard: CardMeta? = null
+    private var dataSourceFactory: DefaultHttpDataSource.Factory? = null
     private var saveJob: Job? = null
     private var diagJob: Job? = null
     private var osdHideJob: Job? = null
@@ -88,8 +103,7 @@ class PlayerViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             settingsDataStore.settings.collect { s ->
-                settings = s
-                _uiState.update { it.copy(settings = s) }
+                settings = s; _uiState.update { it.copy(settings = s) }
             }
         }
     }
@@ -98,40 +112,38 @@ class PlayerViewModel @Inject constructor(
         currentUrl = url
         currentCard = card
         _uiState.update {
-            it.copy(title = buildTitle(card), quality = card.quality ?: "", translator = card.translator ?: "", card = card)
+            it.copy(
+                title = buildTitle(card), quality = card.quality ?: "",
+                translator = card.translator ?: "", card = card,
+                episodes = card.episodes, currentEpisodeIndex = card.currentEpisodeIndex,
+            )
         }
 
         val profile = BufferProfile.fromType(settings.buffer)
-
-        // Software decoder fallback for torrent streams
-        val renderersFactory = DefaultRenderersFactory(context).apply {
-            setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
-        }
+        val renderersFactory = DefaultRenderersFactory(context)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
 
         val trackSelector = DefaultTrackSelector(context).apply {
-            setParameters(buildUpon().apply {
-                setPreferredAudioLanguage("ru")
-                setAllowAudioMixedMimeTypeAdaptiveness(true)
-                setAllowVideoMixedMimeTypeAdaptiveness(true)
-            }.build())
+            setParameters(buildUpon()
+                .setPreferredAudioLanguage("ru")
+                .setAllowAudioMixedMimeTypeAdaptiveness(true)
+                .setAllowVideoMixedMimeTypeAdaptiveness(true)
+                .build())
         }
 
-        val dataSourceFactory = DefaultHttpDataSource.Factory()
-            .setDefaultRequestProperties(
-                buildMap {
-                    putAll(card.headers)
-                    if (!containsKey("User-Agent"))
-                        put("User-Agent", "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/91.0 Mobile Safari/537.36")
-                }
-            )
+        dataSourceFactory = DefaultHttpDataSource.Factory()
+            .setDefaultRequestProperties(buildMap {
+                putAll(card.headers)
+                if (!containsKey("User-Agent"))
+                    put("User-Agent", "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/91.0 Mobile Safari/537.36")
+            })
             .setConnectTimeoutMs(15_000)
             .setReadTimeoutMs(20_000)
             .setAllowCrossProtocolRedirects(true)
 
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                profile.maxBufferLengthMs.toInt(),
-                profile.maxMaxBufferLengthMs.toInt(),
+                profile.maxBufferLengthMs.toInt(), profile.maxMaxBufferLengthMs.toInt(),
                 DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS,
                 DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
             )
@@ -143,13 +155,25 @@ class PlayerViewModel @Inject constructor(
             .setRenderersFactory(renderersFactory)
             .setLoadControl(loadControl)
             .setTrackSelector(trackSelector)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory!!))
             .build()
             .also { setupPlayerListener(it) }
 
-        val mediaSource = buildMediaSource(url, dataSourceFactory)
-        player.setMediaSource(mediaSource)
+        loadUrl(url, card)
+        startAutoSave()
+        if (settings.diag) startDiag()
 
+        card.tmdbId?.let { loadMetadata(it, card.isSerial, card) }
+
+        viewModelScope.launch {
+            delay(800)
+            _uiState.update { it.copy(showMetadata = true) }
+            delay(if (card.tmdbId != null) 6000L else 3000L)
+            _uiState.update { it.copy(showMetadata = false) }
+        }
+    }
+
+    private fun loadUrl(url: String, card: CardMeta) {
         viewModelScope.launch {
             val savedPos = positionDataStore.getPosition(url)
             val startMs = when {
@@ -157,6 +181,7 @@ class PlayerViewModel @Inject constructor(
                 savedPos.watched -> 0L
                 else -> (savedPos.time * 1000).toLong()
             }
+            player.setMediaSource(buildMediaSource(url))
             if (startMs > 0) player.seekTo(startMs)
             player.prepare()
             player.playWhenReady = true
@@ -167,104 +192,104 @@ class PlayerViewModel @Inject constructor(
             }
             showData?.introEnd?.let { _uiState.update { s -> s.copy(introEnd = it) } }
         }
+    }
 
-        startAutoSave()
-        if (settings.diag) startDiag()
+    private fun buildMediaSource(url: String): MediaSource {
+        val item = MediaItem.fromUri(Uri.parse(url))
+        val factory = dataSourceFactory!!
+        return if (isHls(url))
+            HlsMediaSource.Factory(factory).setAllowChunklessPreparation(true).createMediaSource(item)
+        else
+            DefaultMediaSourceFactory(factory).createMediaSource(item)
+    }
 
-        // Load TMDB metadata
-        card.tmdbId?.let { loadMetadata(it, card.isSerial, card) }
+    private fun isHls(url: String) = url.contains(".m3u8", ignoreCase = true)
 
-        // Show metadata overlay at start (6s)
-        viewModelScope.launch {
-            delay(500) // wait for metadata to load
-            _uiState.update { it.copy(showMetadata = true) }
-            delay(6000)
-            _uiState.update { it.copy(showMetadata = false) }
+    // ─── Info Panel ────────────────────────────────────────────────
+    fun toggleInfoPanel() {
+        val visible = !_uiState.value.infoPanelVisible
+        _uiState.update { it.copy(infoPanelVisible = visible) }
+        if (visible) {
+            refreshTracks()
+            osdHideJob?.cancel()
+        } else {
+            scheduleOsdHide()
         }
     }
 
+    fun hideInfoPanel() = _uiState.update { it.copy(infoPanelVisible = false) }
+
+    fun setInfoPanelTab(tab: InfoPanelTab) = _uiState.update { it.copy(infoPanelTab = tab) }
+
+    private fun refreshTracks() {
+        val tracks = player.currentTracks
+        val audioTracks = trackMemoryManager.getAudioTracks(tracks)
+        val subTracks = trackMemoryManager.getSubtitleTracks(tracks)
+        _uiState.update { it.copy(audioTracks = audioTracks, subtitleTracks = subTracks) }
+    }
+
+    fun selectEpisode(episode: EpisodeItem) {
+        viewModelScope.launch {
+            saveCurrentPosition()
+            currentUrl = episode.url
+            _uiState.update { it.copy(currentEpisodeIndex = episode.index, infoPanelVisible = false) }
+            player.stop()
+            loadUrl(episode.url, currentCard!!)
+        }
+    }
+
+    fun selectAudio(index: Int) {
+        val card = currentCard ?: return
+        trackMemoryManager.onAudioSelected(player, card, index, viewModelScope)
+        _uiState.update { it.copy(selectedAudioIndex = index) }
+    }
+
+    fun selectSubtitle(index: Int) {
+        val card = currentCard ?: return
+        trackMemoryManager.onSubtitleSelected(player, card, index, viewModelScope)
+        _uiState.update { it.copy(selectedSubtitleIndex = index) }
+    }
+
+    // ─── TMDB ──────────────────────────────────────────────────────
     private fun loadMetadata(tmdbId: Int, isSerial: Boolean, card: CardMeta) {
         viewModelScope.launch {
             val meta = tmdbRepository.getMetadata(tmdbId, isSerial) ?: return@launch
             val title = meta.title ?: meta.name ?: card.title
             val year = (meta.release_date ?: meta.first_air_date)?.take(4) ?: ""
-            val rating = meta.vote_average?.let { "%.1f".format(it) } ?: ""
+            val rating = meta.vote_average?.let { "★ %.1f".format(it) } ?: ""
             val info = listOfNotNull(year.ifEmpty { null }, rating.ifEmpty { null }, card.quality).joinToString(" · ")
-            val posterUrl = TmdbRepository.posterUrl(meta.poster_path) ?: card.posterUrl
-            val overview = meta.overview ?: ""
-
             _uiState.update { s ->
-                s.copy(
-                    metadata = PlayerUiState.MetadataDisplay(
-                        title = title,
-                        info = info,
-                        overview = overview,
-                        cast = "",
-                        posterUrl = posterUrl,
-                    )
-                )
+                s.copy(metadata = PlayerUiState.MetadataDisplay(
+                    title = title, info = info,
+                    overview = meta.overview ?: "",
+                    cast = "",
+                    posterUrl = TmdbRepository.posterUrl(meta.poster_path) ?: card.posterUrl,
+                ))
             }
         }
     }
 
-    fun toggleMetadata() {
-        _uiState.update { it.copy(showMetadata = !it.showMetadata) }
-    }
+    fun toggleMetadata() = _uiState.update { it.copy(showMetadata = !it.showMetadata) }
 
-    private fun buildMediaSource(url: String, factory: DefaultHttpDataSource.Factory): MediaSource {
-        val uri = Uri.parse(url)
-        val item = MediaItem.fromUri(uri)
-        return when {
-            isHls(url) -> HlsMediaSource.Factory(factory)
-                .setAllowChunklessPreparation(true)
-                .createMediaSource(item)
-            else -> DefaultMediaSourceFactory(factory).createMediaSource(item)
-        }
-    }
-
-    private fun isHls(url: String) = url.contains(".m3u8", ignoreCase = true)
-
-    private fun setupPlayerListener(p: ExoPlayer) {
-        p.addListener(object : Player.Listener {
-            override fun onPlaybackStateChanged(state: Int) {
-                _uiState.update { it.copy(isLoading = state == Player.STATE_BUFFERING) }
-                if (state == Player.STATE_ENDED) onPlaybackEnded()
-            }
-
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                _uiState.update { it.copy(isPlaying = isPlaying) }
-            }
-
-            override fun onPlayerError(error: PlaybackException) {
-                val action = errorRecovery.onError(error, p)
-                if (action == ErrorRecoveryManager.Action.SHOW_FATAL) {
-                    _uiState.update { it.copy(hasError = true, errorMessage = buildErrorMessage(error)) }
-                }
-            }
-
-            override fun onTracksChanged(tracks: Tracks) {
-                _uiState.update { it.copy(currentTracks = tracks) }
-            }
-        })
-    }
-
-    private fun buildErrorMessage(e: PlaybackException): String = when (e.errorCode) {
-        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED -> "Нет соединения с сервером"
-        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "Таймаут подключения"
-        PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "Сервер вернул ошибку HTTP"
-        PlaybackException.ERROR_CODE_DECODER_INIT_FAILED -> "Ошибка декодера — попробуйте программный режим"
-        PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED -> "Повреждённый контейнер"
-        else -> "Ошибка воспроизведения (${e.errorCode})"
-    }
-
+    // ─── Playback controls ─────────────────────────────────────────
     fun onProgress(currentMs: Long, durationMs: Long) {
         val cur = currentMs / 1000.0; val dur = durationMs / 1000.0
         val showSkip = settings.skipIntro && introSkipManager.shouldShowSkipButton(cur, _uiState.value.introEnd.takeIf { it > 0 })
         _uiState.update { it.copy(showSkipIntro = showSkip) }
-        if (settings.autonext) {
+        if (settings.autonext && !_uiState.value.infoPanelVisible) {
             autoNextManager.checkAndStart(dur, cur, settings.autonextDelay, viewModelScope,
                 onTick = { t -> _uiState.update { it.copy(autoNextCountdown = t) } },
-                onNext = { viewModelScope.launch { _navigateToNext.emit(Unit) } })
+                onNext = { viewModelScope.launch { navigateNext() } })
+        }
+    }
+
+    private fun navigateNext() {
+        val state = _uiState.value
+        val nextIdx = state.currentEpisodeIndex + 1
+        if (state.episodes.isNotEmpty() && nextIdx < state.episodes.size) {
+            selectEpisode(state.episodes[nextIdx])
+        } else {
+            viewModelScope.launch { _navigateToNext.emit(Unit) }
         }
     }
 
@@ -287,20 +312,39 @@ class PlayerViewModel @Inject constructor(
     fun onKeyPageUp() = player.seekTo(player.currentPosition + 30_000)
     fun onKeyPageDown() = player.seekTo((player.currentPosition - 30_000).coerceAtLeast(0))
     fun onKeyOk() = if (player.isPlaying) player.pause() else player.play()
-    fun onNextEpisode() = viewModelScope.launch { _navigateToNext.emit(Unit) }
-    fun onPrevEpisode() { /* implement prev episode navigation */ }
 
-    fun onKeyBack(osdVisible: Boolean) {
-        if (osdVisible) _uiState.update { it.copy(osdVisible = false) }
-        else viewModelScope.launch { _showExitDialog.emit(Unit) }
+    fun onNextEpisode() {
+        val state = _uiState.value
+        val next = state.episodes.getOrNull(state.currentEpisodeIndex + 1)
+        if (next != null) selectEpisode(next) else viewModelScope.launch { _navigateToNext.emit(Unit) }
+    }
+
+    fun onPrevEpisode() {
+        val state = _uiState.value
+        val prev = state.episodes.getOrNull(state.currentEpisodeIndex - 1)
+        if (prev != null) selectEpisode(prev)
+        else if (player.currentPosition > 5000) player.seekTo(0)
+    }
+
+    fun onKeyBack(osdVisible: Boolean, panelVisible: Boolean) {
+        when {
+            panelVisible -> hideInfoPanel()
+            osdVisible -> _uiState.update { it.copy(osdVisible = false) }
+            else -> viewModelScope.launch { _showExitDialog.emit(Unit) }
+        }
     }
 
     fun showOsd() {
         _uiState.update { it.copy(osdVisible = true) }
+        scheduleOsdHide()
+    }
+
+    private fun scheduleOsdHide() {
         osdHideJob?.cancel()
         osdHideJob = viewModelScope.launch {
             delay(4000)
-            if (player.isPlaying) _uiState.update { it.copy(osdVisible = false) }
+            if (player.isPlaying && !_uiState.value.infoPanelVisible)
+                _uiState.update { it.copy(osdVisible = false) }
         }
     }
 
@@ -310,16 +354,6 @@ class PlayerViewModel @Inject constructor(
         player.prepare(); player.play()
     }
 
-    fun selectAudioTrack(index: Int) {
-        val card = currentCard ?: return
-        if (settings.rememberTracks) trackMemoryManager.onAudioSelected(player, card, index, viewModelScope)
-    }
-
-    fun selectSubtitleTrack(index: Int) {
-        val card = currentCard ?: return
-        if (settings.rememberTracks) trackMemoryManager.onSubtitleSelected(player, card, index, viewModelScope)
-    }
-
     fun buildResultExtras(): Triple<Long, Long, Int> {
         val pos = player.currentPosition
         val dur = player.duration.takeIf { it != C.TIME_UNSET } ?: 0L
@@ -327,20 +361,45 @@ class PlayerViewModel @Inject constructor(
         return Triple(pos, dur, pct)
     }
 
-    private fun onPlaybackEnded() {
-        viewModelScope.launch {
-            saveCurrentPosition(ended = true)
-            if (settings.autonext) _navigateToNext.emit(Unit)
-        }
+    // ─── Internal ──────────────────────────────────────────────────
+    private fun setupPlayerListener(p: ExoPlayer) {
+        p.addListener(object : Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) {
+                _uiState.update { it.copy(isLoading = state == Player.STATE_BUFFERING) }
+                if (state == Player.STATE_ENDED) {
+                    viewModelScope.launch { saveCurrentPosition(ended = true) }
+                    if (settings.autonext) viewModelScope.launch { navigateNext() }
+                }
+            }
+            override fun onIsPlayingChanged(isPlaying: Boolean) =
+                _uiState.update { it.copy(isPlaying = isPlaying) }
+            override fun onPlayerError(error: PlaybackException) {
+                val action = errorRecovery.onError(error, p)
+                if (action == ErrorRecoveryManager.Action.SHOW_FATAL)
+                    _uiState.update { it.copy(hasError = true, errorMessage = buildErrorMessage(error)) }
+            }
+            override fun onTracksChanged(tracks: Tracks) {
+                _uiState.update { it.copy(currentTracks = tracks) }
+                if (_uiState.value.infoPanelVisible) refreshTracks()
+            }
+        })
+    }
+
+    private fun buildErrorMessage(e: PlaybackException) = when (e.errorCode) {
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED -> "Нет соединения с сервером"
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "Таймаут подключения"
+        PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "Сервер вернул ошибку HTTP"
+        PlaybackException.ERROR_CODE_DECODER_INIT_FAILED -> "Ошибка декодера видео"
+        PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED -> "Повреждённый контейнер"
+        else -> "Ошибка воспроизведения (${e.errorCode})"
     }
 
     private fun startAutoSave() {
         saveJob = viewModelScope.launch {
             while (isActive) {
                 delay(5000)
-                if (player.isPlaying && player.currentPosition > 0 && player.duration != C.TIME_UNSET) {
+                if (player.isPlaying && player.currentPosition > 0 && player.duration != C.TIME_UNSET)
                     saveCurrentPosition()
-                }
             }
         }
     }
@@ -351,8 +410,9 @@ class PlayerViewModel @Inject constructor(
                 delay(1000)
                 val buf = (player.bufferedPosition - player.currentPosition) / 1000.0
                 val fmt = player.videoFormat
-                val h = fmt?.height ?: 0; val kbps = (fmt?.bitrate ?: 0) / 1000
-                _uiState.update { it.copy(diagText = "Буфер: %.1fс  ${h}p ${kbps}kbps".format(buf)) }
+                _uiState.update {
+                    it.copy(diagText = "Буфер: %.1fс  ${fmt?.height ?: 0}p ${(fmt?.bitrate ?: 0) / 1000}kbps".format(buf))
+                }
             }
         }
     }
@@ -375,6 +435,7 @@ class PlayerViewModel @Inject constructor(
 
     private fun buildTitle(card: CardMeta) = buildString {
         append(card.title)
-        if (card.seasonNumber != null && card.episodeNumber != null) append(" — S${card.seasonNumber}E${card.episodeNumber}")
+        if (card.seasonNumber != null && card.episodeNumber != null)
+            append(" — S${card.seasonNumber}E${card.episodeNumber}")
     }
 }

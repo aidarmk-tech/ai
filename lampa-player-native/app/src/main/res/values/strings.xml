@@ -26,4 +26,8 @@
     <string name="iptv_title">Телевидение</string>
     <string name="label_live">LIVE</string>
     <string name="label_next">ДАЛЕЕ</string>
+    <string name="tab_episodes">СЕРИИ</string>
+    <string name="tab_audio">АУДИО</string>
+    <string name="tab_subtitles">СУБТИТРЫ</string>
+    <string name="tab_epg">EPG</string>
 </resources>

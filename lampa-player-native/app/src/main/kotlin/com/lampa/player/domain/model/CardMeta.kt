@@ -19,6 +19,14 @@ data class CardMeta(
     val headers: Map<String, String> = emptyMap(),
     val timelineTime: Double? = null,
     val timelineDuration: Double? = null,
+    // Episodes list for serials (from Lampa JSON)
+    val episodes: List<EpisodeItem> = emptyList(),
+    val currentEpisodeIndex: Int = 0,
+    // EPG data for IPTV
+    val epgTitle: String? = null,
+    val epgStart: String? = null,
+    val epgEnd: String? = null,
 )
 
-val CardMeta.isSerial: Boolean get() = seasonNumber != null
+val CardMeta.isSerial: Boolean get() = seasonNumber != null || episodes.isNotEmpty()
+val CardMeta.isIptv: Boolean get() = !isSerial && episodes.isEmpty() && epgTitle != null
