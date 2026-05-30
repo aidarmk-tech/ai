@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Background -->
+    <color name="bg_primary">#0A0A0F</color>
+    <color name="bg_surface">#14141C</color>
+    <color name="bg_elevated">#1E1E2A</color>
+    <color name="bg_overlay">#D90A0A0F</color>
+
+    <!-- Text -->
+    <color name="text_primary">#FFFFFF</color>
+    <color name="text_secondary">#A8A8B8</color>
+    <color name="text_disabled">#5A5A6A</color>
+
+    <!-- Accent -->
+    <color name="accent_primary">#3D7EFF</color>
+    <color name="accent_glow">#733D7EFF</color>
+    <color name="accent_pressed">#2A5FD9</color>
+
+    <!-- Semantic -->
+    <color name="color_error">#FF5C5C</color>
+    <color name="color_success">#3DDC84</color>
+    <color name="color_warning">#FFB13D</color>
+    <color name="color_live">#FF3B5C</color>
+</resources>
