@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg_primary">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingHorizontal="@dimen/safe_margin"
+        android:paddingVertical="@dimen/space_lg">
+
+        <!-- Header -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="@dimen/space_lg">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/settings_title"
+                android:textColor="@color/text_primary"
+                android:textSize="32sp"
+                android:fontFamily="sans-serif-medium" />
+
+            <Button
+                android:id="@+id/btn_close"
+                android:layout_width="56dp"
+                android:layout_height="56dp"
+                android:text="✕"
+                android:background="@drawable/bg_button"
+                android:textColor="@color/text_primary"
+                android:textSize="20sp"
+                android:focusable="true" />
+        </LinearLayout>
+
+        <!-- ENGINE -->
+        <LinearLayout android:layout_width="match_parent" android:layout_height="64dp"
+            android:orientation="horizontal" android:gravity="center_vertical"
+            android:layout_marginBottom="@dimen/space_sm">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                android:text="@string/settings_engine" android:textColor="@color/text_primary" android:textSize="18sp" />
+            <Spinner android:id="@+id/spinner_engine" android:layout_width="220dp" android:layout_height="wrap_content"
+                android:background="@drawable/bg_button" android:focusable="true" android:popupBackground="@color/bg_elevated" />
+        </LinearLayout>
+
+        <!-- BUFFER -->
+        <LinearLayout android:layout_width="match_parent" android:layout_height="64dp"
+            android:orientation="horizontal" android:gravity="center_vertical"
+            android:layout_marginBottom="@dimen/space_sm">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                android:text="@string/settings_buffer" android:textColor="@color/text_primary" android:textSize="18sp" />
+            <Spinner android:id="@+id/spinner_buffer" android:layout_width="280dp" android:layout_height="wrap_content"
+                android:background="@drawable/bg_button" android:focusable="true" android:popupBackground="@color/bg_elevated" />
+        </LinearLayout>
+
+        <View android:layout_width="match_parent" android:layout_height="1dp"
+            android:background="@color/bg_elevated" android:layout_marginVertical="@dimen/space_md" />
+
+        <!-- AUTONEXT -->
+        <LinearLayout android:layout_width="match_parent" android:layout_height="64dp"
+            android:orientation="horizontal" android:gravity="center_vertical"
+            android:layout_marginBottom="@dimen/space_sm">
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="@string/settings_autonext" android:textColor="@color/text_primary" android:textSize="18sp" />
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="Автоматически переходить к следующей серии" android:textColor="@color/text_secondary" android:textSize="14sp" />
+            </LinearLayout>
+            <Switch android:id="@+id/switch_autonext" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:thumbTint="@color/accent_primary" android:trackTint="@color/bg_elevated" android:focusable="true" />
+        </LinearLayout>
+
+        <!-- AUTONEXT DELAY -->
+        <LinearLayout android:layout_width="match_parent" android:layout_height="64dp"
+            android:orientation="horizontal" android:gravity="center_vertical"
+            android:layout_marginBottom="@dimen/space_sm">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                android:text="@string/settings_autonext_delay" android:textColor="@color/text_secondary" android:textSize="18sp" />
+            <Spinner android:id="@+id/spinner_delay" android:layout_width="120dp" android:layout_height="wrap_content"
+                android:background="@drawable/bg_button" android:focusable="true" android:popupBackground="@color/bg_elevated" />
+        </LinearLayout>
+
+        <View android:layout_width="match_parent" android:layout_height="1dp"
+            android:background="@color/bg_elevated" android:layout_marginVertical="@dimen/space_md" />
+
+        <!-- REMEMBER TRACKS -->
+        <LinearLayout android:layout_width="match_parent" android:layout_height="64dp"
+            android:orientation="horizontal" android:gravity="center_vertical"
+            android:layout_marginBottom="@dimen/space_sm">
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="@string/settings_remember_tracks" android:textColor="@color/text_primary" android:textSize="18sp" />
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="Запоминать язык аудио и субтитры для каждого сериала" android:textColor="@color/text_secondary" android:textSize="14sp" />
+            </LinearLayout>
+            <Switch android:id="@+id/switch_remember_tracks" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:thumbTint="@color/accent_primary" android:trackTint="@color/bg_elevated" android:focusable="true" />
+        </LinearLayout>
+
+        <!-- SKIP INTRO -->
+        <LinearLayout android:layout_width="match_parent" android:layout_height="64dp"
+            android:orientation="horizontal" android:gravity="center_vertical"
+            android:layout_marginBottom="@dimen/space_sm">
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="@string/settings_skip_intro" android:textColor="@color/text_primary" android:textSize="18sp" />
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="Показывать кнопку пропуска вступления" android:textColor="@color/text_secondary" android:textSize="14sp" />
+            </LinearLayout>
+            <Switch android:id="@+id/switch_skip_intro" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:thumbTint="@color/accent_primary" android:trackTint="@color/bg_elevated" android:focusable="true" />
+        </LinearLayout>
+
+        <!-- DIAGNOSTICS -->
+        <LinearLayout android:layout_width="match_parent" android:layout_height="64dp"
+            android:orientation="horizontal" android:gravity="center_vertical">
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="@string/settings_diag" android:textColor="@color/text_primary" android:textSize="18sp" />
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="Показывать буфер и качество в углу экрана" android:textColor="@color/text_secondary" android:textSize="14sp" />
+            </LinearLayout>
+            <Switch android:id="@+id/switch_diag" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:thumbTint="@color/accent_primary" android:trackTint="@color/bg_elevated" android:focusable="true" />
+        </LinearLayout>
+
+    </LinearLayout>
+</ScrollView>

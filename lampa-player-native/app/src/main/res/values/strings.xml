@@ -15,10 +15,10 @@
     <string name="action_back">Назад</string>
     <string name="playback_error">Ошибка воспроизведения</string>
     <string name="settings_title">Настройки плеера</string>
-    <string name="settings_engine">Плеер</string>
-    <string name="settings_buffer">Буфер</string>
+    <string name="settings_engine">Движок</string>
+    <string name="settings_buffer">Профиль буфера</string>
     <string name="settings_autonext">Автопереход серий</string>
-    <string name="settings_autonext_delay">Задержка (сек)</string>
+    <string name="settings_autonext_delay">Задержка перехода</string>
     <string name="settings_remember_tracks">Запоминать дорожки</string>
     <string name="settings_skip_intro">Кнопка пропуска интро</string>
     <string name="settings_diag">Диагностика</string>

@@ -7,9 +7,9 @@ import androidx.lifecycle.viewModelScope
 import androidx.media3.common.*
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.LoadControl
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
@@ -17,6 +17,7 @@ import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import com.lampa.player.data.datastore.AppSettings
 import com.lampa.player.data.datastore.PositionDataStore
 import com.lampa.player.data.datastore.SettingsDataStore
+import com.lampa.player.data.tmdb.TmdbRepository
 import com.lampa.player.domain.model.*
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -40,7 +41,17 @@ data class PlayerUiState(
     val currentTracks: Tracks = Tracks.EMPTY,
     val card: CardMeta? = null,
     val settings: AppSettings = AppSettings(),
-)
+    val metadata: MetadataDisplay? = null,
+    val showMetadata: Boolean = false,
+) {
+    data class MetadataDisplay(
+        val title: String,
+        val info: String,
+        val overview: String,
+        val cast: String,
+        val posterUrl: String?,
+    )
+}
 
 @UnstableApi
 @HiltViewModel
@@ -51,6 +62,7 @@ class PlayerViewModel @Inject constructor(
     private val trackMemoryManager: TrackMemoryManager,
     private val introSkipManager: IntroSkipManager,
     private val autoNextManager: AutoNextManager,
+    private val tmdbRepository: TmdbRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(PlayerUiState())
@@ -65,13 +77,12 @@ class PlayerViewModel @Inject constructor(
     lateinit var player: ExoPlayer
         private set
 
-    private var currentUrl: String = ""
+    private var currentUrl = ""
     private var currentCard: CardMeta? = null
     private var saveJob: Job? = null
     private var diagJob: Job? = null
     private var osdHideJob: Job? = null
-    private var settings: AppSettings = AppSettings()
-
+    private var settings = AppSettings()
     private val errorRecovery = ErrorRecoveryManager()
 
     init {
@@ -86,55 +97,38 @@ class PlayerViewModel @Inject constructor(
     fun initPlayer(context: Context, url: String, card: CardMeta) {
         currentUrl = url
         currentCard = card
-        _uiState.update { it.copy(title = buildTitle(card), quality = card.quality ?: "", translator = card.translator ?: "", card = card) }
-
-        val profile = BufferProfile.fromType(settings.buffer)
-        val loadControl = buildLoadControl(profile)
-        val trackSelector = DefaultTrackSelector(context)
-
-        val dataSourceFactory = DefaultHttpDataSource.Factory()
-            .setDefaultRequestProperties(card.headers)
-            .setConnectTimeoutMs(8000)
-            .setReadTimeoutMs(8000)
-
-        player = ExoPlayer.Builder(context)
-            .setLoadControl(loadControl)
-            .setTrackSelector(trackSelector)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
-            .build()
-            .also { setupPlayerListener(it) }
-
-        val mediaSource = buildMediaSource(url, card.headers, dataSourceFactory)
-        player.setMediaSource(mediaSource)
-
-        viewModelScope.launch {
-            val savedPos = positionDataStore.getPosition(url)
-            val startMs = when {
-                savedPos == null -> (card.timelineTime ?: 0.0).toLong() * 1000
-                savedPos.watched -> 0L
-                else -> (savedPos.time * 1000).toLong()
-            }
-            player.seekTo(startMs)
-            player.prepare()
-            player.playWhenReady = true
-
-            val showData = currentCard?.let { positionDataStore.getShowData(it) }
-            if (showData != null && settings.rememberTracks) {
-                trackMemoryManager.applyTracks(
-                    player, card, showData, viewModelScope, isHls = url.contains(".m3u8")
-                )
-            }
-            showData?.introEnd?.let { introEnd ->
-                _uiState.update { it.copy(introEnd = introEnd) }
-            }
+        _uiState.update {
+            it.copy(title = buildTitle(card), quality = card.quality ?: "", translator = card.translator ?: "", card = card)
         }
 
-        startAutoSave()
-        if (settings.diag) startDiag()
-    }
+        val profile = BufferProfile.fromType(settings.buffer)
 
-    private fun buildLoadControl(profile: BufferProfile): LoadControl =
-        DefaultLoadControl.Builder()
+        // Software decoder fallback for torrent streams
+        val renderersFactory = DefaultRenderersFactory(context).apply {
+            setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+        }
+
+        val trackSelector = DefaultTrackSelector(context).apply {
+            setParameters(buildUpon().apply {
+                setPreferredAudioLanguage("ru")
+                setAllowAudioMixedMimeTypeAdaptiveness(true)
+                setAllowVideoMixedMimeTypeAdaptiveness(true)
+            }.build())
+        }
+
+        val dataSourceFactory = DefaultHttpDataSource.Factory()
+            .setDefaultRequestProperties(
+                buildMap {
+                    putAll(card.headers)
+                    if (!containsKey("User-Agent"))
+                        put("User-Agent", "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/91.0 Mobile Safari/537.36")
+                }
+            )
+            .setConnectTimeoutMs(15_000)
+            .setReadTimeoutMs(20_000)
+            .setAllowCrossProtocolRedirects(true)
+
+        val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 profile.maxBufferLengthMs.toInt(),
                 profile.maxMaxBufferLengthMs.toInt(),
@@ -145,22 +139,93 @@ class PlayerViewModel @Inject constructor(
             .setBackBuffer(profile.backBufferLengthMs.toInt(), true)
             .build()
 
-    private fun buildMediaSource(
-        url: String,
-        headers: Map<String, String>,
-        factory: DefaultHttpDataSource.Factory,
-    ): MediaSource {
-        val uri = Uri.parse(url)
-        val item = MediaItem.fromUri(uri)
-        return if (url.contains(".m3u8", ignoreCase = true)) {
-            HlsMediaSource.Factory(factory).createMediaSource(item)
-        } else {
-            DefaultMediaSourceFactory(factory).createMediaSource(item)
+        player = ExoPlayer.Builder(context)
+            .setRenderersFactory(renderersFactory)
+            .setLoadControl(loadControl)
+            .setTrackSelector(trackSelector)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+            .build()
+            .also { setupPlayerListener(it) }
+
+        val mediaSource = buildMediaSource(url, dataSourceFactory)
+        player.setMediaSource(mediaSource)
+
+        viewModelScope.launch {
+            val savedPos = positionDataStore.getPosition(url)
+            val startMs = when {
+                savedPos == null -> ((card.timelineTime ?: 0.0) * 1000).toLong()
+                savedPos.watched -> 0L
+                else -> (savedPos.time * 1000).toLong()
+            }
+            if (startMs > 0) player.seekTo(startMs)
+            player.prepare()
+            player.playWhenReady = true
+
+            val showData = positionDataStore.getShowData(card)
+            if (showData != null && settings.rememberTracks) {
+                trackMemoryManager.applyTracks(player, card, showData, viewModelScope, isHls = isHls(url))
+            }
+            showData?.introEnd?.let { _uiState.update { s -> s.copy(introEnd = it) } }
+        }
+
+        startAutoSave()
+        if (settings.diag) startDiag()
+
+        // Load TMDB metadata
+        card.tmdbId?.let { loadMetadata(it, card.isSerial, card) }
+
+        // Show metadata overlay at start (6s)
+        viewModelScope.launch {
+            delay(500) // wait for metadata to load
+            _uiState.update { it.copy(showMetadata = true) }
+            delay(6000)
+            _uiState.update { it.copy(showMetadata = false) }
         }
     }
 
-    private fun setupPlayerListener(player: ExoPlayer) {
-        player.addListener(object : Player.Listener {
+    private fun loadMetadata(tmdbId: Int, isSerial: Boolean, card: CardMeta) {
+        viewModelScope.launch {
+            val meta = tmdbRepository.getMetadata(tmdbId, isSerial) ?: return@launch
+            val title = meta.title ?: meta.name ?: card.title
+            val year = (meta.release_date ?: meta.first_air_date)?.take(4) ?: ""
+            val rating = meta.vote_average?.let { "%.1f".format(it) } ?: ""
+            val info = listOfNotNull(year.ifEmpty { null }, rating.ifEmpty { null }, card.quality).joinToString(" · ")
+            val posterUrl = TmdbRepository.posterUrl(meta.poster_path) ?: card.posterUrl
+            val overview = meta.overview ?: ""
+
+            _uiState.update { s ->
+                s.copy(
+                    metadata = PlayerUiState.MetadataDisplay(
+                        title = title,
+                        info = info,
+                        overview = overview,
+                        cast = "",
+                        posterUrl = posterUrl,
+                    )
+                )
+            }
+        }
+    }
+
+    fun toggleMetadata() {
+        _uiState.update { it.copy(showMetadata = !it.showMetadata) }
+    }
+
+    private fun buildMediaSource(url: String, factory: DefaultHttpDataSource.Factory): MediaSource {
+        val uri = Uri.parse(url)
+        val item = MediaItem.fromUri(uri)
+        return when {
+            isHls(url) -> HlsMediaSource.Factory(factory)
+                .setAllowChunklessPreparation(true)
+                .createMediaSource(item)
+            else -> DefaultMediaSourceFactory(factory).createMediaSource(item)
+        }
+    }
+
+    private fun isHls(url: String) = url.contains(".m3u8", ignoreCase = true)
+
+    private fun setupPlayerListener(p: ExoPlayer) {
+        p.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 _uiState.update { it.copy(isLoading = state == Player.STATE_BUFFERING) }
                 if (state == Player.STATE_ENDED) onPlaybackEnded()
@@ -171,109 +236,67 @@ class PlayerViewModel @Inject constructor(
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                handlePlayerError(error)
+                val action = errorRecovery.onError(error, p)
+                if (action == ErrorRecoveryManager.Action.SHOW_FATAL) {
+                    _uiState.update { it.copy(hasError = true, errorMessage = buildErrorMessage(error)) }
+                }
             }
 
             override fun onTracksChanged(tracks: Tracks) {
                 _uiState.update { it.copy(currentTracks = tracks) }
             }
-
-            override fun onPositionDiscontinuity(
-                oldPosition: Player.PositionInfo,
-                newPosition: Player.PositionInfo,
-                reason: Int,
-            ) {
-                checkAutoNext()
-                checkIntroSkip()
-            }
         })
     }
 
+    private fun buildErrorMessage(e: PlaybackException): String = when (e.errorCode) {
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED -> "Нет соединения с сервером"
+        PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "Таймаут подключения"
+        PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "Сервер вернул ошибку HTTP"
+        PlaybackException.ERROR_CODE_DECODER_INIT_FAILED -> "Ошибка декодера — попробуйте программный режим"
+        PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED -> "Повреждённый контейнер"
+        else -> "Ошибка воспроизведения (${e.errorCode})"
+    }
+
     fun onProgress(currentMs: Long, durationMs: Long) {
-        val currentSec = currentMs / 1000.0
-        val durationSec = durationMs / 1000.0
-
-        val showSkip = settings.skipIntro && introSkipManager.shouldShowSkipButton(
-            currentSec, _uiState.value.introEnd.takeIf { it > 0 }
-        )
+        val cur = currentMs / 1000.0; val dur = durationMs / 1000.0
+        val showSkip = settings.skipIntro && introSkipManager.shouldShowSkipButton(cur, _uiState.value.introEnd.takeIf { it > 0 })
         _uiState.update { it.copy(showSkipIntro = showSkip) }
-
         if (settings.autonext) {
-            autoNextManager.checkAndStart(
-                durationSec, currentSec, settings.autonextDelay, viewModelScope,
-                onTick = { countdown -> _uiState.update { it.copy(autoNextCountdown = countdown) } },
-                onNext = { viewModelScope.launch { _navigateToNext.emit(Unit) } },
-            )
+            autoNextManager.checkAndStart(dur, cur, settings.autonextDelay, viewModelScope,
+                onTick = { t -> _uiState.update { it.copy(autoNextCountdown = t) } },
+                onNext = { viewModelScope.launch { _navigateToNext.emit(Unit) } })
         }
-    }
-
-    private fun checkAutoNext() {
-        val pos = player.currentPosition
-        val dur = player.duration
-        if (dur > 0) onProgress(pos, dur)
-    }
-
-    private fun checkIntroSkip() {
-        val currentSec = player.currentPosition / 1000.0
-        val introEnd = _uiState.value.introEnd
-        val show = settings.skipIntro && introSkipManager.shouldShowSkipButton(currentSec, introEnd.takeIf { it > 0 })
-        _uiState.update { it.copy(showSkipIntro = show) }
     }
 
     fun skipIntro() {
-        val introEnd = _uiState.value.introEnd
-        if (introEnd > 0) {
-            player.seekTo((introEnd * 1000).toLong())
-            _uiState.update { it.copy(showSkipIntro = false) }
-        }
+        val end = _uiState.value.introEnd
+        if (end > 0) { player.seekTo((end * 1000).toLong()); _uiState.update { it.copy(showSkipIntro = false) } }
     }
 
     fun markIntro() {
         val card = currentCard ?: return
-        val currentSec = player.currentPosition / 1000.0
-        introSkipManager.markIntro(card, currentSec, viewModelScope) { saved ->
+        introSkipManager.markIntro(card, player.currentPosition / 1000.0, viewModelScope) { saved ->
             _uiState.update { it.copy(introEnd = saved) }
         }
     }
 
-    fun cancelAutoNext() {
-        autoNextManager.cancel()
-        _uiState.update { it.copy(autoNextCountdown = -1) }
-    }
-
-    fun selectAudioTrack(index: Int) {
-        val card = currentCard ?: return
-        if (settings.rememberTracks) {
-            trackMemoryManager.onAudioSelected(player, card, index, viewModelScope)
-        }
-    }
-
-    fun selectSubtitleTrack(index: Int) {
-        val card = currentCard ?: return
-        if (settings.rememberTracks) {
-            trackMemoryManager.onSubtitleSelected(player, card, index, viewModelScope)
-        }
-    }
+    fun cancelAutoNext() { autoNextManager.cancel(); _uiState.update { it.copy(autoNextCountdown = -1) } }
 
     fun onKeyLeft() = player.seekTo((player.currentPosition - 10_000).coerceAtLeast(0))
     fun onKeyRight() = player.seekTo(player.currentPosition + 10_000)
     fun onKeyPageUp() = player.seekTo(player.currentPosition + 30_000)
     fun onKeyPageDown() = player.seekTo((player.currentPosition - 30_000).coerceAtLeast(0))
     fun onKeyOk() = if (player.isPlaying) player.pause() else player.play()
+    fun onNextEpisode() = viewModelScope.launch { _navigateToNext.emit(Unit) }
+    fun onPrevEpisode() { /* implement prev episode navigation */ }
+
     fun onKeyBack(osdVisible: Boolean) {
-        if (osdVisible) {
-            _uiState.update { it.copy(osdVisible = false) }
-        } else {
-            viewModelScope.launch { _showExitDialog.emit(Unit) }
-        }
+        if (osdVisible) _uiState.update { it.copy(osdVisible = false) }
+        else viewModelScope.launch { _showExitDialog.emit(Unit) }
     }
 
     fun showOsd() {
         _uiState.update { it.copy(osdVisible = true) }
-        scheduleOsdHide()
-    }
-
-    private fun scheduleOsdHide() {
         osdHideJob?.cancel()
         osdHideJob = viewModelScope.launch {
             delay(4000)
@@ -281,11 +304,27 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    private fun handlePlayerError(error: PlaybackException) {
-        val action = errorRecovery.onError(error, player)
-        if (action == ErrorRecoveryManager.Action.SHOW_FATAL) {
-            _uiState.update { it.copy(hasError = true, errorMessage = error.message ?: "Playback error") }
-        }
+    fun retryPlayback() {
+        errorRecovery.reset()
+        _uiState.update { it.copy(hasError = false) }
+        player.prepare(); player.play()
+    }
+
+    fun selectAudioTrack(index: Int) {
+        val card = currentCard ?: return
+        if (settings.rememberTracks) trackMemoryManager.onAudioSelected(player, card, index, viewModelScope)
+    }
+
+    fun selectSubtitleTrack(index: Int) {
+        val card = currentCard ?: return
+        if (settings.rememberTracks) trackMemoryManager.onSubtitleSelected(player, card, index, viewModelScope)
+    }
+
+    fun buildResultExtras(): Triple<Long, Long, Int> {
+        val pos = player.currentPosition
+        val dur = player.duration.takeIf { it != C.TIME_UNSET } ?: 0L
+        val pct = if (dur > 0) ((pos.toFloat() / dur) * 100).toInt() else 0
+        return Triple(pos, dur, pct)
     }
 
     private fun onPlaybackEnded() {
@@ -296,7 +335,6 @@ class PlayerViewModel @Inject constructor(
     }
 
     private fun startAutoSave() {
-        saveJob?.cancel()
         saveJob = viewModelScope.launch {
             while (isActive) {
                 delay(5000)
@@ -308,64 +346,35 @@ class PlayerViewModel @Inject constructor(
     }
 
     private fun startDiag() {
-        diagJob?.cancel()
         diagJob = viewModelScope.launch {
             while (isActive) {
                 delay(1000)
-                val buffered = player.bufferedPosition - player.currentPosition
-                val bufferedSec = buffered / 1000.0
-                val format = player.videoFormat
-                val height = format?.height ?: 0
-                val bitrate = (format?.bitrate ?: 0) / 1000
-                _uiState.update { it.copy(diagText = "Буфер: %.1fс  ${height}p ${bitrate}kbps".format(bufferedSec)) }
+                val buf = (player.bufferedPosition - player.currentPosition) / 1000.0
+                val fmt = player.videoFormat
+                val h = fmt?.height ?: 0; val kbps = (fmt?.bitrate ?: 0) / 1000
+                _uiState.update { it.copy(diagText = "Буфер: %.1fс  ${h}p ${kbps}kbps".format(buf)) }
             }
         }
     }
 
     private suspend fun saveCurrentPosition(ended: Boolean = false) {
         val url = currentUrl.ifEmpty { return }
-        val durationMs = player.duration.takeIf { it != C.TIME_UNSET } ?: return
-        val currentMs = if (ended) durationMs else player.currentPosition
-        val durationSec = durationMs / 1000.0
-        val currentSec = currentMs / 1000.0
-        val percent = if (durationSec > 0) ((currentSec / durationSec) * 100).toInt() else 0
-        positionDataStore.savePosition(
-            url,
-            com.lampa.player.domain.model.PlaybackPosition(
-                time = currentSec,
-                duration = durationSec,
-                percent = percent,
-                watched = ended || percent >= 90,
-            )
-        )
-    }
-
-    fun buildResultExtras(): Triple<Long, Long, Int> {
-        val posMs = player.currentPosition
-        val durMs = player.duration.takeIf { it != C.TIME_UNSET } ?: 0
-        val percent = if (durMs > 0) ((posMs.toFloat() / durMs) * 100).toInt() else 0
-        return Triple(posMs, durMs, percent)
-    }
-
-    fun retryPlayback() {
-        _uiState.update { it.copy(hasError = false) }
-        player.prepare()
-        player.play()
+        val durMs = player.duration.takeIf { it != C.TIME_UNSET } ?: return
+        val posMs = if (ended) durMs else player.currentPosition
+        val dur = durMs / 1000.0; val pos = posMs / 1000.0
+        val pct = if (dur > 0) ((pos / dur) * 100).toInt() else 0
+        positionDataStore.savePosition(url, PlaybackPosition(time = pos, duration = dur, percent = pct, watched = ended || pct >= 90))
     }
 
     override fun onCleared() {
-        saveJob?.cancel()
-        diagJob?.cancel()
-        osdHideJob?.cancel()
+        saveJob?.cancel(); diagJob?.cancel(); osdHideJob?.cancel()
         viewModelScope.launch { saveCurrentPosition() }
         player.release()
         super.onCleared()
     }
 
-    private fun buildTitle(card: CardMeta): String = buildString {
+    private fun buildTitle(card: CardMeta) = buildString {
         append(card.title)
-        if (card.seasonNumber != null && card.episodeNumber != null) {
-            append(" — S${card.seasonNumber}E${card.episodeNumber}")
-        }
+        if (card.seasonNumber != null && card.episodeNumber != null) append(" — S${card.seasonNumber}E${card.episodeNumber}")
     }
 }
