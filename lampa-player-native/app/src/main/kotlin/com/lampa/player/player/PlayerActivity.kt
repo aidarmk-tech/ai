@@ -79,6 +79,10 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        // Обновляем данные только если intent содержит lampa_data.
+        // Lampa также посылает стандартный external-player intent (без lampa_data)
+        // — он приходит в onNewIntent() и не должен перезаписывать хорошие данные.
+        if (!intent.hasExtra("lampa_data")) return
         val (_, card) = IntentParser.parse(intent) ?: return
         vm.updateCardMeta(card)
     }

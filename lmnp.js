@@ -245,52 +245,72 @@
     }
 
     // ── Хук на плеер ─────────────────────────────────────────────────────
+    // Стратегия двух запусков:
+    //  1. start-событие: немедленно отправляем intent с тем что есть
+    //     (плейлист может быть ещё пуст — балансер устанавливает его позже)
+    //  2. PlayerPlaylist change: балансер вызывает Lampa.Player.playlist()
+    //     СИНХРОННО после play() — к этому моменту WebView ещё активен.
+    //     Отправляем второй intent с полным плейлистом → onNewIntent() в APK.
 
     var _lastLaunch = 0;
+    var _pendingUrl = '';
+    var _pendingData = null;
+
+    function doLaunch(videoUrl, data, file) {
+        var rawCard  = findCard(data, file);
+        var pl       = getPlaylist();
+        var cardData = buildCard(rawCard, file, data, pl.list, pl.pos);
+        return launch(videoUrl, cardData);
+    }
+
+    function stopWebViewPlayer() {
+        try { Lampa.Player.pause && Lampa.Player.pause(); } catch (_) {}
+        try {
+            var vid = document.querySelector('video');
+            if (vid) { vid.pause(); vid.removeAttribute('src'); }
+        } catch (_) {}
+    }
 
     function hookPlayer() {
         if (!window.Lampa || !Lampa.Player) return;
 
+        // ── Хук 1: start — немедленный запуск (плейлист может быть пустым) ──
         Lampa.Player.listener.follow('start', function (e) {
             if (Date.now() - _lastLaunch < 6000) return;
 
             var data = (e && e.data) ? e.data : (e || {});
-            var file = data.file || {};
+            var file = typeof (data.file) === 'object' ? data.file : {};
 
             var videoUrl = data.url
-                        || (typeof file === 'object' && (file.url || file.file))
-                        || (typeof file === 'string'  && file)
+                        || (file.url || file.file)
+                        || (typeof data.file === 'string' && data.file)
                         || '';
             if (!videoUrl || !/^https?:|^rtsp:|^udp:/.test(videoUrl)) return;
 
-            // Сохраняем file для buildCard
-            _savedFile = typeof file === 'object' ? file : {};
+            _savedFile   = file;
+            _pendingUrl  = videoUrl;
+            _pendingData = data;
 
-            // Задержка 300мс: балансер устанавливает плейлист ПОСЛЕ play(),
-            // поэтому читаем Lampa.PlayerPlaylist.get() с задержкой.
-            var capturedData = data;
-            setTimeout(function () {
-                var rawCard = findCard(capturedData, _savedFile);
-                var pl      = getPlaylist();
-
-                var cardData = buildCard(
-                    rawCard,
-                    _savedFile,
-                    capturedData,
-                    pl.list,
-                    pl.pos
-                );
-
-                if (launch(videoUrl, cardData)) {
-                    _lastLaunch = Date.now();
-                    try { Lampa.Player.pause && Lampa.Player.pause(); } catch (_) {}
-                    try {
-                        var vid = document.querySelector('video');
-                        if (vid) { vid.pause(); vid.removeAttribute('src'); }
-                    } catch (_) {}
-                }
-            }, 300);
+            if (doLaunch(videoUrl, data, file)) {
+                _lastLaunch = Date.now();
+                stopWebViewPlayer();
+            }
         });
+
+        // ── Хук 2: playlist change — обновляем APK с полным плейлистом ──
+        // Балансер вызывает Lampa.Player.playlist(list) ПОСЛЕ play(),
+        // но синхронно в том же стеке вызовов — WebView ещё не заморожен.
+        try {
+            Lampa.PlayerPlaylist.listener.follow('change', function () {
+                if (!_pendingUrl || Date.now() - _lastLaunch > 3000) return;
+                var pl = getPlaylist();
+                if (!pl.list || pl.list.length < 2) return;
+                // Повторный intent → onNewIntent() в APK обновит список серий
+                var rawCard  = findCard(_pendingData || {}, _savedFile || {});
+                var cardData = buildCard(rawCard, _savedFile || {}, _pendingData || {}, pl.list, pl.pos);
+                launch(_pendingUrl, cardData);
+            });
+        } catch (_) {}
     }
 
     // ── Настройки ────────────────────────────────────────────────────────
