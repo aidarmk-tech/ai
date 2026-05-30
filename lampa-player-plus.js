@@ -1207,10 +1207,16 @@
         _recognize: function (wav) {
             var token = settings().audd_token || '';
             if (!token) {
-                this._showStatus('Укажите AudD-токен в настройках Player Plus');
-                var self = this;
-                setTimeout(function () { self._hideOverlay(); }, 5000);
-                return;
+                var entered = '';
+                try { entered = (window.prompt('AudD-токен (audd.io):', '') || '').trim(); } catch (e) {}
+                if (!entered) {
+                    this._showStatus('Токен не введён — Shazam недоступен');
+                    var self = this;
+                    setTimeout(function () { self._hideOverlay(); }, 4000);
+                    return;
+                }
+                setSetting('audd_token', entered);
+                token = entered;
             }
             var fd = new FormData();
             fd.append('file', wav, 'clip.wav');
@@ -1657,13 +1663,6 @@
             param: { name: 'pp_cast', type: 'trigger', default: s.cast_bar },
             field: { name: 'Панель "в ролях"', description: 'Долгое OK — показать/скрыть актёров тайтла' },
             onChange: function (v) { setSetting('cast_bar', v === true || v === 'true'); }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: PLUGIN_NAME,
-            param: { name: 'pp_audd_token', type: 'input', default: s.audd_token || '' },
-            field: { name: 'AudD-токен (Shazam)', description: 'Токен с audd.io — двойное OK во время воспроизведения распознаёт музыку' },
-            onChange: function (v) { setSetting('audd_token', typeof v === 'string' ? v.trim() : ''); }
         });
 
         Lampa.SettingsApi.addParam({
