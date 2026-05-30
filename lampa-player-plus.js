@@ -1083,6 +1083,13 @@
             var video = Engine.video;
             if (!video) return;
 
+            // Сбросить ноды если видеоэлемент сменился (новый фильм)
+            if (this._srcVideo && this._srcVideo !== video) {
+                if (this._proc) { try { this._proc.disconnect(); } catch (e) {} this._proc = null; }
+                if (this._src)  { try { this._src.disconnect();  } catch (e) {} this._src = null; }
+                this._srcVideo = null;
+            }
+
             this._samples = [];
             this._capturing = true;
             this._showStatus('Слушаю…  (10 сек)');
@@ -1091,19 +1098,50 @@
                 if (!this._ctx) {
                     this._ctx = new (window.AudioContext || window.webkitAudioContext)();
                 }
-                if (!this._src) {
-                    this._src = this._ctx.createMediaElementSource(video);
-                    this._src.connect(this._ctx.destination);
+                // Autoplay policy: разбудить контекст если suspend
+                if (this._ctx.state === 'suspended') {
+                    try { this._ctx.resume(); } catch (e) {}
                 }
 
-                var sampleRate  = this._ctx.sampleRate;
-                var maxSamples  = sampleRate * 10;
-                var bufSize     = 4096;
-                var self        = this;
+                if (!this._src) {
+                    // captureStream() предпочтительнее с hls.js (MSE-источник).
+                    // createMediaElementSource() бросает SecurityError на MSE-видео в некоторых WebView.
+                    var cs = video.captureStream || video.mozCaptureStream;
+                    if (typeof cs === 'function') {
+                        var stream = cs.call(video);
+                        this._src = this._ctx.createMediaStreamSource(stream);
+                        this._captureMode = 'stream';
+                    } else {
+                        // Fallback: видео переходит полностью под AudioContext
+                        // путь: video → MediaElementSource → ScriptProcessor → destination
+                        this._src = this._ctx.createMediaElementSource(video);
+                        this._captureMode = 'element';
+                    }
+                    this._srcVideo = video;
+                }
 
-                this._proc = this._ctx.createScriptProcessor(bufSize, 1, 1);
+                var sampleRate = this._ctx.sampleRate;
+                var maxSamples = sampleRate * 10;
+                var self = this;
+
+                this._proc = this._ctx.createScriptProcessor(4096, 1, 1);
                 this._src.connect(this._proc);
-                this._proc.connect(this._ctx.destination);
+
+                if (this._captureMode === 'stream') {
+                    // captureStream: видео играет через элемент как обычно.
+                    // ScriptProcessor нужно подключить к destination (иначе onaudioprocess не срабатывает),
+                    // но через нулевой gain чтобы не дублировать звук.
+                    if (!this._silentGain) {
+                        this._silentGain = this._ctx.createGain();
+                        this._silentGain.gain.value = 0;
+                        this._silentGain.connect(this._ctx.destination);
+                    }
+                    this._proc.connect(this._silentGain);
+                } else {
+                    // element mode: весь звук идёт через AudioContext
+                    // один путь: src → proc → destination (без дублирования)
+                    this._proc.connect(this._ctx.destination);
+                }
 
                 this._proc.onaudioprocess = function (e) {
                     if (!self._capturing) return;
@@ -1122,9 +1160,10 @@
 
             } catch (ex) {
                 this._capturing = false;
-                this._showStatus('Ошибка захвата аудио');
+                var errMsg = ex && ex.name ? ex.name : 'Ошибка';
+                this._showStatus('Аудио недоступно (' + errMsg + ')');
                 var self = this;
-                setTimeout(function () { self._hideOverlay(); }, 3000);
+                setTimeout(function () { self._hideOverlay(); }, 4000);
             }
         },
 
