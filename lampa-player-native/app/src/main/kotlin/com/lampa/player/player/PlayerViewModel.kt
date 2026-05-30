@@ -309,6 +309,24 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    fun updateCardMeta(card: CardMeta) {
+        val merged = card.copy(
+            episodes = card.episodes.takeIf { it.isNotEmpty() } ?: (currentCard?.episodes ?: emptyList()),
+        )
+        currentCard = merged
+        _uiState.update { s ->
+            s.copy(
+                title = buildTitle(merged),
+                quality = merged.quality ?: s.quality,
+                translator = merged.translator ?: s.translator,
+                card = merged,
+                episodes = merged.episodes,
+            )
+        }
+        populateMetadataFromCard(merged)
+        merged.tmdbId?.let { loadMetadata(it, merged.isSerial, merged) }
+    }
+
     fun toggleMetadata() = _uiState.update { it.copy(showMetadata = !it.showMetadata) }
 
     // ─── Playback controls ─────────────────────────────────────────

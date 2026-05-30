@@ -75,6 +75,17 @@ object IntentParser {
         val url = intent.dataString ?: return null
         val extras = intent.extras
 
+        // Single JSON extra from lmnp.js intent:// launch — preferred path
+        val lampaDataJson = extras?.getString("lampa_data")
+        if (!lampaDataJson.isNullOrEmpty()) {
+            return try {
+                val obj = JsonParser.parseString(lampaDataJson).asJsonObject
+                Pair(url, cardFromJson(obj, url))
+            } catch (e: Exception) {
+                Pair(url, CardMeta(title = extractTitleFromUrl(url)))
+            }
+        }
+
         val headersBundle = extras?.getBundle("headers")
         val headersJson = extras?.getString("headers_json")
         val headers: Map<String, String> = when {

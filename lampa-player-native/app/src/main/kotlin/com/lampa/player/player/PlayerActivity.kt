@@ -77,6 +77,12 @@ class PlayerActivity : AppCompatActivity() {
         observeState()
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        val (_, card) = IntentParser.parse(intent) ?: return
+        vm.updateCardMeta(card)
+    }
+
     // ─── List setup ────────────────────────────────────────────────
 
     private fun setupLists() {
