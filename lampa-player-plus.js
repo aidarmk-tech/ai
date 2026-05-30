@@ -701,6 +701,7 @@
                 'border-color:transparent;color:#fff;',
             ].join('');
             intro.textContent = '▶▶  ПРОПУСТИТЬ ИНТРО';
+            intro.title = 'Долгое OK → актёры';
             intro.addEventListener('click', function () { Engine.skipIntro(); });
 
             wrap.appendChild(qual);
@@ -932,10 +933,19 @@
         _visible: false,
         _hideTimer: null,
 
+        _firstShown: false,
         toggle: function () {
             if (!settings().cast_bar) return;
             if (this._visible) this.hide();
-            else this.show();
+            else {
+                this.show();
+                if (!this._firstShown) {
+                    this._firstShown = true;
+                    setTimeout(function () {
+                        try { Lampa.Noty.show('В ролях: долгое OK — открыть/закрыть'); } catch (e) {}
+                    }, 600);
+                }
+            }
         },
 
         show: function () {
@@ -1046,6 +1056,28 @@
     // =====================================================================
 
     function bindRemote() {
+        // Долгое нажатие OK (700мс) → панель актёров.
+        // Работает на любом пульте без дополнительных кнопок.
+        var _lpTimer = null;
+        var _lpFired = false;
+        document.addEventListener('keydown', function (e) {
+            var k = e.keyCode || e.which || 0;
+            if ((k === 13 || e.key === 'Enter') && Engine.video && !_lpTimer && !_lpFired) {
+                _lpTimer = setTimeout(function () {
+                    _lpTimer = null;
+                    _lpFired = true;
+                    CastBar.toggle();
+                }, 700);
+            }
+        }, false);
+        document.addEventListener('keyup', function (e) {
+            var k = e.keyCode || e.which || 0;
+            if (k === 13 || e.key === 'Enter') {
+                if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; }
+                _lpFired = false;
+            }
+        }, false);
+
         Lampa.Controller.listener.follow('keydown', function (e) {
             if (!Engine.video) return;
             var k = e.keyCode || e.which || 0;
@@ -1056,14 +1088,10 @@
                 case 'PageDown':   Engine.seekBy(-30); HUD.peek(); break;
                 default:           HUD.peek();         break;
             }
-            // Info / Guide (457) или жёлтая кнопка (405) — смена скорости
-            if (k === 457 || k === 405) {
-                HUD.cycleSpeed();
-            }
-            // Зелёная кнопка (404) или 'g' — панель "в ролях"
-            if (k === 404 || e.code === 'ColorF0Green' || e.code === 'Green' || (e.key || '').toLowerCase() === 'g') {
-                CastBar.toggle();
-            }
+            // Жёлтая (405) / Info (457) — скорость (если есть на пульте)
+            if (k === 457 || k === 405) HUD.cycleSpeed();
+            // Menu/☰ (82) / зелёная (404) — тоже актёры (если есть)
+            if (k === 404 || k === 82 || e.code === 'ContextMenu') CastBar.toggle();
         });
     }
 
