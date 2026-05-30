@@ -61,6 +61,7 @@
         remember_tracks: true,  // запоминать дорожки на сериал
         skip_intro: true,       // показывать кнопку "пропустить интро"
         cast_bar: true,         // панель "в ролях" (долгое OK)
+        audd_token: '',         // токен audd.io для распознавания музыки
         diag: false             // индикатор буфера/качества
     };
 
@@ -78,6 +79,7 @@
             Lampa.Storage.set(this._root, data);
         },
 
+        // Ключ ресурса = хэш url (стабильный между сессиями)
         keyOf: function (url) {
             var h = 0, s = String(url || '');
             for (var i = 0; i < s.length; i++) {
@@ -87,6 +89,7 @@
             return 'r' + Math.abs(h);
         },
 
+        // Ключ сериала (для общих настроек дорожек/интро)
         showKey: function (card) {
             if (!card) return null;
             var id = card.id || card.tmdb_id || card.imdb_id || card.original_title || card.title;
@@ -115,6 +118,7 @@
             this._save(d);
         },
 
+        // Настройки сериала: аудио, субтитры, точка интро
         getShow: function (card) {
             var k = this.showKey(card);
             if (!k) return {};
@@ -172,6 +176,8 @@
             return /\.m3u8(\?|$)/i.test(String(url || ''));
         },
 
+        // Подмена воспроизведения: вызывается при старте плеера Lampa
+        // forceHls=true — пробуем hls.js даже если URL не содержит .m3u8 (для нестандартных балансеров)
         attach: function (video, url, card, forceHls) {
             this.detach();
 
@@ -181,6 +187,7 @@
 
             var cfg = settings();
 
+            // Восстановление позиции
             var saved = Store.getPosition(url);
             var resumeTo = (saved && saved.time && (!saved.watched)) ? saved.time : 0;
 
@@ -203,27 +210,33 @@
         _attachHls: function (video, url, cfg, resumeTo) {
             var prof = BUFFER_PROFILES[cfg.buffer] || BUFFER_PROFILES.medium;
 
+            // Сброс видеоэлемента — иначе hls.js не может взять управление у нативного плеера
             try { video.pause(); video.removeAttribute('src'); video.load(); } catch (e) {}
 
             var hls = new window.Hls({
                 enableWorker: true,
                 lowLatencyMode: false,
+                // Буфер
                 maxBufferLength: prof.maxBufferLength,
                 maxMaxBufferLength: prof.maxMaxBufferLength,
                 maxBufferSize: prof.maxBufferSize,
                 backBufferLength: prof.backBufferLength,
+                // Стабильность воспроизведения
                 maxBufferHole: 0.5,
                 highBufferWatchdogPeriod: 3,
                 nudgeOffset: 0.2,
                 nudgeMaxRetry: 10,
+                // Загрузка фрагментов
                 fragLoadingMaxRetry: 10,
                 fragLoadingMaxRetryTimeout: 64000,
                 manifestLoadingMaxRetry: 5,
                 levelLoadingMaxRetry: 8,
                 levelLoadingRetryDelay: 500,
-                abrEwmaDefaultEstimate: 30 * 1000 * 1000,
+                // ABR: предполагаем высокий битрейт — hls.js сразу выберет 4K если доступен
+                abrEwmaDefaultEstimate: 30 * 1000 * 1000,  // 30 Мбит/с по умолчанию
                 abrMaxWithRealBitrate: true,
-                startLevel: -1,
+                startLevel: -1,  // авто, но с учётом abrEwmaDefaultEstimate стартует высоко
+                // Совместимость с ATV WebView
                 preferManagedMediaSource: false,
                 xhrSetup: function (xhr) {
                     try {
@@ -239,31 +252,35 @@
 
             this.hls = hls;
 
+            // Правильный порядок по документации hls.js: сначала attachMedia, потом loadSource
             hls.attachMedia(video);
             hls.on(window.Hls.Events.MEDIA_ATTACHED, function () {
                 hls.loadSource(url);
             });
 
             hls.on(window.Hls.Events.MANIFEST_PARSED, function (ev, data) {
-                // Двухпроходный выбор уровня без HEVC.
-                // WebView на ATV не декодирует H.265 аппаратно — 4K почти всегда HEVC.
+                // Двухпроходный выбор уровня качества без HEVC-треков.
+                // WebView на ATV не декодирует H.265 аппаратно — 4K-треки почти
+                // всегда HEVC, поэтому их нужно явно пропустить.
                 if (data && data.levels && data.levels.length > 1) {
                     var levels = data.levels;
                     var bestLevel = -1;
 
-                    // Проход 1: явный AVC-трек сверху вниз
+                    // Проход 1: ищем явный AVC-трек сверху вниз (пропускаем HEVC и без codec-инфо)
                     for (var i = levels.length - 1; i >= 0; i--) {
                         var codec = (levels[i].videoCodec || levels[i].codecs || '').toLowerCase();
-                        if (!codec) continue;
-                        if (/hev|hvc|h\.?265|hevc/.test(codec)) continue;
-                        if (/avc|h\.?264/.test(codec)) { bestLevel = i; break; }
+                        if (!codec) continue; // без инфо — пропускаем в первом проходе
+                        if (/hev|hvc|h\.?265|hevc/.test(codec)) continue; // явный HEVC — пропуск
+                        if (/avc|h\.?264/.test(codec)) { bestLevel = i; break; } // явный AVC
+                        // Неизвестный кодек — проверяем canPlayType
                         try {
                             var cp = document.createElement('video').canPlayType('video/mp4; codecs="' + codec + '"');
                             if (cp === 'probably' || cp === 'maybe') { bestLevel = i; break; }
                         } catch (ex) {}
                     }
 
-                    // Проход 2: нет codec-инфо — ограничиваем 1080p (4K на ATV = HEVC)
+                    // Проход 2: нет codec-инфо ни в одном уровне — ограничиваем 1080p.
+                    // На ATV без явного кодека 4K-уровень почти всегда HEVC.
                     if (bestLevel < 0) {
                         for (var j = levels.length - 1; j >= 0; j--) {
                             if ((levels[j].height || 9999) <= 1080) { bestLevel = j; break; }
@@ -271,11 +288,15 @@
                     }
 
                     if (bestLevel >= 0) hls.currentLevel = bestLevel;
+                    // bestLevel = -1 только если у всех уровней height > 1080 и нет codec-инфо
+                    // → ABR выберет сам, MEDIA_ERROR-хендлер понизит при ошибке
                 }
                 if (resumeTo > 0) {
                     try { video.currentTime = resumeTo; } catch (e) {}
                 }
-                // Гейт пред-буферизации
+                // Гейт пред-буферизации: держим паузу пока не наберётся буфер,
+                // потом играем. Дальше BufferGate сам ловит просадки (waiting/stalled)
+                // и делает один чистый ре-буфер вместо череды микро-фризов.
                 var pre = settings().prebuffer | 0;
                 if (pre > 0) {
                     BufferGate.start(video, hls, pre, function () {
@@ -286,6 +307,7 @@
                 }
             });
 
+            // Автовосстановление ошибок (главное против зависаний)
             var _mediaErrCount = 0;
             hls.on(window.Hls.Events.ERROR, function (event, data) {
                 if (!data.fatal) return;
@@ -297,13 +319,16 @@
                     case window.Hls.ErrorTypes.MEDIA_ERROR:
                         _mediaErrCount++;
                         if (_mediaErrCount === 1) {
+                            // Первая попытка: стандартное восстановление
                             Engine._notify('Медиа: восстановление…');
                             hls.recoverMediaError();
                         } else if (_mediaErrCount <= 3 && hls.currentLevel > 0) {
+                            // Повторные ошибки — понижаем качество (кодек несовместим)
                             hls.currentLevel = hls.currentLevel - 1;
                             Engine._notify('Кодек несовместим, понижаю качество…');
                             hls.recoverMediaError();
                         } else {
+                            // Сдаёмся — переключаем на нативный
                             Engine._notify('Ошибка декодера, нативный режим');
                             Engine._attachNative(video, url, video.currentTime || 0);
                             hls.destroy(); Engine.hls = null;
@@ -330,6 +355,7 @@
             video.addEventListener('loadedmetadata', onMeta);
         },
 
+        // Применить запомненные дорожки сериала
         _applyShowTracks: function () {
             if (!settings().remember_tracks || !this.hls || !this.currentCard) return;
             var show = Store.getShow(this.currentCard);
@@ -357,6 +383,7 @@
             }
         },
 
+        // Периодическое сохранение позиции
         _startAutosave: function () {
             var self = this;
             this._stopAutosave();
@@ -371,6 +398,7 @@
             if (this.saveTimer) { clearInterval(this.saveTimer); this.saveTimer = null; }
         },
 
+        // Финальное сохранение + автопереход
         _hookEnded: function () {
             var self = this;
             if (!this.video || this.endedHooked) return;
@@ -379,6 +407,7 @@
             this.video.addEventListener('timeupdate', function () {
                 var v = self.video;
                 if (!v || !isFinite(v.duration)) return;
+                // показать кнопку автоперехода за autonext_delay сек до конца
                 if (settings().autonext && (v.duration - v.currentTime) <= settings().autonext_delay) {
                     UI.showAutoNext();
                 }
@@ -398,6 +427,7 @@
             } catch (e) {}
         },
 
+        // Перемотка
         seekBy: function (sec) {
             if (this.video && isFinite(this.video.duration)) {
                 this.video.currentTime = Math.max(0, Math.min(
@@ -410,6 +440,7 @@
             if (this.video) this.video.playbackRate = rate;
         },
 
+        // Отметить точку интро (для пропуска на следующих сериях)
         markIntro: function () {
             if (this.video && this.currentCard) {
                 Store.patchShow(this.currentCard, { intro_end: this.video.currentTime });
@@ -423,6 +454,7 @@
             }
         },
 
+        // Диагностика
         _startDiag: function () {
             var self = this;
             this._stopDiag();
@@ -459,6 +491,7 @@
             HUD.stop();
             BufferGate.stop();
             CastBar.hide();
+            Shazam.stop();
             if (this.hls) {
                 try { this.hls.destroy(); } catch (e) {}
                 this.hls = null;
@@ -470,7 +503,7 @@
     };
 
     // =====================================================================
-    //  UI ОВЕРЛЕИ
+    //  UI ОВЕРЛЕИ (автопереход, диагностика, кнопка интро)
     // =====================================================================
 
     var UI = {
@@ -525,7 +558,7 @@
     };
 
     // =====================================================================
-    //  СТИЛЬ ПЛЕЕРА
+    //  СТИЛЬ ПЛЕЕРА (CSS-инъекция)
     // =====================================================================
 
     var PlayerSkin = {
@@ -533,26 +566,35 @@
         inject: function () {
             if (this._el) return;
             var css = [
+                // ── Нижняя панель ────────────────────────────────────────────
+                // Убираем сплошной чёрный фон — заменяем на градиент-тень снизу
                 '.player-panel{',
                     'background:linear-gradient(to top,rgba(0,0,0,.92) 0%,rgba(0,0,0,.55) 55%,transparent 100%)!important;',
                     'padding-bottom:.4em!important;',
                 '}',
+                // Верхняя "плашка" если есть (название + время сверху)
                 '.player-panel--top,.player-panel__top{',
                     'background:linear-gradient(to bottom,rgba(0,0,0,.75) 0%,transparent 100%)!important;',
                 '}',
+
+                // ── Прогресс-бар ──────────────────────────────────────────────
                 '.player-timeline,.player-panel__timeline{',
                     'height:4px!important;margin:.6em 0!important;',
                 '}',
+                // Фоновая дорожка
                 '.player-timeline__peding,.player-timeline--peding,.player-timeline > i:first-child{',
                     'background:rgba(255,255,255,.14)!important;border-radius:4px!important;',
                 '}',
+                // Буфер
                 '.player-timeline__buffer,.player-timeline--buffer{',
                     'background:rgba(255,255,255,.3)!important;border-radius:4px!important;',
                 '}',
+                // Просмотрено — синий/фиолетовый градиент
                 '.player-timeline__position,.player-timeline--position,.player-timeline__progress{',
                     'background:linear-gradient(90deg,#3b82f6 0%,#8b5cf6 100%)!important;',
                     'border-radius:4px!important;',
                 '}',
+                // Маркер — светящийся белый кружок
                 '.player-timeline__marker,.player-timeline--marker{',
                     'width:14px!important;height:14px!important;top:-5px!important;',
                     'background:#fff!important;border-radius:50%!important;',
@@ -560,23 +602,32 @@
                     'transition:transform .1s!important;',
                 '}',
                 '.player-timeline:hover .player-timeline__marker{transform:scale(1.35)!important;}',
+
+                // ── Время ────────────────────────────────────────────────────
                 '.player-panel__time,.player-panel--time,.player-panel .time{',
                     'font-weight:600!important;opacity:.75!important;',
                     'font-variant-numeric:tabular-nums!important;',
                     'font-size:.85em!important;letter-spacing:.01em!important;',
                 '}',
+
+                // ── Название эпизода ──────────────────────────────────────────
                 '.player-panel__title,.player-panel--title,.player-info__title,.player-panel .title{',
                     'font-weight:700!important;letter-spacing:.02em!important;',
                     'text-shadow:0 1px 12px rgba(0,0,0,.95)!important;',
                 '}',
+
+                // ── Кнопки: нормальное состояние ─────────────────────────────
                 '.player-panel svg,.player-panel .icon{',
                     'opacity:.75!important;transition:opacity .15s,filter .15s!important;',
                 '}',
+                // Фокус/активная кнопка — синий glow
                 '.player-panel .focus svg,.player-panel .active svg,',
                 '.player-panel .selector.focus svg,.player-panel .focus .icon{',
                     'opacity:1!important;',
                     'filter:drop-shadow(0 0 6px #60a5fa) drop-shadow(0 0 2px #3b82f6)!important;',
                 '}',
+
+                // ── Кнопка качества (FHD / HD и т.д.) ────────────────────────
                 '.player-panel .player-panel__quality,.player-panel__quality{',
                     'background:linear-gradient(135deg,rgba(59,130,246,.55),rgba(139,92,246,.55))!important;',
                     'border:1px solid rgba(96,165,250,.5)!important;',
@@ -584,6 +635,8 @@
                     'font-weight:700!important;font-size:.72rem!important;letter-spacing:.05em!important;',
                     'color:#fff!important;',
                 '}',
+
+                // ── Убираем outline у кнопок ──────────────────────────────────
                 '.player-panel *:focus{outline:none!important;}',
             ].join('');
             var el = document.createElement('style');
@@ -610,7 +663,7 @@
         _qualLoop: null,
         _active: false,
         speeds: [0.5, 0.75, 1, 1.25, 1.5, 2],
-        speedIdx: 2,
+        speedIdx: 2,    // индекс = 1×
 
         _badgeCSS: [
             'display:inline-flex;align-items:center;',
@@ -650,6 +703,7 @@
                 'border-color:transparent;color:#fff;',
             ].join('');
             intro.textContent = '▶▶  ПРОПУСТИТЬ ИНТРО';
+            intro.title = 'Долгое OK → актёры';
             intro.addEventListener('click', function () { Engine.skipIntro(); });
 
             wrap.appendChild(qual);
@@ -750,6 +804,10 @@
     // =====================================================================
     //  BUFFER GATE — пред-буферизация и чистый ре-буфер при просадках
     // =====================================================================
+    //  Высокобитрейтные сцены (тёмный зал, плёночное зерно) выкачивают буфер
+    //  быстрее, чем он скачивается → череда микро-фризов. Решение: держать
+    //  паузу пока не накопится N сек буфера, затем играть. При просадке —
+    //  один аккуратный ре-буфер вместо постоянных подёргиваний.
 
     function bufferedAhead(v) {
         try {
@@ -766,6 +824,7 @@
         _poll: null, _rebufPoll: null,
         _onWaiting: null, _gating: false,
 
+        // Первичный гейт: держим паузу пока не наберётся target сек, потом onReady()
         start: function (video, hls, target, onReady) {
             this.stop();
             this.video = video; this.hls = hls;
@@ -785,12 +844,13 @@
             }, 250);
         },
 
+        // После старта ловим просадки буфера и делаем один чистый ре-буфер
         _hookRebuffer: function (target) {
             var self = this, v = this.video;
-            var resumeAt = Math.max(6, Math.round(target * 0.5));
+            var resumeAt = Math.max(6, Math.round(target * 0.5)); // порог возобновления
             this._onWaiting = function () {
                 if (self._gating) return;
-                if (bufferedAhead(v) >= 2) return;
+                if (bufferedAhead(v) >= 2) return; // ложная тревога — буфер ещё есть
                 self._gating = true;
                 try { v.pause(); } catch (e) {}
                 self._show(0, 'Догружаю буфер');
@@ -864,15 +924,15 @@
     };
 
     // =====================================================================
-    //  CAST BAR — актёры из TMDB (долгое нажатие OK)
+    //  CAST BAR — "в ролях" по данным TMDB (долгое OK)
     // =====================================================================
 
     var CastBar = {
         _cache: {},
         _visible: false,
         _hideTimer: null,
-        _firstShown: false,
 
+        _firstShown: false,
         toggle: function () {
             if (!settings().cast_bar) return;
             if (this._visible) this.hide();
@@ -889,6 +949,17 @@
 
         show: function () {
             var card = Engine.currentCard;
+            // Пробуем найти карточку с TMDB ID агрессивнее:
+            // при старте плеера передаётся "файл", а не полная карточка тайтла
+            if (!card || !(card.id || card.tmdb_id)) {
+                try { if (Lampa.Player && Lampa.Player.card) card = Lampa.Player.card; } catch (e) {}
+            }
+            if (!card || !(card.id || card.tmdb_id)) {
+                try { var act = Lampa.Activity.active(); if (act) card = act.card || act.movie || act; } catch (e) {}
+            }
+            // Иногда id лежит внутри вложенного movie/show объекта
+            if (card && !(card.id || card.tmdb_id)) card = card.movie || card.show || card.card || card;
+
             if (!card || !(card.id || card.tmdb_id)) {
                 try { Lampa.Noty.show('Нет данных TMDB для этого тайтла'); } catch (e) {}
                 return;
@@ -991,29 +1062,253 @@
     };
 
     // =====================================================================
-    //  ПУЛЬТ
+    //  SHAZAM — распознавание музыки через AudD API
+    // =====================================================================
+
+    function _escHtml(s) {
+        return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    var Shazam = {
+        _ctx:       null,
+        _src:       null,   // MediaElementSourceNode (держим, т.к. нельзя пересоздать)
+        _proc:      null,   // ScriptProcessorNode
+        _samples:   [],
+        _capturing: false,
+        _timeout:   null,
+        _overlay:   null,
+
+        capture: function () {
+            if (this._capturing) return;
+            var video = Engine.video;
+            if (!video) return;
+
+            this._samples = [];
+            this._capturing = true;
+            this._showStatus('Слушаю…  (10 сек)');
+
+            try {
+                if (!this._ctx) {
+                    this._ctx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                if (!this._src) {
+                    this._src = this._ctx.createMediaElementSource(video);
+                    this._src.connect(this._ctx.destination);
+                }
+
+                var sampleRate  = this._ctx.sampleRate;
+                var maxSamples  = sampleRate * 10;
+                var bufSize     = 4096;
+                var self        = this;
+
+                this._proc = this._ctx.createScriptProcessor(bufSize, 1, 1);
+                this._src.connect(this._proc);
+                this._proc.connect(this._ctx.destination);
+
+                this._proc.onaudioprocess = function (e) {
+                    if (!self._capturing) return;
+                    var ch = e.inputBuffer.getChannelData(0);
+                    for (var i = 0; i < ch.length && self._samples.length < maxSamples; i++) {
+                        self._samples.push(ch[i]);
+                    }
+                    if (self._samples.length >= maxSamples) {
+                        self._finish(sampleRate);
+                    }
+                };
+
+                this._timeout = setTimeout(function () {
+                    if (self._capturing) self._finish(sampleRate);
+                }, 12000);
+
+            } catch (ex) {
+                this._capturing = false;
+                this._showStatus('Ошибка захвата аудио');
+                var self = this;
+                setTimeout(function () { self._hideOverlay(); }, 3000);
+            }
+        },
+
+        _finish: function (sampleRate) {
+            this._capturing = false;
+            clearTimeout(this._timeout);
+            if (this._proc) {
+                try { this._proc.disconnect(); } catch (e) {}
+                this._proc.onaudioprocess = null;
+                this._proc = null;
+            }
+            if (!this._samples.length) { this._hideOverlay(); return; }
+            this._showStatus('Распознаю…');
+            var wav = this._toWav(this._samples, sampleRate);
+            this._samples = [];
+            this._recognize(wav);
+        },
+
+        _toWav: function (samples, sr) {
+            var len = samples.length;
+            var buf = new ArrayBuffer(44 + len * 2);
+            var v   = new DataView(buf);
+            var ws  = function (off, s) { for (var i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); };
+            ws(0,  'RIFF'); v.setUint32(4,  36 + len * 2, true);
+            ws(8,  'WAVE'); ws(12, 'fmt ');
+            v.setUint32(16, 16, true);    // chunk size
+            v.setInt16(20,  1,  true);    // PCM
+            v.setInt16(22,  1,  true);    // mono
+            v.setUint32(24, sr, true);
+            v.setUint32(28, sr * 2, true);
+            v.setInt16(32,  2,  true);    // block align
+            v.setInt16(34, 16, true);     // bits
+            ws(36, 'data'); v.setUint32(40, len * 2, true);
+            for (var i = 0; i < len; i++) {
+                var s = Math.max(-1, Math.min(1, samples[i]));
+                v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+            }
+            return new Blob([buf], { type: 'audio/wav' });
+        },
+
+        _recognize: function (wav) {
+            var token = settings().audd_token || '';
+            if (!token) {
+                this._showStatus('Укажите AudD-токен в настройках Player Plus');
+                var self = this;
+                setTimeout(function () { self._hideOverlay(); }, 5000);
+                return;
+            }
+            var fd = new FormData();
+            fd.append('file', wav, 'clip.wav');
+            fd.append('api_token', token);
+            fd.append('return', 'spotify,apple_music');
+            var self = this;
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', 'https://api.audd.io/', true);
+            xhr.timeout = 15000;
+            xhr.onload = function () {
+                try {
+                    var res = JSON.parse(xhr.responseText);
+                    if (res.status === 'success' && res.result) {
+                        var r = res.result;
+                        self._showResult(r.artist, r.title, r.album,
+                            (r.spotify && r.spotify.album && r.spotify.album.images &&
+                             r.spotify.album.images[0] && r.spotify.album.images[0].url) ||
+                            (r.apple_music && r.apple_music.artwork && r.apple_music.artwork.url &&
+                             r.apple_music.artwork.url.replace('{w}', '200').replace('{h}', '200')) || '');
+                    } else {
+                        self._showStatus('Музыка не распознана');
+                        setTimeout(function () { self._hideOverlay(); }, 3000);
+                    }
+                } catch (ex) {
+                    self._showStatus('Ошибка ответа сервера');
+                    setTimeout(function () { self._hideOverlay(); }, 3000);
+                }
+            };
+            xhr.onerror = xhr.ontimeout = function () {
+                self._showStatus('Нет связи с AudD');
+                setTimeout(function () { self._hideOverlay(); }, 3000);
+            };
+            xhr.send(fd);
+        },
+
+        _showStatus: function (text) {
+            this._showOverlay(
+                '<div style="font-size:2.5rem;margin-bottom:.9rem;">🎵</div>' +
+                '<div style="color:#fff;font-size:.95rem;font-weight:600;">' + _escHtml(text) + '</div>'
+            );
+        },
+
+        _showResult: function (artist, title, album, imgUrl) {
+            var img = imgUrl
+                ? '<img src="' + imgUrl + '" style="width:5.5rem;height:5.5rem;border-radius:.7rem;' +
+                  'object-fit:cover;margin-bottom:.9rem;box-shadow:0 4px 20px rgba(0,0,0,.55);">' 
+                : '<div style="font-size:3rem;margin-bottom:.9rem;">🎵</div>';
+            var html = img +
+                '<div style="color:#60a5fa;font-size:.65rem;font-weight:700;letter-spacing:.14em;' +
+                'margin-bottom:.5rem;">SHAZAM</div>' +
+                '<div style="color:#fff;font-size:1.05rem;font-weight:700;margin-bottom:.25rem;' +
+                'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px;">' +
+                _escHtml(title || '—') + '</div>' +
+                '<div style="color:rgba(255,255,255,.6);font-size:.82rem;white-space:nowrap;' +
+                'overflow:hidden;text-overflow:ellipsis;max-width:260px;">' + _escHtml(artist || '') + '</div>' +
+                (album ? '<div style="color:rgba(255,255,255,.38);font-size:.72rem;margin-top:.2rem;' +
+                'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px;">' +
+                _escHtml(album) + '</div>' : '');
+            this._showOverlay(html);
+            var self = this;
+            setTimeout(function () { self._hideOverlay(); }, 8000);
+        },
+
+        _showOverlay: function (html) {
+            this._hideOverlay();
+            var el = document.createElement('div');
+            el.id = 'pp-shazam';
+            el.style.cssText = [
+                'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:9998;',
+                'background:rgba(12,12,22,.93);border-radius:1.3rem;',
+                'border:1px solid rgba(96,165,250,.18);',
+                'padding:2rem 2.8rem;text-align:center;min-width:260px;',
+                'font-family:system-ui,-apple-system,sans-serif;',
+                'box-shadow:0 24px 64px rgba(0,0,0,.75);',
+                'animation:pp-castin .2s ease both;pointer-events:none;'
+            ].join('');
+            el.innerHTML = html;
+            document.body.appendChild(el);
+            this._overlay = el;
+        },
+
+        _hideOverlay: function () {
+            if (this._overlay) { try { this._overlay.remove(); } catch (e) {} this._overlay = null; }
+        },
+
+        stop: function () {
+            this._capturing = false;
+            clearTimeout(this._timeout);
+            if (this._proc) {
+                try { this._proc.disconnect(); } catch (e) {}
+                this._proc.onaudioprocess = null;
+                this._proc = null;
+            }
+            this._hideOverlay();
+            this._samples = [];
+            // _ctx и _src не разрушаем: MediaElementSource нельзя пересоздать для того же <video>
+        }
+    };
+
+    // =====================================================================
+    //  ПУЛЬТ (D-pad перемотка + горячие действия)
     // =====================================================================
 
     function bindRemote() {
-        // Долгое нажатие OK (700мс) → панель актёров.
-        // Работает на любом пульте без дополнительных кнопок.
-        var _lpTimer = null;
-        var _lpFired = false;
+        // OK поведение:
+        //   Двойной тап  (< 400 мс между нажатиями) → Shazam
+        //   Долгое (700 мс)                          → CastBar
+        //   Обычное нажатие                          → пауза/воспроизведение (Lampa)
+        var _lpTimer  = null;
+        var _lpFired  = false;
+        var _lastOkUp = 0;
+
         document.addEventListener('keydown', function (e) {
             var k = e.keyCode || e.which || 0;
-            if ((k === 13 || e.key === 'Enter') && Engine.video && !_lpTimer && !_lpFired) {
-                _lpTimer = setTimeout(function () {
-                    _lpTimer = null;
-                    _lpFired = true;
-                    CastBar.toggle();
-                }, 700);
+            if ((k === 13 || e.key === 'Enter') && Engine.video && !_lpFired) {
+                // Двойной тап: второе нажатие пришло < 400 мс после первого keyup
+                if (!_lpTimer && Date.now() - _lastOkUp < 400) {
+                    _lastOkUp = 0;
+                    Shazam.capture();
+                    e.stopPropagation();
+                    return;
+                }
+                if (!_lpTimer) {
+                    _lpTimer = setTimeout(function () {
+                        _lpTimer = null;
+                        _lpFired = true;
+                        CastBar.toggle();
+                    }, 700);
+                }
             }
         }, false);
         document.addEventListener('keyup', function (e) {
             var k = e.keyCode || e.which || 0;
             if (k === 13 || e.key === 'Enter') {
                 if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; }
-                _lpFired = false;
+                _lpFired  = false;
+                _lastOkUp = Date.now();
             }
         }, false);
 
@@ -1039,6 +1334,8 @@
     // =====================================================================
 
     function showPlayerSelect(cb) {
+        // Задержка 700мс: Enter от запуска фильма не должен сразу выбрать пункт
+        // (некоторые ATV-пульты дают повтор нажатия — увеличено с 450 до 700)
         var readyAt = Date.now() + 700;
 
         var style = document.createElement('style');
@@ -1085,6 +1382,7 @@
             'box-shadow:0 40px 100px rgba(0,0,0,.85),0 0 0 .5px rgba(255,255,255,.04) inset;'
         ].join('');
 
+        /* Шапка */
         var head = document.createElement('div');
         head.style.cssText = [
             'display:flex;align-items:center;gap:.8rem;',
@@ -1149,6 +1447,7 @@
         box.appendChild(btnPlus);
         box.appendChild(btnNative);
 
+        /* Подсказка снизу */
         var hint = document.createElement('div');
         hint.style.cssText = [
             'text-align:center;color:rgba(255,255,255,.2);',
@@ -1180,8 +1479,10 @@
 
         function choose(usePlus) {
             cleanup();
-            // Глушим keydown+keyup+keypress 1.5с — иначе keyup от OK
-            // проскакивает в Lampa-диалог «Продолжить с отметки»
+            // ГЛАВНАЯ ПРИЧИНА автонажатия "продолжить с отметки": пульт на OK даёт
+            // пару событий keydown+keyup. Мы гасили только keydown в onKey, а keyup
+            // от ТОГО ЖЕ нажатия проскакивал в диалог Lampa под нашим окном и
+            // подтверждал его. Поэтому глушим keydown+keyup+keypress ещё 1.5с.
             var sink = function (e) { e.stopPropagation(); e.preventDefault(); };
             document.addEventListener('keydown',  sink, true);
             document.addEventListener('keyup',    sink, true);
@@ -1194,16 +1495,18 @@
             cb(usePlus);
         }
 
+        /* Capture-phase: перехватываем до Lampa, e.stopPropagation блокирует плеер */
         function onKey(e) {
             if (!document.getElementById('pp-select-overlay')) { cleanup(); return; }
             e.stopPropagation();
             e.preventDefault();
+            /* Первые 450мс — глотаем нажатия, Enter не срабатывает */
             if (Date.now() < readyAt) return;
             var k = e.keyCode || e.which || 0;
             var key = e.key || '';
-            if      (key === 'ArrowUp'   || k === 38)                               { setFocus(focused - 1); }
-            else if (key === 'ArrowDown' || k === 40)                               { setFocus(focused + 1); }
-            else if (key === 'Enter'     || k === 13)                               { choose(focused === 0); }
+            if      (key === 'ArrowUp'   || k === 38)                              { setFocus(focused - 1); }
+            else if (key === 'ArrowDown' || k === 40)                              { setFocus(focused + 1); }
+            else if (key === 'Enter'     || k === 13)                              { choose(focused === 0); }
             else if (key === 'Escape' || key === 'GoBack' || k === 27 || k === 461) { choose(false); }
         }
         document.addEventListener('keydown', onKey, true);
@@ -1219,17 +1522,23 @@
     function hookPlayer() {
         if (!window.Lampa || !Lampa.Player) return;
 
+        // Защита от двойного диалога: start может сработать повторно когда hls.js
+        // перехватывает видеоэлемент (Lampa детектирует изменение src → новый start).
         var _lastSelectTime = 0;
 
         Lampa.Player.listener.follow('start', function (e) {
+            // Не показываем диалог если он был < 8с назад (защита от двойного срабатывания)
             if (Date.now() - _lastSelectTime < 8000) return;
 
+            // Lampa может передавать URL как e.url или как e.data.url
             var data = (e && e.data) ? e.data : (e || {});
             var url  = data.url
                     || (data.timeline && data.timeline.url)
                     || (data.file && data.file.url)
                     || '';
             var card = data.card || (data.file && data.file.card) || Lampa.Player.card || null;
+            // Показываем диалог для любого URL (не только .m3u8): некоторые балансеры
+            // отдают HLS без m3u8 в пути. isHls используется только внутри Engine.attach.
             if (!url || !hlsReady) return;
 
             _lastSelectTime = Date.now();
@@ -1241,6 +1550,7 @@
                     tries++;
                     if (video) {
                         clearInterval(check);
+                        // forceHls=true: пробуем hls.js даже без .m3u8 в URL
                         Engine.attach(video, url, card, true);
                     } else if (tries > 50) clearInterval(check);
                 }, 100);
@@ -1306,8 +1616,15 @@
         Lampa.SettingsApi.addParam({
             component: PLUGIN_NAME,
             param: { name: 'pp_cast', type: 'trigger', default: s.cast_bar },
-            field: { name: 'Панель "в ролях"', description: 'Долгое OK во время воспроизведения — актёры тайтла' },
+            field: { name: 'Панель "в ролях"', description: 'Долгое OK — показать/скрыть актёров тайтла' },
             onChange: function (v) { setSetting('cast_bar', v === true || v === 'true'); }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: PLUGIN_NAME,
+            param: { name: 'pp_audd_token', type: 'input', default: s.audd_token || '' },
+            field: { name: 'AudD-токен (Shazam)', description: 'Токен с audd.io — двойное OK во время воспроизведения распознаёт музыку' },
+            onChange: function (v) { setSetting('audd_token', typeof v === 'string' ? v.trim() : ''); }
         });
 
         Lampa.SettingsApi.addParam({
