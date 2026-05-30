@@ -32,7 +32,7 @@ data class PlayerUiState(
     val quality: String = "",
     val translator: String = "",
     val isPlaying: Boolean = false,
-    val isLoading: Boolean = true,
+    val isLoading: Boolean = false,
     val hasError: Boolean = false,
     val errorMessage: String = "",
     val osdVisible: Boolean = true,
@@ -167,13 +167,6 @@ class PlayerViewModel @Inject constructor(
         if (settings.diag) startDiag()
 
         card.tmdbId?.let { loadMetadata(it, card.isSerial, card) }
-
-        viewModelScope.launch {
-            delay(800)
-            _uiState.update { it.copy(showMetadata = true) }
-            delay(if (card.tmdbId != null) 6000L else 3000L)
-            _uiState.update { it.copy(showMetadata = false) }
-        }
     }
 
     private fun loadUrl(url: String, card: CardMeta) {
@@ -261,14 +254,20 @@ class PlayerViewModel @Inject constructor(
             val year = (meta.release_date ?: meta.first_air_date)?.take(4) ?: ""
             val rating = meta.vote_average?.let { "★ %.1f".format(it) } ?: ""
             val info = listOfNotNull(year.ifEmpty { null }, rating.ifEmpty { null }, card.quality).joinToString(" · ")
+            // Set metadata and show flag atomically so the observer sees both at once
             _uiState.update { s ->
-                s.copy(metadata = PlayerUiState.MetadataDisplay(
-                    title = title, info = info,
-                    overview = meta.overview ?: "",
-                    cast = "",
-                    posterUrl = TmdbRepository.posterUrl(meta.poster_path) ?: card.posterUrl,
-                ))
+                s.copy(
+                    metadata = PlayerUiState.MetadataDisplay(
+                        title = title, info = info,
+                        overview = meta.overview ?: "",
+                        cast = "",
+                        posterUrl = TmdbRepository.posterUrl(meta.poster_path) ?: card.posterUrl,
+                    ),
+                    showMetadata = true,
+                )
             }
+            delay(6000)
+            _uiState.update { it.copy(showMetadata = false) }
         }
     }
 

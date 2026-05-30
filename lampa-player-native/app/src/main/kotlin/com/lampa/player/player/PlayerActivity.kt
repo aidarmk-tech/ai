@@ -134,7 +134,7 @@ class PlayerActivity : AppCompatActivity() {
                     binding.btnPlayPause.requestFocus()
                 }
 
-                binding.progressBuffering.isVisible = s.isLoading && !s.hasError
+                binding.progressBuffering.isVisible = s.isLoading && !s.isPlaying && !s.hasError
                 binding.errorContainer.isVisible = s.hasError
                 binding.tvErrorMessage.text = s.errorMessage
                 binding.btnSkipIntro.isVisible = s.showSkipIntro && !s.hasError
@@ -150,8 +150,8 @@ class PlayerActivity : AppCompatActivity() {
                 binding.infoPanel.isVisible = s.infoPanelVisible
                 if (s.infoPanelVisible) applyPanelTab(s)
 
-                // Video info row (format/resolution/audio)
-                binding.tvVideoInfo.isVisible = s.videoInfo.isNotEmpty()
+                // Video info row — only visible while OSD is open
+                binding.tvVideoInfo.isVisible = s.videoInfo.isNotEmpty() && s.osdVisible
                 binding.tvVideoInfo.text = s.videoInfo
 
                 // TMDB overlay
@@ -285,24 +285,9 @@ class PlayerActivity : AppCompatActivity() {
                 // INFO / MENU → info panel
                 KeyEvent.KEYCODE_INFO,
                 KeyEvent.KEYCODE_MENU -> { vm.toggleInfoPanel(); true }
-                // ← / → while OSD: seek AND let focus navigate
-                KeyEvent.KEYCODE_DPAD_LEFT -> {
-                    // If a button other than progress is focused, let focus system navigate
-                    val focused = currentFocus
-                    if (focused == binding.progressBar || focused == null) {
-                        doSeek(false); vm.showOsd(); true
-                    } else {
-                        super.onKeyDown(keyCode, event)
-                    }
-                }
-                KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                    val focused = currentFocus
-                    if (focused == binding.progressBar || focused == null) {
-                        doSeek(true); vm.showOsd(); true
-                    } else {
-                        super.onKeyDown(keyCode, event)
-                    }
-                }
+                // ← / → always seek, never navigate focus
+                KeyEvent.KEYCODE_DPAD_LEFT -> { doSeek(false); vm.showOsd(); true }
+                KeyEvent.KEYCODE_DPAD_RIGHT -> { doSeek(true); vm.showOsd(); true }
                 // Everything else: let focus system handle (navigates between buttons, OK clicks)
                 else -> super.onKeyDown(keyCode, event)
             }
