@@ -2,6 +2,7 @@
 <resources>
     <!-- Background -->
     <color name="bg_primary">#0A0A0F</color>
+    <color name="ic_launcher_background">#0A0A0F</color>
     <color name="bg_surface">#14141C</color>
     <color name="bg_elevated">#1E1E2A</color>
     <color name="bg_overlay">#D90A0A0F</color>
