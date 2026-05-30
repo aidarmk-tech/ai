@@ -12,14 +12,10 @@
     var PACKAGE = 'com.lampa.player';
     var PLUGIN_NAME = 'lmnp';
 
-    // ── Запуск через intent:// (Lampa WebView умеет это обрабатывать) ────
+    // ── Запуск через intent:// ────────────────────────────────────────────
     function launch(videoUrl, cardData) {
         var json = JSON.stringify(cardData);
-
-        // Экранируем # в URL чтобы не сломать intent:// формат
         var safeUrl = videoUrl.replace(/#/g, '%23');
-
-        // Все данные в одном extra lampa_data — нет проблем с ; в JSON
         var intentUri = 'intent:' + safeUrl +
             '#Intent' +
             ';action=android.intent.action.VIEW' +
@@ -28,65 +24,84 @@
             ';S.lampa_data=' + encodeURIComponent(json) +
             ';end;';
 
-        // Метод 1: навигация WebView — Lampa перехватывает intent://
         try { window.location.href = intentUri; return true; } catch (e) {}
-
-        // Метод 2: Android-мост если есть
         try {
             if (window.Android && typeof Android.openUrl === 'function') {
-                Android.openUrl(intentUri);
-                return true;
+                Android.openUrl(intentUri); return true;
             }
         } catch (e) {}
-
-        // Метод 3: lmnp:// fallback
         try {
             var b64 = btoa(unescape(encodeURIComponent(json)));
             window.location.href = 'lmnp://play?url=' + encodeURIComponent(videoUrl) + '&d=' + encodeURIComponent(b64);
             return true;
         } catch (e) {}
-
         return false;
     }
 
-    // ── Поиск TMDB-карточки из стека активностей ─────────────────────────
-    // Плеер в Lampa — это оверлей, не новая активность.
-    // Lampa.Activity.active() возвращает последний экран перед плеером.
-    // Для сериала это может быть экран серий (без TMDB id), а выше — экран фильма (с TMDB id).
-    // Ищем карточку с id, перебирая весь стек снизу вверх.
+    // ── Хранилище: сохраняем карточку когда пользователь открывает фильм ─
+    // Балансер вызывает play() с карточкой источника (без TMDB id).
+    // Настоящая TMDB-карточка сохраняется заранее, когда пользователь
+    // открывает страницу фильма — до запуска плеера.
 
-    function findTmdbCard(data, file) {
+    var _savedCard = null;
+    var _savedFile = null;
+
+    function saveTmdbCard(obj) {
+        if (!obj || typeof obj !== 'object') return;
+        // Разворачиваем обёртки
+        var c = obj.movie || obj.show || obj.card || obj;
+        if (c && (c.id || c.tmdb_id) && (c.title || c.name)) {
+            _savedCard = c;
+        }
+    }
+
+    function hookActivity() {
+        // Слушаем открытие карточки фильма/сериала через глобальный Listener.
+        // Событие 'activity' (или 'full') сигнализирует о переходе пользователя
+        // на страницу с TMDB-данными.
+        try {
+            Lampa.Listener.follow('full', function (e) {
+                saveTmdbCard(e && (e.data || e));
+            });
+        } catch (_) {}
+        try {
+            Lampa.Listener.follow('activity', function (e) {
+                var obj = e && (e.data || e.object || e);
+                saveTmdbCard(obj);
+            });
+        } catch (_) {}
+        // Также пробуем напрямую из active() при каждом старте
+        // (резервный вариант если listener не сработал)
+    }
+
+    // ── Получение TMDB-карточки в момент запуска ──────────────────────────
+    function findCard(data, file) {
+        // 1. Предсохранённая карточка — самый надёжный источник
+        if (_savedCard && (_savedCard.id || _savedCard.tmdb_id)) return _savedCard;
+
         var candidates = [];
 
-        // Стек активностей Lampa (от самой старой к последней)
-        // activity.card содержит карточку открытого фильма/шоу
-        try {
-            var all = Lampa.Activity.all ? Lampa.Activity.all() : [];
-            for (var i = 0; i < all.length; i++) {
-                if (!all[i]) continue;
-                if (all[i].card)  candidates.push(all[i].card);
-                if (all[i].movie) candidates.push(all[i].movie);
-            }
-        } catch (_) {}
-
-        // Текущая активность (то, что под плеером)
+        // 2. Текущая активность (последний экран перед плеером)
         try {
             var act = Lampa.Activity.active();
             if (act) {
-                if (act.card)  candidates.push(act.card);
-                if (act.movie) candidates.push(act.movie);
+                candidates.push(act.card);
+                candidates.push(act.movie);
+                // Сам объект активности может быть карточкой
+                if (act.id || act.tmdb_id) candidates.push(act);
             }
         } catch (_) {}
 
-        // Player.card и Player.item как запасной вариант
-        try { if (Lampa.Player.card)  candidates.push(Lampa.Player.card); } catch (_) {}
-        try { if (Lampa.Player.item)  candidates.push(Lampa.Player.item); } catch (_) {}
+        // 3. Данные из события start
+        try { candidates.push(data.card); } catch (_) {}
+        try { candidates.push(data.movie); } catch (_) {}
+        // data может быть самой карточкой (некоторые балансеры передают так)
+        try { if (data.id || data.tmdb_id) candidates.push(data); } catch (_) {}
 
-        // Данные из события start
-        try { if (data.card) candidates.push(data.card); } catch (_) {}
-        try { if (file && file.card) candidates.push(file.card); } catch (_) {}
+        // 4. Player.card
+        try { candidates.push(Lampa.Player.card); } catch (_) {}
+        try { candidates.push(file && file.card); } catch (_) {}
 
-        // Разворачиваем обёртки (балансер может обернуть карточку в {movie: {...}})
         function unwrap(c) {
             if (!c || typeof c !== 'object') return null;
             if (c.id || c.tmdb_id) return c;
@@ -94,12 +109,10 @@
             return (inner && inner !== c && (inner.id || inner.tmdb_id)) ? inner : c;
         }
 
-        // Приоритет — карточка с TMDB id
         for (var i = 0; i < candidates.length; i++) {
             var u = unwrap(candidates[i]);
             if (u && (u.id || u.tmdb_id)) return u;
         }
-        // Иначе — любая с названием
         for (var i = 0; i < candidates.length; i++) {
             var u = unwrap(candidates[i]);
             if (u && (u.title || u.name)) return u;
@@ -107,9 +120,10 @@
         return null;
     }
 
-    // ── Плейлист серий ────────────────────────────────────────────────────
-    // Для сериалов используем Lampa.PlayerPlaylist — именно его использует Lampa.
-    // Для IPTV (tv: true / iptv: true) плейлист — это список каналов, не передаём.
+    // ── Плейлист ──────────────────────────────────────────────────────────
+    // Балансер устанавливает плейлист ПОСЛЕ вызова play(), поэтому читаем
+    // его с задержкой (вызываем через setTimeout).
+    // IPTV-каналы (tv: true / iptv: true) не передаём как список серий.
 
     function getPlaylist() {
         var list = null, pos = 0;
@@ -119,57 +133,46 @@
                 pos  = Lampa.PlayerPlaylist.position ? (Lampa.PlayerPlaylist.position() || 0) : 0;
             }
         } catch (_) {}
-        // Fallback: Lampa.Player.playlist()
-        try {
-            if (!list && Lampa.Player.playlist) list = Lampa.Player.playlist();
-        } catch (_) {}
-        // IPTV каналы не нужны как список серий
-        if (list && list.length && (list[0].tv || list[0].iptv)) {
-            list = null; pos = 0;
-        }
-        return { playlist: list, index: pos };
+        try { if (!list && Lampa.Player.playlist) list = Lampa.Player.playlist(); } catch (_) {}
+        if (list && list.length && (list[0].tv || list[0].iptv)) { list = null; pos = 0; }
+        return { list: list, pos: pos };
     }
 
-    // ── EPG из данных IPTV-плагина ────────────────────────────────────────
-    // IPTV-плагины (rootu.top, etc.) передают EPG как массив:
-    //   data.epg = [startMinutes, durationMinutes, title, description?]
-    // Для архива/catchup этот массив есть в data.epg.
-    // Для текущей прямой трансляции — в data.epg тоже, если плагин заполнил.
+    // ── EPG ───────────────────────────────────────────────────────────────
+    // Формат от IPTV-плагинов: data.epg = [startMinutes, durationMinutes, title]
+    // Для живого ТВ data.epg обычно не заполнен — принимаем это ограничение.
 
     function getEpg(card, data) {
-        // Формат от IPTV-плагина: массив [startMin, durMin, title, ...]
-        var epgArr = null;
-        try { epgArr = (data && Array.isArray(data.epg)) ? data.epg : null; } catch (_) {}
-        try { if (!epgArr && card && Array.isArray(card.epg)) epgArr = card.epg; } catch (_) {}
-
-        if (epgArr && epgArr.length >= 2) {
-            var startMs = epgArr[0] * 60000;
-            var endMs   = (epgArr[0] + epgArr[1]) * 60000;
-            var fmt = function(ms) {
+        // Массив [startMin, durMin, title] — формат IPTV-плагинов (rootu.top и др.)
+        var arr = null;
+        try { arr = (data && Array.isArray(data.epg)) ? data.epg : null; } catch (_) {}
+        try { if (!arr && card && Array.isArray(card.epg)) arr = card.epg; } catch (_) {}
+        if (arr && arr.length >= 2) {
+            var fmt = function (ms) {
                 var d = new Date(ms);
                 return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
             };
             return {
-                epg_title: epgArr[2] || '',
-                epg_start: fmt(startMs),
-                epg_end:   fmt(endMs),
+                epg_title: arr[2] || '',
+                epg_start: fmt(arr[0] * 60000),
+                epg_end:   fmt((arr[0] + arr[1]) * 60000),
             };
         }
-
-        // Lampa EPG API (для VOD-карточек с TMDB)
-        var r = {};
+        // Lampa EPG API (VOD/IPTV через Lampa)
         try {
             var now = null;
             if (window.Lampa && Lampa.EPG && Lampa.EPG.now) now = Lampa.EPG.now(card);
             if (!now && card && card.current) now = card.current;
-            if (!now && card && card.epg && typeof card.epg === 'object') now = card.epg;
-            if (now) {
-                r.epg_title = now.title || now.name  || '';
-                r.epg_start = now.start || now.time_start || '';
-                r.epg_end   = now.stop  || now.time_end   || '';
+            if (!now && card && card.epg && typeof card.epg === 'object' && !Array.isArray(card.epg)) now = card.epg;
+            if (now && (now.title || now.name)) {
+                return {
+                    epg_title: now.title || now.name || '',
+                    epg_start: now.start || now.time_start || '',
+                    epg_end:   now.stop  || now.time_end   || '',
+                };
             }
         } catch (_) {}
-        return r;
+        return {};
     }
 
     // ── Постер ────────────────────────────────────────────────────────────
@@ -181,13 +184,12 @@
         return null;
     }
 
-    // ── Список эпизодов (≤50 вокруг текущего) ────────────────────────────
-    function buildEpisodes(playlist, currentIndex) {
+    // ── Список эпизодов ───────────────────────────────────────────────────
+    function buildEpisodes(playlist, idx) {
         if (!playlist || playlist.length < 2) return null;
         try {
-            var start = Math.max(0, (currentIndex || 0) - 25);
-            var slice = playlist.slice(start, start + 50);
-            var eps = slice.map(function (item, i) {
+            var start = Math.max(0, (idx || 0) - 25);
+            var eps = playlist.slice(start, start + 50).map(function (item, i) {
                 return {
                     title:   item.title || item.name || ('Серия ' + (start + i + 1)),
                     url:     item.url || item.file || '',
@@ -199,16 +201,13 @@
         } catch (_) { return null; }
     }
 
-    // ── Сборка карточки для передачи плееру ──────────────────────────────
+    // ── Сборка объекта для передачи в APK ────────────────────────────────
     function buildCard(rawCard, fileData, epgData, playlist, episodeIndex) {
         var c = rawCard || {};
-
-        // Если у карточки нет TMDB id — пробуем развернуть обёртку
         if (!c.id && !c.tmdb_id) {
             var inner = c.movie || c.show || c.card;
             if (inner && (inner.id || inner.tmdb_id || inner.title || inner.name)) c = inner;
         }
-
         var file = (fileData && typeof fileData === 'object') ? fileData : {};
         var epg  = getEpg(c, epgData);
 
@@ -220,12 +219,11 @@
             season_number:  c.season_number || c.season || 0,
             episode_number: c.episode_number || c.episode || 0,
             poster_url:     posterUrl(c),
-            backdrop_url:   c.backdrop_path
-                ? 'https://image.tmdb.org/t/p/w1280' + c.backdrop_path : null,
+            backdrop_url:   c.backdrop_path ? 'https://image.tmdb.org/t/p/w1280' + c.backdrop_path : null,
             overview:       c.overview || null,
             release_year:   parseInt((c.release_date || c.first_air_date || '').substring(0, 4)) || 0,
             rating:         c.vote_average || 0,
-            quality:        file.quality   || null,
+            quality:        file.quality  || null,
             translator:     file.translate || null,
             timeline_time:     (file.timeline && file.timeline.time)     || 0,
             timeline_duration: (file.timeline && file.timeline.duration) || 0,
@@ -234,23 +232,19 @@
             episodes:       buildEpisodes(playlist, episodeIndex),
             episode_index:  episodeIndex || 0,
         };
-
         if (epg.epg_title) {
             card.epg_title = epg.epg_title;
             card.epg_start = epg.epg_start || null;
             card.epg_end   = epg.epg_end   || null;
         }
-
-        // Убираем пустые значения
         Object.keys(card).forEach(function (k) {
             var v = card[k];
             if (v === null || v === undefined || v === 0 || v === '') delete card[k];
         });
-
         return card;
     }
 
-    // ── Хук на старт плеера ──────────────────────────────────────────────
+    // ── Хук на плеер ─────────────────────────────────────────────────────
 
     var _lastLaunch = 0;
 
@@ -269,29 +263,33 @@
                         || '';
             if (!videoUrl || !/^https?:|^rtsp:|^udp:/.test(videoUrl)) return;
 
-            // TMDB-карточка: ищем в стеке активностей (1-2 уровня выше плеера)
-            var rawCard = findTmdbCard(data, file);
+            // Сохраняем file для buildCard
+            _savedFile = typeof file === 'object' ? file : {};
 
-            // Плейлист серий через Lampa.PlayerPlaylist
-            var pl = getPlaylist();
+            // Задержка 300мс: балансер устанавливает плейлист ПОСЛЕ play(),
+            // поэтому читаем Lampa.PlayerPlaylist.get() с задержкой.
+            var capturedData = data;
+            setTimeout(function () {
+                var rawCard = findCard(capturedData, _savedFile);
+                var pl      = getPlaylist();
 
-            var cardData = buildCard(
-                rawCard,
-                typeof file === 'object' ? file : {},
-                data,                   // для EPG: data.epg = [startMin, durMin, title]
-                pl.playlist,
-                pl.index
-            );
+                var cardData = buildCard(
+                    rawCard,
+                    _savedFile,
+                    capturedData,
+                    pl.list,
+                    pl.pos
+                );
 
-            if (launch(videoUrl, cardData)) {
-                _lastLaunch = Date.now();
-                // Останавливаем WebView-плеер — иначе двоится звук
-                try { Lampa.Player.pause && Lampa.Player.pause(); } catch (_) {}
-                try {
-                    var vid = document.querySelector('video');
-                    if (vid) { vid.pause(); vid.removeAttribute('src'); }
-                } catch (_) {}
-            }
+                if (launch(videoUrl, cardData)) {
+                    _lastLaunch = Date.now();
+                    try { Lampa.Player.pause && Lampa.Player.pause(); } catch (_) {}
+                    try {
+                        var vid = document.querySelector('video');
+                        if (vid) { vid.pause(); vid.removeAttribute('src'); }
+                    } catch (_) {}
+                }
+            }, 300);
         });
     }
 
@@ -320,6 +318,7 @@
 
     function start() {
         addSettings();
+        hookActivity();   // сохраняем TMDB-карточку при открытии фильма
         hookPlayer();
         try { Lampa.Noty.show('Native Player подключён'); } catch (_) {}
     }
