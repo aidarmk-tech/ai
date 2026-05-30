@@ -3,7 +3,6 @@ package com.lampa.player.player
 import android.content.Intent
 import android.os.Bundle
 import android.view.KeyEvent
-import android.view.View
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.viewModels
@@ -17,9 +16,9 @@ import com.bumptech.glide.Glide
 import com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions
 import com.lampa.player.R
 import com.lampa.player.databinding.ActivityPlayerBinding
-import com.lampa.player.domain.model.EpisodeItem
 import com.lampa.player.settings.SettingsActivity
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
@@ -45,12 +44,17 @@ class PlayerActivity : AppCompatActivity() {
         onSelected = { vm.selectSubtitle(it.substringBefore(":").trim().toIntOrNull() ?: 0) }
     )
 
-    private var longPressJob: kotlinx.coroutines.Job? = null
-    private var longPressSpeed = 1
+    // Seek preview state
+    private var seekTargetMs = -1L
+    private var seekDebounceJob: Job? = null
+    private var hideSeekPreviewJob: Job? = null
+
+    // Turbo rewind
+    private var turboJob: Job? = null
+    private var turboSpeed = 1
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Keep screen on while player is active
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         binding = ActivityPlayerBinding.inflate(layoutInflater)
         setContentView(binding.root)
@@ -65,9 +69,11 @@ class PlayerActivity : AppCompatActivity() {
         binding.playerView.useController = false
 
         setupInfoPanel()
-        setupClickListeners()
+        setupOsdClicks()
         observeState()
     }
+
+    // ─── Info panel setup ──────────────────────────────────────────
 
     private fun setupInfoPanel() {
         binding.rvInfoList.layoutManager = LinearLayoutManager(this)
@@ -79,10 +85,12 @@ class PlayerActivity : AppCompatActivity() {
         binding.tabEpg.setOnClickListener { vm.setInfoPanelTab(InfoPanelTab.EPG) }
     }
 
-    private fun setupClickListeners() {
+    // ─── OSD button clicks (when focused) ──────────────────────────
+
+    private fun setupOsdClicks() {
         binding.btnPlayPause.setOnClickListener { vm.onKeyOk(); vm.showOsd() }
-        binding.btnRewind.setOnClickListener { vm.onKeyLeft(); vm.showOsd() }
-        binding.btnForward.setOnClickListener { vm.onKeyRight(); vm.showOsd() }
+        binding.btnRewind.setOnClickListener { doSeek(false, fast = false); vm.showOsd() }
+        binding.btnForward.setOnClickListener { doSeek(true, fast = false); vm.showOsd() }
         binding.btnPrev.setOnClickListener { vm.onPrevEpisode(); vm.showOsd() }
         binding.btnNext.setOnClickListener { vm.onNextEpisode(); vm.showOsd() }
         binding.btnInfo.setOnClickListener { vm.toggleInfoPanel() }
@@ -97,13 +105,10 @@ class PlayerActivity : AppCompatActivity() {
         binding.btnSettings.setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
-        binding.metadataOverlay.setOnClickListener {
-            binding.metadataOverlay.animate().alpha(0f).setDuration(200).withEndAction {
-                binding.metadataOverlay.isVisible = false
-                binding.metadataOverlay.alpha = 1f
-            }.start()
-        }
+        binding.metadataOverlay.setOnClickListener { hideMetadataOverlay() }
     }
+
+    // ─── State observation ─────────────────────────────────────────
 
     private fun observeState() {
         lifecycleScope.launch {
@@ -115,22 +120,26 @@ class PlayerActivity : AppCompatActivity() {
                 binding.tvTranslator.isVisible = s.translator.isNotEmpty()
                 binding.tvTranslator.text = s.translator
                 binding.btnPlayPause.setImageResource(
-                    if (s.isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
+                    if (s.isPlaying) android.R.drawable.ic_media_pause
+                    else android.R.drawable.ic_media_play
                 )
-                // Episode counter badge on info button
                 binding.tvEpisodeBadge.isVisible = s.episodes.size > 1
                 binding.tvEpisodeBadge.text = "${s.currentEpisodeIndex + 1}/${s.episodes.size}"
 
-                // States
-                binding.progressBuffering.isVisible = s.isLoading && !s.hasError
+                // OSD visibility — when shown, focus play/pause button
+                val osdWasHidden = !binding.osdContainer.isVisible
                 binding.osdContainer.isVisible = s.osdVisible
+                if (s.osdVisible && osdWasHidden) {
+                    binding.btnPlayPause.requestFocus()
+                }
+
+                binding.progressBuffering.isVisible = s.isLoading && !s.hasError
                 binding.errorContainer.isVisible = s.hasError
                 binding.tvErrorMessage.text = s.errorMessage
                 binding.btnSkipIntro.isVisible = s.showSkipIntro && !s.hasError
                 binding.diagText.isVisible = s.settings.diag && s.diagText.isNotEmpty()
                 binding.diagText.text = s.diagText
 
-                // Auto-next
                 val showNext = s.autoNextCountdown >= 0
                 binding.autoNextOverlay.isVisible = showNext
                 if (showNext) binding.tvAutoNextCountdown.text =
@@ -138,9 +147,11 @@ class PlayerActivity : AppCompatActivity() {
 
                 // Info panel
                 binding.infoPanel.isVisible = s.infoPanelVisible
-                if (s.infoPanelVisible) {
-                    applyPanelTab(s)
-                }
+                if (s.infoPanelVisible) applyPanelTab(s)
+
+                // Video info row (format/resolution/audio)
+                binding.tvVideoInfo.isVisible = s.videoInfo.isNotEmpty()
+                binding.tvVideoInfo.text = s.videoInfo
 
                 // TMDB overlay
                 s.metadata?.let { meta ->
@@ -149,10 +160,7 @@ class PlayerActivity : AppCompatActivity() {
                         binding.metadataOverlay.isVisible = true
                         binding.metadataOverlay.animate().alpha(1f).setDuration(400).start()
                     } else if (!s.showMetadata && binding.metadataOverlay.isVisible) {
-                        binding.metadataOverlay.animate().alpha(0f).setDuration(300).withEndAction {
-                            binding.metadataOverlay.isVisible = false
-                            binding.metadataOverlay.alpha = 1f
-                        }.start()
+                        hideMetadataOverlay()
                     }
                     binding.tvMetaTitle.text = meta.title
                     binding.tvMetaInfo.text = meta.info
@@ -169,33 +177,44 @@ class PlayerActivity : AppCompatActivity() {
         lifecycleScope.launch { vm.navigateToNext.collect { finishWithResult(completed = true) } }
         lifecycleScope.launch { vm.showExitDialog.collect { showExitDialog() } }
 
-        // Progress loop
+        // Progress polling
         lifecycleScope.launch {
             while (isActive) {
                 delay(500)
                 val p = vm.player
-                val pos = p.currentPosition; val dur = p.duration
+                val pos = p.currentPosition
+                val dur = p.duration
                 if (dur > 0) {
                     vm.onProgress(pos, dur)
                     binding.progressBar.progress = ((pos.toFloat() / dur) * 1000).toInt()
                     binding.tvCurrentTime.text = formatTime(pos)
                     binding.tvDuration.text = formatTime(dur)
+                    // Update seek indicator position
+                    if (seekTargetMs >= 0) {
+                        binding.seekIndicator.progress = ((seekTargetMs.toFloat() / dur) * 1000).toInt()
+                    }
                 }
             }
         }
     }
 
+    private fun hideMetadataOverlay() {
+        binding.metadataOverlay.animate().alpha(0f).setDuration(200).withEndAction {
+            binding.metadataOverlay.isVisible = false
+            binding.metadataOverlay.alpha = 1f
+        }.start()
+    }
+
     private fun applyPanelTab(s: PlayerUiState) {
-        // Tab highlight
         val accent = getColor(R.color.accent_primary)
         val secondary = getColor(R.color.text_secondary)
-        listOf(binding.tabEpisodes to InfoPanelTab.EPISODES,
+        listOf(
+            binding.tabEpisodes to InfoPanelTab.EPISODES,
             binding.tabAudio to InfoPanelTab.AUDIO,
             binding.tabSubtitles to InfoPanelTab.SUBTITLES,
-            binding.tabEpg to InfoPanelTab.EPG
+            binding.tabEpg to InfoPanelTab.EPG,
         ).forEach { (tv, tab) -> tv.setTextColor(if (s.infoPanelTab == tab) accent else secondary) }
 
-        // Tab visibility
         binding.tabEpisodes.isVisible = s.episodes.isNotEmpty()
         binding.tabEpg.isVisible = s.card?.epgTitle != null
 
@@ -225,73 +244,140 @@ class PlayerActivity : AppCompatActivity() {
         binding.tvEpgContent.isVisible = s.infoPanelTab == InfoPanelTab.EPG
     }
 
+    // ─── Key handling ──────────────────────────────────────────────
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         val s = vm.uiState.value
         val panelVisible = s.infoPanelVisible
         val osdVisible = s.osdVisible
 
-        // Panel open: let RecyclerView handle navigation
+        // ── Panel open: only intercept BACK and LEFT ──────────────
         if (panelVisible) {
-            if (keyCode == KeyEvent.KEYCODE_BACK) { vm.hideInfoPanel(); return true }
-            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) { vm.hideInfoPanel(); return true }
-            return super.onKeyDown(keyCode, event)
+            return when (keyCode) {
+                KeyEvent.KEYCODE_BACK,
+                KeyEvent.KEYCODE_DPAD_LEFT -> { vm.hideInfoPanel(); true }
+                else -> super.onKeyDown(keyCode, event) // let RecyclerView navigate
+            }
         }
 
+        // ── Media keys — always handle ────────────────────────────
         when (keyCode) {
-            KeyEvent.KEYCODE_DPAD_LEFT -> {
-                vm.onKeyLeft(); vm.showOsd()
-                if (event.repeatCount > 3) startTurboRewind(false)
-                return true
-            }
-            KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                vm.onKeyRight(); vm.showOsd()
-                if (event.repeatCount > 3) startTurboRewind(true)
-                return true
-            }
-            KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_CHANNEL_UP -> { vm.onKeyPageUp(); vm.showOsd(); return true }
-            KeyEvent.KEYCODE_PAGE_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> { vm.onKeyPageDown(); vm.showOsd(); return true }
-            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                if (!osdVisible) vm.showOsd() else vm.onKeyOk()
-                return true
-            }
-            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE -> {
-                vm.onKeyOk(); return true
-            }
-            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { vm.onKeyRight(); return true }
-            KeyEvent.KEYCODE_MEDIA_REWIND -> { vm.onKeyLeft(); return true }
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+            KeyEvent.KEYCODE_MEDIA_PLAY,
+            KeyEvent.KEYCODE_MEDIA_PAUSE -> { vm.onKeyOk(); return true }
+            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { doSeek(true); vm.showOsd(); return true }
+            KeyEvent.KEYCODE_MEDIA_REWIND -> { doSeek(false); vm.showOsd(); return true }
             KeyEvent.KEYCODE_MEDIA_NEXT -> { vm.onNextEpisode(); return true }
             KeyEvent.KEYCODE_MEDIA_PREVIOUS -> { vm.onPrevEpisode(); return true }
-            KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_MENU -> { vm.toggleInfoPanel(); return true }
-            KeyEvent.KEYCODE_DPAD_UP -> {
-                if (osdVisible) { vm.toggleInfoPanel(); return true }
-            }
-            KeyEvent.KEYCODE_BACK -> { vm.onKeyBack(osdVisible, panelVisible); return true }
         }
 
-        vm.showOsd()
-        return super.onKeyDown(keyCode, event)
+        // ── OSD visible: focus system handles navigation ──────────
+        if (osdVisible) {
+            return when (keyCode) {
+                KeyEvent.KEYCODE_BACK -> { vm.onKeyBack(true, false); true }
+                // ↓ while OSD visible → open info panel (audio/subtitles)
+                KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    vm.setInfoPanelTab(InfoPanelTab.AUDIO)
+                    vm.toggleInfoPanel()
+                    true
+                }
+                // INFO / MENU → info panel
+                KeyEvent.KEYCODE_INFO,
+                KeyEvent.KEYCODE_MENU -> { vm.toggleInfoPanel(); true }
+                // ← / → while OSD: seek AND let focus navigate
+                KeyEvent.KEYCODE_DPAD_LEFT -> {
+                    // If a button other than progress is focused, let focus system navigate
+                    val focused = currentFocus
+                    if (focused == binding.progressBar || focused == null) {
+                        doSeek(false); vm.showOsd(); true
+                    } else {
+                        super.onKeyDown(keyCode, event)
+                    }
+                }
+                KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    val focused = currentFocus
+                    if (focused == binding.progressBar || focused == null) {
+                        doSeek(true); vm.showOsd(); true
+                    } else {
+                        super.onKeyDown(keyCode, event)
+                    }
+                }
+                // Everything else: let focus system handle (navigates between buttons, OK clicks)
+                else -> super.onKeyDown(keyCode, event)
+            }
+        }
+
+        // ── OSD hidden: D-Pad controls playback ──────────────────
+        return when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_LEFT -> {
+                doSeek(false, repeatCount = event.repeatCount)
+                vm.showOsd()
+                true
+            }
+            KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                doSeek(true, repeatCount = event.repeatCount)
+                vm.showOsd()
+                true
+            }
+            KeyEvent.KEYCODE_PAGE_UP,
+            KeyEvent.KEYCODE_CHANNEL_UP -> { vm.onKeyPageUp(); vm.showOsd(); true }
+            KeyEvent.KEYCODE_PAGE_DOWN,
+            KeyEvent.KEYCODE_CHANNEL_DOWN -> { vm.onKeyPageDown(); vm.showOsd(); true }
+            // ↓ or OK when OSD hidden → show OSD (with focus on controls)
+            KeyEvent.KEYCODE_DPAD_DOWN,
+            KeyEvent.KEYCODE_DPAD_UP,
+            KeyEvent.KEYCODE_DPAD_CENTER,
+            KeyEvent.KEYCODE_ENTER -> { vm.showOsd(); true }
+            KeyEvent.KEYCODE_INFO,
+            KeyEvent.KEYCODE_MENU -> { vm.toggleInfoPanel(); true }
+            KeyEvent.KEYCODE_BACK -> { vm.onKeyBack(false, false); true }
+            else -> super.onKeyDown(keyCode, event)
+        }
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) stopTurboRewind()
+        if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
+            turboJob?.cancel(); turboSpeed = 1
+        }
         return super.onKeyUp(keyCode, event)
     }
 
-    private fun startTurboRewind(forward: Boolean) {
-        if (longPressJob?.isActive == true) return
-        longPressJob = lifecycleScope.launch {
-            while (isActive) {
-                val seekMs = (longPressSpeed * 5_000).toLong()
-                val p = vm.player
-                if (forward) p.seekTo(p.currentPosition + seekMs)
-                else p.seekTo((p.currentPosition - seekMs).coerceAtLeast(0))
-                delay(250)
-                if (longPressSpeed < 12) longPressSpeed++
-            }
+    // ─── Seek with preview ─────────────────────────────────────────
+
+    private fun doSeek(forward: Boolean, fast: Boolean = false, repeatCount: Int = 0) {
+        val dur = vm.player.duration.takeIf { it > 0 } ?: return
+
+        val stepMs = when {
+            fast || repeatCount > 8 -> 30_000L
+            repeatCount > 3 -> 15_000L
+            else -> 10_000L
+        }
+
+        // Initialise from current position if first in sequence
+        if (seekTargetMs < 0) seekTargetMs = vm.player.currentPosition
+        seekTargetMs = if (forward) (seekTargetMs + stepMs).coerceAtMost(dur)
+                       else (seekTargetMs - stepMs).coerceAtLeast(0)
+
+        // Show preview
+        binding.seekPreviewContainer.isVisible = true
+        binding.tvSeekTime.text = formatTime(seekTargetMs)
+        binding.tvSeekDelta.text = if (forward) "+${stepMs / 1000}с →" else "← -${stepMs / 1000}с"
+        binding.seekIndicator.progress = ((seekTargetMs.toFloat() / dur) * 1000).toInt()
+        binding.seekIndicator.isVisible = true
+
+        // Debounce: commit seek after 600ms inactivity
+        seekDebounceJob?.cancel()
+        seekDebounceJob = lifecycleScope.launch {
+            delay(600)
+            vm.player.seekTo(seekTargetMs)
+            seekTargetMs = -1L
+            delay(1500)
+            binding.seekPreviewContainer.isVisible = false
+            binding.seekIndicator.isVisible = false
         }
     }
 
-    private fun stopTurboRewind() { longPressJob?.cancel(); longPressSpeed = 1 }
+    // ─── Helpers ───────────────────────────────────────────────────
 
     private fun showExitDialog() {
         vm.player.pause()
@@ -316,7 +402,6 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     override fun onStop() { super.onStop(); vm.player.pause() }
-    override fun onDestroy() { longPressJob?.cancel(); super.onDestroy() }
 
     private fun formatTime(ms: Long): String {
         val s = ms / 1000; val h = s / 3600; val m = (s % 3600) / 60; val sec = s % 60

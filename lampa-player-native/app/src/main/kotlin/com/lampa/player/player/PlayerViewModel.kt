@@ -54,6 +54,7 @@ data class PlayerUiState(
     val subtitleTracks: List<String> = emptyList(),
     val selectedAudioIndex: Int = -1,
     val selectedSubtitleIndex: Int = -1,
+    val videoInfo: String = "",
 ) {
     data class MetadataDisplay(
         val title: String,
@@ -383,8 +384,30 @@ class PlayerViewModel @Inject constructor(
             override fun onTracksChanged(tracks: Tracks) {
                 _uiState.update { it.copy(currentTracks = tracks) }
                 if (_uiState.value.infoPanelVisible) refreshTracks()
+                updateVideoInfo()
             }
+
+            override fun onVideoSizeChanged(videoSize: VideoSize) = updateVideoInfo()
         })
+    }
+
+    private fun updateVideoInfo() {
+        val vfmt = player.videoFormat
+        val afmt = player.audioFormat
+        val info = buildString {
+            if (vfmt != null) {
+                if (vfmt.width > 0) append("${vfmt.width}×${vfmt.height}  ")
+                if (vfmt.frameRate > 0) append("%.0ffps  ".format(vfmt.frameRate))
+                vfmt.codecs?.let { append("$it  ") }
+                if (vfmt.bitrate > 0) append("${vfmt.bitrate / 1000}kbps  ")
+            }
+            if (afmt != null) {
+                afmt.language?.let { append("Аудио: $it  ") }
+                afmt.codecs?.let { append("$it  ") }
+                if (afmt.channelCount > 0) append("${afmt.channelCount}ch  ")
+            }
+        }.trim()
+        _uiState.update { it.copy(videoInfo = info) }
     }
 
     private fun buildErrorMessage(e: PlaybackException) = when (e.errorCode) {
