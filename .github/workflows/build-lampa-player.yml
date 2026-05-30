@@ -22,20 +22,15 @@ jobs:
           java-version: "17"
           distribution: "temurin"
 
-      - name: Install Gradle wrapper
-        working-directory: lampa-player-native
-        run: |
-          gradle wrapper --gradle-version=8.7 --distribution-type=bin
-          chmod +x gradlew
-
-      - name: Cache Gradle packages
-        uses: actions/cache@v4
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
         with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ hashFiles('lampa-player-native/**/*.gradle.kts', 'lampa-player-native/gradle/libs.versions.toml') }}
-          restore-keys: gradle-
+          gradle-version: "8.7"
+          cache-read-only: false
+
+      - name: Generate Gradle wrapper
+        working-directory: lampa-player-native
+        run: gradle wrapper --gradle-version=8.7 --distribution-type=bin
 
       - name: Build Debug APK
         working-directory: lampa-player-native
@@ -48,8 +43,6 @@ jobs:
           path: lampa-player-native/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
 
-      - name: Show APK info
+      - name: Show APK size
         working-directory: lampa-player-native
-        run: |
-          echo "=== APK built successfully ==="
-          ls -lh app/build/outputs/apk/debug/
+        run: ls -lh app/build/outputs/apk/debug/app-debug.apk
