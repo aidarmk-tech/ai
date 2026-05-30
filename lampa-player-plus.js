@@ -60,7 +60,8 @@
         autonext_delay: 10,     // сек до перехода
         remember_tracks: true,  // запоминать дорожки на сериал
         skip_intro: true,       // показывать кнопку "пропустить интро"
-        cast_bar: true,         // панель "в ролях" (зелёная кнопка пульта)
+        cast_bar: true,         // панель "в ролях" (долгое OK)
+        audd_token: '',         // токен audd.io для распознавания музыки
         diag: false             // индикатор буфера/качества
     };
 
@@ -490,6 +491,7 @@
             HUD.stop();
             BufferGate.stop();
             CastBar.hide();
+            Shazam.stop();
             if (this.hls) {
                 try { this.hls.destroy(); } catch (e) {}
                 this.hls = null;
@@ -922,11 +924,8 @@
     };
 
     // =====================================================================
-    //  CAST BAR — "в ролях" по данным TMDB (зелёная кнопка пульта)
+    //  CAST BAR — "в ролях" по данным TMDB (долгое OK)
     // =====================================================================
-    //  Заметка про "что за музыка играет": offline определить трек нельзя —
-    //  нужен внешний fingerprint-сервис (типа Shazam) и доступ к аудиопотоку.
-    //  Поэтому реализуем достоверное: список актёров текущего тайтла.
 
     var CastBar = {
         _cache: {},
@@ -950,6 +949,17 @@
 
         show: function () {
             var card = Engine.currentCard;
+            // Пробуем найти карточку с TMDB ID агрессивнее:
+            // при старте плеера передаётся "файл", а не полная карточка тайтла
+            if (!card || !(card.id || card.tmdb_id)) {
+                try { if (Lampa.Player && Lampa.Player.card) card = Lampa.Player.card; } catch (e) {}
+            }
+            if (!card || !(card.id || card.tmdb_id)) {
+                try { var act = Lampa.Activity.active(); if (act) card = act.card || act.movie || act; } catch (e) {}
+            }
+            // Иногда id лежит внутри вложенного movie/show объекта
+            if (card && !(card.id || card.tmdb_id)) card = card.movie || card.show || card.card || card;
+
             if (!card || !(card.id || card.tmdb_id)) {
                 try { Lampa.Noty.show('Нет данных TMDB для этого тайтла'); } catch (e) {}
                 return;
@@ -1052,29 +1062,253 @@
     };
 
     // =====================================================================
+    //  SHAZAM — распознавание музыки через AudD API
+    // =====================================================================
+
+    function _escHtml(s) {
+        return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    var Shazam = {
+        _ctx:       null,
+        _src:       null,   // MediaElementSourceNode (держим, т.к. нельзя пересоздать)
+        _proc:      null,   // ScriptProcessorNode
+        _samples:   [],
+        _capturing: false,
+        _timeout:   null,
+        _overlay:   null,
+
+        capture: function () {
+            if (this._capturing) return;
+            var video = Engine.video;
+            if (!video) return;
+
+            this._samples = [];
+            this._capturing = true;
+            this._showStatus('Слушаю…  (10 сек)');
+
+            try {
+                if (!this._ctx) {
+                    this._ctx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                if (!this._src) {
+                    this._src = this._ctx.createMediaElementSource(video);
+                    this._src.connect(this._ctx.destination);
+                }
+
+                var sampleRate  = this._ctx.sampleRate;
+                var maxSamples  = sampleRate * 10;
+                var bufSize     = 4096;
+                var self        = this;
+
+                this._proc = this._ctx.createScriptProcessor(bufSize, 1, 1);
+                this._src.connect(this._proc);
+                this._proc.connect(this._ctx.destination);
+
+                this._proc.onaudioprocess = function (e) {
+                    if (!self._capturing) return;
+                    var ch = e.inputBuffer.getChannelData(0);
+                    for (var i = 0; i < ch.length && self._samples.length < maxSamples; i++) {
+                        self._samples.push(ch[i]);
+                    }
+                    if (self._samples.length >= maxSamples) {
+                        self._finish(sampleRate);
+                    }
+                };
+
+                this._timeout = setTimeout(function () {
+                    if (self._capturing) self._finish(sampleRate);
+                }, 12000);
+
+            } catch (ex) {
+                this._capturing = false;
+                this._showStatus('Ошибка захвата аудио');
+                var self = this;
+                setTimeout(function () { self._hideOverlay(); }, 3000);
+            }
+        },
+
+        _finish: function (sampleRate) {
+            this._capturing = false;
+            clearTimeout(this._timeout);
+            if (this._proc) {
+                try { this._proc.disconnect(); } catch (e) {}
+                this._proc.onaudioprocess = null;
+                this._proc = null;
+            }
+            if (!this._samples.length) { this._hideOverlay(); return; }
+            this._showStatus('Распознаю…');
+            var wav = this._toWav(this._samples, sampleRate);
+            this._samples = [];
+            this._recognize(wav);
+        },
+
+        _toWav: function (samples, sr) {
+            var len = samples.length;
+            var buf = new ArrayBuffer(44 + len * 2);
+            var v   = new DataView(buf);
+            var ws  = function (off, s) { for (var i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); };
+            ws(0,  'RIFF'); v.setUint32(4,  36 + len * 2, true);
+            ws(8,  'WAVE'); ws(12, 'fmt ');
+            v.setUint32(16, 16, true);    // chunk size
+            v.setInt16(20,  1,  true);    // PCM
+            v.setInt16(22,  1,  true);    // mono
+            v.setUint32(24, sr, true);
+            v.setUint32(28, sr * 2, true);
+            v.setInt16(32,  2,  true);    // block align
+            v.setInt16(34, 16, true);     // bits
+            ws(36, 'data'); v.setUint32(40, len * 2, true);
+            for (var i = 0; i < len; i++) {
+                var s = Math.max(-1, Math.min(1, samples[i]));
+                v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+            }
+            return new Blob([buf], { type: 'audio/wav' });
+        },
+
+        _recognize: function (wav) {
+            var token = settings().audd_token || '';
+            if (!token) {
+                this._showStatus('Укажите AudD-токен в настройках Player Plus');
+                var self = this;
+                setTimeout(function () { self._hideOverlay(); }, 5000);
+                return;
+            }
+            var fd = new FormData();
+            fd.append('file', wav, 'clip.wav');
+            fd.append('api_token', token);
+            fd.append('return', 'spotify,apple_music');
+            var self = this;
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', 'https://api.audd.io/', true);
+            xhr.timeout = 15000;
+            xhr.onload = function () {
+                try {
+                    var res = JSON.parse(xhr.responseText);
+                    if (res.status === 'success' && res.result) {
+                        var r = res.result;
+                        self._showResult(r.artist, r.title, r.album,
+                            (r.spotify && r.spotify.album && r.spotify.album.images &&
+                             r.spotify.album.images[0] && r.spotify.album.images[0].url) ||
+                            (r.apple_music && r.apple_music.artwork && r.apple_music.artwork.url &&
+                             r.apple_music.artwork.url.replace('{w}', '200').replace('{h}', '200')) || '');
+                    } else {
+                        self._showStatus('Музыка не распознана');
+                        setTimeout(function () { self._hideOverlay(); }, 3000);
+                    }
+                } catch (ex) {
+                    self._showStatus('Ошибка ответа сервера');
+                    setTimeout(function () { self._hideOverlay(); }, 3000);
+                }
+            };
+            xhr.onerror = xhr.ontimeout = function () {
+                self._showStatus('Нет связи с AudD');
+                setTimeout(function () { self._hideOverlay(); }, 3000);
+            };
+            xhr.send(fd);
+        },
+
+        _showStatus: function (text) {
+            this._showOverlay(
+                '<div style="font-size:2.5rem;margin-bottom:.9rem;">🎵</div>' +
+                '<div style="color:#fff;font-size:.95rem;font-weight:600;">' + _escHtml(text) + '</div>'
+            );
+        },
+
+        _showResult: function (artist, title, album, imgUrl) {
+            var img = imgUrl
+                ? '<img src="' + imgUrl + '" style="width:5.5rem;height:5.5rem;border-radius:.7rem;' +
+                  'object-fit:cover;margin-bottom:.9rem;box-shadow:0 4px 20px rgba(0,0,0,.55);">'
+                : '<div style="font-size:3rem;margin-bottom:.9rem;">🎵</div>';
+            var html = img +
+                '<div style="color:#60a5fa;font-size:.65rem;font-weight:700;letter-spacing:.14em;' +
+                'margin-bottom:.5rem;">SHAZAM</div>' +
+                '<div style="color:#fff;font-size:1.05rem;font-weight:700;margin-bottom:.25rem;' +
+                'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px;">' +
+                _escHtml(title || '—') + '</div>' +
+                '<div style="color:rgba(255,255,255,.6);font-size:.82rem;white-space:nowrap;' +
+                'overflow:hidden;text-overflow:ellipsis;max-width:260px;">' + _escHtml(artist || '') + '</div>' +
+                (album ? '<div style="color:rgba(255,255,255,.38);font-size:.72rem;margin-top:.2rem;' +
+                'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px;">' +
+                _escHtml(album) + '</div>' : '');
+            this._showOverlay(html);
+            var self = this;
+            setTimeout(function () { self._hideOverlay(); }, 8000);
+        },
+
+        _showOverlay: function (html) {
+            this._hideOverlay();
+            var el = document.createElement('div');
+            el.id = 'pp-shazam';
+            el.style.cssText = [
+                'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:9998;',
+                'background:rgba(12,12,22,.93);border-radius:1.3rem;',
+                'border:1px solid rgba(96,165,250,.18);',
+                'padding:2rem 2.8rem;text-align:center;min-width:260px;',
+                'font-family:system-ui,-apple-system,sans-serif;',
+                'box-shadow:0 24px 64px rgba(0,0,0,.75);',
+                'animation:pp-castin .2s ease both;pointer-events:none;'
+            ].join('');
+            el.innerHTML = html;
+            document.body.appendChild(el);
+            this._overlay = el;
+        },
+
+        _hideOverlay: function () {
+            if (this._overlay) { try { this._overlay.remove(); } catch (e) {} this._overlay = null; }
+        },
+
+        stop: function () {
+            this._capturing = false;
+            clearTimeout(this._timeout);
+            if (this._proc) {
+                try { this._proc.disconnect(); } catch (e) {}
+                this._proc.onaudioprocess = null;
+                this._proc = null;
+            }
+            this._hideOverlay();
+            this._samples = [];
+            // _ctx и _src не разрушаем: MediaElementSource нельзя пересоздать для того же <video>
+        }
+    };
+
+    // =====================================================================
     //  ПУЛЬТ (D-pad перемотка + горячие действия)
     // =====================================================================
 
     function bindRemote() {
-        // Долгое нажатие OK (700мс) → панель актёров.
-        // Работает на любом пульте без дополнительных кнопок.
-        var _lpTimer = null;
-        var _lpFired = false;
+        // OK поведение:
+        //   Двойной тап  (< 400 мс между нажатиями) → Shazam
+        //   Долгое (700 мс)                          → CastBar
+        //   Обычное нажатие                          → пауза/воспроизведение (Lampa)
+        var _lpTimer  = null;
+        var _lpFired  = false;
+        var _lastOkUp = 0;
+
         document.addEventListener('keydown', function (e) {
             var k = e.keyCode || e.which || 0;
-            if ((k === 13 || e.key === 'Enter') && Engine.video && !_lpTimer && !_lpFired) {
-                _lpTimer = setTimeout(function () {
-                    _lpTimer = null;
-                    _lpFired = true;
-                    CastBar.toggle();
-                }, 700);
+            if ((k === 13 || e.key === 'Enter') && Engine.video && !_lpFired) {
+                // Двойной тап: второе нажатие пришло < 400 мс после первого keyup
+                if (!_lpTimer && Date.now() - _lastOkUp < 400) {
+                    _lastOkUp = 0;
+                    Shazam.capture();
+                    e.stopPropagation();
+                    return;
+                }
+                if (!_lpTimer) {
+                    _lpTimer = setTimeout(function () {
+                        _lpTimer = null;
+                        _lpFired = true;
+                        CastBar.toggle();
+                    }, 700);
+                }
             }
         }, false);
         document.addEventListener('keyup', function (e) {
             var k = e.keyCode || e.which || 0;
             if (k === 13 || e.key === 'Enter') {
                 if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; }
-                _lpFired = false;
+                _lpFired  = false;
+                _lastOkUp = Date.now();
             }
         }, false);
 
@@ -1382,8 +1616,15 @@
         Lampa.SettingsApi.addParam({
             component: PLUGIN_NAME,
             param: { name: 'pp_cast', type: 'trigger', default: s.cast_bar },
-            field: { name: 'Панель "в ролях"', description: 'Зелёная кнопка пульта (или G) — актёры тайтла' },
+            field: { name: 'Панель "в ролях"', description: 'Долгое OK — показать/скрыть актёров тайтла' },
             onChange: function (v) { setSetting('cast_bar', v === true || v === 'true'); }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: PLUGIN_NAME,
+            param: { name: 'pp_audd_token', type: 'input', default: s.audd_token || '' },
+            field: { name: 'AudD-токен (Shazam)', description: 'Токен с audd.io — двойное OK во время воспроизведения распознаёт музыку' },
+            onChange: function (v) { setSetting('audd_token', typeof v === 'string' ? v.trim() : ''); }
         });
 
         Lampa.SettingsApi.addParam({
