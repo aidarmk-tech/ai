@@ -55,10 +55,12 @@
     var SETTINGS_DEFAULT = {
         engine: 'hls',          // hls | native
         buffer: 'medium',       // low | medium | high
+        prebuffer: 20,          // сек пред-буферизации до старта (0 = выкл)
         autonext: true,         // автопереход серий
         autonext_delay: 10,     // сек до перехода
         remember_tracks: true,  // запоминать дорожки на сериал
         skip_intro: true,       // показывать кнопку "пропустить интро"
+        cast_bar: true,         // панель "в ролях" (зелёная кнопка пульта)
         diag: false             // индикатор буфера/качества
     };
 
@@ -291,7 +293,17 @@
                 if (resumeTo > 0) {
                     try { video.currentTime = resumeTo; } catch (e) {}
                 }
-                video.play().catch(function () {});
+                // Гейт пред-буферизации: держим паузу пока не наберётся буфер,
+                // потом играем. Дальше BufferGate сам ловит просадки (waiting/stalled)
+                // и делает один чистый ре-буфер вместо череды микро-фризов.
+                var pre = settings().prebuffer | 0;
+                if (pre > 0) {
+                    BufferGate.start(video, hls, pre, function () {
+                        video.play().catch(function () {});
+                    });
+                } else {
+                    video.play().catch(function () {});
+                }
             });
 
             // Автовосстановление ошибок (главное против зависаний)
@@ -476,6 +488,8 @@
             this._stopAutosave();
             this._stopDiag();
             HUD.stop();
+            BufferGate.stop();
+            CastBar.hide();
             if (this.hls) {
                 try { this.hls.destroy(); } catch (e) {}
                 this.hls = null;
@@ -785,6 +799,249 @@
     };
 
     // =====================================================================
+    //  BUFFER GATE — пред-буферизация и чистый ре-буфер при просадках
+    // =====================================================================
+    //  Высокобитрейтные сцены (тёмный зал, плёночное зерно) выкачивают буфер
+    //  быстрее, чем он скачивается → череда микро-фризов. Решение: держать
+    //  паузу пока не накопится N сек буфера, затем играть. При просадке —
+    //  один аккуратный ре-буфер вместо постоянных подёргиваний.
+
+    function bufferedAhead(v) {
+        try {
+            var t = v.currentTime, b = v.buffered;
+            for (var i = 0; i < b.length; i++) {
+                if (t >= b.start(i) - 0.5 && t <= b.end(i) + 0.5) return b.end(i) - t;
+            }
+        } catch (e) {}
+        return 0;
+    }
+
+    var BufferGate = {
+        video: null, hls: null,
+        _poll: null, _rebufPoll: null,
+        _onWaiting: null, _gating: false,
+
+        // Первичный гейт: держим паузу пока не наберётся target сек, потом onReady()
+        start: function (video, hls, target, onReady) {
+            this.stop();
+            this.video = video; this.hls = hls;
+            var self = this;
+            try { video.pause(); } catch (e) {}
+            this._show(0, 'Буферизация');
+            this._poll = setInterval(function () {
+                var ahead = bufferedAhead(video);
+                self._show(Math.min(100, Math.round(ahead / target * 100)), 'Буферизация');
+                var almostEnd = isFinite(video.duration) && ahead >= (video.duration - video.currentTime - 1);
+                if (ahead >= target || almostEnd) {
+                    clearInterval(self._poll); self._poll = null;
+                    self._hide();
+                    onReady();
+                    self._hookRebuffer(target);
+                }
+            }, 250);
+        },
+
+        // После старта ловим просадки буфера и делаем один чистый ре-буфер
+        _hookRebuffer: function (target) {
+            var self = this, v = this.video;
+            var resumeAt = Math.max(6, Math.round(target * 0.5)); // порог возобновления
+            this._onWaiting = function () {
+                if (self._gating) return;
+                if (bufferedAhead(v) >= 2) return; // ложная тревога — буфер ещё есть
+                self._gating = true;
+                try { v.pause(); } catch (e) {}
+                self._show(0, 'Догружаю буфер');
+                self._rebufPoll = setInterval(function () {
+                    var ahead = bufferedAhead(v);
+                    self._show(Math.min(100, Math.round(ahead / resumeAt * 100)), 'Догружаю буфер');
+                    var almostEnd = isFinite(v.duration) && ahead >= (v.duration - v.currentTime - 1);
+                    if (ahead >= resumeAt || almostEnd) {
+                        clearInterval(self._rebufPoll); self._rebufPoll = null;
+                        self._gating = false;
+                        self._hide();
+                        v.play().catch(function () {});
+                    }
+                }, 250);
+            };
+            v.addEventListener('waiting', this._onWaiting);
+            v.addEventListener('stalled', this._onWaiting);
+        },
+
+        _show: function (pct, label) {
+            var el = document.getElementById('pp-buf');
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 'pp-buf';
+                el.style.cssText = [
+                    'position:fixed;top:0;left:0;width:100%;height:100%;z-index:9997;',
+                    'display:flex;flex-direction:column;align-items:center;justify-content:center;',
+                    'gap:1.1rem;background:rgba(0,0,0,.35);pointer-events:none;',
+                    'font-family:system-ui,-apple-system,sans-serif;'
+                ].join('');
+                el.innerHTML = [
+                    '<div id="pp-buf-ring" style="width:3.6rem;height:3.6rem;border-radius:50%;',
+                        'border:3px solid rgba(255,255,255,.15);border-top-color:#60a5fa;',
+                        'animation:pp-spin .8s linear infinite;"></div>',
+                    '<div style="display:flex;flex-direction:column;align-items:center;gap:.3rem;">',
+                        '<div id="pp-buf-lbl" style="color:#fff;font-weight:700;font-size:.95rem;',
+                            'letter-spacing:.04em;text-shadow:0 1px 8px rgba(0,0,0,.9);"></div>',
+                        '<div id="pp-buf-pct" style="color:#60a5fa;font-weight:700;font-size:.8rem;',
+                            'font-variant-numeric:tabular-nums;"></div>',
+                    '</div>'
+                ].join('');
+                if (!document.getElementById('pp-buf-kf')) {
+                    var st = document.createElement('style');
+                    st.id = 'pp-buf-kf';
+                    st.textContent = '@keyframes pp-spin{to{transform:rotate(360deg)}}';
+                    document.head.appendChild(st);
+                }
+                document.body.appendChild(el);
+            }
+            var l = document.getElementById('pp-buf-lbl');
+            var p = document.getElementById('pp-buf-pct');
+            if (l) l.textContent = label || 'Буферизация';
+            if (p) p.textContent = (pct || 0) + '%';
+        },
+        _hide: function () {
+            var el = document.getElementById('pp-buf');
+            if (el) el.remove();
+        },
+
+        stop: function () {
+            if (this._poll) { clearInterval(this._poll); this._poll = null; }
+            if (this._rebufPoll) { clearInterval(this._rebufPoll); this._rebufPoll = null; }
+            if (this.video && this._onWaiting) {
+                this.video.removeEventListener('waiting', this._onWaiting);
+                this.video.removeEventListener('stalled', this._onWaiting);
+            }
+            this._onWaiting = null; this._gating = false;
+            this._hide();
+            this.video = null; this.hls = null;
+        }
+    };
+
+    // =====================================================================
+    //  CAST BAR — "в ролях" по данным TMDB (зелёная кнопка пульта)
+    // =====================================================================
+    //  Заметка про "что за музыка играет": offline определить трек нельзя —
+    //  нужен внешний fingerprint-сервис (типа Shazam) и доступ к аудиопотоку.
+    //  Поэтому реализуем достоверное: список актёров текущего тайтла.
+
+    var CastBar = {
+        _cache: {},
+        _visible: false,
+        _hideTimer: null,
+
+        toggle: function () {
+            if (!settings().cast_bar) return;
+            if (this._visible) this.hide();
+            else this.show();
+        },
+
+        show: function () {
+            var card = Engine.currentCard;
+            if (!card || !(card.id || card.tmdb_id)) {
+                try { Lampa.Noty.show('Нет данных TMDB для этого тайтла'); } catch (e) {}
+                return;
+            }
+            this._visible = true;
+            this._render('Загрузка состава…', []);
+            var self = this;
+            this._fetch(card, function (list) {
+                if (!self._visible) return;
+                if (!list || !list.length) { self._render('Актёры не найдены', []); }
+                else self._render(null, list);
+                self._schedHide();
+            });
+        },
+
+        hide: function () {
+            this._visible = false;
+            clearTimeout(this._hideTimer);
+            var el = document.getElementById('pp-cast');
+            if (el) el.remove();
+        },
+
+        _schedHide: function () {
+            clearTimeout(this._hideTimer);
+            this._hideTimer = setTimeout(function () { CastBar.hide(); }, 14000);
+        },
+
+        _fetch: function (card, cb) {
+            var id = card.id || card.tmdb_id;
+            var type = card.media_type || (card.number_of_seasons || card.first_air_date ? 'tv' : 'movie');
+            var key = type + id;
+            if (this._cache[key]) return cb(this._cache[key]);
+            try {
+                var lang = Lampa.Storage.get('language') || 'ru';
+                var url = Lampa.TMDB.api(type + '/' + id + '/credits?api_key=' + Lampa.TMDB.key() + '&language=' + lang);
+                var net = new Lampa.Reguest();
+                net.silent(url, function (data) {
+                    var cast = (data && data.cast) ? data.cast : [];
+                    var list = cast.slice(0, 15).map(function (p) {
+                        return {
+                            name: p.name || '',
+                            role: p.character || '',
+                            img: p.profile_path ? Lampa.TMDB.image('t/p/w200' + p.profile_path) : ''
+                        };
+                    });
+                    CastBar._cache[key] = list;
+                    cb(list);
+                }, function () { cb([]); });
+            } catch (e) { cb([]); }
+        },
+
+        _render: function (loadingText, list) {
+            var el = document.getElementById('pp-cast');
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 'pp-cast';
+                el.style.cssText = [
+                    'position:fixed;left:0;right:0;bottom:0;z-index:9996;',
+                    'padding:1rem 1.4rem 1.2rem;',
+                    'background:linear-gradient(to top,rgba(0,0,0,.95) 0%,rgba(0,0,0,.6) 70%,transparent 100%);',
+                    'font-family:system-ui,-apple-system,sans-serif;',
+                    'animation:pp-castin .25s ease both;pointer-events:none;'
+                ].join('');
+                if (!document.getElementById('pp-cast-kf')) {
+                    var st = document.createElement('style');
+                    st.id = 'pp-cast-kf';
+                    st.textContent = '@keyframes pp-castin{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:none}}';
+                    document.head.appendChild(st);
+                }
+                document.body.appendChild(el);
+            }
+            var head = '<div style="color:rgba(255,255,255,.55);font-size:.7rem;font-weight:700;' +
+                'letter-spacing:.12em;margin-bottom:.7rem;">В РОЛЯХ</div>';
+            if (loadingText) {
+                el.innerHTML = head + '<div style="color:rgba(255,255,255,.6);font-size:.85rem;">' +
+                    loadingText + '</div>';
+                return;
+            }
+            var cards = list.map(function (p) {
+                var ph = p.img
+                    ? '<div style="width:3.2rem;height:3.2rem;border-radius:50%;flex-shrink:0;' +
+                        'background:#222 center/cover url(' + p.img + ');' +
+                        'box-shadow:0 0 0 2px rgba(96,165,250,.35);"></div>'
+                    : '<div style="width:3.2rem;height:3.2rem;border-radius:50%;flex-shrink:0;' +
+                        'background:linear-gradient(135deg,#3b82f6,#7c3aed);display:flex;' +
+                        'align-items:center;justify-content:center;color:#fff;font-weight:700;">' +
+                        (p.name ? p.name.charAt(0) : '?') + '</div>';
+                return '<div style="display:flex;align-items:center;gap:.6rem;flex-shrink:0;' +
+                    'background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);' +
+                    'border-radius:.7rem;padding:.45rem .8rem .45rem .45rem;">' + ph +
+                    '<div style="min-width:0;"><div style="color:#fff;font-weight:600;font-size:.82rem;' +
+                    'white-space:nowrap;">' + p.name + '</div>' +
+                    (p.role ? '<div style="color:rgba(255,255,255,.45);font-size:.7rem;white-space:nowrap;">' +
+                        p.role + '</div>' : '') + '</div></div>';
+            }).join('');
+            el.innerHTML = head +
+                '<div style="display:flex;gap:.6rem;overflow-x:auto;padding-bottom:.3rem;' +
+                'scrollbar-width:none;">' + cards + '</div>';
+        }
+    };
+
+    // =====================================================================
     //  ПУЛЬТ (D-pad перемотка + горячие действия)
     // =====================================================================
 
@@ -802,6 +1059,10 @@
             // Info / Guide (457) или жёлтая кнопка (405) — смена скорости
             if (k === 457 || k === 405) {
                 HUD.cycleSpeed();
+            }
+            // Зелёная кнопка (404) или 'g' — панель "в ролях"
+            if (k === 404 || e.code === 'ColorF0Green' || e.code === 'Green' || (e.key || '').toLowerCase() === 'g') {
+                CastBar.toggle();
             }
         });
     }
@@ -956,12 +1217,19 @@
 
         function choose(usePlus) {
             cleanup();
-            // После закрытия нашего диалога поглощаем все клавиши ещё 1.5с.
-            // Иначе "хвостовой" Enter (которым пользователь выбрал Player Plus)
-            // попадает в Lampa-диалог "Продолжить с отметки" и автоматически его подтверждает.
+            // ГЛАВНАЯ ПРИЧИНА автонажатия "продолжить с отметки": пульт на OK даёт
+            // пару событий keydown+keyup. Мы гасили только keydown в onKey, а keyup
+            // от ТОГО ЖЕ нажатия проскакивал в диалог Lampa под нашим окном и
+            // подтверждал его. Поэтому глушим keydown+keyup+keypress ещё 1.5с.
             var sink = function (e) { e.stopPropagation(); e.preventDefault(); };
-            document.addEventListener('keydown', sink, true);
-            setTimeout(function () { document.removeEventListener('keydown', sink, true); }, 1500);
+            document.addEventListener('keydown',  sink, true);
+            document.addEventListener('keyup',    sink, true);
+            document.addEventListener('keypress', sink, true);
+            setTimeout(function () {
+                document.removeEventListener('keydown',  sink, true);
+                document.removeEventListener('keyup',    sink, true);
+                document.removeEventListener('keypress', sink, true);
+            }, 1500);
             cb(usePlus);
         }
 
@@ -1064,6 +1332,13 @@
 
         Lampa.SettingsApi.addParam({
             component: PLUGIN_NAME,
+            param: { name: 'pp_prebuffer', type: 'select', values: { '0': 'Выкл', '10': '10 сек', '20': '20 сек', '30': '30 сек', '45': '45 сек' }, default: String(s.prebuffer) },
+            field: { name: 'Пред-буферизация', description: 'Ждать буфер перед стартом — убирает фризы в тяжёлых сценах' },
+            onChange: function (v) { setSetting('prebuffer', parseInt(v, 10) || 0); }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: PLUGIN_NAME,
             param: { name: 'pp_autonext', type: 'trigger', default: s.autonext },
             field: { name: 'Автопереход к след. серии' },
             onChange: function (v) { setSetting('autonext', v === true || v === 'true'); }
@@ -1074,6 +1349,13 @@
             param: { name: 'pp_tracks', type: 'trigger', default: s.remember_tracks },
             field: { name: 'Запоминать дорожки на сериал', description: 'Аудио и субтитры для всех серий' },
             onChange: function (v) { setSetting('remember_tracks', v === true || v === 'true'); }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: PLUGIN_NAME,
+            param: { name: 'pp_cast', type: 'trigger', default: s.cast_bar },
+            field: { name: 'Панель "в ролях"', description: 'Зелёная кнопка пульта (или G) — актёры тайтла' },
+            onChange: function (v) { setSetting('cast_bar', v === true || v === 'true'); }
         });
 
         Lampa.SettingsApi.addParam({
