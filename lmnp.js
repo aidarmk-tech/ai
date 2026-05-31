@@ -12,19 +12,31 @@
     var PACKAGE = 'com.lampa.player';
     var PLUGIN_NAME = 'lmnp';
 
-    // ── Запуск через intent:// ────────────────────────────────────────────
-    function launch(videoUrl, cardData) {
-        var json    = JSON.stringify(cardData);
-        var safeUrl = videoUrl.replace(/#/g, '%23');
-        var intentUri = 'intent:' + safeUrl
+    // ── Формирование Chrome-совместимого intent URI ───────────────────────
+    // intent://HOST/PATH#Intent;scheme=SCHEME;package=...;S.lampa_data=JSON;end
+    // (raw-формат intent:https://... вызывает ERR_UNKNOWN_URL_SCHEME в браузере)
+    function buildIntentUri(videoUrl, json) {
+        var m = videoUrl.match(/^(https?|rtsp|udp):\/\//);
+        if (!m) return null;
+        var scheme = m[1];
+        var rest   = videoUrl.slice(m[0].length).replace(/#/g, '%23');
+        return 'intent://' + rest
             + '#Intent'
+            + ';scheme=' + scheme
             + ';action=android.intent.action.VIEW'
             + ';type=video/*'
             + ';package=' + PACKAGE
             + ';S.lampa_data=' + encodeURIComponent(json)
             + ';end;';
+    }
 
-        // 1. Синхронный вызов Android bridge (приоритет — не конкурирует с window.location)
+    // ── Запуск APK ────────────────────────────────────────────────────────
+    function launch(videoUrl, cardData) {
+        var json      = JSON.stringify(cardData);
+        var intentUri = buildIntentUri(videoUrl, json);
+        if (!intentUri) return false;
+
+        // 1. Синхронный Android bridge (Lampa-wrapper / TV-приложение)
         try {
             if (window.Android && typeof Android.openUrl === 'function') {
                 Android.openUrl(intentUri); return true;
@@ -41,10 +53,10 @@
             }
         } catch (e) {}
 
-        // 2. Навигация через href (асинхронно)
+        // 2. Навигация (Chrome intent:// формат — корректно обрабатывается браузером)
         try { window.location.href = intentUri; return true; } catch (e) {}
 
-        // 3. Запасной схем lmnp://
+        // 3. lmnp:// запасная схема
         try {
             var b64 = btoa(unescape(encodeURIComponent(json)));
             window.location.href = 'lmnp://play?url=' + encodeURIComponent(videoUrl) + '&d=' + encodeURIComponent(b64);
@@ -59,10 +71,8 @@
 
     function saveTmdbCard(obj) {
         if (!obj || typeof obj !== 'object') return;
-        var candidates = [
-            obj.movie, obj.show, obj.card, obj.item, obj
-        ];
-        if (obj.data)   [obj.data, obj.data.movie, obj.data.card, obj.data.show, obj.data.item].forEach(function(x){ candidates.push(x); });
+        var candidates = [obj.movie, obj.show, obj.card, obj.item, obj];
+        if (obj.data)   [obj.data, obj.data.movie, obj.data.card, obj.data.show].forEach(function(x){ candidates.push(x); });
         if (obj.params) [obj.params, obj.params.movie, obj.params.card].forEach(function(x){ candidates.push(x); });
         candidates.forEach(function(c) {
             if (c && typeof c === 'object' && (c.id || c.tmdb_id) && (c.title || c.name)) {
@@ -90,7 +100,7 @@
         } catch (_) {}
     }
 
-    // ── Поиск TMDB-карточки в момент запуска ─────────────────────────────
+    // ── Поиск TMDB-карточки ───────────────────────────────────────────────
     function findCard(data, file) {
         if (_savedCard && (_savedCard.id || _savedCard.tmdb_id)) return _savedCard;
 
@@ -106,7 +116,7 @@
             }
         } catch (_) {}
 
-        try { candidates.push(data.card); } catch (_) {}
+        try { candidates.push(data.card);  } catch (_) {}
         try { candidates.push(data.movie); } catch (_) {}
         try { candidates.push(data.item);  } catch (_) {}
         try { if (data.id || data.tmdb_id) candidates.push(data); } catch (_) {}
@@ -204,7 +214,7 @@
         } catch (_) { return null; }
     }
 
-    // ── Сборка объекта для передачи в APK ────────────────────────────────
+    // ── Сборка данных для APK ─────────────────────────────────────────────
     function buildCard(rawCard, fileData, epgData, playlist, episodeIndex) {
         var c = rawCard || {};
         if (!c.id && !c.tmdb_id) {
@@ -270,50 +280,10 @@
     function hookPlayer() {
         if (!window.Lampa || !Lampa.Player) return;
 
-        // ── Хук 1: Lampa.Player.play() — основной, синхронный перехват ───────
-        // Переопределяем play() чтобы запустить APK ДО того, как Lampa
-        // сформирует собственный intent (без наших данных).
-        // Не вызываем _origPlay() → Lampa не отправляет конкурирующий intent.
-        if (typeof Lampa.Player.play === 'function') {
-            var _origPlay = Lampa.Player.play;
-            Lampa.Player.play = function (video) {
-                if (!video || video._lmnp_done) {
-                    return _origPlay.apply(this, arguments);
-                }
-                video._lmnp_done = true;
-
-                var file = (video.file && typeof video.file === 'object') ? video.file : {};
-                var url  = video.url
-                        || (file.url || file.file)
-                        || (typeof video.file === 'string' ? video.file : '')
-                        || '';
-
-                if (!url || !/^https?:|^rtsp:|^udp:/.test(url)) {
-                    return _origPlay.apply(this, arguments);
-                }
-                if (Date.now() - _lastLaunch < 6000) return;
-
-                _savedFile   = file;
-                _pendingUrl  = url;
-                _pendingData = video;
-
-                var rawCard  = findCard(video, file);
-                var pl       = getPlaylist();
-                var cardData = buildCard(rawCard, file, video, pl.list, pl.pos);
-
-                if (launch(url, cardData)) {
-                    _lastLaunch = Date.now();
-                    // Не вызываем _origPlay — предотвращаем конкурирующий intent от Lampa.
-                    // Балансер всё равно вызовет Lampa.Player.playlist() после нас — это нужно.
-                    return;
-                }
-
-                // APK не установлен — откатываемся на встроенный плеер
-                return _origPlay.apply(this, arguments);
-            };
-        }
-
-        // ── Хук 2: start-событие — резерв (если _origPlay всё же вызван) ──────
+        // ── Хук 1: start-событие ─────────────────────────────────────────
+        // Наш listener регистрируется ПОСЛЕ встроенного обработчика Lampa,
+        // поэтому наш window.location.href перезаписывает Lampa's в очереди
+        // навигации — APK получает наш intent с lampa_data.
         Lampa.Player.listener.follow('start', function (e) {
             if (Date.now() - _lastLaunch < 6000) return;
 
@@ -335,10 +305,9 @@
             }
         });
 
-        // ── Хук 3: playlist change — APK обновляется с полным списком серий ──
-        // Балансер вызывает Lampa.Player.playlist(list) ПОСЛЕ play() — синхронно,
-        // пока WebView ещё не заморожен.
-        // Повторный intent → onNewIntent() в APK обновит список серий.
+        // ── Хук 2: playlist change — обновляем APK со списком серий ──────
+        // Балансер вызывает Lampa.Player.playlist(list) ПОСЛЕ play() синхронно;
+        // повторный intent → onNewIntent() в APK обновляет список серий.
         try {
             Lampa.PlayerPlaylist.listener.follow('change', function () {
                 if (!_pendingUrl || Date.now() - _lastLaunch > 4000) return;
