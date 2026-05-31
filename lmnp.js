@@ -83,6 +83,10 @@
         var all = [obj.movie, obj.show, obj.card, obj.item, obj];
         if (obj.data)   [obj.data, obj.data.movie, obj.data.card, obj.data.show, obj.data.item].forEach(function(x){ all.push(x); });
         if (obj.params) [obj.params, obj.params.movie, obj.params.card].forEach(function(x){ all.push(x); });
+        // online_mod.js и аналоги балансеров хранят карточку в object.movie
+        // activity.params.object.movie или activity.object.movie
+        if (obj.object) [obj.object, obj.object.movie, obj.object.card].forEach(function(x){ all.push(x); });
+        if (obj.params && obj.params.object) [obj.params.object, obj.params.object.movie, obj.params.object.card].forEach(function(x){ all.push(x); });
         all.forEach(function(c) {
             if (!c || typeof c !== 'object') return;
             if (!(c.id || c.tmdb_id) || !(c.title || c.name)) return;
@@ -156,8 +160,10 @@
                 all.slice().reverse().forEach(function(act) {
                     if (!act) return;
                     [act.card, act.movie, act.item,
+                     act.object && act.object.movie, act.object && act.object.card,
                      act.data && act.data.movie, act.data && act.data.card,
-                     act.params && act.params.movie, act.params && act.params.card].forEach(function(x){ candidates.push(x); });
+                     act.params && act.params.movie, act.params && act.params.card,
+                     act.params && act.params.object && act.params.object.movie].forEach(function(x){ candidates.push(x); });
                 });
             }
         } catch (_) {}
@@ -165,8 +171,10 @@
             var act = Lampa.Activity.active();
             if (act) {
                 [act.card, act.movie, act.item,
+                 act.object && act.object.movie, act.object && act.object.card,
                  act.data && act.data.movie, act.data && act.data.card,
-                 act.params && act.params.movie, act.params && act.params.card].forEach(function(x){ candidates.push(x); });
+                 act.params && act.params.movie, act.params && act.params.card,
+                 act.params && act.params.object && act.params.object.movie].forEach(function(x){ candidates.push(x); });
             }
         } catch (_) {}
 
@@ -269,9 +277,13 @@
         try {
             var start = Math.max(0, (idx || 0) - 25);
             var eps = playlist.slice(start, start + 50).map(function (item, i) {
+                // Балансеры (online_mod и др.) хранят URL как функцию для ленивой загрузки.
+                // Такие URL нельзя сериализовать в JSON — передаём только строковые URL.
+                var url = (typeof item.url === 'string') ? item.url
+                        : (typeof item.file === 'string') ? item.file : '';
                 return {
                     title:   item.title || item.name || ('Серия ' + (start + i + 1)),
-                    url:     item.url || item.file || '',
+                    url:     url,
                     season:  item.season  || null,
                     episode: item.episode || null,
                 };
@@ -369,6 +381,9 @@
                     try { saveTmdbCard(act); } catch(_e) {}
                     try { if (act.params) saveTmdbCard(act.params); } catch(_e) {}
                     try { if (act.data)   saveTmdbCard(act.data);   } catch(_e) {}
+                    // online_mod.js и балансеры хранят карточку в act.object.movie
+                    try { if (act.object) saveTmdbCard(act.object); } catch(_e) {}
+                    try { if (act.params && act.params.object) saveTmdbCard(act.params.object); } catch(_e) {}
                 });
             } catch (_) {}
 
