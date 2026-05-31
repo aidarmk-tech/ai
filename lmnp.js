@@ -1,7 +1,7 @@
 /**
  * lmnp — Lampa Native Player companion plugin
  * Перехватывает воспроизведение в Lampa и запускает нативный APK
- * с полными данными через intent:// scheme (которую Lampa обрабатывает).
+ * с полными данными через intent:// scheme.
  *
  * Установка: Lampa → Настройки → Расширения → добавить URL:
  * https://raw.githubusercontent.com/aidarmk-tech/ai/main/lmnp.js
@@ -14,22 +14,37 @@
 
     // ── Запуск через intent:// ────────────────────────────────────────────
     function launch(videoUrl, cardData) {
-        var json = JSON.stringify(cardData);
+        var json    = JSON.stringify(cardData);
         var safeUrl = videoUrl.replace(/#/g, '%23');
-        var intentUri = 'intent:' + safeUrl +
-            '#Intent' +
-            ';action=android.intent.action.VIEW' +
-            ';type=video/*' +
-            ';package=' + PACKAGE +
-            ';S.lampa_data=' + encodeURIComponent(json) +
-            ';end;';
+        var intentUri = 'intent:' + safeUrl
+            + '#Intent'
+            + ';action=android.intent.action.VIEW'
+            + ';type=video/*'
+            + ';package=' + PACKAGE
+            + ';S.lampa_data=' + encodeURIComponent(json)
+            + ';end;';
 
-        try { window.location.href = intentUri; return true; } catch (e) {}
+        // 1. Синхронный вызов Android bridge (приоритет — не конкурирует с window.location)
         try {
             if (window.Android && typeof Android.openUrl === 'function') {
                 Android.openUrl(intentUri); return true;
             }
         } catch (e) {}
+        try {
+            if (window.Android && typeof Android.open === 'function') {
+                Android.open(intentUri); return true;
+            }
+        } catch (e) {}
+        try {
+            if (window.LampaAndroid && typeof LampaAndroid.openUrl === 'function') {
+                LampaAndroid.openUrl(intentUri); return true;
+            }
+        } catch (e) {}
+
+        // 2. Навигация через href (асинхронно)
+        try { window.location.href = intentUri; return true; } catch (e) {}
+
+        // 3. Запасной схем lmnp://
         try {
             var b64 = btoa(unescape(encodeURIComponent(json)));
             window.location.href = 'lmnp://play?url=' + encodeURIComponent(videoUrl) + '&d=' + encodeURIComponent(b64);
@@ -38,69 +53,66 @@
         return false;
     }
 
-    // ── Хранилище: сохраняем карточку когда пользователь открывает фильм ─
-    // Балансер вызывает play() с карточкой источника (без TMDB id).
-    // Настоящая TMDB-карточка сохраняется заранее, когда пользователь
-    // открывает страницу фильма — до запуска плеера.
-
+    // ── Хранилище TMDB-карточки ───────────────────────────────────────────
     var _savedCard = null;
     var _savedFile = null;
 
     function saveTmdbCard(obj) {
         if (!obj || typeof obj !== 'object') return;
-        // Разворачиваем обёртки
-        var c = obj.movie || obj.show || obj.card || obj;
-        if (c && (c.id || c.tmdb_id) && (c.title || c.name)) {
-            _savedCard = c;
-        }
+        var candidates = [
+            obj.movie, obj.show, obj.card, obj.item, obj
+        ];
+        if (obj.data)   [obj.data, obj.data.movie, obj.data.card, obj.data.show, obj.data.item].forEach(function(x){ candidates.push(x); });
+        if (obj.params) [obj.params, obj.params.movie, obj.params.card].forEach(function(x){ candidates.push(x); });
+        candidates.forEach(function(c) {
+            if (c && typeof c === 'object' && (c.id || c.tmdb_id) && (c.title || c.name)) {
+                _savedCard = c;
+            }
+        });
     }
 
     function hookActivity() {
-        // Слушаем открытие карточки фильма/сериала через глобальный Listener.
-        // Событие 'activity' (или 'full') сигнализирует о переходе пользователя
-        // на страницу с TMDB-данными.
         try {
             Lampa.Listener.follow('full', function (e) {
-                saveTmdbCard(e && (e.data || e));
+                if (!e) return;
+                saveTmdbCard(e.data || e);
+                if (e.movie) saveTmdbCard(e.movie);
+                if (e.card)  saveTmdbCard(e.card);
             });
         } catch (_) {}
         try {
             Lampa.Listener.follow('activity', function (e) {
-                var obj = e && (e.data || e.object || e);
-                saveTmdbCard(obj);
+                if (!e) return;
+                [e, e.data, e.object, e.movie, e.card, e.item, e.params].forEach(function(t) {
+                    try { saveTmdbCard(t); } catch (_) {}
+                });
             });
         } catch (_) {}
-        // Также пробуем напрямую из active() при каждом старте
-        // (резервный вариант если listener не сработал)
     }
 
-    // ── Получение TMDB-карточки в момент запуска ──────────────────────────
+    // ── Поиск TMDB-карточки в момент запуска ─────────────────────────────
     function findCard(data, file) {
-        // 1. Предсохранённая карточка — самый надёжный источник
         if (_savedCard && (_savedCard.id || _savedCard.tmdb_id)) return _savedCard;
 
         var candidates = [];
 
-        // 2. Текущая активность (последний экран перед плеером)
         try {
             var act = Lampa.Activity.active();
             if (act) {
-                candidates.push(act.card);
-                candidates.push(act.movie);
-                // Сам объект активности может быть карточкой
+                [act.card, act.movie, act.item,
+                 act.data && act.data.movie, act.data && act.data.card,
+                 act.params && act.params.movie, act.params && act.params.card].forEach(function(x){ candidates.push(x); });
                 if (act.id || act.tmdb_id) candidates.push(act);
             }
         } catch (_) {}
 
-        // 3. Данные из события start
         try { candidates.push(data.card); } catch (_) {}
         try { candidates.push(data.movie); } catch (_) {}
-        // data может быть самой карточкой (некоторые балансеры передают так)
+        try { candidates.push(data.item);  } catch (_) {}
         try { if (data.id || data.tmdb_id) candidates.push(data); } catch (_) {}
 
-        // 4. Player.card
         try { candidates.push(Lampa.Player.card); } catch (_) {}
-        try { candidates.push(file && file.card); } catch (_) {}
+        try { candidates.push(file && file.card);  } catch (_) {}
 
         function unwrap(c) {
             if (!c || typeof c !== 'object') return null;
@@ -121,10 +133,6 @@
     }
 
     // ── Плейлист ──────────────────────────────────────────────────────────
-    // Балансер устанавливает плейлист ПОСЛЕ вызова play(), поэтому читаем
-    // его с задержкой (вызываем через setTimeout).
-    // IPTV-каналы (tv: true / iptv: true) не передаём как список серий.
-
     function getPlaylist() {
         var list = null, pos = 0;
         try {
@@ -139,11 +147,7 @@
     }
 
     // ── EPG ───────────────────────────────────────────────────────────────
-    // Формат от IPTV-плагинов: data.epg = [startMinutes, durationMinutes, title]
-    // Для живого ТВ data.epg обычно не заполнен — принимаем это ограничение.
-
     function getEpg(card, data) {
-        // Массив [startMin, durMin, title] — формат IPTV-плагинов (rootu.top и др.)
         var arr = null;
         try { arr = (data && Array.isArray(data.epg)) ? data.epg : null; } catch (_) {}
         try { if (!arr && card && Array.isArray(card.epg)) arr = card.epg; } catch (_) {}
@@ -158,7 +162,6 @@
                 epg_end:   fmt((arr[0] + arr[1]) * 60000),
             };
         }
-        // Lampa EPG API (VOD/IPTV через Lampa)
         try {
             var now = null;
             if (window.Lampa && Lampa.EPG && Lampa.EPG.now) now = Lampa.EPG.now(card);
@@ -245,15 +248,8 @@
     }
 
     // ── Хук на плеер ─────────────────────────────────────────────────────
-    // Стратегия двух запусков:
-    //  1. start-событие: немедленно отправляем intent с тем что есть
-    //     (плейлист может быть ещё пуст — балансер устанавливает его позже)
-    //  2. PlayerPlaylist change: балансер вызывает Lampa.Player.playlist()
-    //     СИНХРОННО после play() — к этому моменту WebView ещё активен.
-    //     Отправляем второй intent с полным плейлистом → onNewIntent() в APK.
-
-    var _lastLaunch = 0;
-    var _pendingUrl = '';
+    var _lastLaunch  = 0;
+    var _pendingUrl  = '';
     var _pendingData = null;
 
     function doLaunch(videoUrl, data, file) {
@@ -274,16 +270,58 @@
     function hookPlayer() {
         if (!window.Lampa || !Lampa.Player) return;
 
-        // ── Хук 1: start — немедленный запуск (плейлист может быть пустым) ──
+        // ── Хук 1: Lampa.Player.play() — основной, синхронный перехват ───────
+        // Переопределяем play() чтобы запустить APK ДО того, как Lampa
+        // сформирует собственный intent (без наших данных).
+        // Не вызываем _origPlay() → Lampa не отправляет конкурирующий intent.
+        if (typeof Lampa.Player.play === 'function') {
+            var _origPlay = Lampa.Player.play;
+            Lampa.Player.play = function (video) {
+                if (!video || video._lmnp_done) {
+                    return _origPlay.apply(this, arguments);
+                }
+                video._lmnp_done = true;
+
+                var file = (video.file && typeof video.file === 'object') ? video.file : {};
+                var url  = video.url
+                        || (file.url || file.file)
+                        || (typeof video.file === 'string' ? video.file : '')
+                        || '';
+
+                if (!url || !/^https?:|^rtsp:|^udp:/.test(url)) {
+                    return _origPlay.apply(this, arguments);
+                }
+                if (Date.now() - _lastLaunch < 6000) return;
+
+                _savedFile   = file;
+                _pendingUrl  = url;
+                _pendingData = video;
+
+                var rawCard  = findCard(video, file);
+                var pl       = getPlaylist();
+                var cardData = buildCard(rawCard, file, video, pl.list, pl.pos);
+
+                if (launch(url, cardData)) {
+                    _lastLaunch = Date.now();
+                    // Не вызываем _origPlay — предотвращаем конкурирующий intent от Lampa.
+                    // Балансер всё равно вызовет Lampa.Player.playlist() после нас — это нужно.
+                    return;
+                }
+
+                // APK не установлен — откатываемся на встроенный плеер
+                return _origPlay.apply(this, arguments);
+            };
+        }
+
+        // ── Хук 2: start-событие — резерв (если _origPlay всё же вызван) ──────
         Lampa.Player.listener.follow('start', function (e) {
             if (Date.now() - _lastLaunch < 6000) return;
 
-            var data = (e && e.data) ? e.data : (e || {});
-            var file = typeof (data.file) === 'object' ? data.file : {};
-
+            var data    = (e && e.data) ? e.data : (e || {});
+            var file    = typeof data.file === 'object' ? data.file : {};
             var videoUrl = data.url
                         || (file.url || file.file)
-                        || (typeof data.file === 'string' && data.file)
+                        || (typeof data.file === 'string' ? data.file : '')
                         || '';
             if (!videoUrl || !/^https?:|^rtsp:|^udp:/.test(videoUrl)) return;
 
@@ -297,15 +335,15 @@
             }
         });
 
-        // ── Хук 2: playlist change — обновляем APK с полным плейлистом ──
-        // Балансер вызывает Lampa.Player.playlist(list) ПОСЛЕ play(),
-        // но синхронно в том же стеке вызовов — WebView ещё не заморожен.
+        // ── Хук 3: playlist change — APK обновляется с полным списком серий ──
+        // Балансер вызывает Lampa.Player.playlist(list) ПОСЛЕ play() — синхронно,
+        // пока WebView ещё не заморожен.
+        // Повторный intent → onNewIntent() в APK обновит список серий.
         try {
             Lampa.PlayerPlaylist.listener.follow('change', function () {
-                if (!_pendingUrl || Date.now() - _lastLaunch > 3000) return;
+                if (!_pendingUrl || Date.now() - _lastLaunch > 4000) return;
                 var pl = getPlaylist();
                 if (!pl.list || pl.list.length < 2) return;
-                // Повторный intent → onNewIntent() в APK обновит список серий
                 var rawCard  = findCard(_pendingData || {}, _savedFile || {});
                 var cardData = buildCard(rawCard, _savedFile || {}, _pendingData || {}, pl.list, pl.pos);
                 launch(_pendingUrl, cardData);
@@ -338,7 +376,7 @@
 
     function start() {
         addSettings();
-        hookActivity();   // сохраняем TMDB-карточку при открытии фильма
+        hookActivity();
         hookPlayer();
         try { Lampa.Noty.show('Native Player подключён'); } catch (_) {}
     }
