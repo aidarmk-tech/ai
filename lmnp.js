@@ -278,15 +278,17 @@
             original_title: c.original_title || c.original_name || null,
             tmdb_id:        c.id || c.tmdb_id || 0,
             imdb_id:        c.imdb_id || null,
-            season_number:  c.season_number || c.season || 0,
-            episode_number: c.episode_number || c.episode || 0,
+            // prefer per-episode values from the play element over the card defaults
+            season_number:  file.season  || c.season_number || c.season  || 0,
+            episode_number: file.episode || c.episode_number || c.episode || 0,
             poster_url:     posterUrl(c),
             backdrop_url:   c.backdrop_path ? 'https://image.tmdb.org/t/p/w1280' + c.backdrop_path : null,
             overview:       c.overview || null,
             release_year:   parseInt((c.release_date || c.first_air_date || '').substring(0, 4)) || 0,
             rating:         c.vote_average || 0,
             quality:        file.quality  || null,
-            translator:     file.translate || null,
+            // balancer stores translator as voice_name in the play element
+            translator:     file.translate || file.voice_name || null,
             timeline_time:     (file.timeline && file.timeline.time)     || 0,
             timeline_duration: (file.timeline && file.timeline.duration) || 0,
             headers:        (file.headers && Object.keys(file.headers).length)
@@ -336,8 +338,13 @@
         Lampa.Player.listener.follow('start', function (e) {
             if (Date.now() - _lastLaunch < 6000) return;
 
+            // Capture Lampa.Player.card if set by the full-card view
+            try { if (Lampa.Player.card) saveTmdbCard({card: Lampa.Player.card}); } catch (_) {}
+
             var data    = (e && e.data) ? e.data : (e || {});
-            var file    = typeof data.file === 'object' ? data.file : {};
+            // Balancer's play element has quality/timeline/voice_name at top level,
+            // not nested under .file — fall back to data itself when .file is absent
+            var file    = (typeof data.file === 'object') ? data.file : data;
             var videoUrl = data.url
                         || (file.url || file.file)
                         || (typeof data.file === 'string' ? data.file : '')
