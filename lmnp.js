@@ -107,10 +107,13 @@
         try { Lampa.Activity.listener.follow('push', function(e) { saveTmdbCard(e); }); } catch (_) {}
 
         // Глобальные события
+        // full: e.object.card = data.movie устанавливается в full.js компоненте Lampa
         try {
             Lampa.Listener.follow('full', function (e) {
                 if (!e) return;
-                [e, e.data, e.movie, e.card, e.item].forEach(function(t) {
+                [e, e.data, e.movie, e.card, e.item,
+                 e.object, e.object && e.object.card, e.object && e.object.movie,
+                 e.data && e.data.movie].forEach(function(t) {
                     try { saveTmdbCard(t); } catch (_) {}
                 });
             });
@@ -118,17 +121,19 @@
         try {
             Lampa.Listener.follow('activity', function (e) {
                 if (!e) return;
-                [e, e.data, e.object, e.movie, e.card, e.item, e.params].forEach(function(t) {
+                [e, e.data, e.object, e.movie, e.card, e.item, e.params,
+                 e.object && e.object.card, e.object && e.object.movie].forEach(function(t) {
                     try { saveTmdbCard(t); } catch (_) {}
                 });
             });
         } catch (_) {}
         // Дополнительные события: card, movie, show
-        ['card','movie','show','full_open','full'].forEach(function(ev) {
+        ['card','movie','show','full_open'].forEach(function(ev) {
             try {
                 Lampa.Listener.follow(ev, function(e) {
                     if (!e) return;
-                    [e, e.card, e.movie, e.data, e.item].forEach(function(t) {
+                    [e, e.card, e.movie, e.data, e.item,
+                     e.object, e.object && e.object.card].forEach(function(t) {
                         try { saveTmdbCard(t); } catch(_) {}
                     });
                 });
