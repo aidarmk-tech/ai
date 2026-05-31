@@ -107,8 +107,21 @@
             }
         } catch (_) {}
 
-        // Listener на push (некоторые версии Lampa)
-        try { Lampa.Activity.listener.follow('push', function(e) { saveTmdbCard(e); }); } catch (_) {}
+        // Переопределяем Lampa.Activity.replace — z01 и ряд балансеров используют
+        // replace() вместо push() при переключении балансера / сезона / серии
+        try {
+            if (typeof Lampa.Activity.replace === 'function') {
+                var _origReplace = Lampa.Activity.replace;
+                Lampa.Activity.replace = function (data) {
+                    try { saveTmdbCard(data); } catch (_) {}
+                    return _origReplace.apply(this, arguments);
+                };
+            }
+        } catch (_) {}
+
+        // Listener на push/replace (некоторые версии Lampa)
+        try { Lampa.Activity.listener.follow('push',    function(e) { saveTmdbCard(e); }); } catch (_) {}
+        try { Lampa.Activity.listener.follow('replace', function(e) { saveTmdbCard(e); }); } catch (_) {}
 
         // Глобальные события
         // full: e.object.card = data.movie устанавливается в full.js компоненте Lampa
