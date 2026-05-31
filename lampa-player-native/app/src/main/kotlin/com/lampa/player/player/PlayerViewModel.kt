@@ -181,14 +181,10 @@ class PlayerViewModel @Inject constructor(
         startAutoSave()
         if (settings.diag) startDiag()
 
-        // Показываем данные из карточки сразу, затем обогащаем через TMDB
+        // Показываем данные из карточки сразу, затем обогащаем через TMDB по ID.
+        // Поиск по названию не используем — TMDB search даёт ненадёжный результат.
         populateMetadataFromCard(card)
-        when {
-            card.tmdbId != null -> loadMetadata(card.tmdbId, card.isSerial, card)
-            // Если tmdbId нет, но название не совпадает с переводчиком — ищем по названию
-            card.title.isNotBlank() && card.title != (card.translator ?: "") ->
-                searchAndLoadMetadata(card.title, card.isSerial, card)
-        }
+        card.tmdbId?.let { loadMetadata(it, card.isSerial, card) }
     }
 
     private fun loadUrl(url: String, card: CardMeta, askResume: Boolean = true) {
@@ -374,11 +370,7 @@ class PlayerViewModel @Inject constructor(
             )
         }
         populateMetadataFromCard(merged)
-        when {
-            merged.tmdbId != null -> loadMetadata(merged.tmdbId, merged.isSerial, merged)
-            merged.title.isNotBlank() && merged.title != (merged.translator ?: "") ->
-                searchAndLoadMetadata(merged.title, merged.isSerial, merged)
-        }
+        merged.tmdbId?.let { loadMetadata(it, merged.isSerial, merged) }
     }
 
     fun toggleMetadata() = _uiState.update { it.copy(showMetadata = !it.showMetadata) }
