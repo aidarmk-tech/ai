@@ -408,16 +408,57 @@
         });
 
         // ── Хук 2: playlist change — обновляем APK со списком серий ──────
-        // Балансер вызывает Lampa.Player.playlist(list) ПОСЛЕ play() синхронно;
-        // повторный intent → onNewIntent() в APK обновляет список серий.
+        // Балансеры (online_mod и др.) передают URL серий как ленивые функции:
+        //   cell.url = function(callback) { getStream(elem, function(e){ cell.url = realUrl; callback(); }) }
+        // Нужно вызвать каждую из них, дождаться ответа и только тогда слать intent.
         try {
             Lampa.PlayerPlaylist.listener.follow('change', function () {
-                if (!_pendingUrl || Date.now() - _lastLaunch > 4000) return;
+                if (!_pendingUrl) return;
                 var pl = getPlaylist();
                 if (!pl.list || pl.list.length < 2) return;
-                var rawCard  = findCard(_pendingData || {}, _savedFile || {});
-                var cardData = buildCard(rawCard, _savedFile || {}, _pendingData || {}, pl.list, pl.pos);
-                launch(_pendingUrl, cardData);
+
+                var snapUrl  = _pendingUrl;
+                var snapData = _pendingData;
+                var snapFile = _savedFile;
+
+                function sendUpdate(list) {
+                    if (snapUrl !== _pendingUrl) return;   // уже запустили другое видео
+                    var rawCard  = findCard(snapData || {}, snapFile || {});
+                    var cardData = buildCard(rawCard, snapFile || {}, snapData || {}, list, pl.pos);
+                    launch(snapUrl, cardData);
+                }
+
+                var items    = pl.list.slice();
+                var lazyIdx  = [];
+                items.forEach(function(x, i){ if (typeof x.url === 'function') lazyIdx.push(i); });
+
+                if (!lazyIdx.length) {
+                    // Все URL уже строки
+                    sendUpdate(items);
+                    return;
+                }
+
+                // Разрешаем ленивые URL параллельно; таймаут 12 с на весь процесс
+                var pending   = lazyIdx.length;
+                var finished  = false;
+                var timer     = setTimeout(function() {
+                    if (!finished) { finished = true; sendUpdate(items); }
+                }, 12000);
+
+                function oneDone() {
+                    if (finished) return;
+                    if (--pending <= 0) {
+                        finished = true;
+                        clearTimeout(timer);
+                        sendUpdate(items);
+                    }
+                }
+
+                lazyIdx.forEach(function(i) {
+                    try {
+                        items[i].url(oneDone);
+                    } catch(_) { oneDone(); }
+                });
             });
         } catch (_) {}
     }
