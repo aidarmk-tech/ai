@@ -5,6 +5,7 @@ import androidx.room.Room
 import com.lampa.player.data.db.AppDatabase
 import com.lampa.player.data.db.MetadataDao
 import com.lampa.player.data.tmdb.TmdbApi
+import com.lampa.player.data.tmdb.TmdbRepository
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -23,6 +24,13 @@ object AppModule {
     @Provides
     @Singleton
     fun provideOkHttp(): OkHttpClient = OkHttpClient.Builder()
+        .addInterceptor { chain ->
+            chain.proceed(
+                chain.request().newBuilder()
+                    .addHeader("Authorization", "Bearer ${TmdbRepository.BEARER_TOKEN}")
+                    .build()
+            )
+        }
         .addInterceptor(HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BASIC })
         .build()
 

@@ -181,9 +181,14 @@ class PlayerViewModel @Inject constructor(
         startAutoSave()
         if (settings.diag) startDiag()
 
-        // Show card metadata immediately from intent data, enhance with TMDB if available
+        // Показываем данные из карточки сразу, затем обогащаем через TMDB
         populateMetadataFromCard(card)
-        card.tmdbId?.let { loadMetadata(it, card.isSerial, card) }
+        when {
+            card.tmdbId != null -> loadMetadata(card.tmdbId, card.isSerial, card)
+            // Если tmdbId нет, но название не совпадает с переводчиком — ищем по названию
+            card.title.isNotBlank() && card.title != (card.translator ?: "") ->
+                searchAndLoadMetadata(card.title, card.isSerial, card)
+        }
     }
 
     private fun loadUrl(url: String, card: CardMeta, askResume: Boolean = true) {
@@ -318,9 +323,31 @@ class PlayerViewModel @Inject constructor(
             val year = (meta.release_date ?: meta.first_air_date)?.take(4) ?: ""
             val rating = meta.vote_average?.let { "★ %.1f".format(it) } ?: ""
             val info = listOfNotNull(year.ifEmpty { null }, rating.ifEmpty { null }, card.quality).joinToString(" · ")
-            // Обогащаем данные из TMDB — без всплывающего сплэша, всё видно во вкладке «О фильме».
             _uiState.update { s ->
                 s.copy(
+                    // Если текущий заголовок — имя переводчика, заменяем на настоящее название из TMDB
+                    title = if (s.title.isBlank() || s.title == s.translator) title else s.title,
+                    metadata = PlayerUiState.MetadataDisplay(
+                        title = title, info = info,
+                        overview = meta.overview ?: s.metadata?.overview ?: "",
+                        cast = "",
+                        posterUrl = TmdbRepository.posterUrl(meta.poster_path) ?: card.posterUrl,
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun searchAndLoadMetadata(query: String, isSerial: Boolean, card: CardMeta) {
+        viewModelScope.launch {
+            val meta = tmdbRepository.searchAndGet(query, isSerial) ?: return@launch
+            val title = meta.title ?: meta.name ?: query
+            val year = (meta.release_date ?: meta.first_air_date)?.take(4) ?: ""
+            val rating = meta.vote_average?.let { "★ %.1f".format(it) } ?: ""
+            val info = listOfNotNull(year.ifEmpty { null }, rating.ifEmpty { null }, card.quality).joinToString(" · ")
+            _uiState.update { s ->
+                s.copy(
+                    title = if (s.title.isBlank() || s.title == s.translator) title else s.title,
                     metadata = PlayerUiState.MetadataDisplay(
                         title = title, info = info,
                         overview = meta.overview ?: s.metadata?.overview ?: "",
@@ -347,7 +374,11 @@ class PlayerViewModel @Inject constructor(
             )
         }
         populateMetadataFromCard(merged)
-        merged.tmdbId?.let { loadMetadata(it, merged.isSerial, merged) }
+        when {
+            merged.tmdbId != null -> loadMetadata(merged.tmdbId, merged.isSerial, merged)
+            merged.title.isNotBlank() && merged.title != (merged.translator ?: "") ->
+                searchAndLoadMetadata(merged.title, merged.isSerial, merged)
+        }
     }
 
     fun toggleMetadata() = _uiState.update { it.copy(showMetadata = !it.showMetadata) }

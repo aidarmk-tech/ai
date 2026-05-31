@@ -145,7 +145,9 @@ class PlayerActivity : AppCompatActivity() {
         lifecycleScope.launch {
             vm.uiState.collectLatest { s ->
                 // Top bar
-                binding.tvTitle.text = s.title
+                binding.tvTitle.text = s.metadata?.title?.takeIf { it.isNotBlank() && it != s.translator }
+                    ?: s.title.takeIf { it != s.translator && it.isNotBlank() }
+                    ?: s.title
                 binding.tvQuality.isVisible = s.quality.isNotEmpty()
                 binding.tvQuality.text = s.quality
                 binding.tvTranslator.isVisible = s.translator.isNotEmpty()
