@@ -69,25 +69,50 @@
     var _savedCard = null;
     var _savedFile = null;
 
+    // Признак настоящей TMDB-карточки (не карточки балансера/переводчика)
+    function isTmdbCard(c) {
+        if (!c || typeof c !== 'object') return false;
+        return !!(c.poster_path || c.backdrop_path || c.overview ||
+                  c.vote_average || c.release_date || c.first_air_date ||
+                  c.original_title || c.original_name);
+    }
+
+    // Сохраняем карточку; TMDB-карточка всегда приоритетнее карточки балансера
     function saveTmdbCard(obj) {
         if (!obj || typeof obj !== 'object') return;
-        var candidates = [obj.movie, obj.show, obj.card, obj.item, obj];
-        if (obj.data)   [obj.data, obj.data.movie, obj.data.card, obj.data.show].forEach(function(x){ candidates.push(x); });
-        if (obj.params) [obj.params, obj.params.movie, obj.params.card].forEach(function(x){ candidates.push(x); });
-        candidates.forEach(function(c) {
-            if (c && typeof c === 'object' && (c.id || c.tmdb_id) && (c.title || c.name)) {
-                _savedCard = c;
-            }
+        var all = [obj.movie, obj.show, obj.card, obj.item, obj];
+        if (obj.data)   [obj.data, obj.data.movie, obj.data.card, obj.data.show, obj.data.item].forEach(function(x){ all.push(x); });
+        if (obj.params) [obj.params, obj.params.movie, obj.params.card].forEach(function(x){ all.push(x); });
+        all.forEach(function(c) {
+            if (!c || typeof c !== 'object') return;
+            if (!(c.id || c.tmdb_id) || !(c.title || c.name)) return;
+            // Сохраняем если: ничего нет, или новая карточка — TMDB-качества
+            if (!_savedCard || isTmdbCard(c)) _savedCard = c;
         });
     }
 
     function hookActivity() {
+        // Переопределяем Lampa.Activity.push — самый надёжный способ поймать карточку
+        try {
+            if (typeof Lampa.Activity.push === 'function') {
+                var _origPush = Lampa.Activity.push;
+                Lampa.Activity.push = function (data) {
+                    try { saveTmdbCard(data); } catch (_) {}
+                    return _origPush.apply(this, arguments);
+                };
+            }
+        } catch (_) {}
+
+        // Listener на push (некоторые версии Lampa)
+        try { Lampa.Activity.listener.follow('push', function(e) { saveTmdbCard(e); }); } catch (_) {}
+
+        // Глобальные события
         try {
             Lampa.Listener.follow('full', function (e) {
                 if (!e) return;
-                saveTmdbCard(e.data || e);
-                if (e.movie) saveTmdbCard(e.movie);
-                if (e.card)  saveTmdbCard(e.card);
+                [e, e.data, e.movie, e.card, e.item].forEach(function(t) {
+                    try { saveTmdbCard(t); } catch (_) {}
+                });
             });
         } catch (_) {}
         try {
@@ -102,27 +127,44 @@
 
     // ── Поиск TMDB-карточки ───────────────────────────────────────────────
     function findCard(data, file) {
-        if (_savedCard && (_savedCard.id || _savedCard.tmdb_id)) return _savedCard;
+        // 1. Предсохранённая TMDB-карточка (из hookActivity)
+        if (_savedCard && isTmdbCard(_savedCard)) return _savedCard;
 
         var candidates = [];
 
+        // 2. Стек активностей — ищем карточку фильма (не плеера/балансера)
+        try {
+            // Все активности в стеке (некоторые Lampa-версии)
+            var all = Lampa.Activity.all ? Lampa.Activity.all() : null;
+            if (all && all.length) {
+                all.slice().reverse().forEach(function(act) {
+                    if (!act) return;
+                    [act.card, act.movie, act.item,
+                     act.data && act.data.movie, act.data && act.data.card].forEach(function(x){ candidates.push(x); });
+                });
+            }
+        } catch (_) {}
         try {
             var act = Lampa.Activity.active();
             if (act) {
                 [act.card, act.movie, act.item,
                  act.data && act.data.movie, act.data && act.data.card,
                  act.params && act.params.movie, act.params && act.params.card].forEach(function(x){ candidates.push(x); });
-                if (act.id || act.tmdb_id) candidates.push(act);
             }
         } catch (_) {}
 
+        // 3. Lampa.Player.card (устанавливается full-компонентом перед play())
+        try { candidates.push(Lampa.Player.card); } catch (_) {}
+
+        // 4. Данные события start (балансер — менее приоритетны)
         try { candidates.push(data.card);  } catch (_) {}
         try { candidates.push(data.movie); } catch (_) {}
         try { candidates.push(data.item);  } catch (_) {}
         try { if (data.id || data.tmdb_id) candidates.push(data); } catch (_) {}
+        try { candidates.push(file && file.card); } catch (_) {}
 
-        try { candidates.push(Lampa.Player.card); } catch (_) {}
-        try { candidates.push(file && file.card);  } catch (_) {}
+        // 5. Предсохранённая карточка (любая, без TMDB-признаков)
+        if (_savedCard && (_savedCard.id || _savedCard.tmdb_id)) candidates.push(_savedCard);
 
         function unwrap(c) {
             if (!c || typeof c !== 'object') return null;
@@ -131,10 +173,17 @@
             return (inner && inner !== c && (inner.id || inner.tmdb_id)) ? inner : c;
         }
 
+        // Первый проход: только настоящие TMDB-карточки
+        for (var i = 0; i < candidates.length; i++) {
+            var u = unwrap(candidates[i]);
+            if (u && (u.id || u.tmdb_id) && isTmdbCard(u)) return u;
+        }
+        // Второй проход: любая карточка с id
         for (var i = 0; i < candidates.length; i++) {
             var u = unwrap(candidates[i]);
             if (u && (u.id || u.tmdb_id)) return u;
         }
+        // Третий проход: хотя бы название
         for (var i = 0; i < candidates.length; i++) {
             var u = unwrap(candidates[i]);
             if (u && (u.title || u.name)) return u;
