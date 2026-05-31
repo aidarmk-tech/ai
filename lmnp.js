@@ -123,24 +123,36 @@
                 });
             });
         } catch (_) {}
+        // Дополнительные события: card, movie, show
+        ['card','movie','show','full_open','full'].forEach(function(ev) {
+            try {
+                Lampa.Listener.follow(ev, function(e) {
+                    if (!e) return;
+                    [e, e.card, e.movie, e.data, e.item].forEach(function(t) {
+                        try { saveTmdbCard(t); } catch(_) {}
+                    });
+                });
+            } catch(_) {}
+        });
     }
 
     // ── Поиск TMDB-карточки ───────────────────────────────────────────────
     function findCard(data, file) {
-        // 1. Предсохранённая TMDB-карточка (из hookActivity)
+        // 1. Предсохранённая TMDB-карточка (из hookActivity или сканирования на старте)
         if (_savedCard && isTmdbCard(_savedCard)) return _savedCard;
 
         var candidates = [];
 
-        // 2. Стек активностей — ищем карточку фильма (не плеера/балансера)
+        // 2. Полный стек активностей (в т.ч. activity.params.movie у балансера)
         try {
-            // Все активности в стеке (некоторые Lampa-версии)
             var all = Lampa.Activity.all ? Lampa.Activity.all() : null;
+            if (!all || !all.length) { try { all = Lampa.Activity.history || null; } catch(_) {} }
             if (all && all.length) {
                 all.slice().reverse().forEach(function(act) {
                     if (!act) return;
                     [act.card, act.movie, act.item,
-                     act.data && act.data.movie, act.data && act.data.card].forEach(function(x){ candidates.push(x); });
+                     act.data && act.data.movie, act.data && act.data.card,
+                     act.params && act.params.movie, act.params && act.params.card].forEach(function(x){ candidates.push(x); });
                 });
             }
         } catch (_) {}
@@ -153,17 +165,21 @@
             }
         } catch (_) {}
 
-        // 3. Lampa.Player.card (устанавливается full-компонентом перед play())
-        try { candidates.push(Lampa.Player.card); } catch (_) {}
+        // 3. Lampa.Player.card / .movie / .film
+        try { candidates.push(Lampa.Player.card);  } catch (_) {}
+        try { candidates.push(Lampa.Player.movie); } catch (_) {}
+        try { candidates.push(Lampa.Player.film);  } catch (_) {}
 
-        // 4. Данные события start (балансер — менее приоритетны)
+        // 4. Поля события start
         try { candidates.push(data.card);  } catch (_) {}
         try { candidates.push(data.movie); } catch (_) {}
+        try { candidates.push(data.film);  } catch (_) {}
         try { candidates.push(data.item);  } catch (_) {}
         try { if (data.id || data.tmdb_id) candidates.push(data); } catch (_) {}
-        try { candidates.push(file && file.card); } catch (_) {}
+        try { candidates.push(file && file.card);  } catch (_) {}
+        try { candidates.push(file && file.movie); } catch (_) {}
 
-        // 5. Предсохранённая карточка (любая, без TMDB-признаков)
+        // 5. Предсохранённая карточка (запасная)
         if (_savedCard && (_savedCard.id || _savedCard.tmdb_id)) candidates.push(_savedCard);
 
         function unwrap(c) {
@@ -178,16 +194,12 @@
             var u = unwrap(candidates[i]);
             if (u && (u.id || u.tmdb_id) && isTmdbCard(u)) return u;
         }
-        // Второй проход: любая карточка с id
+        // Второй проход: любая карточка с id, но НЕ элемент балансера (voice_name/translate без TMDB-признаков)
         for (var i = 0; i < candidates.length; i++) {
             var u = unwrap(candidates[i]);
-            if (u && (u.id || u.tmdb_id)) return u;
+            if (u && (u.id || u.tmdb_id) && !(u.voice_name || u.translate)) return u;
         }
-        // Третий проход: хотя бы название
-        for (var i = 0; i < candidates.length; i++) {
-            var u = unwrap(candidates[i]);
-            if (u && (u.title || u.name)) return u;
-        }
+        // Третий проход НЕ делаем — иначе вернём «Оригинальный» как название фильма
         return null;
     }
 
@@ -278,15 +290,17 @@
             original_title: c.original_title || c.original_name || null,
             tmdb_id:        c.id || c.tmdb_id || 0,
             imdb_id:        c.imdb_id || null,
-            season_number:  c.season_number || c.season || 0,
-            episode_number: c.episode_number || c.episode || 0,
+            // prefer per-episode values from the play element over the card defaults
+            season_number:  file.season  || c.season_number || c.season  || 0,
+            episode_number: file.episode || c.episode_number || c.episode || 0,
             poster_url:     posterUrl(c),
             backdrop_url:   c.backdrop_path ? 'https://image.tmdb.org/t/p/w1280' + c.backdrop_path : null,
             overview:       c.overview || null,
             release_year:   parseInt((c.release_date || c.first_air_date || '').substring(0, 4)) || 0,
             rating:         c.vote_average || 0,
             quality:        file.quality  || null,
-            translator:     file.translate || null,
+            // balancer stores translator as voice_name in the play element
+            translator:     file.translate || file.voice_name || null,
             timeline_time:     (file.timeline && file.timeline.time)     || 0,
             timeline_duration: (file.timeline && file.timeline.duration) || 0,
             headers:        (file.headers && Object.keys(file.headers).length)
@@ -336,8 +350,27 @@
         Lampa.Player.listener.follow('start', function (e) {
             if (Date.now() - _lastLaunch < 6000) return;
 
+            // Сканируем всё доступное состояние Lampa прямо в момент запуска
+            try { if (Lampa.Player.card)  saveTmdbCard({card: Lampa.Player.card}); } catch (_) {}
+            try { if (Lampa.Player.movie) saveTmdbCard({card: Lampa.Player.movie}); } catch (_) {}
+            try { if (Lampa.Player.film)  saveTmdbCard({card: Lampa.Player.film}); } catch (_) {}
+            try {
+                var _acts = [];
+                try { var _a = Lampa.Activity.all ? Lampa.Activity.all() : null; if (_a) _acts = _a; } catch(_e) {}
+                try { var _h = Lampa.Activity.history; if (_h && _h.length) _acts = _acts.concat(_h); } catch(_e) {}
+                try { var _ac = Lampa.Activity.active(); if (_ac) _acts.push(_ac); } catch(_e) {}
+                _acts.forEach(function(act) {
+                    if (!act) return;
+                    try { saveTmdbCard(act); } catch(_e) {}
+                    try { if (act.params) saveTmdbCard(act.params); } catch(_e) {}
+                    try { if (act.data)   saveTmdbCard(act.data);   } catch(_e) {}
+                });
+            } catch (_) {}
+
             var data    = (e && e.data) ? e.data : (e || {});
-            var file    = typeof data.file === 'object' ? data.file : {};
+            // Balancer's play element has quality/timeline/voice_name at top level,
+            // not nested under .file — fall back to data itself when .file is absent
+            var file    = (typeof data.file === 'object') ? data.file : data;
             var videoUrl = data.url
                         || (file.url || file.file)
                         || (typeof data.file === 'string' ? data.file : '')
