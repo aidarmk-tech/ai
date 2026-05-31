@@ -109,10 +109,6 @@ class PlayerActivity : AppCompatActivity() {
         binding.btnPrev.setOnClickListener { vm.onPrevEpisode(); vm.showOsd() }
         binding.btnNext.setOnClickListener { vm.onNextEpisode(); vm.showOsd() }
         binding.btnInfo.setOnClickListener { vm.toggleInfoOverlay() }
-        binding.btnMarkIntro.setOnClickListener {
-            vm.markIntro()
-            Toast.makeText(this, getString(R.string.intro_marked, vm.player.currentPosition / 1000f), Toast.LENGTH_SHORT).show()
-        }
         binding.btnSkipIntro.setOnClickListener { vm.skipIntro() }
         binding.btnRetry.setOnClickListener { vm.retryPlayback() }
         binding.btnExit.setOnClickListener { finishWithResult() }
@@ -190,6 +186,8 @@ class PlayerActivity : AppCompatActivity() {
 
         lifecycleScope.launch { vm.navigateToNext.collect { finishWithResult(completed = true) } }
         lifecycleScope.launch { vm.showExitDialog.collect { showExitDialog() } }
+        lifecycleScope.launch { vm.message.collect { Toast.makeText(this@PlayerActivity, it, Toast.LENGTH_SHORT).show() } }
+        lifecycleScope.launch { vm.showResumeDialog.collect { showResumeDialog(it) } }
 
         // Progress polling
         lifecycleScope.launch {
@@ -384,6 +382,7 @@ class PlayerActivity : AppCompatActivity() {
         seekDebounceJob?.cancel()
         seekDebounceJob = lifecycleScope.launch {
             delay(600)
+            vm.learnIntroFromSeek(seekTargetMs / 1000.0)  // до seekTo: сравнивает со старой позицией
             vm.player.seekTo(seekTargetMs)
             seekTargetMs = -1L
             delay(1500)
@@ -393,6 +392,18 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     // ─── Helpers ───────────────────────────────────────────────────
+
+    private fun showResumeDialog(prompt: PlayerViewModel.ResumePrompt) {
+        val t = prompt.positionSec.toLong()
+        val hhmm = formatTime(t * 1000)
+        AlertDialog.Builder(this)
+            .setTitle(R.string.resume_dialog_title)
+            .setMessage(getString(R.string.resume_dialog_message, hhmm))
+            .setPositiveButton(getString(R.string.resume_continue, hhmm)) { _, _ -> vm.resumePlaybackConfirmed() }
+            .setNegativeButton(R.string.resume_restart) { _, _ -> vm.restartFromBeginning() }
+            .setOnCancelListener { vm.resumePlaybackConfirmed() }
+            .show()
+    }
 
     private fun showExitDialog() {
         vm.player.pause()

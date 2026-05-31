@@ -2,9 +2,12 @@
 <resources>
     <string name="app_name">Lampa Player</string>
     <string name="error_no_url">Нет URL для воспроизведения</string>
-    <string name="skip_intro">Пропустить интро</string>
-    <string name="mark_intro">Отметить интро</string>
-    <string name="intro_marked">Точка интро сохранена: %1$.0fс</string>
+    <string name="skip_intro">Пропустить заставку</string>
+    <string name="resume_dialog_title">Продолжить просмотр?</string>
+    <string name="resume_dialog_message">Вы остановились на %1$s</string>
+    <string name="resume_continue">Продолжить с %1$s</string>
+    <string name="resume_restart">Сначала</string>
+    <string name="tab_about">О ФИЛЬМЕ</string>
     <string name="autonext_countdown">Следующая серия через %1$d с</string>
     <string name="cancel_autonext">Отмена</string>
     <string name="exit_dialog_title">Выход</string>

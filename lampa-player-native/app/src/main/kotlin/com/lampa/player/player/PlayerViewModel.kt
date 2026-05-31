@@ -88,6 +88,14 @@ class PlayerViewModel @Inject constructor(
     private val _showExitDialog = MutableSharedFlow<Unit>()
     val showExitDialog: SharedFlow<Unit> = _showExitDialog.asSharedFlow()
 
+    private val _message = MutableSharedFlow<String>()
+    val message: SharedFlow<String> = _message.asSharedFlow()
+
+    private val _showResumeDialog = MutableSharedFlow<ResumePrompt>()
+    val showResumeDialog: SharedFlow<ResumePrompt> = _showResumeDialog.asSharedFlow()
+
+    data class ResumePrompt(val url: String, val positionSec: Double)
+
     private val _playEpisode = MutableSharedFlow<EpisodeItem>()
     val playEpisode: SharedFlow<EpisodeItem> = _playEpisode.asSharedFlow()
 
@@ -123,8 +131,12 @@ class PlayerViewModel @Inject constructor(
         }
 
         val profile = BufferProfile.fromType(settings.buffer)
+        // EXTENSION_RENDERER_MODE_ON (не PREFER!): аппаратный MediaCodec в приоритете,
+        // программный ffmpeg — только как запасной. PREFER ломал 4K HEVC, т.к. софт-декодер
+        // его не тянет. enableDecoderFallback: если первичный декодер не стартует — пробуем следующий.
         val renderersFactory = DefaultRenderersFactory(context)
-            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+            .setEnableDecoderFallback(true)
 
         val trackSelector = DefaultTrackSelector(context).apply {
             setParameters(
@@ -153,6 +165,9 @@ class PlayerViewModel @Inject constructor(
                 DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
             )
             .setTargetBufferBytes(profile.maxBufferSizeBytes.toInt())
+            // Для высокобитрейтного 4K важно не упираться в байтовый лимит:
+            // отдаём приоритет времени буфера, иначе плеер «замирает», ожидая байты.
+            .setPrioritizeTimeOverSizeThresholds(true)
             .setBackBuffer(profile.backBufferLengthMs.toInt(), true)
             .build()
 
@@ -173,18 +188,28 @@ class PlayerViewModel @Inject constructor(
         card.tmdbId?.let { loadMetadata(it, card.isSerial, card) }
     }
 
-    private fun loadUrl(url: String, card: CardMeta) {
+    private fun loadUrl(url: String, card: CardMeta, askResume: Boolean = true) {
         viewModelScope.launch {
             val savedPos = positionDataStore.getPosition(url)
-            val startMs = when {
-                savedPos == null -> ((card.timelineTime ?: 0.0) * 1000).toLong()
-                savedPos.watched -> 0L
-                else -> (savedPos.time * 1000).toLong()
+            // Точка возобновления: из нашей памяти позиций или из таймлайна Lampa.
+            val resumeSec: Double = when {
+                savedPos != null && !savedPos.watched && savedPos.percent < 95 -> savedPos.time
+                savedPos == null -> (card.timelineTime ?: 0.0)
+                else -> 0.0
             }
+
             player.setMediaSource(buildMediaSource(url))
-            if (startMs > 0) player.seekTo(startMs)
             player.prepare()
-            player.playWhenReady = true
+
+            if (askResume && resumeSec > 30) {
+                // Буферизуемся в точке возобновления, но ждём выбор пользователя.
+                player.seekTo((resumeSec * 1000).toLong())
+                player.playWhenReady = false
+                _showResumeDialog.emit(ResumePrompt(url, resumeSec))
+            } else {
+                if (resumeSec > 0) player.seekTo((resumeSec * 1000).toLong())
+                player.playWhenReady = true
+            }
 
             val showData = positionDataStore.getShowData(card)
             if (showData != null && settings.rememberTracks) {
@@ -193,6 +218,12 @@ class PlayerViewModel @Inject constructor(
             showData?.introEnd?.let { _uiState.update { s -> s.copy(introEnd = it) } }
         }
     }
+
+    /** Пользователь выбрал «Продолжить» — остаёмся в точке возобновления. */
+    fun resumePlaybackConfirmed() { player.playWhenReady = true }
+
+    /** Пользователь выбрал «Сначала» — перематываем в начало. */
+    fun restartFromBeginning() { player.seekTo(0); player.playWhenReady = true }
 
     private fun buildMediaSource(url: String): MediaSource {
         val item = MediaItem.fromUri(Uri.parse(url))
@@ -246,13 +277,13 @@ class PlayerViewModel @Inject constructor(
         _uiState.update { it.copy(audioTracks = audioTracks, subtitleTracks = subTracks) }
     }
 
-    fun selectEpisode(episode: EpisodeItem) {
+    fun selectEpisode(episode: EpisodeItem, askResume: Boolean = true) {
         viewModelScope.launch {
             saveCurrentPosition()
             currentUrl = episode.url
             _uiState.update { it.copy(currentEpisodeIndex = episode.index, infoOverlayVisible = false) }
             player.stop()
-            loadUrl(episode.url, currentCard!!)
+            loadUrl(episode.url, currentCard!!, askResume = askResume)
         }
     }
 
@@ -334,20 +365,40 @@ class PlayerViewModel @Inject constructor(
         val cur = currentMs / 1000.0; val dur = durationMs / 1000.0
         val showSkip = settings.skipIntro && introSkipManager.shouldShowSkipButton(cur, _uiState.value.introEnd.takeIf { it > 0 })
         _uiState.update { it.copy(showSkipIntro = showSkip) }
-        if (settings.autonext && !_uiState.value.infoOverlayVisible) {
+        // Авто-переход только для конечного контента (фильм/серия), НЕ для live/IPTV.
+        // У live-потока длительность = окну буфера, из-за чего обратный отсчёт срабатывал через ~15с.
+        if (settings.autonext && !isLiveStream() && !_uiState.value.infoOverlayVisible) {
             autoNextManager.checkAndStart(dur, cur, settings.autonextDelay, viewModelScope,
                 onTick = { t -> _uiState.update { it.copy(autoNextCountdown = t) } },
                 onNext = { viewModelScope.launch { navigateNext() } })
         }
     }
 
+    private fun isLiveStream(): Boolean =
+        currentCard?.isIptv == true ||
+        player.isCurrentMediaItemLive ||
+        player.duration == C.TIME_UNSET
+
     private fun navigateNext() {
         val state = _uiState.value
         val nextIdx = state.currentEpisodeIndex + 1
-        if (state.episodes.isNotEmpty() && nextIdx < state.episodes.size) {
-            selectEpisode(state.episodes[nextIdx])
-        } else {
-            viewModelScope.launch { _navigateToNext.emit(Unit) }
+        when {
+            // Есть следующая серия — проигрываем с начала, без вопроса о возобновлении
+            state.episodes.isNotEmpty() && nextIdx < state.episodes.size ->
+                selectEpisode(state.episodes[nextIdx], askResume = false)
+            // Сериал, но список серий пуст/закончился — НЕ выходим молча в Lampa,
+            // показываем OSD и сообщение (раньше это выглядело как «просто выходит»).
+            currentCard?.isSerial == true -> {
+                showOsd()
+                viewModelScope.launch {
+                    _message.emit(
+                        if (state.episodes.isEmpty()) "Список серий не получен из Lampa"
+                        else "Это последняя серия"
+                    )
+                }
+            }
+            // Одиночный фильм досмотрен — выходим с результатом «просмотрено»
+            else -> viewModelScope.launch { _navigateToNext.emit(Unit) }
         }
     }
 
@@ -356,9 +407,20 @@ class PlayerViewModel @Inject constructor(
         if (end > 0) { player.seekTo((end * 1000).toLong()); _uiState.update { it.copy(showSkipIntro = false) } }
     }
 
-    fun markIntro() {
+    /**
+     * Авто-обучение конца интро без отдельной кнопки: если пользователь вручную
+     * проскакивает вперёд в начале серии (первые 10 минут) и конец интро ещё не известен,
+     * запоминаем точку приземления как конец заставки. В следующих сериях покажется
+     * «Пропустить заставку».
+     */
+    fun learnIntroFromSeek(targetSec: Double) {
         val card = currentCard ?: return
-        introSkipManager.markIntro(card, player.currentPosition / 1000.0, viewModelScope) { saved ->
+        if (!settings.skipIntro) return
+        if (_uiState.value.introEnd > 0) return
+        val fromSec = player.currentPosition / 1000.0
+        if (targetSec <= fromSec) return                 // только проскок вперёд
+        if (targetSec !in 30.0..600.0) return            // только в зоне заставки
+        introSkipManager.markIntro(card, targetSec, viewModelScope) { saved ->
             _uiState.update { it.copy(introEnd = saved) }
         }
     }
@@ -374,7 +436,10 @@ class PlayerViewModel @Inject constructor(
     fun onNextEpisode() {
         val state = _uiState.value
         val next = state.episodes.getOrNull(state.currentEpisodeIndex + 1)
-        if (next != null) selectEpisode(next) else viewModelScope.launch { _navigateToNext.emit(Unit) }
+        if (next != null) selectEpisode(next)
+        else viewModelScope.launch {
+            _message.emit(if (state.episodes.isEmpty()) "Список серий не получен" else "Это последняя серия")
+        }
     }
 
     fun onPrevEpisode() {
@@ -426,7 +491,7 @@ class PlayerViewModel @Inject constructor(
                 _uiState.update { it.copy(isLoading = state == Player.STATE_BUFFERING) }
                 if (state == Player.STATE_ENDED) {
                     viewModelScope.launch { saveCurrentPosition(ended = true) }
-                    if (settings.autonext) viewModelScope.launch { navigateNext() }
+                    if (settings.autonext && !isLiveStream()) viewModelScope.launch { navigateNext() }
                 }
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) =
