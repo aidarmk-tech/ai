@@ -8,6 +8,7 @@ import android.widget.Toast
 import androidx.activity.viewModels
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.util.UnstableApi
@@ -73,8 +74,28 @@ class PlayerActivity : AppCompatActivity() {
         binding.playerView.useController = false
 
         setupLists()
+        setupTabs()
         setupOsdClicks()
         observeState()
+    }
+
+    // Вкладки единой панели в порядке отображения
+    private val tabViews by lazy {
+        listOf(
+            InfoPanelTab.EPISODES to binding.tabEpisodes,
+            InfoPanelTab.AUDIO to binding.tabAudio,
+            InfoPanelTab.SUBTITLES to binding.tabSubtitles,
+            InfoPanelTab.ABOUT to binding.tabAbout,
+            InfoPanelTab.EPG to binding.tabEpg,
+        )
+    }
+
+    private fun setupTabs() {
+        tabViews.forEach { (tab, view) ->
+            // Переключение содержимого при наведении фокуса на вкладку
+            view.setOnFocusChangeListener { _, focused -> if (focused) vm.setPanelTab(tab) }
+            view.setOnClickListener { vm.setPanelTab(tab); focusPanelContent() }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -108,7 +129,6 @@ class PlayerActivity : AppCompatActivity() {
         binding.btnForward.setOnClickListener { doSeek(true, fast = false); vm.showOsd() }
         binding.btnPrev.setOnClickListener { vm.onPrevEpisode(); vm.showOsd() }
         binding.btnNext.setOnClickListener { vm.onNextEpisode(); vm.showOsd() }
-        binding.btnInfo.setOnClickListener { vm.toggleInfoOverlay() }
         binding.btnSkipIntro.setOnClickListener { vm.skipIntro() }
         binding.btnRetry.setOnClickListener { vm.retryPlayback() }
         binding.btnExit.setOnClickListener { finishWithResult() }
@@ -137,19 +157,21 @@ class PlayerActivity : AppCompatActivity() {
                 binding.tvEpisodeBadge.isVisible = s.episodes.size > 1
                 binding.tvEpisodeBadge.text = "${s.currentEpisodeIndex + 1}/${s.episodes.size}"
 
-                // OSD
+                // OSD: при открытии — фокус на полоску (если открыли перемоткой) или на Play
                 val osdWasHidden = !binding.osdContainer.isVisible
                 binding.osdContainer.isVisible = s.osdVisible
-                if (s.osdVisible && osdWasHidden && !osdFromSeek) {
-                    binding.btnPlayPause.requestFocus()
+                if (s.osdVisible && osdWasHidden) {
+                    if (osdFromSeek) binding.progressFocus.requestFocus()
+                    else binding.btnPlayPause.requestFocus()
                 }
 
-                // Overlays
-                binding.infoOverlay.isVisible = s.infoOverlayVisible
-                if (s.infoOverlayVisible) applyInfoOverlay(s)
-
-                binding.tracksOverlay.isVisible = s.tracksOverlayVisible
-                if (s.tracksOverlayVisible) applyTracksOverlay(s)
+                // Единая панель с вкладками
+                val panelWasHidden = !binding.infoPanel.isVisible
+                binding.infoPanel.isVisible = s.panelVisible
+                if (s.panelVisible) {
+                    applyPanel(s)
+                    if (panelWasHidden) focusActiveTab()
+                }
 
                 binding.progressBuffering.isVisible = s.isLoading && !s.isPlaying && !s.hasError
                 binding.errorContainer.isVisible = s.hasError
@@ -209,47 +231,70 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
-    private fun applyInfoOverlay(s: PlayerUiState) {
+    // ─── Единая панель с вкладками ─────────────────────────────────
+
+    private fun applyPanel(s: PlayerUiState) {
+        val tabs = vm.availableTabs()
+
+        // Видимость и подсветка вкладок
+        tabViews.forEach { (tab, view) ->
+            view.isVisible = tab in tabs
+            val active = tab == s.infoPanelTab
+            view.setTextColor(ContextCompat.getColor(this, if (active) R.color.accent_primary else R.color.text_secondary))
+        }
+
+        // Наполнение списков
+        episodeAdapter.setItems(s.episodes, s.currentEpisodeIndex)
+        audioAdapter.setItems(s.audioTracks, s.selectedAudioIndex)
+        subtitleAdapter.setItems(s.subtitleTracks, s.selectedSubtitleIndex)
+
+        // О фильме
         val meta = s.metadata
-        binding.overlayMetaSection.isVisible = meta != null || s.title.isNotEmpty()
-        binding.tvOverlayMetaTitle.text = meta?.title ?: s.title
-        binding.tvOverlayMetaInfo.text = meta?.info ?: ""
-        binding.tvOverlayMetaOverview.text = meta?.overview ?: ""
+        binding.tvPanelTitle.text = meta?.title ?: s.title
+        binding.tvPanelInfo.text = meta?.info ?: ""
+        binding.tvPanelOverview.text = meta?.overview ?: ""
+        binding.tvPanelVideoInfo.text = s.videoInfo
+        binding.tvPanelVideoInfo.isVisible = s.videoInfo.isNotEmpty()
         if (!meta?.posterUrl.isNullOrEmpty()) {
             Glide.with(this).load(meta!!.posterUrl)
                 .transition(DrawableTransitionOptions.withCrossFade())
-                .into(binding.ivOverlayPoster)
+                .into(binding.ivPanelPoster)
         }
 
         // EPG
-        val epgText = buildString {
+        binding.tvEpgContent.text = buildString {
             s.card?.epgTitle?.let { append(it) }
             s.card?.epgStart?.let { if (isNotEmpty()) append("\n"); append(it) }
             s.card?.epgEnd?.let { append(" — $it") }
         }
-        binding.tvOverlayEpg.text = epgText
-        binding.tvOverlayEpg.isVisible = epgText.isNotBlank()
 
-        // Video format
-        binding.tvOverlayVideoInfo.text = s.videoInfo
-        binding.tvOverlayVideoInfo.isVisible = s.videoInfo.isNotEmpty()
+        // Показ содержимого активной вкладки
+        binding.rvInfoList.isVisible = s.infoPanelTab == InfoPanelTab.EPISODES
+        binding.rvAudioList.isVisible = s.infoPanelTab == InfoPanelTab.AUDIO
+        binding.rvSubtitleList.isVisible = s.infoPanelTab == InfoPanelTab.SUBTITLES
+        binding.panelAbout.isVisible = s.infoPanelTab == InfoPanelTab.ABOUT
+        binding.tvEpgContent.isVisible = s.infoPanelTab == InfoPanelTab.EPG
 
-        // Episodes or EPG content on the right
-        val hasEpisodes = s.episodes.size > 1
-        binding.rvInfoList.isVisible = hasEpisodes
-        binding.tvEpgContent.isVisible = !hasEpisodes && s.card?.epgTitle != null
-
-        if (hasEpisodes) {
-            episodeAdapter.setItems(s.episodes, s.currentEpisodeIndex)
+        if (s.infoPanelTab == InfoPanelTab.EPISODES)
             binding.rvInfoList.scrollToPosition(s.currentEpisodeIndex)
-        } else {
-            binding.tvEpgContent.text = epgText
-        }
     }
 
-    private fun applyTracksOverlay(s: PlayerUiState) {
-        audioAdapter.setItems(s.audioTracks, s.selectedAudioIndex)
-        subtitleAdapter.setItems(s.subtitleTracks, s.selectedSubtitleIndex)
+    /** Фокус на активную вкладку панели. */
+    private fun focusActiveTab() {
+        val tab = vm.uiState.value.infoPanelTab
+        tabViews.firstOrNull { it.first == tab }?.second?.requestFocus()
+            ?: tabViews.firstOrNull { it.second.isVisible }?.second?.requestFocus()
+    }
+
+    /** Перевод фокуса со вкладок в содержимое активной вкладки. */
+    private fun focusPanelContent() {
+        when (vm.uiState.value.infoPanelTab) {
+            InfoPanelTab.EPISODES -> binding.rvInfoList
+            InfoPanelTab.AUDIO -> binding.rvAudioList
+            InfoPanelTab.SUBTITLES -> binding.rvSubtitleList
+            InfoPanelTab.ABOUT -> binding.panelAbout
+            InfoPanelTab.EPG -> binding.tvEpgContent
+        }.requestFocus()
     }
 
     private fun hideMetadataOverlay() {
@@ -263,91 +308,74 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         val s = vm.uiState.value
-        val osdVisible = s.osdVisible
 
-        // ── Tracks overlay (↑): BACK закрывает ────────────────────
-        if (s.tracksOverlayVisible) {
+        // ── Единая панель открыта (приоритет) ─────────────────────
+        // ←/→ переключают вкладки, ↑/↓ ходят между вкладками и содержимым/по списку
+        // (фокусный поиск). Перехватываем только BACK и ↓ со вкладок в содержимое.
+        if (s.panelVisible) {
+            val onTabs = binding.tabStrip.hasFocus()
             return when (keyCode) {
-                KeyEvent.KEYCODE_BACK,
-                KeyEvent.KEYCODE_DPAD_UP -> { vm.hideTracksOverlay(); true }
+                KeyEvent.KEYCODE_BACK -> { vm.hidePanel(); true }
+                KeyEvent.KEYCODE_DPAD_DOWN ->
+                    if (onTabs) { focusPanelContent(); true } else super.onKeyDown(keyCode, event)
                 else -> super.onKeyDown(keyCode, event)
             }
         }
 
-        // ── Info overlay (↓↓): BACK/↑ закрывает ──────────────────
-        if (s.infoOverlayVisible) {
-            return when (keyCode) {
-                KeyEvent.KEYCODE_BACK,
-                KeyEvent.KEYCODE_DPAD_UP -> { vm.hideInfoOverlay(); true }
-                else -> super.onKeyDown(keyCode, event)
-            }
-        }
-
-        // ── Медиа-кнопки — всегда обрабатываем ───────────────────
+        // ── Медиа-кнопки пульта — всегда ──────────────────────────
         when (keyCode) {
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
             KeyEvent.KEYCODE_MEDIA_PLAY,
-            KeyEvent.KEYCODE_MEDIA_PAUSE -> { vm.onKeyOk(); return true }
-            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { doSeek(true); vm.showOsd(); return true }
-            KeyEvent.KEYCODE_MEDIA_REWIND -> { doSeek(false); vm.showOsd(); return true }
+            KeyEvent.KEYCODE_MEDIA_PAUSE -> { vm.onKeyOk(); vm.showOsd(); return true }
+            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { osdFromSeek = true; doSeek(true); vm.showOsd(); return true }
+            KeyEvent.KEYCODE_MEDIA_REWIND -> { osdFromSeek = true; doSeek(false); vm.showOsd(); return true }
             KeyEvent.KEYCODE_MEDIA_NEXT -> { vm.onNextEpisode(); return true }
             KeyEvent.KEYCODE_MEDIA_PREVIOUS -> { vm.onPrevEpisode(); return true }
         }
 
-        // ── OSD visible ───────────────────────────────────────────
-        if (osdVisible) {
+        // ── OSD открыт (гибрид: перемотка только на полоске) ──────
+        if (s.osdVisible) {
+            val onProgress = binding.progressFocus.hasFocus()
+            val onButtons = binding.osdButtons.hasFocus()
             return when (keyCode) {
                 KeyEvent.KEYCODE_BACK -> { vm.onKeyBack(true, false); true }
-                // ↑ → попап аудио/субтитров
-                KeyEvent.KEYCODE_DPAD_UP -> {
-                    osdFromSeek = false; vm.toggleTracksOverlay(); true
-                }
-                // ↓ → инфо-оверлей
-                KeyEvent.KEYCODE_DPAD_DOWN -> {
-                    vm.toggleInfoOverlay(); true
-                }
-                KeyEvent.KEYCODE_INFO,
-                KeyEvent.KEYCODE_MENU -> { vm.toggleInfoOverlay(); true }
-                // ← / → — перемотка если OSD открылся от перемотки; иначе навигация
-                KeyEvent.KEYCODE_DPAD_LEFT -> {
-                    if (osdFromSeek) { doSeek(false); vm.showOsd(); true }
-                    else super.onKeyDown(keyCode, event)
-                }
-                KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                    if (osdFromSeek) { doSeek(true); vm.showOsd(); true }
-                    else super.onKeyDown(keyCode, event)
-                }
-                // OK в режиме перемотки — переходим к навигации по кнопкам
+                KeyEvent.KEYCODE_DPAD_DOWN ->
+                    // ↓ с кнопок (после первого ↓) — открыть панель; иначе вниз по фокусу
+                    if (onButtons) { vm.openPanel(); true } else super.onKeyDown(keyCode, event)
+                KeyEvent.KEYCODE_DPAD_LEFT ->
+                    if (onProgress) { doSeek(false); vm.showOsd(); true } else super.onKeyDown(keyCode, event)
+                KeyEvent.KEYCODE_DPAD_RIGHT ->
+                    if (onProgress) { doSeek(true); vm.showOsd(); true } else super.onKeyDown(keyCode, event)
                 KeyEvent.KEYCODE_DPAD_CENTER,
-                KeyEvent.KEYCODE_ENTER -> {
-                    if (osdFromSeek) {
-                        osdFromSeek = false; binding.btnPlayPause.requestFocus(); true
-                    } else super.onKeyDown(keyCode, event)
-                }
+                KeyEvent.KEYCODE_ENTER ->
+                    if (onProgress) { vm.onKeyOk(); vm.showOsd(); true } else super.onKeyDown(keyCode, event)
+                KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_MENU -> { vm.openPanel(); true }
                 else -> super.onKeyDown(keyCode, event)
             }
         }
 
         // ── OSD скрыт ─────────────────────────────────────────────
         return when (keyCode) {
+            // ←/→ — быстрая перемотка, фокус уходит на полоску
             KeyEvent.KEYCODE_DPAD_LEFT -> {
-                doSeek(false, repeatCount = event.repeatCount)
-                osdFromSeek = true; vm.showOsd(); true
+                osdFromSeek = true; vm.showOsd(); doSeek(false, repeatCount = event.repeatCount); true
             }
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                doSeek(true, repeatCount = event.repeatCount)
-                osdFromSeek = true; vm.showOsd(); true
+                osdFromSeek = true; vm.showOsd(); doSeek(true, repeatCount = event.repeatCount); true
             }
-            KeyEvent.KEYCODE_PAGE_UP,
-            KeyEvent.KEYCODE_CHANNEL_UP -> { vm.onKeyPageUp(); vm.showOsd(); true }
-            KeyEvent.KEYCODE_PAGE_DOWN,
-            KeyEvent.KEYCODE_CHANNEL_DOWN -> { vm.onKeyPageDown(); vm.showOsd(); true }
-            KeyEvent.KEYCODE_DPAD_DOWN,
+            // ↓ — единственная кнопка, открывающая OSD (фокус на Play)
+            KeyEvent.KEYCODE_DPAD_DOWN -> { osdFromSeek = false; vm.showOsd(); true }
+            // ↑ / MENU / INFO — сразу единая панель
             KeyEvent.KEYCODE_DPAD_UP,
-            KeyEvent.KEYCODE_DPAD_CENTER,
-            KeyEvent.KEYCODE_ENTER -> { osdFromSeek = false; vm.showOsd(); true }
             KeyEvent.KEYCODE_INFO,
-            KeyEvent.KEYCODE_MENU -> { vm.toggleInfoOverlay(); true }
+            KeyEvent.KEYCODE_MENU -> { vm.openPanel(); true }
+            // OK — пауза/воспроизведение + показать OSD
+            KeyEvent.KEYCODE_DPAD_CENTER,
+            KeyEvent.KEYCODE_ENTER -> { osdFromSeek = false; vm.onKeyOk(); vm.showOsd(); true }
+            KeyEvent.KEYCODE_PAGE_UP,
+            KeyEvent.KEYCODE_CHANNEL_UP -> { osdFromSeek = true; vm.onKeyPageUp(); vm.showOsd(); true }
+            KeyEvent.KEYCODE_PAGE_DOWN,
+            KeyEvent.KEYCODE_CHANNEL_DOWN -> { osdFromSeek = true; vm.onKeyPageDown(); vm.showOsd(); true }
             KeyEvent.KEYCODE_BACK -> { vm.onKeyBack(false, false); true }
             else -> super.onKeyDown(keyCode, event)
         }

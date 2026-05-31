@@ -30,6 +30,20 @@
         <item name="android:background">@drawable/bg_button_accent</item>
     </style>
 
+    <style name="PanelTab" parent="Widget.AppCompat.TextView">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">match_parent</item>
+        <item name="android:gravity">center</item>
+        <item name="android:textColor">@color/text_secondary</item>
+        <item name="android:textSize">16sp</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:paddingHorizontal">@dimen/space_md</item>
+        <item name="android:layout_marginEnd">@dimen/space_xs</item>
+        <item name="android:background">@drawable/bg_tab</item>
+        <item name="android:focusable">true</item>
+        <item name="android:focusableInTouchMode">false</item>
+    </style>
+
     <style name="Widget.LampaPlayer.Pill" parent="Widget.AppCompat.TextView">
         <item name="android:background">@drawable/bg_pill</item>
         <item name="android:textColor">@color/text_primary</item>

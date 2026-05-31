@@ -23,7 +23,7 @@
     <string name="settings_autonext">Автопереход серий</string>
     <string name="settings_autonext_delay">Задержка перехода</string>
     <string name="settings_remember_tracks">Запоминать дорожки</string>
-    <string name="settings_skip_intro">Кнопка пропуска интро</string>
+    <string name="settings_skip_intro">Пропуск заставки (авто)</string>
     <string name="settings_diag">Диагностика</string>
     <string name="epg_title">Программа передач</string>
     <string name="iptv_title">Телевидение</string>

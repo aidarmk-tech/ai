@@ -25,7 +25,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import javax.inject.Inject
 
-enum class InfoPanelTab { EPISODES, AUDIO, SUBTITLES, EPG }
+enum class InfoPanelTab { EPISODES, AUDIO, SUBTITLES, ABOUT, EPG }
 
 data class PlayerUiState(
     val title: String = "",
@@ -45,10 +45,8 @@ data class PlayerUiState(
     val settings: AppSettings = AppSettings(),
     val metadata: MetadataDisplay? = null,
     val showMetadata: Boolean = false,
-    // Info panel
-    val infoPanelVisible: Boolean = false,
-    val infoOverlayVisible: Boolean = false,
-    val tracksOverlayVisible: Boolean = false,
+    // Единая панель с вкладками
+    val panelVisible: Boolean = false,
     val infoPanelTab: InfoPanelTab = InfoPanelTab.EPISODES,
     val episodes: List<EpisodeItem> = emptyList(),
     val currentEpisodeIndex: Int = 0,
@@ -236,39 +234,36 @@ class PlayerViewModel @Inject constructor(
 
     private fun isHls(url: String) = url.contains(".m3u8", ignoreCase = true)
 
-    // ─── Info Panel ────────────────────────────────────────────────
-    fun toggleInfoPanel() {
-        val visible = !_uiState.value.infoPanelVisible
-        _uiState.update { it.copy(infoPanelVisible = visible) }
-        if (visible) {
-            refreshTracks()
-            osdHideJob?.cancel()
-        } else {
-            scheduleOsdHide()
-        }
+    // ─── Единая панель с вкладками ─────────────────────────────────
+    /** Список доступных вкладок для текущего контента (в порядке отображения). */
+    fun availableTabs(): List<InfoPanelTab> {
+        val s = _uiState.value
+        val tabs = mutableListOf<InfoPanelTab>()
+        if (s.episodes.size > 1) tabs += InfoPanelTab.EPISODES
+        if (s.audioTracks.isNotEmpty()) tabs += InfoPanelTab.AUDIO
+        if (s.subtitleTracks.isNotEmpty()) tabs += InfoPanelTab.SUBTITLES
+        if (s.metadata != null || s.title.isNotEmpty()) tabs += InfoPanelTab.ABOUT
+        if (s.card?.epgTitle != null) tabs += InfoPanelTab.EPG
+        return tabs.ifEmpty { listOf(InfoPanelTab.ABOUT) }
     }
 
-    fun hideInfoPanel() = _uiState.update { it.copy(infoPanelVisible = false) }
-
-    fun toggleInfoOverlay() {
-        val visible = !_uiState.value.infoOverlayVisible
-        _uiState.update { it.copy(infoOverlayVisible = visible) }
-        if (visible) { refreshTracks(); osdHideJob?.cancel() }
-        else scheduleOsdHide()
+    fun openPanel(tab: InfoPanelTab? = null) {
+        refreshTracks()
+        val tabs = availableTabs()
+        val target = tab?.takeIf { it in tabs } ?: tabs.first()
+        osdHideJob?.cancel()
+        _uiState.update { it.copy(panelVisible = true, infoPanelTab = target) }
     }
 
-    fun hideInfoOverlay() = _uiState.update { it.copy(infoOverlayVisible = false) }
-
-    fun toggleTracksOverlay() {
-        val visible = !_uiState.value.tracksOverlayVisible
-        _uiState.update { it.copy(tracksOverlayVisible = visible, infoOverlayVisible = false) }
-        if (visible) { refreshTracks(); osdHideJob?.cancel() }
-        else scheduleOsdHide()
+    fun hidePanel() {
+        _uiState.update { it.copy(panelVisible = false) }
+        scheduleOsdHide()
     }
 
-    fun hideTracksOverlay() = _uiState.update { it.copy(tracksOverlayVisible = false) }
-
-    fun setInfoPanelTab(tab: InfoPanelTab) = _uiState.update { it.copy(infoPanelTab = tab) }
+    fun setPanelTab(tab: InfoPanelTab) {
+        if (tab == InfoPanelTab.AUDIO || tab == InfoPanelTab.SUBTITLES) refreshTracks()
+        _uiState.update { it.copy(infoPanelTab = tab) }
+    }
 
     private fun refreshTracks() {
         val tracks = player.currentTracks
@@ -281,7 +276,7 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             saveCurrentPosition()
             currentUrl = episode.url
-            _uiState.update { it.copy(currentEpisodeIndex = episode.index, infoOverlayVisible = false) }
+            _uiState.update { it.copy(currentEpisodeIndex = episode.index, panelVisible = false) }
             player.stop()
             loadUrl(episode.url, currentCard!!, askResume = askResume)
         }
@@ -323,7 +318,7 @@ class PlayerViewModel @Inject constructor(
             val year = (meta.release_date ?: meta.first_air_date)?.take(4) ?: ""
             val rating = meta.vote_average?.let { "★ %.1f".format(it) } ?: ""
             val info = listOfNotNull(year.ifEmpty { null }, rating.ifEmpty { null }, card.quality).joinToString(" · ")
-            // Enhance metadata with TMDB data and show splash overlay
+            // Обогащаем данные из TMDB — без всплывающего сплэша, всё видно во вкладке «О фильме».
             _uiState.update { s ->
                 s.copy(
                     metadata = PlayerUiState.MetadataDisplay(
@@ -332,11 +327,8 @@ class PlayerViewModel @Inject constructor(
                         cast = "",
                         posterUrl = TmdbRepository.posterUrl(meta.poster_path) ?: card.posterUrl,
                     ),
-                    showMetadata = true,
                 )
             }
-            delay(6000)
-            _uiState.update { it.copy(showMetadata = false) }
         }
     }
 
@@ -367,7 +359,7 @@ class PlayerViewModel @Inject constructor(
         _uiState.update { it.copy(showSkipIntro = showSkip) }
         // Авто-переход только для конечного контента (фильм/серия), НЕ для live/IPTV.
         // У live-потока длительность = окну буфера, из-за чего обратный отсчёт срабатывал через ~15с.
-        if (settings.autonext && !isLiveStream() && !_uiState.value.infoOverlayVisible) {
+        if (settings.autonext && !isLiveStream() && !_uiState.value.panelVisible) {
             autoNextManager.checkAndStart(dur, cur, settings.autonextDelay, viewModelScope,
                 onTick = { t -> _uiState.update { it.copy(autoNextCountdown = t) } },
                 onNext = { viewModelScope.launch { navigateNext() } })
@@ -451,7 +443,7 @@ class PlayerViewModel @Inject constructor(
 
     fun onKeyBack(osdVisible: Boolean, panelVisible: Boolean) {
         when {
-            _uiState.value.infoOverlayVisible -> hideInfoOverlay()
+            _uiState.value.panelVisible -> hidePanel()
             osdVisible -> _uiState.update { it.copy(osdVisible = false) }
             else -> viewModelScope.launch { _showExitDialog.emit(Unit) }
         }
@@ -466,7 +458,7 @@ class PlayerViewModel @Inject constructor(
         osdHideJob?.cancel()
         osdHideJob = viewModelScope.launch {
             delay(4000)
-            if (player.isPlaying && !_uiState.value.infoOverlayVisible && !_uiState.value.tracksOverlayVisible)
+            if (player.isPlaying && !_uiState.value.panelVisible)
                 _uiState.update { it.copy(osdVisible = false) }
         }
     }
@@ -503,7 +495,7 @@ class PlayerViewModel @Inject constructor(
             }
             override fun onTracksChanged(tracks: Tracks) {
                 _uiState.update { it.copy(currentTracks = tracks) }
-                if (_uiState.value.tracksOverlayVisible) refreshTracks()
+                if (_uiState.value.panelVisible) refreshTracks()
                 updateVideoInfo()
             }
 
