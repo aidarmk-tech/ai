@@ -77,7 +77,27 @@
                   c.original_title || c.original_name);
     }
 
-    // Сохраняем карточку; TMDB-карточка всегда приоритетнее карточки балансера
+    // Оценка качества карточки: больше TMDB-полей — выше балл,
+    // карточки-переводчики от балансера получают штраф.
+    function cardScore(c) {
+        if (!c || typeof c !== 'object') return -1;
+        if (!(c.id || c.tmdb_id) || !(c.title || c.name)) return -1;
+        var s = 0;
+        if (c.poster_path)                        s += 4;
+        if (c.backdrop_path)                      s += 4;
+        if (c.overview)                           s += 4;
+        if (c.vote_average)                       s += 2;
+        if (c.release_date || c.first_air_date)   s += 2;
+        if (c.original_title || c.original_name)  s += 2;
+        // Штраф за признаки карточки-переводчика от балансера
+        if (c.voice_name)   s -= 20;
+        if (c.translate)    s -= 20;
+        if (c.translator)   s -= 10;
+        if (c.voice_id)     s -= 10;
+        return s;
+    }
+
+    // Сохраняем карточку с наибольшим количеством TMDB-полей
     function saveTmdbCard(obj) {
         if (!obj || typeof obj !== 'object') return;
         var all = [obj.movie, obj.show, obj.card, obj.item, obj];
@@ -89,9 +109,9 @@
         if (obj.params && obj.params.object) [obj.params.object, obj.params.object.movie, obj.params.object.card].forEach(function(x){ all.push(x); });
         all.forEach(function(c) {
             if (!c || typeof c !== 'object') return;
-            if (!(c.id || c.tmdb_id) || !(c.title || c.name)) return;
-            // Сохраняем если: ничего нет, или новая карточка — TMDB-качества
-            if (!_savedCard || isTmdbCard(c)) _savedCard = c;
+            var s = cardScore(c);
+            if (s < 0) return;
+            if (s > cardScore(_savedCard)) _savedCard = c;
         });
     }
 
@@ -236,17 +256,15 @@
             return (inner && inner !== c && (inner.id || inner.tmdb_id)) ? inner : c;
         }
 
-        // Первый проход: только настоящие TMDB-карточки
-        for (var i = 0; i < candidates.length; i++) {
-            var u = unwrap(candidates[i]);
-            if (u && (u.id || u.tmdb_id) && isTmdbCard(u)) return u;
-        }
-        // Второй проход: любая карточка с id, но НЕ элемент балансера (voice_name/translate без TMDB-признаков)
-        for (var i = 0; i < candidates.length; i++) {
-            var u = unwrap(candidates[i]);
-            if (u && (u.id || u.tmdb_id) && !(u.voice_name || u.translate)) return u;
-        }
-        // Третий проход НЕ делаем — иначе вернём «Оригинальный» как название фильма
+        // Выбираем кандидата с наибольшим баллом (score); балансерные карточки получают штраф
+        var best = null, bestScore = -1;
+        candidates.forEach(function(c) {
+            var u = unwrap(c);
+            if (!u) return;
+            var s = cardScore(u);
+            if (s > bestScore) { best = u; bestScore = s; }
+        });
+        if (best && bestScore >= 0) return best;
         return null;
     }
 
@@ -336,8 +354,14 @@
         var file = (fileData && typeof fileData === 'object') ? fileData : {};
         var epg  = getEpg(c, epgData);
 
+        // If c.title looks like a translator/balancer label (has voice_name / translate,
+        // or the title IS the voice_name), use original_title as a last resort.
+        var rawTitle = c.title || c.name || '';
+        if (rawTitle && (c.voice_name === rawTitle || c.translate === rawTitle)) {
+            rawTitle = c.original_title || c.original_name || rawTitle;
+        }
         var card = {
-            title:          c.title || c.name || '',
+            title:          rawTitle,
             original_title: c.original_title || c.original_name || null,
             tmdb_id:        c.id || c.tmdb_id || 0,
             imdb_id:        c.imdb_id || null,
