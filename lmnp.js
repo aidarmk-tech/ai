@@ -156,6 +156,23 @@
                 });
             } catch(_) {}
         });
+
+        // ── Событие нажатия «Смотреть» / открытия источника ─────────────────
+        // В Lampa/BylAmpa эти события стреляют ДО того как балансер получает
+        // управление — именно здесь лежит чистая TMDB-карточка.
+        // Разные форки используют разные имена: 'source', 'online', 'sources',
+        // 'stream', 'open', 'watch' — слушаем все.
+        ['source','online','sources','stream','open','watch','start_watch'].forEach(function(ev) {
+            try {
+                Lampa.Listener.follow(ev, function(e) {
+                    if (!e) return;
+                    var t = [e, e.card, e.movie, e.item, e.film, e.data,
+                             e.object, e.object && e.object.movie, e.object && e.object.card,
+                             e.params && e.params.card, e.params && e.params.movie];
+                    t.forEach(function(x){ try { saveTmdbCard(x); } catch(_) {} });
+                });
+            } catch(_) {}
+        });
     }
 
     // ── Поиск TMDB-карточки ───────────────────────────────────────────────
@@ -388,6 +405,10 @@
             try { if (Lampa.Player.card)  saveTmdbCard({card: Lampa.Player.card}); } catch (_) {}
             try { if (Lampa.Player.movie) saveTmdbCard({card: Lampa.Player.movie}); } catch (_) {}
             try { if (Lampa.Player.film)  saveTmdbCard({card: Lampa.Player.film}); } catch (_) {}
+            // Текущая/родительская активность (разные форки Lampa используют разные имена)
+            ['current','parent','prev','last'].forEach(function(k) {
+                try { var x = Lampa.Activity[k]; if (x && typeof x === 'function') saveTmdbCard(x()); else if (x) saveTmdbCard(x); } catch(_e) {}
+            });
             try {
                 var _acts = [];
                 try { var _a = Lampa.Activity.all ? Lampa.Activity.all() : null; if (_a) _acts = _a; } catch(_e) {}
@@ -398,9 +419,11 @@
                     try { saveTmdbCard(act); } catch(_e) {}
                     try { if (act.params) saveTmdbCard(act.params); } catch(_e) {}
                     try { if (act.data)   saveTmdbCard(act.data);   } catch(_e) {}
-                    // online_mod.js и балансеры хранят карточку в act.object.movie
+                    // Балансеры хранят оригинальный объект фильма в act.object или act.object.movie
                     try { if (act.object) saveTmdbCard(act.object); } catch(_e) {}
                     try { if (act.params && act.params.object) saveTmdbCard(act.params.object); } catch(_e) {}
+                    // Некоторые форки используют act.card напрямую как TMDB карточку
+                    try { if (act.card && typeof act.card === 'object') saveTmdbCard({movie: act.card}); } catch(_e) {}
                 });
             } catch (_) {}
 
