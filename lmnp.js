@@ -503,6 +503,76 @@
         } catch (_) {}
     }
 
+    // ── Хук на регистрацию плагинов-балансеров ───────────────────────────
+    // Самая надёжная точка: Lampa передаёт чистую TMDB-карточку именно в
+    // moment вызова plugin.component(object). Оборачиваем её у каждого плагина.
+
+    function hookPlugins() {
+        function wrapComponent(plugin) {
+            if (!plugin || typeof plugin.component !== 'function') return;
+            if (plugin.__lmnp) return;   // уже обёрнут
+            plugin.__lmnp = true;
+            var _orig = plugin.component;
+            plugin.component = function(object) {
+                try { saveTmdbCard(object); } catch(_) {}
+                return _orig.apply(this, arguments);
+            };
+        }
+
+        function wrapExisting() {
+            try {
+                var store = (Lampa.Plugin || {}).plugins
+                         || (Lampa.Plugin || {}).list
+                         || (Lampa.Plugin || {}).all;
+                if (!store) return;
+                var arr = Array.isArray(store) ? store : Object.values(store);
+                arr.forEach(function(p) { try { wrapComponent(p); } catch(_) {} });
+            } catch(_) {}
+        }
+
+        // Хук на Lampa.Plugin.add / register — регистрация нового плагина
+        ['add','register'].forEach(function(method) {
+            try {
+                if (!Lampa.Plugin || typeof Lampa.Plugin[method] !== 'function') return;
+                var _orig = Lampa.Plugin[method];
+                Lampa.Plugin[method] = function(plugin) {
+                    try { wrapComponent(plugin); } catch(_) {}
+                    return _orig.apply(this, arguments);
+                };
+            } catch(_) {}
+        });
+
+        // Хук на Lampa.InteractionSource.add (BylAmpa и другие форки)
+        try {
+            if (Lampa.InteractionSource && typeof Lampa.InteractionSource.add === 'function') {
+                var _isAdd = Lampa.InteractionSource.add;
+                Lampa.InteractionSource.add = function(plugin) {
+                    try { wrapComponent(plugin); } catch(_) {}
+                    return _isAdd.apply(this, arguments);
+                };
+            }
+        } catch(_) {}
+
+        // Хук на методы запуска источника в разных форках
+        ['Source','InteractionSource','InteractionMain','Online'].forEach(function(ns) {
+            try {
+                var obj = Lampa[ns];
+                if (!obj) return;
+                ['show','online','start','open','component'].forEach(function(m) {
+                    if (typeof obj[m] !== 'function' || obj['__lmnp_' + m]) return;
+                    obj['__lmnp_' + m] = true;
+                    var _orig = obj[m];
+                    obj[m] = function() {
+                        try { if (arguments[0]) saveTmdbCard(arguments[0]); } catch(_) {}
+                        return _orig.apply(this, arguments);
+                    };
+                });
+            } catch(_) {}
+        });
+
+        wrapExisting();
+    }
+
     // ── Настройки ────────────────────────────────────────────────────────
 
     function addSettings() {
@@ -529,6 +599,7 @@
     function start() {
         addSettings();
         hookActivity();
+        hookPlugins();
         hookPlayer();
         try { Lampa.Noty.show('Native Player подключён'); } catch (_) {}
     }
