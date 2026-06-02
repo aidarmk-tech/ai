@@ -173,9 +173,11 @@
                 all.slice().reverse().forEach(function(act) {
                     if (!act) return;
                     [act.card, act.movie, act.item,
+                     act.object,                                                       // act.object может быть самой карточкой
                      act.object && act.object.movie, act.object && act.object.card,
                      act.data && act.data.movie, act.data && act.data.card,
                      act.params && act.params.movie, act.params && act.params.card,
+                     act.params && act.params.object,
                      act.params && act.params.object && act.params.object.movie].forEach(function(x){ candidates.push(x); });
                 });
             }
@@ -184,9 +186,11 @@
             var act = Lampa.Activity.active();
             if (act) {
                 [act.card, act.movie, act.item,
+                 act.object,                                                           // act.object может быть самой карточкой
                  act.object && act.object.movie, act.object && act.object.card,
                  act.data && act.data.movie, act.data && act.data.card,
                  act.params && act.params.movie, act.params && act.params.card,
+                 act.params && act.params.object,
                  act.params && act.params.object && act.params.object.movie].forEach(function(x){ candidates.push(x); });
             }
         } catch (_) {}

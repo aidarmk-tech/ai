@@ -321,8 +321,7 @@ class PlayerViewModel @Inject constructor(
             val info = listOfNotNull(year.ifEmpty { null }, rating.ifEmpty { null }, card.quality).joinToString(" · ")
             _uiState.update { s ->
                 s.copy(
-                    // Если текущий заголовок — имя переводчика, заменяем на настоящее название из TMDB
-                    title = if (s.title.isBlank() || s.title == s.translator) title else s.title,
+                    title = title,
                     metadata = PlayerUiState.MetadataDisplay(
                         title = title, info = info,
                         overview = meta.overview ?: s.metadata?.overview ?: "",
@@ -343,7 +342,7 @@ class PlayerViewModel @Inject constructor(
             val info = listOfNotNull(year.ifEmpty { null }, rating.ifEmpty { null }, card.quality).joinToString(" · ")
             _uiState.update { s ->
                 s.copy(
-                    title = if (s.title.isBlank() || s.title == s.translator) title else s.title,
+                    title = title,
                     metadata = PlayerUiState.MetadataDisplay(
                         title = title, info = info,
                         overview = meta.overview ?: s.metadata?.overview ?: "",
