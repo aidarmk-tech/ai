@@ -58,6 +58,22 @@ class PlayerActivity : AppCompatActivity() {
     // When false: OSD opened by OK/↓ → ←/→ navigate OSD buttons.
     private var osdFromSeek = false
 
+    // Info panel width in pixels (used for slide-in animation)
+    private val infoPanelWidthPx by lazy {
+        resources.getDimensionPixelSize(R.dimen.info_panel_width).toFloat()
+    }
+
+    // Ordered list of (tab enum → tab TextView) for the unified panel
+    private val tabViews by lazy {
+        listOf(
+            InfoPanelTab.EPISODES  to binding.tabEpisodes,
+            InfoPanelTab.AUDIO     to binding.tabAudio,
+            InfoPanelTab.SUBTITLES to binding.tabSubtitles,
+            InfoPanelTab.ABOUT     to binding.tabAbout,
+            InfoPanelTab.EPG       to binding.tabEpg,
+        )
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -79,30 +95,10 @@ class PlayerActivity : AppCompatActivity() {
         observeState()
     }
 
-    // Вкладки единой панели в порядке отображения
-    private val tabViews by lazy {
-        listOf(
-            InfoPanelTab.EPISODES to binding.tabEpisodes,
-            InfoPanelTab.AUDIO to binding.tabAudio,
-            InfoPanelTab.SUBTITLES to binding.tabSubtitles,
-            InfoPanelTab.ABOUT to binding.tabAbout,
-            InfoPanelTab.EPG to binding.tabEpg,
-        )
-    }
-
-    private fun setupTabs() {
-        tabViews.forEach { (tab, view) ->
-            // Переключение содержимого при наведении фокуса на вкладку
-            view.setOnFocusChangeListener { _, focused -> if (focused) vm.setPanelTab(tab) }
-            view.setOnClickListener { vm.setPanelTab(tab); focusPanelContent() }
-        }
-    }
-
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        // Обновляем данные только если intent содержит lampa_data.
-        // Lampa также посылает стандартный external-player intent (без lampa_data)
-        // — он приходит в onNewIntent() и не должен перезаписывать хорошие данные.
+        // Only update if the intent carries lampa_data — plain external-player intents
+        // arrive here too and must not overwrite good data.
         if (!intent.hasExtra("lampa_data")) return
         val (_, card) = IntentParser.parse(intent) ?: return
         vm.updateCardMeta(card)
@@ -121,6 +117,15 @@ class PlayerActivity : AppCompatActivity() {
         binding.rvSubtitleList.adapter = subtitleAdapter
     }
 
+    // ─── Tab setup ─────────────────────────────────────────────────
+
+    private fun setupTabs() {
+        tabViews.forEach { (tab, view) ->
+            view.setOnFocusChangeListener { _, focused -> if (focused) vm.setPanelTab(tab) }
+            view.setOnClickListener { vm.setPanelTab(tab); focusPanelContent() }
+        }
+    }
+
     // ─── OSD button clicks ─────────────────────────────────────────
 
     private fun setupOsdClicks() {
@@ -129,6 +134,15 @@ class PlayerActivity : AppCompatActivity() {
         binding.btnForward.setOnClickListener { doSeek(true, fast = false); vm.showOsd() }
         binding.btnPrev.setOnClickListener { vm.onPrevEpisode(); vm.showOsd() }
         binding.btnNext.setOnClickListener { vm.onNextEpisode(); vm.showOsd() }
+        binding.btnInfo.setOnClickListener { if (vm.uiState.value.panelVisible) vm.hidePanel() else vm.openPanel() }
+        binding.btnMarkIntro.setOnClickListener {
+            vm.markIntro()
+            Toast.makeText(
+                this,
+                getString(R.string.intro_marked, vm.player.currentPosition / 1000f),
+                Toast.LENGTH_SHORT
+            ).show()
+        }
         binding.btnSkipIntro.setOnClickListener { vm.skipIntro() }
         binding.btnRetry.setOnClickListener { vm.retryPlayback() }
         binding.btnExit.setOnClickListener { finishWithResult() }
@@ -145,9 +159,7 @@ class PlayerActivity : AppCompatActivity() {
         lifecycleScope.launch {
             vm.uiState.collectLatest { s ->
                 // Top bar
-                binding.tvTitle.text = s.metadata?.title?.takeIf { it.isNotBlank() && it != s.translator }
-                    ?: s.title.takeIf { it != s.translator && it.isNotBlank() }
-                    ?: s.title
+                binding.tvTitle.text = s.title
                 binding.tvQuality.isVisible = s.quality.isNotEmpty()
                 binding.tvQuality.text = s.quality
                 binding.tvTranslator.isVisible = s.translator.isNotEmpty()
@@ -159,20 +171,35 @@ class PlayerActivity : AppCompatActivity() {
                 binding.tvEpisodeBadge.isVisible = s.episodes.size > 1
                 binding.tvEpisodeBadge.text = "${s.currentEpisodeIndex + 1}/${s.episodes.size}"
 
-                // OSD: при открытии — фокус на полоску (если открыли перемоткой) или на Play
+                // OSD
                 val osdWasHidden = !binding.osdContainer.isVisible
                 binding.osdContainer.isVisible = s.osdVisible
-                if (s.osdVisible && osdWasHidden) {
-                    if (osdFromSeek) binding.progressFocus.requestFocus()
-                    else binding.btnPlayPause.requestFocus()
+                if (s.osdVisible && osdWasHidden && !osdFromSeek) {
+                    binding.btnPlayPause.requestFocus()
                 }
 
-                // Единая панель с вкладками
+                // Unified info panel (right-side Netflix/Kivi style)
                 val panelWasHidden = !binding.infoPanel.isVisible
-                binding.infoPanel.isVisible = s.panelVisible
                 if (s.panelVisible) {
+                    if (panelWasHidden) {
+                        binding.infoPanel.translationX = infoPanelWidthPx
+                        binding.infoPanel.isVisible = true
+                        binding.infoPanel.animate()
+                            .translationX(0f)
+                            .setDuration(280)
+                            .setInterpolator(android.view.animation.DecelerateInterpolator())
+                            .start()
+                    }
                     applyPanel(s)
                     if (panelWasHidden) focusActiveTab()
+                } else if (!panelWasHidden) {
+                    // Slide out to the right, then hide
+                    binding.infoPanel.animate()
+                        .translationX(infoPanelWidthPx)
+                        .setDuration(200)
+                        .setInterpolator(android.view.animation.AccelerateInterpolator())
+                        .withEndAction { binding.infoPanel.isVisible = false }
+                        .start()
                 }
 
                 binding.progressBuffering.isVisible = s.isLoading && !s.isPlaying && !s.hasError
@@ -210,7 +237,6 @@ class PlayerActivity : AppCompatActivity() {
 
         lifecycleScope.launch { vm.navigateToNext.collect { finishWithResult(completed = true) } }
         lifecycleScope.launch { vm.showExitDialog.collect { showExitDialog() } }
-        lifecycleScope.launch { vm.message.collect { Toast.makeText(this@PlayerActivity, it, Toast.LENGTH_SHORT).show() } }
         lifecycleScope.launch { vm.showResumeDialog.collect { showResumeDialog(it) } }
 
         // Progress polling
@@ -233,24 +259,36 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
-    // ─── Единая панель с вкладками ─────────────────────────────────
+    // ─── Unified info panel ────────────────────────────────────────
 
     private fun applyPanel(s: PlayerUiState) {
-        val tabs = vm.availableTabs()
+        // Determine which tabs should be visible
+        val hasTracks = s.audioTracks.isNotEmpty() || s.subtitleTracks.isNotEmpty()
+        val hasEpg = s.card?.epgTitle != null
 
-        // Видимость и подсветка вкладок
         tabViews.forEach { (tab, view) ->
-            view.isVisible = tab in tabs
+            view.isVisible = when (tab) {
+                InfoPanelTab.EPISODES  -> s.episodes.size > 1
+                InfoPanelTab.AUDIO     -> s.audioTracks.isNotEmpty()
+                InfoPanelTab.SUBTITLES -> s.subtitleTracks.isNotEmpty()
+                InfoPanelTab.ABOUT     -> true  // always shown
+                InfoPanelTab.EPG       -> hasEpg
+            }
             val active = tab == s.infoPanelTab
-            view.setTextColor(ContextCompat.getColor(this, if (active) R.color.accent_primary else R.color.text_secondary))
+            view.setTextColor(
+                ContextCompat.getColor(
+                    this,
+                    if (active) R.color.accent_primary else R.color.text_secondary
+                )
+            )
         }
 
-        // Наполнение списков
+        // Fill lists
         episodeAdapter.setItems(s.episodes, s.currentEpisodeIndex)
         audioAdapter.setItems(s.audioTracks, s.selectedAudioIndex)
         subtitleAdapter.setItems(s.subtitleTracks, s.selectedSubtitleIndex)
 
-        // О фильме
+        // About tab content
         val meta = s.metadata
         binding.tvPanelTitle.text = meta?.title ?: s.title
         binding.tvPanelInfo.text = meta?.info ?: ""
@@ -263,39 +301,39 @@ class PlayerActivity : AppCompatActivity() {
                 .into(binding.ivPanelPoster)
         }
 
-        // EPG
+        // EPG text
         binding.tvEpgContent.text = buildString {
             s.card?.epgTitle?.let { append(it) }
             s.card?.epgStart?.let { if (isNotEmpty()) append("\n"); append(it) }
             s.card?.epgEnd?.let { append(" — $it") }
         }
 
-        // Показ содержимого активной вкладки
-        binding.rvInfoList.isVisible = s.infoPanelTab == InfoPanelTab.EPISODES
-        binding.rvAudioList.isVisible = s.infoPanelTab == InfoPanelTab.AUDIO
+        // Show only the active tab's content view
+        binding.rvInfoList.isVisible    = s.infoPanelTab == InfoPanelTab.EPISODES
+        binding.rvAudioList.isVisible   = s.infoPanelTab == InfoPanelTab.AUDIO
         binding.rvSubtitleList.isVisible = s.infoPanelTab == InfoPanelTab.SUBTITLES
-        binding.panelAbout.isVisible = s.infoPanelTab == InfoPanelTab.ABOUT
-        binding.tvEpgContent.isVisible = s.infoPanelTab == InfoPanelTab.EPG
+        binding.panelAbout.isVisible    = s.infoPanelTab == InfoPanelTab.ABOUT
+        binding.tvEpgContent.isVisible  = s.infoPanelTab == InfoPanelTab.EPG
 
         if (s.infoPanelTab == InfoPanelTab.EPISODES)
             binding.rvInfoList.scrollToPosition(s.currentEpisodeIndex)
     }
 
-    /** Фокус на активную вкладку панели. */
+    /** Move focus to the active tab button in the panel tab strip. */
     private fun focusActiveTab() {
         val tab = vm.uiState.value.infoPanelTab
-        tabViews.firstOrNull { it.first == tab }?.second?.requestFocus()
+        tabViews.firstOrNull { it.first == tab && it.second.isVisible }?.second?.requestFocus()
             ?: tabViews.firstOrNull { it.second.isVisible }?.second?.requestFocus()
     }
 
-    /** Перевод фокуса со вкладок в содержимое активной вкладки. */
+    /** Move focus from the tab strip down into the active content area. */
     private fun focusPanelContent() {
         when (vm.uiState.value.infoPanelTab) {
-            InfoPanelTab.EPISODES -> binding.rvInfoList
-            InfoPanelTab.AUDIO -> binding.rvAudioList
+            InfoPanelTab.EPISODES  -> binding.rvInfoList
+            InfoPanelTab.AUDIO     -> binding.rvAudioList
             InfoPanelTab.SUBTITLES -> binding.rvSubtitleList
-            InfoPanelTab.ABOUT -> binding.panelAbout
-            InfoPanelTab.EPG -> binding.tvEpgContent
+            InfoPanelTab.ABOUT     -> binding.panelAbout
+            InfoPanelTab.EPG       -> binding.tvEpgContent
         }.requestFocus()
     }
 
@@ -310,75 +348,85 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         val s = vm.uiState.value
+        val osdVisible = s.osdVisible
 
-        // ── Единая панель открыта (приоритет) ─────────────────────
-        // ←/→ переключают вкладки, ↑/↓ ходят между вкладками и содержимым/по списку
-        // (фокусный поиск). Перехватываем только BACK и ↓ со вкладок в содержимое.
+        // ── Info panel open (priority) ─────────────────────────────
+        // ←/→ navigate between tab items, ↑/↓ move between tabs and content.
+        // We only intercept BACK and ↓ from tabs into content.
         if (s.panelVisible) {
             val onTabs = binding.tabStrip.hasFocus()
             return when (keyCode) {
                 KeyEvent.KEYCODE_BACK -> { vm.hidePanel(); true }
                 KeyEvent.KEYCODE_DPAD_DOWN ->
                     if (onTabs) { focusPanelContent(); true } else super.onKeyDown(keyCode, event)
+                KeyEvent.KEYCODE_DPAD_UP ->
+                    if (!onTabs) { focusActiveTab(); true } else super.onKeyDown(keyCode, event)
                 else -> super.onKeyDown(keyCode, event)
             }
         }
 
-        // ── Медиа-кнопки пульта — всегда ──────────────────────────
+        // ── Media remote keys — always handled ───────────────────
         when (keyCode) {
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
             KeyEvent.KEYCODE_MEDIA_PLAY,
-            KeyEvent.KEYCODE_MEDIA_PAUSE -> { vm.onKeyOk(); vm.showOsd(); return true }
-            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { osdFromSeek = true; doSeek(true); vm.showOsd(); return true }
-            KeyEvent.KEYCODE_MEDIA_REWIND -> { osdFromSeek = true; doSeek(false); vm.showOsd(); return true }
+            KeyEvent.KEYCODE_MEDIA_PAUSE -> { vm.onKeyOk(); return true }
+            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { doSeek(true); vm.showOsd(); return true }
+            KeyEvent.KEYCODE_MEDIA_REWIND -> { doSeek(false); vm.showOsd(); return true }
             KeyEvent.KEYCODE_MEDIA_NEXT -> { vm.onNextEpisode(); return true }
             KeyEvent.KEYCODE_MEDIA_PREVIOUS -> { vm.onPrevEpisode(); return true }
         }
 
-        // ── OSD открыт (гибрид: перемотка только на полоске) ──────
-        if (s.osdVisible) {
-            val onProgress = binding.progressFocus.hasFocus()
-            val onButtons = binding.osdButtons.hasFocus()
+        // ── OSD visible ───────────────────────────────────────────
+        if (osdVisible) {
             return when (keyCode) {
-                KeyEvent.KEYCODE_BACK -> { vm.onKeyBack(true, false); true }
-                KeyEvent.KEYCODE_DPAD_DOWN ->
-                    // ↓ с кнопок (после первого ↓) — открыть панель; иначе вниз по фокусу
-                    if (onButtons) { vm.openPanel(); true } else super.onKeyDown(keyCode, event)
-                KeyEvent.KEYCODE_DPAD_LEFT ->
-                    if (onProgress) { doSeek(false); vm.showOsd(); true } else super.onKeyDown(keyCode, event)
-                KeyEvent.KEYCODE_DPAD_RIGHT ->
-                    if (onProgress) { doSeek(true); vm.showOsd(); true } else super.onKeyDown(keyCode, event)
+                KeyEvent.KEYCODE_BACK -> { vm.onKeyBack(true, s.panelVisible); true }
+                // ↑ → open info panel
+                KeyEvent.KEYCODE_DPAD_UP -> { if (vm.uiState.value.panelVisible) vm.hidePanel() else vm.openPanel(); true }
+                // ↓ → open info panel
+                KeyEvent.KEYCODE_DPAD_DOWN -> { if (vm.uiState.value.panelVisible) vm.hidePanel() else vm.openPanel(); true }
+                KeyEvent.KEYCODE_INFO,
+                KeyEvent.KEYCODE_MENU -> { if (vm.uiState.value.panelVisible) vm.hidePanel() else vm.openPanel(); true }
+                // ← / → — seek if OSD was opened by seek, otherwise navigate OSD buttons
+                KeyEvent.KEYCODE_DPAD_LEFT -> {
+                    if (osdFromSeek) { doSeek(false); vm.showOsd(); true }
+                    else super.onKeyDown(keyCode, event)
+                }
+                KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    if (osdFromSeek) { doSeek(true); vm.showOsd(); true }
+                    else super.onKeyDown(keyCode, event)
+                }
+                // OK in seek-mode: switch to button navigation
                 KeyEvent.KEYCODE_DPAD_CENTER,
-                KeyEvent.KEYCODE_ENTER ->
-                    if (onProgress) { vm.onKeyOk(); vm.showOsd(); true } else super.onKeyDown(keyCode, event)
-                KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_MENU -> { vm.openPanel(); true }
+                KeyEvent.KEYCODE_ENTER -> {
+                    if (osdFromSeek) {
+                        osdFromSeek = false; binding.btnPlayPause.requestFocus(); true
+                    } else super.onKeyDown(keyCode, event)
+                }
                 else -> super.onKeyDown(keyCode, event)
             }
         }
 
-        // ── OSD скрыт ─────────────────────────────────────────────
+        // ── OSD hidden ────────────────────────────────────────────
         return when (keyCode) {
-            // ←/→ — быстрая перемотка, фокус уходит на полоску
             KeyEvent.KEYCODE_DPAD_LEFT -> {
-                osdFromSeek = true; vm.showOsd(); doSeek(false, repeatCount = event.repeatCount); true
+                doSeek(false, repeatCount = event.repeatCount)
+                osdFromSeek = true; vm.showOsd(); true
             }
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                osdFromSeek = true; vm.showOsd(); doSeek(true, repeatCount = event.repeatCount); true
+                doSeek(true, repeatCount = event.repeatCount)
+                osdFromSeek = true; vm.showOsd(); true
             }
-            // ↓ — единственная кнопка, открывающая OSD (фокус на Play)
-            KeyEvent.KEYCODE_DPAD_DOWN -> { osdFromSeek = false; vm.showOsd(); true }
-            // ↑ / MENU / INFO — сразу единая панель
-            KeyEvent.KEYCODE_DPAD_UP,
-            KeyEvent.KEYCODE_INFO,
-            KeyEvent.KEYCODE_MENU -> { vm.openPanel(); true }
-            // OK — пауза/воспроизведение + показать OSD
+            KeyEvent.KEYCODE_PAGE_UP,
+            KeyEvent.KEYCODE_CHANNEL_UP -> { vm.onKeyPageUp(); vm.showOsd(); true }
+            KeyEvent.KEYCODE_PAGE_DOWN,
+            KeyEvent.KEYCODE_CHANNEL_DOWN -> { vm.onKeyPageDown(); vm.showOsd(); true }
+            KeyEvent.KEYCODE_DPAD_DOWN,
+            KeyEvent.KEYCODE_DPAD_UP -> { osdFromSeek = false; vm.showOsd(); true }
             KeyEvent.KEYCODE_DPAD_CENTER,
             KeyEvent.KEYCODE_ENTER -> { osdFromSeek = false; vm.onKeyOk(); vm.showOsd(); true }
-            KeyEvent.KEYCODE_PAGE_UP,
-            KeyEvent.KEYCODE_CHANNEL_UP -> { osdFromSeek = true; vm.onKeyPageUp(); vm.showOsd(); true }
-            KeyEvent.KEYCODE_PAGE_DOWN,
-            KeyEvent.KEYCODE_CHANNEL_DOWN -> { osdFromSeek = true; vm.onKeyPageDown(); vm.showOsd(); true }
-            KeyEvent.KEYCODE_BACK -> { vm.onKeyBack(false, false); true }
+            KeyEvent.KEYCODE_INFO,
+            KeyEvent.KEYCODE_MENU -> { if (vm.uiState.value.panelVisible) vm.hidePanel() else vm.openPanel(); true }
+            KeyEvent.KEYCODE_BACK -> { vm.onKeyBack(false, s.panelVisible); true }
             else -> super.onKeyDown(keyCode, event)
         }
     }
@@ -412,7 +460,6 @@ class PlayerActivity : AppCompatActivity() {
         seekDebounceJob?.cancel()
         seekDebounceJob = lifecycleScope.launch {
             delay(600)
-            vm.learnIntroFromSeek(seekTargetMs / 1000.0)  // до seekTo: сравнивает со старой позицией
             vm.player.seekTo(seekTargetMs)
             seekTargetMs = -1L
             delay(1500)
@@ -423,18 +470,6 @@ class PlayerActivity : AppCompatActivity() {
 
     // ─── Helpers ───────────────────────────────────────────────────
 
-    private fun showResumeDialog(prompt: PlayerViewModel.ResumePrompt) {
-        val t = prompt.positionSec.toLong()
-        val hhmm = formatTime(t * 1000)
-        AlertDialog.Builder(this)
-            .setTitle(R.string.resume_dialog_title)
-            .setMessage(getString(R.string.resume_dialog_message, hhmm))
-            .setPositiveButton(getString(R.string.resume_continue, hhmm)) { _, _ -> vm.resumePlaybackConfirmed() }
-            .setNegativeButton(R.string.resume_restart) { _, _ -> vm.restartFromBeginning() }
-            .setOnCancelListener { vm.resumePlaybackConfirmed() }
-            .show()
-    }
-
     private fun showExitDialog() {
         vm.player.pause()
         AlertDialog.Builder(this)
@@ -443,6 +478,18 @@ class PlayerActivity : AppCompatActivity() {
             .setPositiveButton(R.string.action_exit) { _, _ -> finishWithResult() }
             .setNegativeButton(R.string.action_cancel) { _, _ -> vm.player.play() }
             .setOnCancelListener { vm.player.play() }
+            .show()
+    }
+
+    private fun showResumeDialog(prompt: PlayerViewModel.ResumePrompt) {
+        val min = (prompt.positionSec / 60).toInt()
+        val sec = (prompt.positionSec % 60).toInt()
+        AlertDialog.Builder(this)
+            .setTitle(R.string.resume_dialog_title)
+            .setMessage(getString(R.string.resume_dialog_message, "%d:%02d".format(min, sec)))
+            .setPositiveButton(R.string.action_resume) { _, _ -> vm.resumePlaybackConfirmed() }
+            .setNegativeButton(R.string.action_restart) { _, _ -> vm.restartFromBeginning() }
+            .setOnCancelListener { vm.resumePlaybackConfirmed() }
             .show()
     }
 

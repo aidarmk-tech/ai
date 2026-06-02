@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  State selector for episode/audio/subtitle list items in the right-side info panel.
+  - focused  → subtle blue tint + left accent stripe (D-pad highlight for TV navigation)
+  - default  → fully transparent (relies on the parent RecyclerView background)
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Focused (D-pad cursor on this item) -->
+    <item android:state_focused="true">
+        <layer-list>
+            <item>
+                <shape>
+                    <solid android:color="#1A3D7EFF" />
+                    <corners android:radius="10dp" />
+                </shape>
+            </item>
+            <!-- Left accent stripe -->
+            <item
+                android:width="4dp"
+                android:gravity="start">
+                <shape>
+                    <solid android:color="#3D7EFF" />
+                    <corners
+                        android:topLeftRadius="10dp"
+                        android:bottomLeftRadius="10dp" />
+                </shape>
+            </item>
+        </layer-list>
+    </item>
+
+    <!-- Default (unfocused, unselected) -->
+    <item>
+        <shape>
+            <solid android:color="#00000000" />
+            <corners android:radius="10dp" />
+        </shape>
+    </item>
+
+</selector>

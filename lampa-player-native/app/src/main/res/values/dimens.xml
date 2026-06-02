@@ -36,4 +36,7 @@
     <!-- Poster -->
     <dimen name="poster_width">240dp</dimen>
     <dimen name="poster_height">360dp</dimen>
+
+    <!-- Info panel (right-side Netflix/Kivi-style slide-over) -->
+    <dimen name="info_panel_width">480dp</dimen>
 </resources>

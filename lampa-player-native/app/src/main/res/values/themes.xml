@@ -30,6 +30,15 @@
         <item name="android:background">@drawable/bg_button_accent</item>
     </style>
 
+    <style name="Widget.LampaPlayer.Pill" parent="Widget.AppCompat.TextView">
+        <item name="android:background">@drawable/bg_pill</item>
+        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:paddingHorizontal">@dimen/space_sm</item>
+        <item name="android:paddingVertical">@dimen/space_xs</item>
+    </style>
+
+    <!-- Tab label inside the info panel tab strip -->
     <style name="PanelTab" parent="Widget.AppCompat.TextView">
         <item name="android:layout_width">wrap_content</item>
         <item name="android:layout_height">match_parent</item>
@@ -42,13 +51,5 @@
         <item name="android:background">@drawable/bg_tab</item>
         <item name="android:focusable">true</item>
         <item name="android:focusableInTouchMode">false</item>
-    </style>
-
-    <style name="Widget.LampaPlayer.Pill" parent="Widget.AppCompat.TextView">
-        <item name="android:background">@drawable/bg_pill</item>
-        <item name="android:textColor">@color/text_primary</item>
-        <item name="android:textSize">14sp</item>
-        <item name="android:paddingHorizontal">@dimen/space_sm</item>
-        <item name="android:paddingVertical">@dimen/space_xs</item>
     </style>
 </resources>

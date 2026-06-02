@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Left blue accent bar for the currently selected/playing episode or track -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Background fill -->
+    <item>
+        <shape>
+            <solid android:color="#1A3D7EFF" />
+            <corners android:radius="10dp" />
+        </shape>
+    </item>
+    <!-- Left accent stripe -->
+    <item
+        android:width="4dp"
+        android:gravity="start">
+        <shape>
+            <solid android:color="#3D7EFF" />
+            <corners
+                android:topLeftRadius="10dp"
+                android:bottomLeftRadius="10dp" />
+        </shape>
+    </item>
+</layer-list>

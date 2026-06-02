@@ -44,7 +44,7 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:textColor="@color/text_primary"
-                android:textSize="24sp"
+                android:textSize="28sp"
                 android:fontFamily="sans-serif-medium"
                 android:maxLines="1"
                 android:ellipsize="end" />
@@ -75,24 +75,38 @@
                 android:focusable="true"
                 android:visibility="gone" />
 
-            <!-- Бейдж текущей серии -->
-            <TextView
-                android:id="@+id/tv_episode_badge"
+            <!-- ☰ Info/Episodes button (always visible) -->
+            <FrameLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="@dimen/space_xs"
-                android:background="@drawable/bg_button_accent"
-                android:textColor="@color/text_primary"
-                android:textSize="14sp"
-                android:paddingHorizontal="12dp"
-                android:paddingVertical="6dp"
-                android:visibility="gone" />
+                android:layout_marginStart="@dimen/space_sm">
+
+                <ImageButton
+                    android:id="@+id/btn_info"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:src="@android:drawable/ic_menu_agenda"
+                    android:background="@drawable/bg_button"
+                    android:contentDescription="Серии / Дорожки"
+                    android:focusable="true" />
+
+                <TextView
+                    android:id="@+id/tv_episode_badge"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="top|end"
+                    android:background="@drawable/bg_button_accent"
+                    android:textColor="@color/text_primary"
+                    android:textSize="10sp"
+                    android:paddingHorizontal="4dp"
+                    android:visibility="gone" />
+            </FrameLayout>
 
             <ImageButton
                 android:id="@+id/btn_settings"
                 android:layout_width="48dp"
                 android:layout_height="48dp"
-                android:layout_marginStart="@dimen/space_sm"
+                android:layout_marginStart="@dimen/space_xs"
                 android:src="@android:drawable/ic_menu_preferences"
                 android:background="@drawable/bg_button"
                 android:contentDescription="Настройки"
@@ -126,16 +140,11 @@
                     android:textColor="@color/text_secondary" android:textSize="18sp" android:text="0:00" />
             </LinearLayout>
 
-            <!-- Полоска перемотки (фокусируемая: ←/→ перематывают только когда она в фокусе) -->
+            <!-- Progress bar + seek indicator stacked -->
             <FrameLayout
-                android:id="@+id/progress_focus"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="@dimen/space_sm"
-                android:paddingVertical="10dp"
-                android:background="@drawable/bg_progress_focus"
-                android:focusable="true"
-                android:focusableInTouchMode="false">
+                android:layout_marginBottom="@dimen/space_sm">
 
                 <ProgressBar android:id="@+id/progress_bar"
                     style="?android:attr/progressBarStyleHorizontal"
@@ -155,11 +164,17 @@
             </FrameLayout>
 
             <LinearLayout
-                android:id="@+id/osd_buttons"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:gravity="center">
+
+                <ImageButton android:id="@+id/btn_mark_intro"
+                    android:layout_width="40dp" android:layout_height="40dp"
+                    android:src="@android:drawable/ic_menu_edit"
+                    android:background="@drawable/bg_button"
+                    android:contentDescription="Отметить интро"
+                    android:focusable="true" android:layout_marginHorizontal="6dp" />
 
                 <ImageButton android:id="@+id/btn_prev"
                     android:layout_width="48dp" android:layout_height="48dp"
@@ -292,16 +307,21 @@
         android:textColor="@color/text_primary" android:textSize="14sp"
         android:padding="@dimen/space_xs" android:visibility="gone" />
 
-    <!-- ═══ ЕДИНАЯ ПАНЕЛЬ (double-↓): вкладки Серии·Аудио·Субтитры·О фильме·EPG ═══ -->
+    <!-- ═══ INFO PANEL — Netflix/Kivi-style right-side slide-over ═══
+         480 dp wide, slides in from the right over the video.
+         Contains tab strip (top) + content area (bottom fill).
+    -->
     <LinearLayout
         android:id="@+id/info_panel"
-        android:layout_width="match_parent"
+        android:layout_width="@dimen/info_panel_width"
         android:layout_height="match_parent"
+        android:layout_gravity="end"
         android:orientation="vertical"
-        android:background="#F00B0B12"
-        android:visibility="gone">
+        android:background="#E8080810"
+        android:visibility="gone"
+        android:elevation="8dp">
 
-        <!-- Полоса вкладок -->
+        <!-- Tab strip — spans full panel width at the top -->
         <LinearLayout
             android:id="@+id/tab_strip"
             android:layout_width="match_parent"
@@ -309,28 +329,38 @@
             android:orientation="horizontal"
             android:gravity="center_vertical"
             android:background="#FF111118"
-            android:paddingHorizontal="@dimen/safe_margin">
+            android:paddingHorizontal="@dimen/space_sm">
 
             <TextView android:id="@+id/tab_episodes"
-                style="@style/PanelTab" android:text="@string/tab_episodes" />
+                style="@style/PanelTab"
+                android:text="@string/tab_episodes" />
+
             <TextView android:id="@+id/tab_audio"
-                style="@style/PanelTab" android:text="@string/tab_audio" />
+                style="@style/PanelTab"
+                android:text="@string/tab_audio" />
+
             <TextView android:id="@+id/tab_subtitles"
-                style="@style/PanelTab" android:text="@string/tab_subtitles" />
+                style="@style/PanelTab"
+                android:text="@string/tab_subtitles" />
+
             <TextView android:id="@+id/tab_about"
-                style="@style/PanelTab" android:text="@string/tab_about" />
+                style="@style/PanelTab"
+                android:text="@string/tab_about" />
+
             <TextView android:id="@+id/tab_epg"
-                style="@style/PanelTab" android:text="@string/tab_epg" />
+                style="@style/PanelTab"
+                android:text="@string/tab_epg" />
         </LinearLayout>
 
-        <!-- Содержимое вкладок -->
+        <!-- Content area — fills remaining panel height -->
         <FrameLayout
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"
-            android:padding="@dimen/safe_margin">
+            android:paddingHorizontal="@dimen/space_xs"
+            android:paddingVertical="@dimen/space_xs">
 
-            <!-- Серии -->
+            <!-- Episodes -->
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/rv_info_list"
                 android:layout_width="match_parent"
@@ -339,7 +369,7 @@
                 android:descendantFocusability="afterDescendants"
                 android:visibility="gone" />
 
-            <!-- Аудио -->
+            <!-- Audio tracks -->
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/rv_audio_list"
                 android:layout_width="match_parent"
@@ -348,7 +378,7 @@
                 android:descendantFocusability="afterDescendants"
                 android:visibility="gone" />
 
-            <!-- Субтитры -->
+            <!-- Subtitle tracks -->
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/rv_subtitle_list"
                 android:layout_width="match_parent"
@@ -357,7 +387,7 @@
                 android:descendantFocusability="afterDescendants"
                 android:visibility="gone" />
 
-            <!-- О фильме -->
+            <!-- About: poster + description -->
             <ScrollView
                 android:id="@+id/panel_about"
                 android:layout_width="match_parent"
@@ -368,57 +398,53 @@
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="horizontal">
+                    android:orientation="vertical"
+                    android:padding="@dimen/space_sm">
 
-                    <ImageView android:id="@+id/iv_panel_poster"
-                        android:layout_width="@dimen/poster_width"
-                        android:layout_height="@dimen/poster_height"
+                    <ImageView
+                        android:id="@+id/iv_panel_poster"
+                        android:layout_width="match_parent"
+                        android:layout_height="220dp"
                         android:scaleType="centerCrop"
                         android:background="@color/bg_surface"
-                        android:layout_marginEnd="@dimen/space_lg" />
+                        android:layout_marginBottom="@dimen/space_sm" />
 
-                    <LinearLayout
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:orientation="vertical">
+                    <TextView android:id="@+id/tv_panel_title"
+                        android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:textColor="@color/text_primary" android:textSize="22sp"
+                        android:fontFamily="sans-serif-medium"
+                        android:layout_marginBottom="@dimen/space_xs" />
 
-                        <TextView android:id="@+id/tv_panel_title"
-                            android:layout_width="match_parent" android:layout_height="wrap_content"
-                            android:textColor="@color/text_primary" android:textSize="30sp"
-                            android:fontFamily="sans-serif-medium"
-                            android:layout_marginBottom="@dimen/space_xs" />
+                    <TextView android:id="@+id/tv_panel_info"
+                        android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:textColor="@color/accent_primary" android:textSize="15sp"
+                        android:layout_marginBottom="@dimen/space_sm" />
 
-                        <TextView android:id="@+id/tv_panel_info"
-                            android:layout_width="match_parent" android:layout_height="wrap_content"
-                            android:textColor="@color/accent_primary" android:textSize="17sp"
-                            android:layout_marginBottom="@dimen/space_md" />
+                    <TextView android:id="@+id/tv_panel_overview"
+                        android:layout_width="match_parent" android:layout_height="wrap_content"
+                        android:textColor="@color/text_secondary" android:textSize="15sp"
+                        android:lineSpacingMultiplier="1.3" />
 
-                        <TextView android:id="@+id/tv_panel_overview"
-                            android:layout_width="match_parent" android:layout_height="wrap_content"
-                            android:textColor="@color/text_secondary" android:textSize="17sp"
-                            android:lineSpacingMultiplier="1.2" />
-
-                        <TextView android:id="@+id/tv_panel_video_info"
-                            android:layout_width="wrap_content" android:layout_height="wrap_content"
-                            android:layout_marginTop="@dimen/space_md"
-                            android:background="@drawable/bg_diag"
-                            android:textColor="@color/text_secondary"
-                            android:fontFamily="monospace" android:textSize="13sp"
-                            android:padding="@dimen/space_xs"
-                            android:visibility="gone" />
-                    </LinearLayout>
+                    <TextView android:id="@+id/tv_panel_video_info"
+                        android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/space_sm"
+                        android:background="@drawable/bg_diag"
+                        android:textColor="@color/text_secondary"
+                        android:fontFamily="monospace" android:textSize="12sp"
+                        android:padding="@dimen/space_xs"
+                        android:visibility="gone" />
                 </LinearLayout>
             </ScrollView>
 
-            <!-- EPG -->
+            <!-- EPG text content (IPTV) -->
             <TextView
                 android:id="@+id/tv_epg_content"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
+                android:padding="@dimen/space_sm"
                 android:focusable="true"
                 android:textColor="@color/text_primary"
-                android:textSize="18sp"
+                android:textSize="17sp"
                 android:lineSpacingMultiplier="1.3"
                 android:visibility="gone" />
         </FrameLayout>

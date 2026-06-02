@@ -1,21 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Episode / audio / subtitle list item for the right-side info panel.
+
+  Layout:
+  ┌──────────────────────────────────────┐
+  │▌  [check icon]  Title text           │
+  └──────────────────────────────────────┘
+
+  The left accent stripe and focus highlight are handled by bg_item_info_list
+  (default state) and bg_list_item_selected (selected/playing item).
+  The adapter (InfoListAdapter) switches between the two drawables.
+-->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="56dp"
+    android:layout_height="64dp"
     android:orientation="horizontal"
     android:gravity="center_vertical"
-    android:background="@drawable/bg_card"
-    android:paddingHorizontal="@dimen/space_md"
+    android:background="@drawable/bg_item_info_list"
+    android:paddingStart="16dp"
+    android:paddingEnd="@dimen/space_md"
     android:focusable="true"
     android:clickable="true"
     android:layout_marginVertical="2dp">
 
-    <ImageView
-        android:id="@+id/iv_check"
-        android:layout_width="20dp"
-        android:layout_height="20dp"
-        android:src="@android:drawable/checkbox_on_background"
-        android:layout_marginEnd="@dimen/space_sm"
+    <!-- Checkmark shown when this item is the currently active selection -->
+    <View
+        android:id="@+id/accent_bar"
+        android:layout_width="4dp"
+        android:layout_height="28dp"
+        android:background="@color/accent_primary"
+        android:layout_marginEnd="12dp"
         android:visibility="invisible" />
 
     <TextView
@@ -24,7 +38,15 @@
         android:layout_height="wrap_content"
         android:layout_weight="1"
         android:textColor="@color/text_secondary"
-        android:textSize="18sp"
+        android:textSize="20sp"
         android:maxLines="1"
         android:ellipsize="end" />
+
+    <!-- Invisible spacer that keeps the legacy iv_check id alive so the adapter compiles -->
+    <ImageView
+        android:id="@+id/iv_check"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:visibility="gone" />
+
 </LinearLayout>
