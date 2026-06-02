@@ -447,6 +447,15 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    fun markIntro() {
+        val card = currentCard ?: return
+        val posSec = player.currentPosition / 1000.0
+        if (posSec < 5) return
+        introSkipManager.markIntro(card, posSec, viewModelScope) { saved ->
+            _uiState.update { it.copy(introEnd = saved) }
+        }
+    }
+
     fun cancelAutoNext() { autoNextManager.cancel(); _uiState.update { it.copy(autoNextCountdown = -1) } }
 
     fun onKeyLeft() = player.seekTo((player.currentPosition - 10_000).coerceAtLeast(0))
