@@ -7,11 +7,11 @@ plugins {
 }
 
 android {
-    namespace = "com.lampa.player"
+    namespace = "com.lampplayer.tv"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.lampa.player"
+        applicationId = "com.lampplayer.tv"
         minSdk = 21
         targetSdk = 34
         versionCode = 1

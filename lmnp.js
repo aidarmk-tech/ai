@@ -9,7 +9,7 @@
 (function () {
     'use strict';
 
-    var PACKAGE = 'com.lampa.player';
+    var PACKAGE = 'com.lampplayer.tv';
     var PLUGIN_NAME = 'lmnp';
 
     // ── Формирование Chrome-совместимого intent URI ───────────────────────

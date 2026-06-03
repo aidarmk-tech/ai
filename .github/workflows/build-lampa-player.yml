@@ -2,9 +2,10 @@ name: Build Lampa Player APK
 
 on:
   push:
-    branches: [ "claude/code-from-spec-tE7mA", "main", "master" ]
+    branches: [ "claude/code-from-spec-tE7mA", "claude/lampplayer-android-tv-BNB6g", "main", "master" ]
     paths:
       - "lampa-player-native/**"
+      - "lmnp.js"
       - ".github/workflows/build-lampa-player.yml"
   workflow_dispatch:
 

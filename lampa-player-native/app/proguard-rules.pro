@@ -1,5 +1,5 @@
--keep class com.lampa.player.domain.model.** { *; }
--keep class com.lampa.player.data.tmdb.TmdbMetadata { *; }
+-keep class com.lampplayer.tv.domain.model.** { *; }
+-keep class com.lampplayer.tv.data.tmdb.TmdbMetadata { *; }
 -keep class androidx.media3.** { *; }
 -dontwarn androidx.media3.**
 -keepattributes Signature
