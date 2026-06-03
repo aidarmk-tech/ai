@@ -36,10 +36,11 @@ class PlayerActivity : AppCompatActivity() {
         labelOf = { it.title },
         onSelected = { vm.selectEpisode(it) }
     )
-    // Rich TMDB episode list (selection can't switch stream yet — URL not available).
+    // Rich TMDB episode list; plays the episode when a playable URL is available.
     private val episodeRowAdapter = EpisodeRowAdapter(
-        onSelected = {
-            Toast.makeText(this, "Переключение серии пока недоступно (нет ссылки)", Toast.LENGTH_SHORT).show()
+        onSelected = { row ->
+            if (row.url != null) vm.playEpisodeRow(row)
+            else Toast.makeText(this, "Серия недоступна для прямого запуска", Toast.LENGTH_SHORT).show()
         }
     )
     private val audioAdapter = InfoListAdapter<String>(

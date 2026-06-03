@@ -384,6 +384,32 @@
         return out;
     }
 
+    // ── Компактный плейлист-окно для title-конверта ───────────────────────
+    // Кладём URL серий вокруг текущей (у кого ссылка уже строковая), чтобы
+    // плеер мог сам переключать серии и делать автопереход. Окно ограничено,
+    // т.к. длина title ограничена (иначе обрежется и сломает base64).
+    function buildCompactPlaylist(list, pos) {
+        if (!list || list.length < 2) return null;
+        var WINDOW = 12, BEFORE = 2;
+        var start = Math.max(0, (pos || 0) - BEFORE);
+        var end   = Math.min(list.length, start + WINDOW);
+        var items = [];
+        for (var i = start; i < end; i++) {
+            var it = list[i] || {};
+            var url = (typeof it.url === 'string') ? it.url
+                    : (typeof it.file === 'string') ? it.file : '';
+            if (!url || !/^https?:|^rtsp:|^udp:/.test(url)) continue;
+            items.push({
+                u: url,
+                e: it.episode || (i + 1),
+                s: it.season || null,
+                t: (it.title || it.name || '').toString().slice(0, 40) || null,
+            });
+        }
+        if (items.length < 2) return null;
+        return { items: items, pi: Math.max(0, (pos || 0) - start) };
+    }
+
     // ── Список эпизодов ───────────────────────────────────────────────────
     function buildEpisodes(playlist, idx) {
         if (!playlist || playlist.length < 2) return null;
@@ -633,6 +659,9 @@
                             season:         cardData.season_number || null,
                             episode:        cardData.episode_number || null,
                         };
+                        // Компактный плейлист-окно (серии с играбельными URL).
+                        var compactPl = buildCompactPlaylist(pl.list, pl.pos);
+                        if (compactPl) meta.pl = compactPl;
                         Object.keys(meta).forEach(function (k) {
                             if (meta[k] === null || meta[k] === undefined || meta[k] === '') delete meta[k];
                         });

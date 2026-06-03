@@ -49,7 +49,12 @@ object IntentParser {
         fun double(key: String) = obj.get(key)?.takeIf { !it.isJsonNull }?.asDouble
         fun long(key: String) = obj.get(key)?.takeIf { !it.isJsonNull }?.asLong
 
-        val episodes = str("episodes")?.let { parseEpisodes(it) } ?: emptyList()
+        // Playlist window (compact): { items:[{u,e,s,t}], pi } — playable episode URLs.
+        val plObj = obj.get("pl")?.takeIf { it.isJsonObject }?.asJsonObject
+        val plEpisodes = plObj?.let { parseCompactPlaylist(it) } ?: emptyList()
+        val plIndex = plObj?.get("pi")?.takeIf { !it.isJsonNull }?.asInt ?: 0
+
+        val episodes = plEpisodes.ifEmpty { str("episodes")?.let { parseEpisodes(it) } ?: emptyList() }
         val headers = str("headers")?.let { parseHeaders(it) } ?: emptyMap()
         // Subtitles may arrive as a JSON array [{url,name,enable}] or a single string.
         val subtitles = subtitlesFromJson(obj)
@@ -75,7 +80,7 @@ object IntentParser {
             fromStart = obj.get("from_start")?.takeIf { !it.isJsonNull }?.asBoolean ?: false,
             subtitles = subtitles,
             episodes = episodes,
-            currentEpisodeIndex = int("episode_index") ?: 0,
+            currentEpisodeIndex = if (plEpisodes.isNotEmpty()) plIndex else (int("episode_index") ?: 0),
             epgTitle = str("epg_title"),
             epgStart = str("epg_start"),
             epgEnd = str("epg_end"),
@@ -250,6 +255,24 @@ object IntentParser {
     }
 
     // ─── Helpers ───────────────────────────────────────────────────
+
+    /** Compact playlist window from the title envelope: { items:[{u,e,s,t}], pi }. */
+    private fun parseCompactPlaylist(obj: JsonObject): List<EpisodeItem> {
+        val arr = obj.get("items")?.takeIf { it.isJsonArray }?.asJsonArray ?: return emptyList()
+        return arr.mapIndexedNotNull { i, el ->
+            val o = el.takeIf { it.isJsonObject }?.asJsonObject ?: return@mapIndexedNotNull null
+            val u = o.get("u")?.takeIf { !it.isJsonNull }?.asString ?: return@mapIndexedNotNull null
+            if (u.isBlank()) return@mapIndexedNotNull null
+            val ep = o.get("e")?.takeIf { !it.isJsonNull }?.asInt
+            EpisodeItem(
+                index = i,
+                title = o.get("t")?.takeIf { !it.isJsonNull }?.asString?.ifBlank { null } ?: "Серия ${ep ?: i + 1}",
+                url = u,
+                season = o.get("s")?.takeIf { !it.isJsonNull }?.asInt,
+                episode = ep,
+            )
+        }
+    }
 
     private fun parseEpisodes(json: String?): List<EpisodeItem> {
         if (json.isNullOrBlank()) return emptyList()

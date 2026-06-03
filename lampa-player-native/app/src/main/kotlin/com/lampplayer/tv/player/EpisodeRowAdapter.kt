@@ -31,6 +31,7 @@ class EpisodeRowAdapter(
         holder.b.tvEpOverview.isVisible = e.overview.isNotBlank()
         holder.b.tvEpOverview.text = e.overview
         holder.b.root.isActivated = e.current
+        holder.b.root.alpha = if (e.url != null) 1f else 0.45f   // dim non-playable
         if (!e.stillUrl.isNullOrEmpty()) {
             Glide.with(holder.b.epStill).load(e.stillUrl).into(holder.b.epStill)
         } else {

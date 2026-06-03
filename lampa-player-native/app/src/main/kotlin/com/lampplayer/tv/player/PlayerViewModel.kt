@@ -85,6 +85,7 @@ data class PlayerUiState(
         val overview: String,
         val stillUrl: String?,
         val current: Boolean,
+        val url: String? = null,   // playable stream URL (from the playlist window), if available
     )
 }
 
@@ -204,8 +205,31 @@ class PlayerViewModel @Inject constructor(
         loadEpisodes(card)
     }
 
-    /** Fetch the season's episodes from TMDB (name/overview/still) for the episodes list. */
+    /**
+     * Build the episode list for the panel. TMDB gives names/stills/synopsis;
+     * the playlist window (card.episodes) gives the playable URLs — matched by
+     * episode number. Falls back to the playlist alone when TMDB has no data.
+     */
     private fun loadEpisodes(card: CardMeta) {
+        // Playable URLs from the title-envelope playlist window, keyed by episode number.
+        val urlByEpisode = card.episodes.mapNotNull { ep -> ep.episode?.let { it to ep.url } }.toMap()
+
+        // Immediate fallback list from the playlist so something shows even before TMDB.
+        if (card.episodes.size > 1) {
+            _uiState.update {
+                it.copy(episodeRows = card.episodes.map { ep ->
+                    PlayerUiState.EpisodeRow(
+                        number = ep.episode ?: (ep.index + 1),
+                        title = ep.title,
+                        overview = "",
+                        stillUrl = null,
+                        current = ep.index == card.currentEpisodeIndex,
+                        url = ep.url,
+                    )
+                })
+            }
+        }
+
         val tmdb = card.tmdbId ?: return
         val season = card.seasonNumber ?: return   // movies have no season
         episodesJob?.cancel()
@@ -219,10 +243,20 @@ class PlayerViewModel @Inject constructor(
                     overview = e.overview.orEmpty(),
                     stillUrl = TmdbRepository.stillUrl(e.still_path),
                     current = e.episode_number == card.episodeNumber,
+                    url = urlByEpisode[e.episode_number],
                 )
             }
             _uiState.update { it.copy(episodeRows = rows) }
         }
+    }
+
+    /** Play an episode chosen from the list (only when it has a playable URL). */
+    fun playEpisodeRow(row: PlayerUiState.EpisodeRow) {
+        val url = row.url ?: return
+        val card = currentCard ?: return
+        val item = card.episodes.firstOrNull { it.url == url }
+            ?: EpisodeItem(index = card.currentEpisodeIndex, title = row.title, url = url, season = null, episode = row.number)
+        selectEpisode(item)
     }
 
     private fun initExo(context: Context, url: String, card: CardMeta) {
