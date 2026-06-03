@@ -131,7 +131,8 @@ class PlayerActivity : AppCompatActivity() {
         // — он приходит в onNewIntent() и не должен перезаписывать хорошие данные.
         val hasMeta = intent.hasExtra("lampa_data") ||
             intent.hasExtra("lampa_meta") ||
-            (intent.getStringExtra("title")?.startsWith("lmpmeta://") == true)
+            (intent.getStringExtra("title")?.startsWith("lmpmeta://") == true) ||
+            (intent.getStringExtra("android.intent.extra.TITLE")?.startsWith("lmpmeta://") == true)
         if (!hasMeta) return
         val (_, card) = IntentParser.parse(intent) ?: return
         vm.updateCardMeta(card)

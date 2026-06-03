@@ -97,6 +97,8 @@ object IntentParser {
             ?: extras?.getString("lampa_meta")?.let { decodeMaybeBase64(it) }
             ?: extras?.getString("title")?.takeIf { it.startsWith(META_PREFIX) }
                 ?.removePrefix(META_PREFIX)?.let { decodeMaybeBase64(it) }
+            ?: extras?.getString("android.intent.extra.TITLE")?.takeIf { it.startsWith(META_PREFIX) }
+                ?.removePrefix(META_PREFIX)?.let { decodeMaybeBase64(it) }
         if (!metaJson.isNullOrEmpty()) {
             val card = runCatching { cardFromJson(JsonParser.parseString(metaJson).asJsonObject, url) }
                 .getOrElse { CardMeta(title = extractTitleFromUrl(url)) }

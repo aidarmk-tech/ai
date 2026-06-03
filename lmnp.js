@@ -26,6 +26,21 @@
         catch (_) { return true; }
     }
 
+    // Выбран ли ВНЕШНИЙ плеер в Lampa (player_lauch != внутренний).
+    // Если да — Lampa сама запустит APK штатным intent, и метаданные надо
+    // упаковывать в title (этот канал реально доезжает). Если нет — наш APK
+    // можно открыть только своим intent (см. hookPlayer / start).
+    function externalPlayerSelected() {
+        try {
+            var pl = (Lampa.Storage.field ? Lampa.Storage.field('player_lauch') : null)
+                  || Lampa.Storage.get('player_lauch', '');
+            return !!pl && pl !== 'inner';
+        } catch (_) { return false; }
+    }
+
+    // base64(UTF-8) — безопасно для кириллицы.
+    function b64utf8(str) { return btoa(unescape(encodeURIComponent(str))); }
+
     // ── Формирование Chrome-совместимого intent URI ───────────────────────
     // intent://HOST/PATH#Intent;scheme=SCHEME;package=...;S.lampa_data=JSON;end
     // (raw-формат intent:https://... вызывает ERR_UNKNOWN_URL_SCHEME в браузере)
@@ -467,6 +482,10 @@
         // навигации — APK получает наш intent с lampa_data.
         Lampa.Player.listener.follow('start', function (e) {
             if (!enabled()) return;                       // тумблер «Нативный плеер»
+            // Если выбран внешний плеер — Lampa сама запустит APK, а метаданные
+            // уедут через title-конверт (hookPlayerPlay). Свой intent не нужен,
+            // иначе будет двойной запуск.
+            if (externalPlayerSelected()) return;
             if (Date.now() - _lastLaunch < 6000) return;
 
             // Сканируем всё доступное состояние Lampa прямо в момент запуска
@@ -569,6 +588,36 @@
                 });
             });
         } catch (_) {}
+    }
+
+    // ── Хук на Lampa.Player.play — упаковка метаданных в title ────────────
+    // Подтверждено диагностикой: при выбранном внешнем плеере Lampa запускает
+    // APK своим штатным intent, надёжно форвардит только `title`, и кладёт туда
+    // имя озвучки, а не фильма. Поэтому подменяем video.title на конверт
+    // lmpmeta://<base64(JSON)> с настоящими метаданными — нативный плеер его
+    // распакует (поддержка уже есть в IntentParser).
+    function hookPlayerPlay() {
+        if (!window.Lampa || !Lampa.Player || typeof Lampa.Player.play !== 'function') return;
+        if (Lampa.Player.__lmnp_play) return;
+        Lampa.Player.__lmnp_play = true;
+        var _origPlay = Lampa.Player.play;
+        Lampa.Player.play = function (video) {
+            try {
+                var alreadyPacked = video && typeof video.title === 'string' &&
+                                    /^lmpmeta:\/\//.test(video.title);
+                if (enabled() && externalPlayerSelected() &&
+                    video && typeof video === 'object' && video.url && !alreadyPacked) {
+                    var rawCard  = findCard(video, video);
+                    var pl       = getPlaylist();
+                    var cardData = buildCard(rawCard, video, video, pl.list, pl.pos);
+                    // Шлём конверт только если реально есть метаданные (а не одна озвучка)
+                    if (cardData && (cardData.tmdb_id || cardData.overview || cardData.poster_url)) {
+                        video.title = 'lmpmeta://' + b64utf8(JSON.stringify(cardData));
+                    }
+                }
+            } catch (e) {}
+            return _origPlay.apply(this, arguments);
+        };
     }
 
     // ── Хук на регистрацию плагинов-балансеров ───────────────────────────
@@ -676,6 +725,7 @@
         addSettings();
         hookActivity();
         hookPlugins();
+        hookPlayerPlay();
         hookPlayer();
         try { Lampa.Noty.show('Native Player подключён'); } catch (_) {}
     }
