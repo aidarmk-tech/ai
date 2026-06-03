@@ -339,6 +339,15 @@
         android:textColor="@color/text_primary" android:textSize="14sp"
         android:padding="@dimen/space_xs" android:visibility="gone" />
 
+    <!-- Intent diagnostic overlay: shows exactly what arrived in the launch intent -->
+    <TextView android:id="@+id/intent_debug"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:layout_gravity="top|start" android:layout_margin="@dimen/safe_margin"
+        android:background="@drawable/bg_diag" android:fontFamily="monospace"
+        android:textColor="#FFE082" android:textSize="13sp"
+        android:lineSpacingMultiplier="1.1"
+        android:padding="@dimen/space_sm" android:visibility="gone" />
+
     <!-- ═══ INFO OVERLAY (double-↓): инфо о контенте + серии ═══ -->
     <LinearLayout
         android:id="@+id/info_overlay"

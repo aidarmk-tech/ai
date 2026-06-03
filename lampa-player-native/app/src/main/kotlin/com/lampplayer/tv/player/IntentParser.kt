@@ -284,4 +284,32 @@ object IntentParser {
     private fun extractTitleFromUrl(url: String): String =
         url.substringAfterLast("/").substringBeforeLast(".")
             .replace(Regex("[_\\-]+"), " ").trim().ifEmpty { "" }
+
+    /**
+     * Human-readable dump of exactly what arrived in the launch intent — used by the
+     * in-player diagnostic overlay to see which metadata channel (if any) survived.
+     */
+    fun debugDump(intent: Intent): String = buildString {
+        append("action: ").append(intent.action ?: "—").append('\n')
+        append("scheme: ").append(intent.data?.scheme ?: "—").append('\n')
+        append("type:   ").append(intent.type ?: "—").append('\n')
+        val data = intent.dataString
+        append("data:   ").append(if (data != null) data.take(90) else "—").append('\n')
+        val ex = intent.extras
+        if (ex == null) {
+            append("extras: <NONE>")
+            return@buildString
+        }
+        val keys = ex.keySet()
+        append("extras (").append(keys.size).append("): ").append(keys.joinToString(", ")).append('\n')
+        // Highlight the channels we care about
+        listOf("title", "lampa_data", "lampa_meta").forEach { key ->
+            if (ex.containsKey(key)) {
+                val v = runCatching { ex.getString(key) }.getOrNull() ?: ex.get(key)?.toString()
+                append("  • ").append(key).append(" = ").append(v?.take(120) ?: "—").append('\n')
+            } else {
+                append("  • ").append(key).append(": <absent>\n")
+            }
+        }
+    }
 }

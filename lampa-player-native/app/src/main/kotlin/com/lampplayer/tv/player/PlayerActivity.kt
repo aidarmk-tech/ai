@@ -68,6 +68,8 @@ class PlayerActivity : AppCompatActivity() {
             finish(); return
         }
 
+        maybeShowIntentDebug(card)
+
         val dm = resources.displayMetrics
         vm.setDisplayAspect("${dm.widthPixels}:${dm.heightPixels}")
 
@@ -77,6 +79,34 @@ class PlayerActivity : AppCompatActivity() {
         setupLists()
         setupOsdClicks()
         observeState()
+    }
+
+    private var debugVisible = false
+
+    /**
+     * Show the intent-diagnostic overlay automatically when no rich metadata arrived,
+     * so we can see on-device which channel survived. Dismiss with BACK; auto-hides.
+     */
+    private fun maybeShowIntentDebug(card: com.lampplayer.tv.domain.model.CardMeta) {
+        val noMeta = card.tmdbId == null && card.overview.isNullOrBlank() &&
+            card.posterUrl.isNullOrBlank() && card.backdropUrl.isNullOrBlank()
+        if (!noMeta) return
+        val dump = buildString {
+            append("⚠ Метаданные не пришли\n")
+            append(IntentParser.debugDump(intent))
+            append("\n— разобрано —\n")
+            append("title: ").append(card.title.take(60)).append('\n')
+            append("tmdb: ").append(card.tmdbId ?: "—")
+            append("  poster: ").append(if (card.posterUrl != null) "да" else "нет")
+        }
+        binding.intentDebug.text = dump
+        binding.intentDebug.isVisible = true
+        debugVisible = true
+        lifecycleScope.launch {
+            delay(30_000)
+            binding.intentDebug.isVisible = false
+            debugVisible = false
+        }
     }
 
     /** Attach the render surface for the engine the ViewModel actually started. */
@@ -302,6 +332,13 @@ class PlayerActivity : AppCompatActivity() {
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         val s = vm.uiState.value
         val osdVisible = s.osdVisible
+
+        // Diagnostic overlay: any key dismisses it first.
+        if (debugVisible) {
+            binding.intentDebug.isVisible = false
+            debugVisible = false
+            if (keyCode == KeyEvent.KEYCODE_BACK) return true
+        }
 
         // ── Tracks overlay (↑): BACK закрывает ────────────────────
         if (s.tracksOverlayVisible) {
