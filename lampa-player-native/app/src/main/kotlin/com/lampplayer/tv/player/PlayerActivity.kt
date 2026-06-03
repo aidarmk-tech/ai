@@ -36,6 +36,12 @@ class PlayerActivity : AppCompatActivity() {
         labelOf = { it.title },
         onSelected = { vm.selectEpisode(it) }
     )
+    // Rich TMDB episode list (selection can't switch stream yet — URL not available).
+    private val episodeRowAdapter = EpisodeRowAdapter(
+        onSelected = {
+            Toast.makeText(this, "Переключение серии пока недоступно (нет ссылки)", Toast.LENGTH_SHORT).show()
+        }
+    )
     private val audioAdapter = InfoListAdapter<String>(
         labelOf = { it },
         onSelected = { vm.selectAudio(it.substringBefore(":").trim().toIntOrNull() ?: 0) }
@@ -338,17 +344,26 @@ class PlayerActivity : AppCompatActivity() {
 
         // Episodes / EPG panel — shown only when there's something to list, so a
         // movie gets the full-width readable description instead of an empty pane.
-        val hasEpisodes = s.episodes.size > 1
+        val hasTmdbEps = s.episodeRows.size > 1
+        val hasBalancerEps = s.episodes.size > 1
+        val hasEpisodes = hasTmdbEps || hasBalancerEps
         val hasEpg = !hasEpisodes && s.card?.epgTitle != null
         binding.episodesPanel.isVisible = hasEpisodes || hasEpg
         binding.rvInfoList.isVisible = hasEpisodes
         binding.tvEpgContent.isVisible = hasEpg
 
-        if (hasEpisodes) {
-            episodeAdapter.setItems(s.episodes, s.currentEpisodeIndex)
-            binding.rvInfoList.scrollToPosition(s.currentEpisodeIndex)
-        } else if (hasEpg) {
-            binding.tvEpgContent.text = epgText
+        when {
+            hasTmdbEps -> {
+                if (binding.rvInfoList.adapter !== episodeRowAdapter) binding.rvInfoList.adapter = episodeRowAdapter
+                episodeRowAdapter.setItems(s.episodeRows)
+                binding.rvInfoList.scrollToPosition(episodeRowAdapter.currentIndex())
+            }
+            hasBalancerEps -> {
+                if (binding.rvInfoList.adapter !== episodeAdapter) binding.rvInfoList.adapter = episodeAdapter
+                episodeAdapter.setItems(s.episodes, s.currentEpisodeIndex)
+                binding.rvInfoList.scrollToPosition(s.currentEpisodeIndex)
+            }
+            hasEpg -> binding.tvEpgContent.text = epgText
         }
     }
 
@@ -396,7 +411,7 @@ class PlayerActivity : AppCompatActivity() {
 
         // ── Info overlay: описание (↓↓), затем серии (↓↓↓) ───────
         if (s.infoOverlayVisible) {
-            val hasEpisodes = s.episodes.size > 1
+            val hasEpisodes = s.episodes.size > 1 || s.episodeRows.size > 1
             return when (keyCode) {
                 KeyEvent.KEYCODE_DPAD_DOWN -> {
                     if (!episodesFocused && hasEpisodes) {

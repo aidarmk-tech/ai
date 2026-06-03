@@ -32,11 +32,26 @@ class TmdbRepository @Inject constructor(
         }.getOrNull()
     }
 
+    /** TMDB season episodes (name/overview/still), cached per show+season. */
+    suspend fun getSeason(tmdbId: Int, season: Int): List<TmdbEpisode> {
+        val type = "season_$season"
+        val cached = dao.get(tmdbId, type)
+        if (cached != null && System.currentTimeMillis() - cached.cachedAt < CACHE_TTL_MS) {
+            return runCatching { gson.fromJson(cached.json, TmdbSeason::class.java).episodes }.getOrNull().orEmpty()
+        }
+        return runCatching {
+            val s = api.getSeason(tmdbId, season)
+            dao.insert(MetadataEntity(tmdbId = tmdbId, type = type, json = gson.toJson(s)))
+            s.episodes
+        }.getOrNull().orEmpty()
+    }
+
     companion object {
         // Set your TMDB API key here or via BuildConfig
         const val API_KEY = "a0ce3eb86e4197432bac852601427019"
         const val IMAGE_BASE = "https://image.tmdb.org/t/p/"
         fun posterUrl(path: String?) = path?.let { "${IMAGE_BASE}w500$it" }
         fun backdropUrl(path: String?) = path?.let { "${IMAGE_BASE}w1280$it" }
+        fun stillUrl(path: String?) = path?.let { "${IMAGE_BASE}w300$it" }
     }
 }

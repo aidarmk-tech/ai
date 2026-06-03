@@ -68,6 +68,8 @@ data class PlayerUiState(
     val videoInfo: String = "",
     val playbackSpeed: Float = 1f,
     val scaleMode: VideoScaleMode = VideoScaleMode.FIT,
+    // Rich episode list fetched from TMDB (series only).
+    val episodeRows: List<EpisodeRow> = emptyList(),
 ) {
     data class MetadataDisplay(
         val title: String,
@@ -75,6 +77,14 @@ data class PlayerUiState(
         val overview: String,
         val cast: String,
         val posterUrl: String?,
+    )
+
+    data class EpisodeRow(
+        val number: Int,
+        val title: String,
+        val overview: String,
+        val stillUrl: String?,
+        val current: Boolean,
     )
 }
 
@@ -125,6 +135,7 @@ class PlayerViewModel @Inject constructor(
     private var vlcPollJob: Job? = null
     private var sleepJob: Job? = null
     private var metaJob: Job? = null
+    private var episodesJob: Job? = null
     private var settings = AppSettings()
     private val errorRecovery = ErrorRecoveryManager()
     private var didAutoFallback = false
@@ -148,7 +159,7 @@ class PlayerViewModel @Inject constructor(
                 positionDataStore.savePosition(url, PlaybackPosition(time = p, duration = d, percent = pct, watched = pct >= 90))
             }
         }
-        saveJob?.cancel(); diagJob?.cancel(); vlcPollJob?.cancel(); osdHideJob?.cancel(); metaJob?.cancel()
+        saveJob?.cancel(); diagJob?.cancel(); vlcPollJob?.cancel(); osdHideJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel()
         if (::player.isInitialized) runCatching { player.release() }
         runCatching { vlc?.release() }; vlc = null
         usingVlc = false
@@ -190,6 +201,28 @@ class PlayerViewModel @Inject constructor(
         // Show card metadata immediately from intent data, enhance with TMDB if available
         populateMetadataFromCard(card)
         card.tmdbId?.let { loadMetadata(it, card.isSerial, card) }
+        loadEpisodes(card)
+    }
+
+    /** Fetch the season's episodes from TMDB (name/overview/still) for the episodes list. */
+    private fun loadEpisodes(card: CardMeta) {
+        val tmdb = card.tmdbId ?: return
+        val season = card.seasonNumber ?: return   // movies have no season
+        episodesJob?.cancel()
+        episodesJob = viewModelScope.launch {
+            val eps = tmdbRepository.getSeason(tmdb, season)
+            if (eps.isEmpty()) return@launch
+            val rows = eps.map { e ->
+                PlayerUiState.EpisodeRow(
+                    number = e.episode_number,
+                    title = e.name?.takeIf { it.isNotBlank() } ?: "Серия ${e.episode_number}",
+                    overview = e.overview.orEmpty(),
+                    stillUrl = TmdbRepository.stillUrl(e.still_path),
+                    current = e.episode_number == card.episodeNumber,
+                )
+            }
+            _uiState.update { it.copy(episodeRows = rows) }
+        }
     }
 
     private fun initExo(context: Context, url: String, card: CardMeta) {
@@ -611,6 +644,7 @@ class PlayerViewModel @Inject constructor(
         }
         populateMetadataFromCard(merged)
         merged.tmdbId?.let { loadMetadata(it, merged.isSerial, merged) }
+        loadEpisodes(merged)
     }
 
     fun toggleMetadata() = _uiState.update { it.copy(showMetadata = !it.showMetadata) }
@@ -819,7 +853,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     override fun onCleared() {
-        saveJob?.cancel(); diagJob?.cancel(); osdHideJob?.cancel(); vlcPollJob?.cancel(); sleepJob?.cancel(); metaJob?.cancel()
+        saveJob?.cancel(); diagJob?.cancel(); osdHideJob?.cancel(); vlcPollJob?.cancel(); sleepJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel()
         viewModelScope.launch { saveCurrentPosition() }
         if (::player.isInitialized) player.release()
         vlc?.release(); vlc = null

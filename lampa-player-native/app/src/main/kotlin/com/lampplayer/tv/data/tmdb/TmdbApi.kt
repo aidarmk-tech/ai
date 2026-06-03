@@ -20,6 +20,14 @@ interface TmdbApi {
         @Query("append_to_response") appendToResponse: String = "credits,videos",
         @Query("api_key") apiKey: String = TmdbRepository.API_KEY,
     ): TmdbMetadata
+
+    @GET("tv/{id}/season/{season}")
+    suspend fun getSeason(
+        @Path("id") id: Int,
+        @Path("season") season: Int,
+        @Query("language") language: String = "ru-RU",
+        @Query("api_key") apiKey: String = TmdbRepository.API_KEY,
+    ): TmdbSeason
 }
 
 data class TmdbMetadata(
@@ -32,4 +40,20 @@ data class TmdbMetadata(
     val vote_average: Float? = null,
     val release_date: String? = null,
     val first_air_date: String? = null,
+)
+
+data class TmdbSeason(
+    val season_number: Int = 0,
+    val episodes: List<TmdbEpisode> = emptyList(),
+)
+
+data class TmdbEpisode(
+    val episode_number: Int = 0,
+    val season_number: Int = 0,
+    val name: String? = null,
+    val overview: String? = null,
+    val still_path: String? = null,
+    val air_date: String? = null,
+    val runtime: Int? = null,
+    val vote_average: Float? = null,
 )
