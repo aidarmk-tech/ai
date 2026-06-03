@@ -126,16 +126,25 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        // Обновляем данные только если intent несёт богатые метаданные.
-        // Lampa также посылает стандартный external-player intent (без них)
-        // — он приходит в onNewIntent() и не должен перезаписывать хорошие данные.
-        val hasMeta = intent.hasExtra("lampa_data") ||
-            intent.hasExtra("lampa_meta") ||
-            (intent.getStringExtra("title")?.startsWith("lmpmeta://") == true) ||
-            (intent.getStringExtra("android.intent.extra.TITLE")?.startsWith("lmpmeta://") == true)
-        if (!hasMeta) return
-        val (_, card) = IntentParser.parse(intent) ?: return
-        vm.updateCardMeta(card)
+        val (url, card) = IntentParser.parse(intent) ?: return
+
+        // Same media → only enrich metadata if a richer envelope arrived; don't
+        // disrupt playback (Lampa may fire duplicate/secondary intents).
+        if (url == vm.currentMediaUrl) {
+            val hasMeta = intent.hasExtra("lampa_data") ||
+                intent.hasExtra("lampa_meta") ||
+                (intent.getStringExtra("title")?.startsWith("lmpmeta://") == true) ||
+                (intent.getStringExtra("android.intent.extra.TITLE")?.startsWith("lmpmeta://") == true)
+            if (hasMeta) vm.updateCardMeta(card)
+            return
+        }
+
+        // Different media → full clean restart (singleTask reuses this activity).
+        setIntent(intent)
+        vm.resetForNewMedia()
+        maybeShowIntentDebug(card)
+        vm.initPlayer(this, url, card)
+        bindEngineSurface()
     }
 
     // ─── List setup ────────────────────────────────────────────────

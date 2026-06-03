@@ -129,6 +129,34 @@ class PlayerViewModel @Inject constructor(
     private var didAutoFallback = false
 
     val isUsingVlc: Boolean get() = usingVlc
+    val currentMediaUrl: String get() = currentUrl
+
+    /**
+     * Tear down the active engine so a different media item can start fresh.
+     * Used when the singleTask activity is relaunched for another film.
+     */
+    fun resetForNewMedia() {
+        // Persist the outgoing position using captured values (engine about to die).
+        val url = currentUrl
+        val pos = engPositionMs()
+        val dur = engDurationMs()
+        if (url.isNotEmpty() && dur > 0) {
+            val p = pos / 1000.0; val d = dur / 1000.0
+            val pct = ((p / d) * 100).toInt()
+            viewModelScope.launch {
+                positionDataStore.savePosition(url, PlaybackPosition(time = p, duration = d, percent = pct, watched = pct >= 90))
+            }
+        }
+        saveJob?.cancel(); diagJob?.cancel(); vlcPollJob?.cancel(); osdHideJob?.cancel()
+        if (::player.isInitialized) runCatching { player.release() }
+        runCatching { vlc?.release() }; vlc = null
+        usingVlc = false
+        didAutoFallback = false
+        currentRate = 1f
+        currentUrl = ""
+        currentCard = null
+        _uiState.value = PlayerUiState(settings = settings)
+    }
 
     init {
         viewModelScope.launch {
