@@ -23,6 +23,8 @@ data class AppSettings(
     val rememberTracks: Boolean = true,
     val skipIntro: Boolean = true,
     val diag: Boolean = false,
+    // Sleep timer in minutes; 0 = off.
+    val sleepTimerMin: Int = 0,
 )
 
 @Singleton
@@ -37,6 +39,7 @@ class SettingsDataStore @Inject constructor(
         val REMEMBER_TRACKS = booleanPreferencesKey("remember_tracks")
         val SKIP_INTRO = booleanPreferencesKey("skip_intro")
         val DIAG = booleanPreferencesKey("diag")
+        val SLEEP_TIMER = intPreferencesKey("sleep_timer_min")
     }
 
     val settings: Flow<AppSettings> = context.settingsDataStore.data
@@ -51,6 +54,7 @@ class SettingsDataStore @Inject constructor(
                 rememberTracks = prefs[Keys.REMEMBER_TRACKS] ?: true,
                 skipIntro = prefs[Keys.SKIP_INTRO] ?: true,
                 diag = prefs[Keys.DIAG] ?: false,
+                sleepTimerMin = prefs[Keys.SLEEP_TIMER] ?: 0,
             )
         }
 
@@ -65,4 +69,5 @@ class SettingsDataStore @Inject constructor(
     suspend fun setRememberTracks(enabled: Boolean) = update { this[Keys.REMEMBER_TRACKS] = enabled }
     suspend fun setSkipIntro(enabled: Boolean) = update { this[Keys.SKIP_INTRO] = enabled }
     suspend fun setDiag(enabled: Boolean) = update { this[Keys.DIAG] = enabled }
+    suspend fun setSleepTimer(minutes: Int) = update { this[Keys.SLEEP_TIMER] = minutes }
 }

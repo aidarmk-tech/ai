@@ -117,6 +117,20 @@
                 android:thumbTint="@color/accent_primary" android:trackTint="@color/bg_elevated" android:focusable="true" />
         </LinearLayout>
 
+        <!-- SLEEP TIMER -->
+        <LinearLayout android:layout_width="match_parent" android:layout_height="64dp"
+            android:orientation="horizontal" android:gravity="center_vertical"
+            android:layout_marginBottom="@dimen/space_sm">
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="Таймер сна" android:textColor="@color/text_primary" android:textSize="18sp" />
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="Пауза по истечении времени" android:textColor="@color/text_secondary" android:textSize="14sp" />
+            </LinearLayout>
+            <Spinner android:id="@+id/spinner_sleep" android:layout_width="160dp" android:layout_height="wrap_content"
+                android:background="@drawable/bg_button" android:focusable="true" android:popupBackground="@color/bg_elevated" />
+        </LinearLayout>
+
         <!-- DIAGNOSTICS -->
         <LinearLayout android:layout_width="match_parent" android:layout_height="64dp"
             android:orientation="horizontal" android:gravity="center_vertical">

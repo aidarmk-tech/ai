@@ -115,6 +115,7 @@ class PlayerViewModel @Inject constructor(
     private var diagJob: Job? = null
     private var osdHideJob: Job? = null
     private var vlcPollJob: Job? = null
+    private var sleepJob: Job? = null
     private var settings = AppSettings()
     private val errorRecovery = ErrorRecoveryManager()
     private var didAutoFallback = false
@@ -125,6 +126,7 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             settingsDataStore.settings.collect { s ->
                 settings = s; _uiState.update { it.copy(settings = s) }
+                restartSleepTimer(s.sleepTimerMin)
             }
         }
     }
@@ -564,6 +566,17 @@ class PlayerViewModel @Inject constructor(
 
     fun cancelAutoNext() { autoNextManager.cancel(); _uiState.update { it.copy(autoNextCountdown = -1) } }
 
+    // Sleep timer: pause playback and surface the exit dialog when it elapses.
+    private fun restartSleepTimer(minutes: Int) {
+        sleepJob?.cancel()
+        if (minutes <= 0) return
+        sleepJob = viewModelScope.launch {
+            delay(minutes * 60_000L)
+            pausePlayback()
+            _showExitDialog.emit(Unit)
+        }
+    }
+
     fun onKeyLeft() = engSeekTo((engPositionMs() - 10_000).coerceAtLeast(0))
     fun onKeyRight() = engSeekTo(engPositionMs() + 10_000)
     fun onKeyPageUp() = engSeekTo(engPositionMs() + 30_000)
@@ -721,7 +734,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     override fun onCleared() {
-        saveJob?.cancel(); diagJob?.cancel(); osdHideJob?.cancel(); vlcPollJob?.cancel()
+        saveJob?.cancel(); diagJob?.cancel(); osdHideJob?.cancel(); vlcPollJob?.cancel(); sleepJob?.cancel()
         viewModelScope.launch { saveCurrentPosition() }
         if (::player.isInitialized) player.release()
         vlc?.release(); vlc = null

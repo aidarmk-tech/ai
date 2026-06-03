@@ -34,7 +34,10 @@ class SettingsViewModel @Inject constructor(
     fun setRememberTracks(v: Boolean) = viewModelScope.launch { store.setRememberTracks(v) }
     fun setSkipIntro(v: Boolean) = viewModelScope.launch { store.setSkipIntro(v) }
     fun setDiag(v: Boolean) = viewModelScope.launch { store.setDiag(v) }
+    fun setSleepTimer(min: Int) = viewModelScope.launch { store.setSleepTimer(min) }
 }
+
+private val SLEEP_OPTIONS = listOf(0, 15, 30, 45, 60, 90)
 
 @AndroidEntryPoint
 class SettingsActivity : AppCompatActivity() {
@@ -93,6 +96,19 @@ class SettingsActivity : AppCompatActivity() {
             }
             override fun onNothingSelected(p: AdapterView<*>?) {}
         }
+
+        val sleepAdapter = ArrayAdapter(
+            this, android.R.layout.simple_spinner_item,
+            SLEEP_OPTIONS.map { if (it == 0) "Выкл" else "$it мин" },
+        ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        binding.spinnerSleep.adapter = sleepAdapter
+        binding.spinnerSleep.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(p: AdapterView<*>?, v: android.view.View?, pos: Int, id: Long) {
+                if (ignoreSpinnerEvent) return
+                vm.setSleepTimer(SLEEP_OPTIONS[pos.coerceIn(0, SLEEP_OPTIONS.size - 1)])
+            }
+            override fun onNothingSelected(p: AdapterView<*>?) {}
+        }
     }
 
     private fun setupSwitches() {
@@ -112,6 +128,7 @@ class SettingsActivity : AppCompatActivity() {
         binding.switchRememberTracks.isChecked = s.rememberTracks
         binding.switchSkipIntro.isChecked = s.skipIntro
         binding.switchDiag.isChecked = s.diag
+        binding.spinnerSleep.setSelection(SLEEP_OPTIONS.indexOf(s.sleepTimerMin).coerceAtLeast(0))
         binding.spinnerDelay.isEnabled = s.autonext
         ignoreSpinnerEvent = false
     }
