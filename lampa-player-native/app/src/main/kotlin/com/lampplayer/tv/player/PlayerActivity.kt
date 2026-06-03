@@ -68,6 +68,9 @@ class PlayerActivity : AppCompatActivity() {
             finish(); return
         }
 
+        val dm = resources.displayMetrics
+        vm.setDisplayAspect("${dm.widthPixels}:${dm.heightPixels}")
+
         vm.initPlayer(this, url, card)
         bindEngineSurface()
 
@@ -126,6 +129,7 @@ class PlayerActivity : AppCompatActivity() {
         binding.btnPrev.setOnClickListener { vm.onPrevEpisode(); vm.showOsd() }
         binding.btnNext.setOnClickListener { vm.onNextEpisode(); vm.showOsd() }
         binding.btnSpeed.setOnClickListener { vm.cyclePlaybackSpeed(); vm.showOsd() }
+        binding.btnAspect.setOnClickListener { vm.cycleScaleMode(); vm.showOsd() }
         binding.btnInfo.setOnClickListener { vm.toggleInfoOverlay() }
         binding.btnMarkIntro.setOnClickListener {
             vm.markIntro()
@@ -159,6 +163,18 @@ class PlayerActivity : AppCompatActivity() {
                 binding.tvEpisodeBadge.isVisible = s.episodes.size > 1
                 binding.tvEpisodeBadge.text = "${s.currentEpisodeIndex + 1}/${s.episodes.size}"
                 binding.btnSpeed.text = formatSpeed(s.playbackSpeed)
+                binding.btnAspect.text = when (s.scaleMode) {
+                    com.lampplayer.tv.player.VideoScaleMode.FIT -> "FIT"
+                    com.lampplayer.tv.player.VideoScaleMode.FILL -> "FILL"
+                    com.lampplayer.tv.player.VideoScaleMode.ZOOM -> "ZOOM"
+                }
+                binding.playerView.resizeMode = when (s.scaleMode) {
+                    com.lampplayer.tv.player.VideoScaleMode.FILL ->
+                        androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL
+                    com.lampplayer.tv.player.VideoScaleMode.ZOOM ->
+                        androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                    else -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                }
 
                 // OSD
                 val osdWasHidden = !binding.osdContainer.isVisible

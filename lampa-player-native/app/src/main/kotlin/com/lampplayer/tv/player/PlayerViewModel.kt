@@ -33,6 +33,9 @@ enum class InfoPanelTab { EPISODES, AUDIO, SUBTITLES, EPG }
 /** Selectable playback speeds cycled by the OSD speed button. */
 private val SPEED_STEPS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
 
+/** Video sizing mode. ExoPlayer maps these to PlayerView resizeMode; libVLC supports FIT/FILL. */
+enum class VideoScaleMode { FIT, FILL, ZOOM }
+
 data class PlayerUiState(
     val title: String = "",
     val quality: String = "",
@@ -64,6 +67,7 @@ data class PlayerUiState(
     val selectedSubtitleIndex: Int = -1,
     val videoInfo: String = "",
     val playbackSpeed: Float = 1f,
+    val scaleMode: VideoScaleMode = VideoScaleMode.FIT,
 ) {
     data class MetadataDisplay(
         val title: String,
@@ -396,14 +400,41 @@ class PlayerViewModel @Inject constructor(
         if (usingVlc) vlc?.setRate(rate)
         else if (::player.isInitialized) player.setPlaybackSpeed(rate)
     }
-    /** Re-apply the chosen rate after (re)loading media — VLC resets it per media. */
-    private fun reapplyRate() { if (currentRate != 1f) applyRate(currentRate) }
+    /** Re-apply rate + sizing after (re)loading media — VLC resets them per media. */
+    private fun reapplyRate() {
+        if (currentRate != 1f) applyRate(currentRate)
+        if (usingVlc && _uiState.value.scaleMode != VideoScaleMode.FIT) applyScaleMode(_uiState.value.scaleMode)
+    }
 
     fun cyclePlaybackSpeed() {
         val idx = SPEED_STEPS.indexOfFirst { it >= currentRate - 0.001f }.takeIf { it >= 0 } ?: 2
         val next = SPEED_STEPS[(idx + 1) % SPEED_STEPS.size]
         applyRate(next)
         _uiState.update { it.copy(playbackSpeed = next) }
+    }
+
+    // ─── Video sizing (aspect / zoom) ──────────────────────────────
+    // Screen ratio "W:H" used for libVLC FILL (stretch). Set by the Activity.
+    private var displayAspect: String? = null
+    fun setDisplayAspect(ratio: String) { displayAspect = ratio }
+
+    fun cycleScaleMode() {
+        // libVLC has no reliable keep-aspect crop without video-track dims, so it
+        // cycles FIT↔FILL only; ExoPlayer offers the full FIT→FILL→ZOOM set.
+        val order = if (usingVlc) listOf(VideoScaleMode.FIT, VideoScaleMode.FILL)
+                    else listOf(VideoScaleMode.FIT, VideoScaleMode.FILL, VideoScaleMode.ZOOM)
+        val idx = order.indexOf(_uiState.value.scaleMode).coerceAtLeast(0)
+        val next = order[(idx + 1) % order.size]
+        _uiState.update { it.copy(scaleMode = next) }
+        applyScaleMode(next)   // ExoPlayer sizing is applied by the Activity via resizeMode
+    }
+
+    private fun applyScaleMode(mode: VideoScaleMode) {
+        if (!usingVlc) return
+        when (mode) {
+            VideoScaleMode.FILL -> { vlc?.setAspectRatio(displayAspect); vlc?.setScale(0f) }
+            else -> { vlc?.setAspectRatio(null); vlc?.setScale(0f) }   // FIT (and unreachable ZOOM)
+        }
     }
 
     // ─── Info Panel ────────────────────────────────────────────────
