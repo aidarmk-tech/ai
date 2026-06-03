@@ -591,7 +591,21 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             saveCurrentPosition()
             currentUrl = episode.url
-            _uiState.update { it.copy(currentEpisodeIndex = episode.index, infoOverlayVisible = false) }
+            // Update the card's season/episode so the title + badge reflect the new episode.
+            val updated = currentCard?.copy(
+                seasonNumber = episode.season ?: currentCard?.seasonNumber,
+                episodeNumber = episode.episode ?: currentCard?.episodeNumber,
+            )
+            if (updated != null) currentCard = updated
+            _uiState.update { s ->
+                s.copy(
+                    currentEpisodeIndex = episode.index,
+                    infoOverlayVisible = false,
+                    title = updated?.let { buildTitle(it) } ?: s.title,
+                    card = updated ?: s.card,
+                    episodeRows = s.episodeRows.map { it.copy(current = it.number == episode.episode) },
+                )
+            }
             if (usingVlc) {
                 val card = currentCard ?: return@launch
                 vlc?.setMedia(appContext, episode.url, card.headers, 0L, emptyList(), hardwareDecode = true)
