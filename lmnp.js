@@ -140,7 +140,13 @@
             if (!c || typeof c !== 'object') return;
             var s = cardScore(c);
             if (s < 0) return;
-            if (s > cardScore(_savedCard)) _savedCard = c;
+            var cid = c.id || c.tmdb_id;
+            var sid = _savedCard && (_savedCard.id || _savedCard.tmdb_id);
+            // Заменяем если: (а) выше балл для того же фильма, ИЛИ (б) пришёл
+            // ДРУГОЙ настоящий TMDB-фильм (другой id + сильные TMDB-поля) —
+            // иначе карточка прошлого фильма залипает между запусками.
+            var newFilm = isTmdbCard(c) && cid && sid && cid !== sid;
+            if (!_savedCard || s > cardScore(_savedCard) || newFilm) _savedCard = c;
         });
     }
 
