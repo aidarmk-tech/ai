@@ -125,6 +125,7 @@ class PlayerActivity : AppCompatActivity() {
         binding.btnForward.setOnClickListener { doSeek(true, fast = false); vm.showOsd() }
         binding.btnPrev.setOnClickListener { vm.onPrevEpisode(); vm.showOsd() }
         binding.btnNext.setOnClickListener { vm.onNextEpisode(); vm.showOsd() }
+        binding.btnSpeed.setOnClickListener { vm.cyclePlaybackSpeed(); vm.showOsd() }
         binding.btnInfo.setOnClickListener { vm.toggleInfoOverlay() }
         binding.btnMarkIntro.setOnClickListener {
             vm.markIntro()
@@ -157,6 +158,7 @@ class PlayerActivity : AppCompatActivity() {
                 )
                 binding.tvEpisodeBadge.isVisible = s.episodes.size > 1
                 binding.tvEpisodeBadge.text = "${s.currentEpisodeIndex + 1}/${s.episodes.size}"
+                binding.btnSpeed.text = formatSpeed(s.playbackSpeed)
 
                 // OSD
                 val osdWasHidden = !binding.osdContainer.isVisible
@@ -441,6 +443,11 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     override fun onStop() { super.onStop(); vm.pausePlayback() }
+
+    private fun formatSpeed(rate: Float): String {
+        val s = if (rate % 1f == 0f) rate.toInt().toString() else rate.toString().trimEnd('0').trimEnd('.')
+        return "$s×"
+    }
 
     private fun formatTime(ms: Long): String {
         val s = ms / 1000; val h = s / 3600; val m = (s % 3600) / 60; val sec = s % 60

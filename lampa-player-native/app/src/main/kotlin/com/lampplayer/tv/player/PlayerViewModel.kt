@@ -30,6 +30,9 @@ import javax.inject.Inject
 
 enum class InfoPanelTab { EPISODES, AUDIO, SUBTITLES, EPG }
 
+/** Selectable playback speeds cycled by the OSD speed button. */
+private val SPEED_STEPS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
+
 data class PlayerUiState(
     val title: String = "",
     val quality: String = "",
@@ -60,6 +63,7 @@ data class PlayerUiState(
     val selectedAudioIndex: Int = -1,
     val selectedSubtitleIndex: Int = -1,
     val videoInfo: String = "",
+    val playbackSpeed: Float = 1f,
 ) {
     data class MetadataDisplay(
         val title: String,
@@ -233,6 +237,7 @@ class PlayerViewModel @Inject constructor(
                 subtitles = if (useIntentStart) card.subtitles else emptyList(),
                 hardwareDecode = true,
             )
+            reapplyRate()
             startVlcPoll()
         }
     }
@@ -285,6 +290,7 @@ class PlayerViewModel @Inject constructor(
         val controller = VlcController(appContext, profile.maxBufferLengthMs.toInt().coerceIn(1500, 60_000), vlcListener)
         vlc = controller
         controller.setMedia(appContext, currentUrl, card.headers, resumeMs.coerceAtLeast(0), card.subtitles, hardwareDecode = true)
+        reapplyRate()
         startVlcPoll()
         viewModelScope.launch { _engineSwitched.emit(Unit) }
     }
@@ -383,6 +389,23 @@ class PlayerViewModel @Inject constructor(
     fun pausePlayback() { if (usingVlc) vlc?.pause() else if (::player.isInitialized) player.pause() }
     fun resumePlayback() { if (usingVlc) vlc?.play() else if (::player.isInitialized) player.play() }
 
+    // ─── Playback speed (engine-agnostic) ──────────────────────────
+    private var currentRate = 1f
+    private fun applyRate(rate: Float) {
+        currentRate = rate
+        if (usingVlc) vlc?.setRate(rate)
+        else if (::player.isInitialized) player.setPlaybackSpeed(rate)
+    }
+    /** Re-apply the chosen rate after (re)loading media — VLC resets it per media. */
+    private fun reapplyRate() { if (currentRate != 1f) applyRate(currentRate) }
+
+    fun cyclePlaybackSpeed() {
+        val idx = SPEED_STEPS.indexOfFirst { it >= currentRate - 0.001f }.takeIf { it >= 0 } ?: 2
+        val next = SPEED_STEPS[(idx + 1) % SPEED_STEPS.size]
+        applyRate(next)
+        _uiState.update { it.copy(playbackSpeed = next) }
+    }
+
     // ─── Info Panel ────────────────────────────────────────────────
     fun toggleInfoPanel() {
         val visible = !_uiState.value.infoPanelVisible
@@ -442,6 +465,7 @@ class PlayerViewModel @Inject constructor(
             if (usingVlc) {
                 val card = currentCard ?: return@launch
                 vlc?.setMedia(appContext, episode.url, card.headers, 0L, emptyList(), hardwareDecode = true)
+                reapplyRate()
             } else {
                 player.stop()
                 loadUrl(episode.url, currentCard!!)
