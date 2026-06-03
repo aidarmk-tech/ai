@@ -12,6 +12,7 @@ coroutines = "1.8.1"
 lifecycle = "2.8.2"
 glide = "4.16.0"
 leanback = "1.2.0-alpha04"
+libvlc = "3.7.2"
 
 [libraries]
 # AndroidX Core
@@ -59,6 +60,9 @@ coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutin
 
 # Glide
 glide = { group = "com.github.bumptech.glide", name = "glide", version.ref = "glide" }
+
+# libVLC (fallback playback engine — bundles all ABIs)
+libvlc-all = { group = "org.videolan.android", name = "libvlc-all", version.ref = "libvlc" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

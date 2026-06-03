@@ -13,6 +13,7 @@ import com.lampplayer.tv.data.datastore.AppSettings
 import com.lampplayer.tv.data.datastore.SettingsDataStore
 import com.lampplayer.tv.databinding.ActivitySettingsBinding
 import com.lampplayer.tv.domain.model.BufferProfileType
+import com.lampplayer.tv.engine.EngineType
 import dagger.hilt.android.AndroidEntryPoint
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
@@ -58,13 +59,15 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun setupSpinners() {
-        val engineAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, listOf("hls", "native"))
-            .also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        val engineAdapter = ArrayAdapter(
+            this, android.R.layout.simple_spinner_item,
+            listOf("Авто (ExoPlayer + libVLC)", "Только ExoPlayer", "Только libVLC"),
+        ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
         binding.spinnerEngine.adapter = engineAdapter
         binding.spinnerEngine.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(p: AdapterView<*>?, v: android.view.View?, pos: Int, id: Long) {
                 if (ignoreSpinnerEvent) return
-                vm.setEngine(if (pos == 0) "hls" else "native")
+                vm.setEngine(EngineType.ALL[pos.coerceIn(0, EngineType.ALL.size - 1)])
             }
             override fun onNothingSelected(p: AdapterView<*>?) {}
         }
@@ -101,7 +104,7 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun applySettings(s: AppSettings) {
         ignoreSpinnerEvent = true
-        binding.spinnerEngine.setSelection(if (s.engine == "hls") 0 else 1)
+        binding.spinnerEngine.setSelection(EngineType.ALL.indexOf(EngineType.normalize(s.engine)).coerceAtLeast(0))
         binding.spinnerBuffer.setSelection(s.buffer.ordinal)
         val delayIndex = ((s.autonextDelay / 5) - 1).coerceIn(0, 5)
         binding.spinnerDelay.setSelection(delayIndex)

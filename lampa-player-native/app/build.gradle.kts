@@ -59,6 +59,9 @@ dependencies {
     implementation(libs.media3.session)
     implementation(libs.media3.datasource.okhttp)
 
+    // libVLC — fallback engine for codecs/containers ExoPlayer can't handle
+    implementation(libs.libvlc.all)
+
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
     ksp(libs.room.compiler)

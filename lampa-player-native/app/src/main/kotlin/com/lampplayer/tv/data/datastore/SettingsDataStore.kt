@@ -15,7 +15,8 @@ import javax.inject.Singleton
 private val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(name = "lampa_settings")
 
 data class AppSettings(
-    val engine: String = "hls",
+    // Player engine: "auto" | "exoplayer" | "vlc" (see engine.EngineType)
+    val engine: String = "auto",
     val buffer: BufferProfileType = BufferProfileType.MEDIUM,
     val autonext: Boolean = true,
     val autonextDelay: Int = 10,
@@ -42,7 +43,7 @@ class SettingsDataStore @Inject constructor(
         .catch { emit(emptyPreferences()) }
         .map { prefs ->
             AppSettings(
-                engine = prefs[Keys.ENGINE] ?: "hls",
+                engine = com.lampplayer.tv.engine.EngineType.normalize(prefs[Keys.ENGINE]),
                 buffer = prefs[Keys.BUFFER]?.let { runCatching { BufferProfileType.valueOf(it.uppercase()) }.getOrNull() }
                     ?: BufferProfileType.MEDIUM,
                 autonext = prefs[Keys.AUTONEXT] ?: true,
