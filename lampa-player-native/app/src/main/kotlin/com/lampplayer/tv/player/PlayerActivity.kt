@@ -53,9 +53,9 @@ class PlayerActivity : AppCompatActivity() {
     private var turboJob: Job? = null
     private var turboSpeed = 1
 
-    // When true: OSD opened by seek → ←/→ continue seeking.
-    // When false: OSD opened by OK/↓ → ←/→ navigate OSD buttons.
-    private var osdFromSeek = false
+    // Netflix-style OSD focus model: true = the scrubber owns ←/→ (seek);
+    // false = focus is on the button row (←/→ move between buttons).
+    private var scrubberFocused = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -163,11 +163,13 @@ class PlayerActivity : AppCompatActivity() {
     // ─── OSD button clicks ─────────────────────────────────────────
 
     private fun setupOsdClicks() {
+        binding.scrubber.setOnClickListener { vm.onKeyOk(); vm.showOsd() }
         binding.btnPlayPause.setOnClickListener { vm.onKeyOk(); vm.showOsd() }
         binding.btnRewind.setOnClickListener { doSeek(false, fast = false); vm.showOsd() }
         binding.btnForward.setOnClickListener { doSeek(true, fast = false); vm.showOsd() }
         binding.btnPrev.setOnClickListener { vm.onPrevEpisode(); vm.showOsd() }
         binding.btnNext.setOnClickListener { vm.onNextEpisode(); vm.showOsd() }
+        binding.btnTracks.setOnClickListener { vm.toggleTracksOverlay() }
         binding.btnSpeed.setOnClickListener { vm.cyclePlaybackSpeed(); vm.showOsd() }
         binding.btnAspect.setOnClickListener { vm.cycleScaleMode(); vm.showOsd() }
         binding.btnInfo.setOnClickListener { vm.toggleInfoOverlay() }
@@ -216,11 +218,12 @@ class PlayerActivity : AppCompatActivity() {
                     else -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
                 }
 
-                // OSD
+                // OSD — default focus on the scrubber (Netflix-style)
                 val osdWasHidden = !binding.osdContainer.isVisible
                 binding.osdContainer.isVisible = s.osdVisible
-                if (s.osdVisible && osdWasHidden && !osdFromSeek) {
-                    binding.btnPlayPause.requestFocus()
+                if (!s.osdVisible) scrubberFocused = true   // reset zone when hidden
+                if (s.osdVisible && osdWasHidden && scrubberFocused) {
+                    binding.scrubber.requestFocus()
                 }
 
                 // Overlays
@@ -312,15 +315,18 @@ class PlayerActivity : AppCompatActivity() {
         binding.tvOverlayVideoInfo.text = s.videoInfo
         binding.tvOverlayVideoInfo.isVisible = s.videoInfo.isNotEmpty()
 
-        // Episodes or EPG content on the right
+        // Episodes / EPG panel — shown only when there's something to list, so a
+        // movie gets the full-width readable description instead of an empty pane.
         val hasEpisodes = s.episodes.size > 1
+        val hasEpg = !hasEpisodes && s.card?.epgTitle != null
+        binding.episodesPanel.isVisible = hasEpisodes || hasEpg
         binding.rvInfoList.isVisible = hasEpisodes
-        binding.tvEpgContent.isVisible = !hasEpisodes && s.card?.epgTitle != null
+        binding.tvEpgContent.isVisible = hasEpg
 
         if (hasEpisodes) {
             episodeAdapter.setItems(s.episodes, s.currentEpisodeIndex)
             binding.rvInfoList.scrollToPosition(s.currentEpisodeIndex)
-        } else {
+        } else if (hasEpg) {
             binding.tvEpgContent.text = epgText
         }
     }
@@ -381,56 +387,53 @@ class PlayerActivity : AppCompatActivity() {
 
         // ── OSD visible ───────────────────────────────────────────
         if (osdVisible) {
-            return when (keyCode) {
-                KeyEvent.KEYCODE_BACK -> { vm.onKeyBack(true, false); true }
-                // ↑ → попап аудио/субтитров
-                KeyEvent.KEYCODE_DPAD_UP -> {
-                    osdFromSeek = false; vm.toggleTracksOverlay(); true
+            if (scrubberFocused) {
+                // Scrubber owns ←/→ (always seek) and OK (play/pause).
+                return when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_LEFT -> { doSeek(false, repeatCount = event.repeatCount); vm.showOsd(); true }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> { doSeek(true, repeatCount = event.repeatCount); vm.showOsd(); true }
+                    KeyEvent.KEYCODE_DPAD_CENTER,
+                    KeyEvent.KEYCODE_ENTER -> { vm.onKeyOk(); vm.showOsd(); true }
+                    KeyEvent.KEYCODE_DPAD_DOWN -> {
+                        scrubberFocused = false; binding.btnPlayPause.requestFocus(); vm.showOsd(); true
+                    }
+                    KeyEvent.KEYCODE_DPAD_UP -> { vm.toggleTracksOverlay(); true }
+                    KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_MENU -> { vm.toggleInfoOverlay(); true }
+                    KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_CHANNEL_UP -> { vm.onKeyPageUp(); vm.showOsd(); true }
+                    KeyEvent.KEYCODE_PAGE_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> { vm.onKeyPageDown(); vm.showOsd(); true }
+                    KeyEvent.KEYCODE_BACK -> { vm.onKeyBack(true, false); true }
+                    else -> super.onKeyDown(keyCode, event)
                 }
-                // ↓ → инфо-оверлей
-                KeyEvent.KEYCODE_DPAD_DOWN -> {
-                    vm.toggleInfoOverlay(); true
+            } else {
+                // Button row: ←/→/OK handled by the focused button (Android focus).
+                return when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_UP,
+                    KeyEvent.KEYCODE_BACK -> {
+                        scrubberFocused = true; binding.scrubber.requestFocus(); vm.showOsd(); true
+                    }
+                    KeyEvent.KEYCODE_DPAD_DOWN,
+                    KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_MENU -> { vm.toggleInfoOverlay(); true }
+                    else -> { vm.showOsd(); super.onKeyDown(keyCode, event) }
                 }
-                KeyEvent.KEYCODE_INFO,
-                KeyEvent.KEYCODE_MENU -> { vm.toggleInfoOverlay(); true }
-                // ← / → — перемотка если OSD открылся от перемотки; иначе навигация
-                KeyEvent.KEYCODE_DPAD_LEFT -> {
-                    if (osdFromSeek) { doSeek(false); vm.showOsd(); true }
-                    else super.onKeyDown(keyCode, event)
-                }
-                KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                    if (osdFromSeek) { doSeek(true); vm.showOsd(); true }
-                    else super.onKeyDown(keyCode, event)
-                }
-                // OK в режиме перемотки — переходим к навигации по кнопкам
-                KeyEvent.KEYCODE_DPAD_CENTER,
-                KeyEvent.KEYCODE_ENTER -> {
-                    if (osdFromSeek) {
-                        osdFromSeek = false; binding.btnPlayPause.requestFocus(); true
-                    } else super.onKeyDown(keyCode, event)
-                }
-                else -> super.onKeyDown(keyCode, event)
             }
         }
 
-        // ── OSD скрыт ─────────────────────────────────────────────
+        // ── OSD скрыт: любое действие открывает OSD на полосе ──────
         return when (keyCode) {
             KeyEvent.KEYCODE_DPAD_LEFT -> {
-                doSeek(false, repeatCount = event.repeatCount)
-                osdFromSeek = true; vm.showOsd(); true
+                scrubberFocused = true; vm.showOsd(); doSeek(false, repeatCount = event.repeatCount); true
             }
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                doSeek(true, repeatCount = event.repeatCount)
-                osdFromSeek = true; vm.showOsd(); true
+                scrubberFocused = true; vm.showOsd(); doSeek(true, repeatCount = event.repeatCount); true
             }
             KeyEvent.KEYCODE_PAGE_UP,
-            KeyEvent.KEYCODE_CHANNEL_UP -> { vm.onKeyPageUp(); vm.showOsd(); true }
+            KeyEvent.KEYCODE_CHANNEL_UP -> { vm.onKeyPageUp(); scrubberFocused = true; vm.showOsd(); true }
             KeyEvent.KEYCODE_PAGE_DOWN,
-            KeyEvent.KEYCODE_CHANNEL_DOWN -> { vm.onKeyPageDown(); vm.showOsd(); true }
+            KeyEvent.KEYCODE_CHANNEL_DOWN -> { vm.onKeyPageDown(); scrubberFocused = true; vm.showOsd(); true }
+            KeyEvent.KEYCODE_DPAD_UP -> { vm.toggleTracksOverlay(); true }
             KeyEvent.KEYCODE_DPAD_DOWN,
-            KeyEvent.KEYCODE_DPAD_UP,
             KeyEvent.KEYCODE_DPAD_CENTER,
-            KeyEvent.KEYCODE_ENTER -> { osdFromSeek = false; vm.showOsd(); true }
+            KeyEvent.KEYCODE_ENTER -> { scrubberFocused = true; vm.showOsd(); true }
             KeyEvent.KEYCODE_INFO,
             KeyEvent.KEYCODE_MENU -> { vm.toggleInfoOverlay(); true }
             KeyEvent.KEYCODE_BACK -> { vm.onKeyBack(false, false); true }

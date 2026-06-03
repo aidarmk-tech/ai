@@ -121,128 +121,152 @@
                 android:focusable="true" />
         </LinearLayout>
 
-        <!-- BOTTOM controls -->
+        <!-- BOTTOM controls (Infuse-minimal) -->
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="220dp"
+            android:layout_height="wrap_content"
             android:layout_gravity="bottom"
             android:background="@drawable/bg_osd_gradient_bottom"
             android:orientation="vertical"
             android:paddingHorizontal="@dimen/safe_margin"
-            android:paddingBottom="@dimen/space_md"
-            android:gravity="bottom">
+            android:paddingTop="@dimen/space_lg"
+            android:paddingBottom="@dimen/space_md">
 
+            <!-- Scrubber: фокусируемая полоса прогресса + время по краям -->
             <LinearLayout
+                android:id="@+id/scrubber"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:layout_marginBottom="6dp">
+                android:orientation="vertical"
+                android:focusable="true"
+                android:background="@drawable/scrubber_bg"
+                android:padding="14dp"
+                android:layout_marginBottom="@dimen/space_md">
 
-                <TextView android:id="@+id/tv_current_time"
-                    android:layout_width="wrap_content" android:layout_height="wrap_content"
-                    android:textColor="@color/text_primary" android:textSize="18sp" android:text="0:00" />
-                <View android:layout_width="0dp" android:layout_height="0dp" android:layout_weight="1" />
-                <TextView android:id="@+id/tv_duration"
-                    android:layout_width="wrap_content" android:layout_height="wrap_content"
-                    android:textColor="@color/text_secondary" android:textSize="18sp" android:text="0:00" />
+                <FrameLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="10dp">
+
+                    <ProgressBar android:id="@+id/progress_bar"
+                        style="?android:attr/progressBarStyleHorizontal"
+                        android:layout_width="match_parent" android:layout_height="8dp"
+                        android:layout_gravity="center_vertical"
+                        android:max="1000" android:progressDrawable="@drawable/bg_progress_track" />
+
+                    <ProgressBar android:id="@+id/seek_indicator"
+                        style="?android:attr/progressBarStyleHorizontal"
+                        android:layout_width="match_parent" android:layout_height="8dp"
+                        android:layout_gravity="center_vertical"
+                        android:max="1000"
+                        android:progressTint="#88FFFFFF"
+                        android:progressBackgroundTint="#00000000"
+                        android:visibility="gone" />
+                </FrameLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical">
+
+                    <TextView android:id="@+id/tv_current_time"
+                        android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:textColor="@color/text_primary" android:textSize="16sp" android:text="0:00" />
+                    <View android:layout_width="0dp" android:layout_height="0dp" android:layout_weight="1" />
+                    <TextView android:id="@+id/tv_duration"
+                        android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:textColor="@color/text_secondary" android:textSize="16sp" android:text="0:00" />
+                </LinearLayout>
             </LinearLayout>
 
-            <!-- Progress bar + seek indicator stacked -->
-            <FrameLayout
+            <!-- Ряд кнопок (тонкие иконки по центру, прокрутка при переполнении) -->
+            <HorizontalScrollView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="@dimen/space_sm">
+                android:scrollbars="none"
+                android:fillViewport="true">
 
-                <ProgressBar android:id="@+id/progress_bar"
-                    style="?android:attr/progressBarStyleHorizontal"
-                    android:layout_width="match_parent" android:layout_height="6dp"
-                    android:layout_gravity="center_vertical"
-                    android:max="1000" android:progressDrawable="@drawable/bg_progress_track" />
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:gravity="center">
 
-                <!-- Seek target indicator (white, semi-transparent) -->
-                <ProgressBar android:id="@+id/seek_indicator"
-                    style="?android:attr/progressBarStyleHorizontal"
-                    android:layout_width="match_parent" android:layout_height="6dp"
-                    android:layout_gravity="center_vertical"
-                    android:max="1000"
-                    android:progressTint="#88FFFFFF"
-                    android:progressBackgroundTint="#00000000"
-                    android:visibility="gone" />
-            </FrameLayout>
+                    <ImageButton android:id="@+id/btn_mark_intro"
+                        android:layout_width="44dp" android:layout_height="44dp"
+                        android:src="@android:drawable/ic_menu_edit"
+                        android:background="@drawable/bg_button"
+                        android:contentDescription="Отметить интро"
+                        android:focusable="true" android:layout_marginHorizontal="6dp" />
 
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center">
+                    <ImageButton android:id="@+id/btn_prev"
+                        android:layout_width="48dp" android:layout_height="48dp"
+                        android:src="@android:drawable/ic_media_previous"
+                        android:background="@drawable/bg_button"
+                        android:contentDescription="Пред. серия"
+                        android:focusable="true" android:layout_marginHorizontal="6dp" />
 
-                <ImageButton android:id="@+id/btn_mark_intro"
-                    android:layout_width="40dp" android:layout_height="40dp"
-                    android:src="@android:drawable/ic_menu_edit"
-                    android:background="@drawable/bg_button"
-                    android:contentDescription="Отметить интро"
-                    android:focusable="true" android:layout_marginHorizontal="6dp" />
+                    <ImageButton android:id="@+id/btn_rewind"
+                        android:layout_width="48dp" android:layout_height="48dp"
+                        android:src="@android:drawable/ic_media_rew"
+                        android:background="@drawable/bg_button"
+                        android:contentDescription="-10с"
+                        android:focusable="true" android:layout_marginHorizontal="6dp" />
 
-                <ImageButton android:id="@+id/btn_prev"
-                    android:layout_width="48dp" android:layout_height="48dp"
-                    android:src="@android:drawable/ic_media_previous"
-                    android:background="@drawable/bg_button"
-                    android:contentDescription="Пред. серия"
-                    android:focusable="true" android:layout_marginHorizontal="6dp" />
+                    <ImageButton android:id="@+id/btn_play_pause"
+                        android:layout_width="60dp" android:layout_height="60dp"
+                        android:src="@android:drawable/ic_media_play"
+                        android:background="@drawable/bg_button_accent"
+                        android:contentDescription="Пауза"
+                        android:focusable="true" android:layout_marginHorizontal="6dp" />
 
-                <ImageButton android:id="@+id/btn_rewind"
-                    android:layout_width="48dp" android:layout_height="48dp"
-                    android:src="@android:drawable/ic_media_rew"
-                    android:background="@drawable/bg_button"
-                    android:contentDescription="-10с"
-                    android:focusable="true" android:layout_marginHorizontal="6dp" />
+                    <ImageButton android:id="@+id/btn_forward"
+                        android:layout_width="48dp" android:layout_height="48dp"
+                        android:src="@android:drawable/ic_media_ff"
+                        android:background="@drawable/bg_button"
+                        android:contentDescription="+10с"
+                        android:focusable="true" android:layout_marginHorizontal="6dp" />
 
-                <ImageButton android:id="@+id/btn_play_pause"
-                    android:layout_width="64dp" android:layout_height="64dp"
-                    android:src="@android:drawable/ic_media_play"
-                    android:background="@drawable/bg_button_accent"
-                    android:contentDescription="Пауза"
-                    android:focusable="true" android:layout_marginHorizontal="6dp" />
+                    <ImageButton android:id="@+id/btn_next"
+                        android:layout_width="48dp" android:layout_height="48dp"
+                        android:src="@android:drawable/ic_media_next"
+                        android:background="@drawable/bg_button"
+                        android:contentDescription="След. серия"
+                        android:focusable="true" android:layout_marginHorizontal="6dp" />
 
-                <ImageButton android:id="@+id/btn_forward"
-                    android:layout_width="48dp" android:layout_height="48dp"
-                    android:src="@android:drawable/ic_media_ff"
-                    android:background="@drawable/bg_button"
-                    android:contentDescription="+10с"
-                    android:focusable="true" android:layout_marginHorizontal="6dp" />
+                    <ImageButton android:id="@+id/btn_tracks"
+                        android:layout_width="48dp" android:layout_height="48dp"
+                        android:src="@android:drawable/ic_menu_sort_by_size"
+                        android:background="@drawable/bg_button"
+                        android:contentDescription="Аудио и субтитры"
+                        android:focusable="true" android:layout_marginHorizontal="6dp" />
 
-                <ImageButton android:id="@+id/btn_next"
-                    android:layout_width="48dp" android:layout_height="48dp"
-                    android:src="@android:drawable/ic_media_next"
-                    android:background="@drawable/bg_button"
-                    android:contentDescription="След. серия"
-                    android:focusable="true" android:layout_marginHorizontal="6dp" />
+                    <Button android:id="@+id/btn_speed"
+                        android:layout_width="wrap_content" android:layout_height="48dp"
+                        android:minWidth="56dp"
+                        android:paddingHorizontal="12dp"
+                        android:text="1×"
+                        android:textColor="@color/text_primary"
+                        android:textSize="16sp"
+                        android:textAllCaps="false"
+                        android:background="@drawable/bg_button"
+                        android:contentDescription="Скорость воспроизведения"
+                        android:focusable="true" android:layout_marginHorizontal="6dp" />
 
-                <Button android:id="@+id/btn_speed"
-                    android:layout_width="wrap_content" android:layout_height="48dp"
-                    android:minWidth="56dp"
-                    android:paddingHorizontal="12dp"
-                    android:text="1×"
-                    android:textColor="@color/text_primary"
-                    android:textSize="16sp"
-                    android:textAllCaps="false"
-                    android:background="@drawable/bg_button"
-                    android:contentDescription="Скорость воспроизведения"
-                    android:focusable="true" android:layout_marginHorizontal="6dp" />
-
-                <Button android:id="@+id/btn_aspect"
-                    android:layout_width="wrap_content" android:layout_height="48dp"
-                    android:minWidth="64dp"
-                    android:paddingHorizontal="12dp"
-                    android:text="FIT"
-                    android:textColor="@color/text_primary"
-                    android:textSize="14sp"
-                    android:textAllCaps="false"
-                    android:background="@drawable/bg_button"
-                    android:contentDescription="Соотношение / зум"
-                    android:focusable="true" android:layout_marginHorizontal="6dp" />
-            </LinearLayout>
+                    <Button android:id="@+id/btn_aspect"
+                        android:layout_width="wrap_content" android:layout_height="48dp"
+                        android:minWidth="64dp"
+                        android:paddingHorizontal="12dp"
+                        android:text="FIT"
+                        android:textColor="@color/text_primary"
+                        android:textSize="14sp"
+                        android:textAllCaps="false"
+                        android:background="@drawable/bg_button"
+                        android:contentDescription="Соотношение / зум"
+                        android:focusable="true" android:layout_marginHorizontal="6dp" />
+                </LinearLayout>
+            </HorizontalScrollView>
         </LinearLayout>
     </FrameLayout>
 
@@ -348,89 +372,80 @@
         android:lineSpacingMultiplier="1.1"
         android:padding="@dimen/space_sm" android:visibility="gone" />
 
-    <!-- ═══ INFO OVERLAY (double-↓): инфо о контенте + серии ═══ -->
+    <!-- ═══ INFO OVERLAY (↓): инфо о контенте + серии (full-screen) ═══ -->
     <LinearLayout
         android:id="@+id/info_overlay"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="horizontal"
-        android:background="#E5000000"
+        android:gravity="center_vertical"
+        android:background="#F2070708"
+        android:paddingHorizontal="@dimen/safe_margin"
+        android:paddingVertical="@dimen/space_lg"
         android:visibility="gone">
 
-        <!-- Left 45%: постер + описание + EPG + формат -->
+        <!-- Постер -->
+        <ImageView android:id="@+id/iv_overlay_poster"
+            android:layout_width="220dp"
+            android:layout_height="330dp"
+            android:scaleType="centerCrop"
+            android:background="@color/bg_surface"
+            android:layout_marginEnd="@dimen/space_lg" />
+
+        <!-- Текстовый блок: название + мета + описание (широкий, читаемый) -->
         <LinearLayout
+            android:id="@+id/overlay_meta_section"
             android:layout_width="0dp"
             android:layout_height="match_parent"
-            android:layout_weight="0.45"
+            android:layout_weight="1"
             android:orientation="vertical"
-            android:background="#FF111118"
-            android:padding="@dimen/safe_margin">
+            android:gravity="center_vertical">
 
-            <!-- Постер + мета текст -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="0dp"
-                android:layout_weight="1"
-                android:orientation="horizontal"
-                android:gravity="top">
+            <TextView android:id="@+id/tv_overlay_meta_title"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:textColor="@color/text_primary" android:textSize="34sp"
+                android:fontFamily="sans-serif-medium"
+                android:maxLines="2" android:ellipsize="end"
+                android:layout_marginBottom="@dimen/space_sm" />
 
-                <ImageView android:id="@+id/iv_overlay_poster"
-                    android:layout_width="@dimen/poster_width"
-                    android:layout_height="@dimen/poster_height"
-                    android:scaleType="centerCrop"
-                    android:background="@color/bg_surface"
-                    android:layout_marginEnd="@dimen/space_md" />
+            <TextView android:id="@+id/tv_overlay_meta_info"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:textColor="@color/accent_primary" android:textSize="17sp"
+                android:layout_marginBottom="@dimen/space_md" />
 
-                <LinearLayout
-                    android:id="@+id/overlay_meta_section"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
-
-                    <TextView android:id="@+id/tv_overlay_meta_title"
-                        android:layout_width="match_parent" android:layout_height="wrap_content"
-                        android:textColor="@color/text_primary" android:textSize="24sp"
-                        android:fontFamily="sans-serif-medium"
-                        android:layout_marginBottom="@dimen/space_xs" />
-
-                    <TextView android:id="@+id/tv_overlay_meta_info"
-                        android:layout_width="match_parent" android:layout_height="wrap_content"
-                        android:textColor="@color/accent_primary" android:textSize="15sp"
-                        android:layout_marginBottom="@dimen/space_sm" />
-
-                    <TextView android:id="@+id/tv_overlay_meta_overview"
-                        android:layout_width="match_parent" android:layout_height="wrap_content"
-                        android:textColor="@color/text_secondary" android:textSize="15sp"
-                        android:maxLines="7" android:ellipsize="end" />
-                </LinearLayout>
-            </LinearLayout>
+            <TextView android:id="@+id/tv_overlay_meta_overview"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:textColor="@color/text_secondary" android:textSize="18sp"
+                android:lineSpacingMultiplier="1.25"
+                android:maxLines="8" android:ellipsize="end" />
 
             <!-- EPG -->
             <TextView android:id="@+id/tv_overlay_epg"
                 android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/space_sm"
-                android:textColor="@color/text_primary" android:textSize="15sp"
+                android:layout_marginTop="@dimen/space_md"
+                android:textColor="@color/text_primary" android:textSize="16sp"
                 android:visibility="gone" />
 
             <!-- Формат видео -->
             <TextView android:id="@+id/tv_overlay_video_info"
-                android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/space_sm"
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_md"
                 android:background="@drawable/bg_diag"
                 android:textColor="@color/text_secondary"
-                android:fontFamily="monospace" android:textSize="12sp"
+                android:fontFamily="monospace" android:textSize="13sp"
                 android:padding="@dimen/space_xs"
                 android:visibility="gone" />
         </LinearLayout>
 
-        <!-- Right 55%: список серий (только если есть) -->
+        <!-- Панель «Серии» — только когда есть серии -->
         <LinearLayout
-            android:layout_width="0dp"
+            android:id="@+id/episodes_panel"
+            android:layout_width="380dp"
             android:layout_height="match_parent"
-            android:layout_weight="0.55"
+            android:layout_marginStart="@dimen/space_lg"
             android:orientation="vertical"
-            android:background="@color/bg_elevated">
+            android:background="@color/bg_elevated"
+            android:visibility="gone">
 
             <TextView
                 android:layout_width="match_parent"
@@ -439,7 +454,7 @@
                 android:gravity="center_vertical"
                 android:paddingHorizontal="@dimen/space_md"
                 android:textColor="@color/accent_primary"
-                android:textSize="15sp"
+                android:textSize="16sp"
                 android:fontFamily="sans-serif-medium"
                 android:background="@color/bg_surface" />
 
@@ -547,18 +562,18 @@
         <LinearLayout
             android:layout_width="0dp"
             android:layout_height="match_parent"
-            android:layout_weight="0.58"
+            android:layout_weight="0.72"
             android:background="@drawable/bg_metadata_overlay"
             android:orientation="horizontal"
             android:padding="@dimen/safe_margin"
             android:gravity="center_vertical">
 
             <ImageView android:id="@+id/iv_meta_poster"
-                android:layout_width="@dimen/poster_width"
-                android:layout_height="@dimen/poster_height"
+                android:layout_width="200dp"
+                android:layout_height="300dp"
                 android:scaleType="centerCrop"
                 android:background="@color/bg_elevated"
-                android:layout_marginEnd="@dimen/space_md" />
+                android:layout_marginEnd="@dimen/space_lg" />
 
             <LinearLayout
                 android:layout_width="0dp"
@@ -568,22 +583,25 @@
 
                 <TextView android:id="@+id/tv_meta_title"
                     android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:textColor="@color/text_primary" android:textSize="32sp"
-                    android:fontFamily="sans-serif-medium" android:layout_marginBottom="@dimen/space_xs" />
+                    android:textColor="@color/text_primary" android:textSize="34sp"
+                    android:fontFamily="sans-serif-medium"
+                    android:maxLines="2" android:ellipsize="end"
+                    android:layout_marginBottom="@dimen/space_sm" />
 
                 <TextView android:id="@+id/tv_meta_info"
                     android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:textColor="@color/accent_primary" android:textSize="18sp"
-                    android:layout_marginBottom="@dimen/space_sm" />
+                    android:layout_marginBottom="@dimen/space_md" />
 
                 <TextView android:id="@+id/tv_meta_overview"
                     android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:textColor="@color/text_secondary" android:textSize="18sp"
-                    android:maxLines="5" android:ellipsize="end" />
+                    android:lineSpacingMultiplier="1.25"
+                    android:maxLines="6" android:ellipsize="end" />
             </LinearLayout>
         </LinearLayout>
 
-        <View android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="0.42" />
+        <View android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="0.28" />
     </LinearLayout>
 
 </FrameLayout>
