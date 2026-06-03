@@ -19,6 +19,9 @@ import com.lampplayer.tv.data.datastore.PositionDataStore
 import com.lampplayer.tv.data.datastore.SettingsDataStore
 import com.lampplayer.tv.data.tmdb.TmdbRepository
 import com.lampplayer.tv.domain.model.*
+import com.lampplayer.tv.engine.EngineListener
+import com.lampplayer.tv.engine.EngineType
+import com.lampplayer.tv.engine.VlcController
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
@@ -91,8 +94,19 @@ class PlayerViewModel @Inject constructor(
     private val _playEpisode = MutableSharedFlow<EpisodeItem>()
     val playEpisode: SharedFlow<EpisodeItem> = _playEpisode.asSharedFlow()
 
+    // ExoPlayer instance — only initialized when the active engine is ExoPlayer.
+    // Guard external/internal access with [usingVlc]; in VLC mode it is never created.
     lateinit var player: ExoPlayer
         private set
+
+    // libVLC fallback engine (non-null only while usingVlc).
+    var vlc: VlcController? = null
+        private set
+    private var usingVlc = false
+
+    /** Emitted when AUTO mode hands playback over to libVLC; the Activity rebinds surfaces. */
+    private val _engineSwitched = MutableSharedFlow<Unit>()
+    val engineSwitched: SharedFlow<Unit> = _engineSwitched.asSharedFlow()
 
     private var currentUrl = ""
     private var currentCard: CardMeta? = null
@@ -100,8 +114,12 @@ class PlayerViewModel @Inject constructor(
     private var saveJob: Job? = null
     private var diagJob: Job? = null
     private var osdHideJob: Job? = null
+    private var vlcPollJob: Job? = null
     private var settings = AppSettings()
     private val errorRecovery = ErrorRecoveryManager()
+    private var didAutoFallback = false
+
+    val isUsingVlc: Boolean get() = usingVlc
 
     init {
         viewModelScope.launch {
@@ -122,6 +140,21 @@ class PlayerViewModel @Inject constructor(
             )
         }
 
+        // Engine selection (see EngineType). "vlc" → libVLC immediately;
+        // "exoplayer"/"auto" → ExoPlayer (AUTO falls back to libVLC on fatal decode errors).
+        if (settings.engine == EngineType.VLC) {
+            startVlc(context, url, card, useIntentStart = true)
+        } else {
+            initExo(context, url, card)
+        }
+
+        // Show card metadata immediately from intent data, enhance with TMDB if available
+        populateMetadataFromCard(card)
+        card.tmdbId?.let { loadMetadata(it, card.isSerial, card) }
+    }
+
+    private fun initExo(context: Context, url: String, card: CardMeta) {
+        usingVlc = false
         val profile = BufferProfile.fromType(settings.buffer)
         val renderersFactory = DefaultRenderersFactory(context)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
@@ -167,10 +200,91 @@ class PlayerViewModel @Inject constructor(
         loadUrl(url, card, useIntentStart = true)
         startAutoSave()
         if (settings.diag) startDiag()
+    }
 
-        // Show card metadata immediately from intent data, enhance with TMDB if available
-        populateMetadataFromCard(card)
-        card.tmdbId?.let { loadMetadata(it, card.isSerial, card) }
+    // ─── libVLC engine ─────────────────────────────────────────────
+
+    /** Build the libVLC controller and start playback. Surface is attached by the Activity. */
+    private fun startVlc(context: Context, url: String, card: CardMeta, useIntentStart: Boolean) {
+        usingVlc = true
+        val profile = BufferProfile.fromType(settings.buffer)
+        val controller = VlcController(
+            context = appContext,
+            networkCachingMs = profile.maxBufferLengthMs.toInt().coerceIn(1500, 60_000),
+            listener = vlcListener,
+        )
+        vlc = controller
+        viewModelScope.launch {
+            val savedPos = positionDataStore.getPosition(url)
+            val startMs = when {
+                useIntentStart && card.fromStart -> 0L
+                useIntentStart && card.startPositionMs != null -> card.startPositionMs
+                savedPos == null -> ((card.timelineTime ?: 0.0) * 1000).toLong()
+                savedPos.watched -> 0L
+                else -> (savedPos.time * 1000).toLong()
+            }
+            controller.setMedia(
+                context = appContext,
+                url = url,
+                headers = card.headers,
+                startMs = startMs.coerceAtLeast(0),
+                subtitles = if (useIntentStart) card.subtitles else emptyList(),
+                hardwareDecode = true,
+            )
+            startVlcPoll()
+        }
+    }
+
+    private val vlcListener = object : EngineListener {
+        override fun onPlaying() { _uiState.update { it.copy(isPlaying = true, isLoading = false) } }
+        override fun onPaused() { _uiState.update { it.copy(isPlaying = false) } }
+        override fun onBuffering(percent: Float) {
+            _uiState.update { it.copy(isLoading = percent < 100f) }
+        }
+        override fun onEnded() {
+            viewModelScope.launch { saveCurrentPosition(ended = true) }
+            if (settings.autonext) viewModelScope.launch { navigateNext() }
+        }
+        override fun onError(message: String) {
+            _uiState.update { it.copy(hasError = true, errorMessage = "libVLC: $message") }
+        }
+        override fun onTracksChanged() { if (_uiState.value.tracksOverlayVisible) refreshTracks() }
+    }
+
+    private fun startVlcPoll() {
+        vlcPollJob?.cancel()
+        vlcPollJob = viewModelScope.launch {
+            while (isActive) {
+                delay(1000)
+                val v = vlc ?: break
+                if (v.isPlaying && v.positionMs > 0 && v.durationMs > 0) saveCurrentPosition()
+                if (settings.diag) {
+                    _uiState.update { it.copy(diagText = "libVLC  %ds / %ds".format(v.positionMs / 1000, v.durationMs / 1000)) }
+                }
+            }
+        }
+    }
+
+    /**
+     * AUTO mode: ExoPlayer hit a fatal decode/container error — hand the same media,
+     * at the last known position, over to libVLC. The Activity rebinds the surfaces
+     * on [engineSwitched].
+     */
+    private fun fallbackToVlc() {
+        if (didAutoFallback) return
+        didAutoFallback = true
+        val card = currentCard ?: return
+        val resumeMs = runCatching { player.currentPosition }.getOrDefault(0L)
+        runCatching { player.release() }
+        saveJob?.cancel(); diagJob?.cancel()
+        _uiState.update { it.copy(hasError = false, isLoading = true) }
+        usingVlc = true
+        val profile = BufferProfile.fromType(settings.buffer)
+        val controller = VlcController(appContext, profile.maxBufferLengthMs.toInt().coerceIn(1500, 60_000), vlcListener)
+        vlc = controller
+        controller.setMedia(appContext, currentUrl, card.headers, resumeMs.coerceAtLeast(0), card.subtitles, hardwareDecode = true)
+        startVlcPoll()
+        viewModelScope.launch { _engineSwitched.emit(Unit) }
     }
 
     // useIntentStart=true only for the initially launched item: honour the
@@ -234,6 +348,39 @@ class PlayerViewModel @Inject constructor(
 
     private fun isHls(url: String) = url.contains(".m3u8", ignoreCase = true)
 
+    // ─── Engine-agnostic accessors (route to ExoPlayer or libVLC) ──
+    private fun engPositionMs(): Long = when {
+        usingVlc -> vlc?.positionMs ?: 0L
+        ::player.isInitialized -> player.currentPosition
+        else -> 0L
+    }
+    private fun engDurationMs(): Long = when {
+        usingVlc -> (vlc?.durationMs ?: -1L).takeIf { it > 0 } ?: 0L
+        ::player.isInitialized -> player.duration.takeIf { it != C.TIME_UNSET } ?: 0L
+        else -> 0L
+    }
+    private fun engIsPlaying(): Boolean = when {
+        usingVlc -> vlc?.isPlaying ?: false
+        ::player.isInitialized -> player.isPlaying
+        else -> false
+    }
+    private fun engSeekTo(ms: Long) {
+        if (usingVlc) vlc?.seekTo(ms) else if (::player.isInitialized) player.seekTo(ms)
+    }
+
+    // Public unified controls for the Activity (engine-agnostic).
+    fun positionMs(): Long = engPositionMs()
+    fun durationMs(): Long = engDurationMs()
+    fun bufferedMs(): Long = when {
+        usingVlc -> vlc?.bufferedMs ?: 0L
+        ::player.isInitialized -> player.bufferedPosition
+        else -> 0L
+    }
+    fun isPlayingNow(): Boolean = engIsPlaying()
+    fun seekToMs(ms: Long) = engSeekTo(ms)
+    fun pausePlayback() { if (usingVlc) vlc?.pause() else if (::player.isInitialized) player.pause() }
+    fun resumePlayback() { if (usingVlc) vlc?.play() else if (::player.isInitialized) player.play() }
+
     // ─── Info Panel ────────────────────────────────────────────────
     fun toggleInfoPanel() {
         val visible = !_uiState.value.infoPanelVisible
@@ -269,6 +416,16 @@ class PlayerViewModel @Inject constructor(
     fun setInfoPanelTab(tab: InfoPanelTab) = _uiState.update { it.copy(infoPanelTab = tab) }
 
     private fun refreshTracks() {
+        if (usingVlc) {
+            val v = vlc ?: return
+            _uiState.update {
+                it.copy(
+                    audioTracks = v.audioTracks().mapIndexed { i, t -> "$i: ${t.name}" },
+                    subtitleTracks = v.subtitleTracks().mapIndexed { i, t -> "$i: ${t.name}" },
+                )
+            }
+            return
+        }
         val tracks = player.currentTracks
         val audioTracks = trackMemoryManager.getAudioTracks(tracks)
         val subTracks = trackMemoryManager.getSubtitleTracks(tracks)
@@ -280,20 +437,33 @@ class PlayerViewModel @Inject constructor(
             saveCurrentPosition()
             currentUrl = episode.url
             _uiState.update { it.copy(currentEpisodeIndex = episode.index, infoOverlayVisible = false) }
-            player.stop()
-            loadUrl(episode.url, currentCard!!)
+            if (usingVlc) {
+                val card = currentCard ?: return@launch
+                vlc?.setMedia(appContext, episode.url, card.headers, 0L, emptyList(), hardwareDecode = true)
+            } else {
+                player.stop()
+                loadUrl(episode.url, currentCard!!)
+            }
         }
     }
 
     fun selectAudio(index: Int) {
         val card = currentCard ?: return
-        trackMemoryManager.onAudioSelected(player, card, index, viewModelScope)
+        if (usingVlc) {
+            vlc?.audioTracks()?.getOrNull(index)?.let { vlc?.selectAudio(it.id) }
+        } else {
+            trackMemoryManager.onAudioSelected(player, card, index, viewModelScope)
+        }
         _uiState.update { it.copy(selectedAudioIndex = index) }
     }
 
     fun selectSubtitle(index: Int) {
         val card = currentCard ?: return
-        trackMemoryManager.onSubtitleSelected(player, card, index, viewModelScope)
+        if (usingVlc) {
+            vlc?.subtitleTracks()?.getOrNull(index)?.let { vlc?.selectSubtitle(it.id) }
+        } else {
+            trackMemoryManager.onSubtitleSelected(player, card, index, viewModelScope)
+        }
         _uiState.update { it.copy(selectedSubtitleIndex = index) }
     }
 
@@ -382,23 +552,23 @@ class PlayerViewModel @Inject constructor(
 
     fun skipIntro() {
         val end = _uiState.value.introEnd
-        if (end > 0) { player.seekTo((end * 1000).toLong()); _uiState.update { it.copy(showSkipIntro = false) } }
+        if (end > 0) { engSeekTo((end * 1000).toLong()); _uiState.update { it.copy(showSkipIntro = false) } }
     }
 
     fun markIntro() {
         val card = currentCard ?: return
-        introSkipManager.markIntro(card, player.currentPosition / 1000.0, viewModelScope) { saved ->
+        introSkipManager.markIntro(card, engPositionMs() / 1000.0, viewModelScope) { saved ->
             _uiState.update { it.copy(introEnd = saved) }
         }
     }
 
     fun cancelAutoNext() { autoNextManager.cancel(); _uiState.update { it.copy(autoNextCountdown = -1) } }
 
-    fun onKeyLeft() = player.seekTo((player.currentPosition - 10_000).coerceAtLeast(0))
-    fun onKeyRight() = player.seekTo(player.currentPosition + 10_000)
-    fun onKeyPageUp() = player.seekTo(player.currentPosition + 30_000)
-    fun onKeyPageDown() = player.seekTo((player.currentPosition - 30_000).coerceAtLeast(0))
-    fun onKeyOk() = if (player.isPlaying) player.pause() else player.play()
+    fun onKeyLeft() = engSeekTo((engPositionMs() - 10_000).coerceAtLeast(0))
+    fun onKeyRight() = engSeekTo(engPositionMs() + 10_000)
+    fun onKeyPageUp() = engSeekTo(engPositionMs() + 30_000)
+    fun onKeyPageDown() = engSeekTo((engPositionMs() - 30_000).coerceAtLeast(0))
+    fun onKeyOk() { if (engIsPlaying()) pausePlayback() else resumePlayback() }
 
     fun onNextEpisode() {
         val state = _uiState.value
@@ -410,7 +580,7 @@ class PlayerViewModel @Inject constructor(
         val state = _uiState.value
         val prev = state.episodes.getOrNull(state.currentEpisodeIndex - 1)
         if (prev != null) selectEpisode(prev)
-        else if (player.currentPosition > 5000) player.seekTo(0)
+        else if (engPositionMs() > 5000) engSeekTo(0)
     }
 
     fun onKeyBack(osdVisible: Boolean, panelVisible: Boolean) {
@@ -430,7 +600,7 @@ class PlayerViewModel @Inject constructor(
         osdHideJob?.cancel()
         osdHideJob = viewModelScope.launch {
             delay(4000)
-            if (player.isPlaying && !_uiState.value.infoOverlayVisible && !_uiState.value.tracksOverlayVisible)
+            if (engIsPlaying() && !_uiState.value.infoOverlayVisible && !_uiState.value.tracksOverlayVisible)
                 _uiState.update { it.copy(osdVisible = false) }
         }
     }
@@ -438,12 +608,12 @@ class PlayerViewModel @Inject constructor(
     fun retryPlayback() {
         errorRecovery.reset()
         _uiState.update { it.copy(hasError = false) }
-        player.prepare(); player.play()
+        if (usingVlc) vlc?.play() else { player.prepare(); player.play() }
     }
 
     fun buildResultExtras(): Triple<Long, Long, Int> {
-        val pos = player.currentPosition
-        val dur = player.duration.takeIf { it != C.TIME_UNSET } ?: 0L
+        val pos = engPositionMs()
+        val dur = engDurationMs()
         val pct = if (dur > 0) ((pos.toFloat() / dur) * 100).toInt() else 0
         return Triple(pos, dur, pct)
     }
@@ -462,8 +632,14 @@ class PlayerViewModel @Inject constructor(
                 _uiState.update { it.copy(isPlaying = isPlaying) }
             override fun onPlayerError(error: PlaybackException) {
                 val action = errorRecovery.onError(error, p)
-                if (action == ErrorRecoveryManager.Action.SHOW_FATAL)
-                    _uiState.update { it.copy(hasError = true, errorMessage = buildErrorMessage(error)) }
+                if (action == ErrorRecoveryManager.Action.SHOW_FATAL) {
+                    // AUTO mode: a decode/container failure is exactly what libVLC may handle.
+                    if (settings.engine == EngineType.AUTO && !didAutoFallback && isDecodeError(error)) {
+                        fallbackToVlc()
+                    } else {
+                        _uiState.update { it.copy(hasError = true, errorMessage = buildErrorMessage(error)) }
+                    }
+                }
             }
             override fun onTracksChanged(tracks: Tracks) {
                 _uiState.update { it.copy(currentTracks = tracks) }
@@ -493,6 +669,15 @@ class PlayerViewModel @Inject constructor(
         }.trim()
         _uiState.update { it.copy(videoInfo = info) }
     }
+
+    private fun isDecodeError(e: PlaybackException): Boolean = e.errorCode in setOf(
+        PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+        PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED,
+        PlaybackException.ERROR_CODE_DECODING_FAILED,
+        PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+        PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+        PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED,
+    )
 
     private fun buildErrorMessage(e: PlaybackException) = when (e.errorCode) {
         PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED -> "Нет соединения с сервером"
@@ -528,17 +713,18 @@ class PlayerViewModel @Inject constructor(
 
     private suspend fun saveCurrentPosition(ended: Boolean = false) {
         val url = currentUrl.ifEmpty { return }
-        val durMs = player.duration.takeIf { it != C.TIME_UNSET } ?: return
-        val posMs = if (ended) durMs else player.currentPosition
+        val durMs = engDurationMs().takeIf { it > 0 } ?: return
+        val posMs = if (ended) durMs else engPositionMs()
         val dur = durMs / 1000.0; val pos = posMs / 1000.0
         val pct = if (dur > 0) ((pos / dur) * 100).toInt() else 0
         positionDataStore.savePosition(url, PlaybackPosition(time = pos, duration = dur, percent = pct, watched = ended || pct >= 90))
     }
 
     override fun onCleared() {
-        saveJob?.cancel(); diagJob?.cancel(); osdHideJob?.cancel()
+        saveJob?.cancel(); diagJob?.cancel(); osdHideJob?.cancel(); vlcPollJob?.cancel()
         viewModelScope.launch { saveCurrentPosition() }
-        player.release()
+        if (::player.isInitialized) player.release()
+        vlc?.release(); vlc = null
         super.onCleared()
     }
 

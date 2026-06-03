@@ -69,12 +69,26 @@ class PlayerActivity : AppCompatActivity() {
         }
 
         vm.initPlayer(this, url, card)
-        binding.playerView.player = vm.player
-        binding.playerView.useController = false
+        bindEngineSurface()
 
         setupLists()
         setupOsdClicks()
         observeState()
+    }
+
+    /** Attach the render surface for the engine the ViewModel actually started. */
+    private fun bindEngineSurface() {
+        if (vm.isUsingVlc) {
+            binding.playerView.player = null
+            binding.playerView.isVisible = false
+            binding.vlcLayout.isVisible = true
+            vm.vlc?.attachViews(binding.vlcLayout, subtitlesEnabled = true)
+        } else {
+            binding.vlcLayout.isVisible = false
+            binding.playerView.isVisible = true
+            binding.playerView.player = vm.player
+            binding.playerView.useController = false
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -114,7 +128,7 @@ class PlayerActivity : AppCompatActivity() {
         binding.btnInfo.setOnClickListener { vm.toggleInfoOverlay() }
         binding.btnMarkIntro.setOnClickListener {
             vm.markIntro()
-            Toast.makeText(this, getString(R.string.intro_marked, vm.player.currentPosition / 1000f), Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.intro_marked, vm.positionMs() / 1000f), Toast.LENGTH_SHORT).show()
         }
         binding.btnSkipIntro.setOnClickListener { vm.skipIntro() }
         binding.btnRetry.setOnClickListener { vm.retryPlayback() }
@@ -193,14 +207,15 @@ class PlayerActivity : AppCompatActivity() {
 
         lifecycleScope.launch { vm.navigateToNext.collect { finishWithResult(completed = true) } }
         lifecycleScope.launch { vm.showExitDialog.collect { showExitDialog() } }
+        // AUTO fallback handed playback to libVLC — rebind the render surface.
+        lifecycleScope.launch { vm.engineSwitched.collect { bindEngineSurface() } }
 
         // Progress polling
         lifecycleScope.launch {
             while (isActive) {
                 delay(500)
-                val p = vm.player
-                val pos = p.currentPosition
-                val dur = p.duration
+                val pos = vm.positionMs()
+                val dur = vm.durationMs()
                 if (dur > 0) {
                     vm.onProgress(pos, dur)
                     binding.progressBar.progress = ((pos.toFloat() / dur) * 1000).toInt()
@@ -368,13 +383,13 @@ class PlayerActivity : AppCompatActivity() {
     // ─── Seek with preview ─────────────────────────────────────────
 
     private fun doSeek(forward: Boolean, fast: Boolean = false, repeatCount: Int = 0) {
-        val dur = vm.player.duration.takeIf { it > 0 } ?: return
+        val dur = vm.durationMs().takeIf { it > 0 } ?: return
         val stepMs = when {
             fast || repeatCount > 8 -> 30_000L
             repeatCount > 3 -> 15_000L
             else -> 10_000L
         }
-        if (seekTargetMs < 0) seekTargetMs = vm.player.currentPosition
+        if (seekTargetMs < 0) seekTargetMs = vm.positionMs()
         seekTargetMs = if (forward) (seekTargetMs + stepMs).coerceAtMost(dur)
                        else (seekTargetMs - stepMs).coerceAtLeast(0)
 
@@ -387,7 +402,7 @@ class PlayerActivity : AppCompatActivity() {
         seekDebounceJob?.cancel()
         seekDebounceJob = lifecycleScope.launch {
             delay(600)
-            vm.player.seekTo(seekTargetMs)
+            vm.seekToMs(seekTargetMs)
             seekTargetMs = -1L
             delay(1500)
             binding.seekPreviewContainer.isVisible = false
@@ -398,13 +413,13 @@ class PlayerActivity : AppCompatActivity() {
     // ─── Helpers ───────────────────────────────────────────────────
 
     private fun showExitDialog() {
-        vm.player.pause()
+        vm.pausePlayback()
         AlertDialog.Builder(this)
             .setTitle(R.string.exit_dialog_title)
             .setMessage(R.string.exit_dialog_message)
             .setPositiveButton(R.string.action_exit) { _, _ -> finishWithResult() }
-            .setNegativeButton(R.string.action_cancel) { _, _ -> vm.player.play() }
-            .setOnCancelListener { vm.player.play() }
+            .setNegativeButton(R.string.action_cancel) { _, _ -> vm.resumePlayback() }
+            .setOnCancelListener { vm.resumePlayback() }
             .show()
     }
 
@@ -425,7 +440,7 @@ class PlayerActivity : AppCompatActivity() {
         finish()
     }
 
-    override fun onStop() { super.onStop(); vm.player.pause() }
+    override fun onStop() { super.onStop(); vm.pausePlayback() }
 
     private fun formatTime(ms: Long): String {
         val s = ms / 1000; val h = s / 3600; val m = (s % 3600) / 60; val sec = s % 60

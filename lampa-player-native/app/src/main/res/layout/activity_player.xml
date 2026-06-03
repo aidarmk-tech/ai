@@ -5,12 +5,20 @@
     android:background="@color/bg_primary"
     android:keepScreenOn="true">
 
-    <!-- Video -->
+    <!-- Video (ExoPlayer) -->
     <androidx.media3.ui.PlayerView
         android:id="@+id/player_view"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:focusable="false" />
+
+    <!-- Video (libVLC fallback) — shown only when the libVLC engine is active -->
+    <org.videolan.libvlc.util.VLCVideoLayout
+        android:id="@+id/vlc_layout"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:focusable="false"
+        android:visibility="gone" />
 
     <!-- Buffering -->
     <ProgressBar
