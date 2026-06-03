@@ -612,7 +612,27 @@
                     var cardData = buildCard(rawCard, video, video, pl.list, pl.pos);
                     // Шлём конверт только если реально есть метаданные (а не одна озвучка)
                     if (cardData && (cardData.tmdb_id || cardData.overview || cardData.poster_url)) {
-                        video.title = 'lmpmeta://' + b64utf8(JSON.stringify(cardData));
+                        // Компактный конверт: только поля для отображения. БЕЗ episodes/
+                        // headers/timeline — иначе title раздувается и обрезается системой,
+                        // ломая base64. Серии и заголовки Lampa передаёт отдельными extra.
+                        var meta = {
+                            title:          cardData.title || null,
+                            original_title: cardData.original_title || null,
+                            overview:       cardData.overview ? String(cardData.overview).slice(0, 600) : null,
+                            year:           cardData.release_year || null,
+                            rating:         cardData.rating || null,
+                            poster:         cardData.poster_url || null,
+                            backdrop:       cardData.backdrop_url || null,
+                            tmdb_id:        cardData.tmdb_id || null,
+                            season:         cardData.season_number || null,
+                            episode:        cardData.episode_number || null,
+                        };
+                        Object.keys(meta).forEach(function (k) {
+                            if (meta[k] === null || meta[k] === undefined || meta[k] === '') delete meta[k];
+                        });
+                        if (meta.title || meta.tmdb_id) {
+                            video.title = 'lmpmeta://' + b64utf8(JSON.stringify(meta));
+                        }
                     }
                 }
             } catch (e) {}
