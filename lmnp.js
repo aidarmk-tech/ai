@@ -410,6 +410,49 @@
         return { items: items, pi: Math.max(0, (pos || 0) - start) };
     }
 
+    // Резолвим «ленивые» URL серий в окне (balancer'ы хранят url как функцию,
+    // которая дёргает сеть и подставляет строку). Дожидаемся, затем callback.
+    function resolveWindow(list, pos, cb) {
+        if (!list || list.length < 2) { cb(); return; }
+        var BEFORE = 2, WINDOW = 12;
+        var start = Math.max(0, (pos || 0) - BEFORE);
+        var end   = Math.min(list.length, start + WINDOW);
+        var pending = 0, done = false;
+        function finish() { if (!done) { done = true; clearTimeout(timer); cb(); } }
+        var timer = setTimeout(finish, 8000);
+        for (var i = start; i < end; i++) {
+            var it = list[i];
+            if (it && typeof it.url === 'function') {
+                pending++;
+                (function (cell) {
+                    try { cell.url(function () { if (--pending <= 0) finish(); }); }
+                    catch (e) { if (--pending <= 0) finish(); }
+                })(it);
+            }
+        }
+        if (pending === 0) finish();
+    }
+
+    function compactMeta(cardData) {
+        return {
+            title:          cardData.title || null,
+            original_title: cardData.original_title || null,
+            overview:       cardData.overview ? String(cardData.overview).slice(0, 600) : null,
+            year:           cardData.release_year || null,
+            rating:         cardData.rating || null,
+            poster:         cardData.poster_url || null,
+            backdrop:       cardData.backdrop_url || null,
+            tmdb_id:        cardData.tmdb_id || null,
+            season:         cardData.season_number || null,
+            episode:        cardData.episode_number || null,
+        };
+    }
+    function cleanMeta(meta) {
+        Object.keys(meta).forEach(function (k) {
+            if (meta[k] === null || meta[k] === undefined || meta[k] === '') delete meta[k];
+        });
+    }
+
     // ── Список эпизодов ───────────────────────────────────────────────────
     function buildEpisodes(playlist, idx) {
         if (!playlist || playlist.length < 2) return null;
@@ -634,44 +677,47 @@
         Lampa.Player.__lmnp_play = true;
         var _origPlay = Lampa.Player.play;
         Lampa.Player.play = function (video) {
+            var self = this, args = arguments;
             try {
                 var alreadyPacked = video && typeof video.title === 'string' &&
                                     /^lmpmeta:\/\//.test(video.title);
                 if (enabled() && externalPlayerSelected() &&
                     video && typeof video === 'object' && video.url && !alreadyPacked) {
                     var rawCard  = findCard(video, video);
-                    var pl       = getPlaylist();
-                    var cardData = buildCard(rawCard, video, video, pl.list, pl.pos);
+                    var cardData = buildCard(rawCard, video, video, null, 0);
                     // Шлём конверт только если реально есть метаданные (а не одна озвучка)
                     if (cardData && (cardData.tmdb_id || cardData.overview || cardData.poster_url)) {
-                        // Компактный конверт: только поля для отображения. БЕЗ episodes/
-                        // headers/timeline — иначе title раздувается и обрезается системой,
-                        // ломая base64. Серии и заголовки Lampa передаёт отдельными extra.
-                        var meta = {
-                            title:          cardData.title || null,
-                            original_title: cardData.original_title || null,
-                            overview:       cardData.overview ? String(cardData.overview).slice(0, 600) : null,
-                            year:           cardData.release_year || null,
-                            rating:         cardData.rating || null,
-                            poster:         cardData.poster_url || null,
-                            backdrop:       cardData.backdrop_url || null,
-                            tmdb_id:        cardData.tmdb_id || null,
-                            season:         cardData.season_number || null,
-                            episode:        cardData.episode_number || null,
-                        };
-                        // Компактный плейлист-окно (серии с играбельными URL).
-                        var compactPl = buildCompactPlaylist(pl.list, pl.pos);
-                        if (compactPl) meta.pl = compactPl;
-                        Object.keys(meta).forEach(function (k) {
-                            if (meta[k] === null || meta[k] === undefined || meta[k] === '') delete meta[k];
-                        });
-                        if (meta.title || meta.tmdb_id) {
-                            video.title = 'lmpmeta://' + b64utf8(JSON.stringify(meta));
+                        var g = getPlaylist();
+                        var list = null, pos = 0;
+                        if (g.list && g.list.length > 1)            { list = g.list; pos = g.pos || 0; }
+                        else if (video.playlist && video.playlist.length > 1) { list = video.playlist; pos = 0; }
+
+                        if (list) {
+                            // Есть плейлист — дорезолвим ленивые ссылки окна, потом стартуем.
+                            try { Lampa.Noty.show('Готовлю серии…'); } catch (_) {}
+                            resolveWindow(list, pos, function () {
+                                try {
+                                    var meta = compactMeta(cardData);
+                                    var cpl  = buildCompactPlaylist(list, pos);
+                                    if (cpl) meta.pl = cpl;
+                                    cleanMeta(meta);
+                                    if (meta.title || meta.tmdb_id)
+                                        video.title = 'lmpmeta://' + b64utf8(JSON.stringify(meta));
+                                } catch (e) {}
+                                _origPlay.apply(self, args);
+                            });
+                            return;   // запуск отложен до резолва ссылок
                         }
+
+                        // Плейлиста нет (фильм/одиночная серия) — пакуем сразу.
+                        var meta = compactMeta(cardData);
+                        cleanMeta(meta);
+                        if (meta.title || meta.tmdb_id)
+                            video.title = 'lmpmeta://' + b64utf8(JSON.stringify(meta));
                     }
                 }
             } catch (e) {}
-            return _origPlay.apply(this, arguments);
+            return _origPlay.apply(self, args);
         };
     }
 
