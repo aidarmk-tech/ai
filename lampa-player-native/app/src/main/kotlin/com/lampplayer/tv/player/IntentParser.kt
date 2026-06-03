@@ -2,15 +2,21 @@ package com.lampplayer.tv.player
 
 import android.content.Intent
 import android.net.Uri
+import android.os.Parcelable
+import android.util.Base64
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.lampplayer.tv.domain.model.CardMeta
 import com.lampplayer.tv.domain.model.EpisodeItem
+import com.lampplayer.tv.domain.model.ExternalSubtitle
 
 object IntentParser {
 
     private val gson = Gson()
+
+    /** Title envelope used by the companion plugin when the core only forwards `title`. */
+    private const val META_PREFIX = "lmpmeta://"
 
     fun parse(intent: Intent): Pair<String, CardMeta>? {
         val uri = intent.data ?: return null
@@ -26,7 +32,8 @@ object IntentParser {
 
     private fun parseLmnpUri(uri: Uri): Pair<String, CardMeta>? {
         val url = uri.getQueryParameter("url")?.ifEmpty { null } ?: return null
-        val jsonStr = uri.getQueryParameter("d") ?: return Pair(url, CardMeta(title = extractTitleFromUrl(url)))
+        val jsonStr = uri.getQueryParameter("d")?.let { decodeMaybeBase64(it) }
+            ?: return Pair(url, CardMeta(title = extractTitleFromUrl(url)))
         return try {
             val obj = JsonParser.parseString(jsonStr).asJsonObject
             Pair(url, cardFromJson(obj, url))
@@ -40,27 +47,33 @@ object IntentParser {
         fun int(key: String) = obj.get(key)?.takeIf { !it.isJsonNull }?.asInt?.takeIf { it > 0 }
         fun float(key: String) = obj.get(key)?.takeIf { !it.isJsonNull }?.asFloat?.takeIf { it > 0 }
         fun double(key: String) = obj.get(key)?.takeIf { !it.isJsonNull }?.asDouble
+        fun long(key: String) = obj.get(key)?.takeIf { !it.isJsonNull }?.asLong
 
         val episodes = str("episodes")?.let { parseEpisodes(it) } ?: emptyList()
         val headers = str("headers")?.let { parseHeaders(it) } ?: emptyMap()
+        // Subtitles may arrive as a JSON array [{url,name,enable}] or a single string.
+        val subtitles = subtitlesFromJson(obj)
 
         return CardMeta(
             title = str("title") ?: extractTitleFromUrl(url),
             originalTitle = str("original_title"),
             tmdbId = int("tmdb_id"),
             imdbId = str("imdb_id"),
-            seasonNumber = int("season_number"),
-            episodeNumber = int("episode_number"),
-            posterUrl = str("poster_url"),
-            backdropUrl = str("backdrop_url"),
+            seasonNumber = int("season_number") ?: int("season"),
+            episodeNumber = int("episode_number") ?: int("episode"),
+            posterUrl = str("poster_url") ?: str("poster"),
+            backdropUrl = str("backdrop_url") ?: str("backdrop"),
             overview = str("overview"),
-            releaseYear = int("release_year"),
+            releaseYear = int("release_year") ?: int("year"),
             rating = float("rating"),
             quality = str("quality"),
             translator = str("translator"),
             headers = headers,
             timelineTime = double("timeline_time"),
             timelineDuration = double("timeline_duration"),
+            startPositionMs = long("position")?.takeIf { it > 0 },
+            fromStart = obj.get("from_start")?.takeIf { !it.isJsonNull }?.asBoolean ?: false,
+            subtitles = subtitles,
             episodes = episodes,
             currentEpisodeIndex = int("episode_index") ?: 0,
             epgTitle = str("epg_title"),
@@ -75,25 +88,23 @@ object IntentParser {
         val url = intent.dataString ?: return null
         val extras = intent.extras
 
-        // Single JSON extra from lmnp.js intent:// launch — preferred path
-        val lampaDataJson = extras?.getString("lampa_data")
-        if (!lampaDataJson.isNullOrEmpty()) {
-            return try {
-                val obj = JsonParser.parseString(lampaDataJson).asJsonObject
-                Pair(url, cardFromJson(obj, url))
-            } catch (e: Exception) {
-                Pair(url, CardMeta(title = extractTitleFromUrl(url)))
-            }
+        // ── Rich-metadata channels ──────────────────────────────────
+        // 1. Single JSON extra from lmnp.js intent:// launch (preferred).
+        // 2. `lampa_meta` extra carrying base64(UTF-8 JSON) — spec "на вырост".
+        // 3. `title` carrying the `lmpmeta://<base64 JSON>` envelope — the
+        //    primary byLampa channel, since the core reliably forwards `title`.
+        val metaJson = extras?.getString("lampa_data")
+            ?: extras?.getString("lampa_meta")?.let { decodeMaybeBase64(it) }
+            ?: extras?.getString("title")?.takeIf { it.startsWith(META_PREFIX) }
+                ?.removePrefix(META_PREFIX)?.let { decodeMaybeBase64(it) }
+        if (!metaJson.isNullOrEmpty()) {
+            val card = runCatching { cardFromJson(JsonParser.parseString(metaJson).asJsonObject, url) }
+                .getOrElse { CardMeta(title = extractTitleFromUrl(url)) }
+            // Merge in MX/VLC-style extras (subs, position, headers) that may also be present.
+            return Pair(url, mergeStandardExtras(card, intent, extras))
         }
 
-        val headersBundle = extras?.getBundle("headers")
-        val headersJson = extras?.getString("headers_json")
-        val headers: Map<String, String> = when {
-            headersBundle != null -> headersBundle.keySet()
-                ?.associateWith { headersBundle.getString(it, "") ?: "" } ?: emptyMap()
-            headersJson != null -> parseHeaders(headersJson)
-            else -> emptyMap()
-        }
+        val headers = parseHeadersFromExtras(extras)
 
         val timelineBundle = extras?.getBundle("timeline")
         val timelineTime = timelineBundle?.getDouble("time")
@@ -125,6 +136,9 @@ object IntentParser {
             headers = headers,
             timelineTime = timelineTime,
             timelineDuration = timelineDuration,
+            startPositionMs = parsePositionMs(extras),
+            fromStart = extras?.getBoolean("from_start", false) ?: false,
+            subtitles = parseSubtitlesFromExtras(intent, extras),
             episodes = parseEpisodes(extras?.getString("episodes")),
             currentEpisodeIndex = extras?.getInt("episode_index", 0) ?: 0,
             epgTitle = extras?.getString("epg_title"),
@@ -132,6 +146,105 @@ object IntentParser {
             epgEnd = extras?.getString("epg_end"),
         )
         return Pair(url, card)
+    }
+
+    /** Overlay MX/VLC-style extras onto a card already built from a metadata envelope. */
+    private fun mergeStandardExtras(card: CardMeta, intent: Intent, extras: android.os.Bundle?): CardMeta {
+        val extraHeaders = parseHeadersFromExtras(extras)
+        val extraSubs = parseSubtitlesFromExtras(intent, extras)
+        val pos = parsePositionMs(extras)
+        return card.copy(
+            headers = if (card.headers.isNotEmpty()) card.headers else extraHeaders,
+            subtitles = if (extraSubs.isNotEmpty()) card.subtitles + extraSubs else card.subtitles,
+            startPositionMs = card.startPositionMs ?: pos,
+            fromStart = card.fromStart || (extras?.getBoolean("from_start", false) ?: false),
+        )
+    }
+
+    // ─── Resume position (MX/VLC `position` in milliseconds) ───────
+
+    private fun parsePositionMs(extras: android.os.Bundle?): Long? {
+        if (extras == null || !extras.containsKey("position")) return null
+        // MX Player stores `position` as int ms; others as long. Try both.
+        val asLong = runCatching { extras.getLong("position", -1L) }.getOrDefault(-1L)
+        if (asLong > 0) return asLong
+        val asInt = runCatching { extras.getInt("position", -1) }.getOrDefault(-1)
+        return asInt.toLong().takeIf { it > 0 }
+    }
+
+    // ─── Headers ───────────────────────────────────────────────────
+    // Supports: Bundle `headers`, JSON `headers_json`, and MX-style
+    // `headers` String[] of alternating key/value pairs.
+
+    private fun parseHeadersFromExtras(extras: android.os.Bundle?): Map<String, String> {
+        if (extras == null) return emptyMap()
+        extras.getBundle("headers")?.let { b ->
+            return b.keySet()?.associateWith { b.getString(it, "") ?: "" } ?: emptyMap()
+        }
+        extras.getStringArray("headers")?.let { arr ->
+            val map = LinkedHashMap<String, String>()
+            var i = 0
+            while (i + 1 < arr.size) { map[arr[i]] = arr[i + 1]; i += 2 }
+            if (map.isNotEmpty()) return map
+        }
+        extras.getString("headers_json")?.let { return parseHeaders(it) }
+        return emptyMap()
+    }
+
+    // ─── Subtitles (MX Player `subs` / VLC `subtitles_location`) ───
+
+    private fun parseSubtitlesFromExtras(intent: Intent, extras: android.os.Bundle?): List<ExternalSubtitle> {
+        if (extras == null) return emptyList()
+        val result = mutableListOf<ExternalSubtitle>()
+
+        // MX Player style: subs (Uri[]), subs.name (String[]), subs.enable (int index)
+        val subUris: Array<Uri> = runCatching {
+            @Suppress("DEPRECATION")
+            (intent.getParcelableArrayExtra("subs"))?.filterIsInstance<Uri>()?.toTypedArray()
+        }.getOrNull() ?: emptyArray()
+        if (subUris.isNotEmpty()) {
+            val names = extras.getStringArray("subs.name")
+            val enableIdx = if (extras.containsKey("subs.enable")) extras.getInt("subs.enable", 0) else 0
+            subUris.forEachIndexed { i, u ->
+                result += ExternalSubtitle(
+                    uri = u.toString(),
+                    name = names?.getOrNull(i),
+                    enabled = i == enableIdx,
+                )
+            }
+        }
+
+        // VLC style: subtitles_location (single string path/uri)
+        extras.getString("subtitles_location")?.takeIf { it.isNotBlank() }?.let {
+            result += ExternalSubtitle(uri = it, name = null, enabled = result.isEmpty())
+        }
+        return result
+    }
+
+    private fun subtitlesFromJson(obj: JsonObject): List<ExternalSubtitle> {
+        val el = obj.get("subtitles") ?: obj.get("subs") ?: return emptyList()
+        if (el.isJsonNull) return emptyList()
+        return try {
+            when {
+                el.isJsonArray -> el.asJsonArray.mapNotNull { item ->
+                    when {
+                        item.isJsonObject -> {
+                            val o = item.asJsonObject
+                            val uri = (o.get("url") ?: o.get("uri"))?.asString ?: return@mapNotNull null
+                            ExternalSubtitle(
+                                uri = uri,
+                                name = (o.get("label") ?: o.get("name"))?.takeIf { !it.isJsonNull }?.asString,
+                                enabled = o.get("enable")?.takeIf { !it.isJsonNull }?.asBoolean ?: false,
+                            )
+                        }
+                        item.isJsonPrimitive -> ExternalSubtitle(uri = item.asString)
+                        else -> null
+                    }
+                }
+                el.isJsonPrimitive -> listOf(ExternalSubtitle(uri = el.asString))
+                else -> emptyList()
+            }
+        } catch (e: Exception) { emptyList() }
     }
 
     // ─── Helpers ───────────────────────────────────────────────────
@@ -159,6 +272,14 @@ object IntentParser {
         val obj = JsonParser.parseString(json).asJsonObject
         obj.entrySet().associate { it.key to it.value.asString }
     } catch (e: Exception) { emptyMap() }
+
+    /** Decode a base64(UTF-8) payload; returns the input unchanged if it isn't valid base64. */
+    private fun decodeMaybeBase64(value: String): String = try {
+        val bytes = Base64.decode(value, Base64.DEFAULT)
+        val decoded = String(bytes, Charsets.UTF_8)
+        // Heuristic: a metadata envelope decodes to JSON. If not, assume it was plain text.
+        if (decoded.trimStart().startsWith("{") || decoded.trimStart().startsWith("[")) decoded else value
+    } catch (e: Exception) { value }
 
     private fun extractTitleFromUrl(url: String): String =
         url.substringAfterLast("/").substringBeforeLast(".")

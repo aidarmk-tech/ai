@@ -79,10 +79,13 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        // Обновляем данные только если intent содержит lampa_data.
-        // Lampa также посылает стандартный external-player intent (без lampa_data)
+        // Обновляем данные только если intent несёт богатые метаданные.
+        // Lampa также посылает стандартный external-player intent (без них)
         // — он приходит в onNewIntent() и не должен перезаписывать хорошие данные.
-        if (!intent.hasExtra("lampa_data")) return
+        val hasMeta = intent.hasExtra("lampa_data") ||
+            intent.hasExtra("lampa_meta") ||
+            (intent.getStringExtra("title")?.startsWith("lmpmeta://") == true)
+        if (!hasMeta) return
         val (_, card) = IntentParser.parse(intent) ?: return
         vm.updateCardMeta(card)
     }
@@ -407,11 +410,17 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun finishWithResult(completed: Boolean = false) {
         val (posMs, durMs, percent) = vm.buildResultExtras()
+        val done = completed || percent >= 90
         setResult(RESULT_OK, Intent().apply {
+            // Lampa / generic contract
             putExtra("position", posMs)
             putExtra("duration", durMs)
             putExtra("watched_percent", percent)
-            putExtra("completed", completed || percent >= 90)
+            putExtra("completed", done)
+            putExtra("end_by", if (done) "playback_completion" else "user")
+            // VLC-style mirrors for broader compatibility
+            putExtra("extra_position", posMs)
+            putExtra("extra_duration", durMs)
         })
         finish()
     }

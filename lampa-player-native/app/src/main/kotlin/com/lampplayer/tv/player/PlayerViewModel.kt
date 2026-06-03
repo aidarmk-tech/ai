@@ -164,7 +164,7 @@ class PlayerViewModel @Inject constructor(
             .build()
             .also { setupPlayerListener(it) }
 
-        loadUrl(url, card)
+        loadUrl(url, card, useIntentStart = true)
         startAutoSave()
         if (settings.diag) startDiag()
 
@@ -173,15 +173,20 @@ class PlayerViewModel @Inject constructor(
         card.tmdbId?.let { loadMetadata(it, card.isSerial, card) }
     }
 
-    private fun loadUrl(url: String, card: CardMeta) {
+    // useIntentStart=true only for the initially launched item: honour the
+    // explicit `position`/`from_start` extras. Episode switches resume from
+    // their own saved position instead.
+    private fun loadUrl(url: String, card: CardMeta, useIntentStart: Boolean = false) {
         viewModelScope.launch {
             val savedPos = positionDataStore.getPosition(url)
             val startMs = when {
+                useIntentStart && card.fromStart -> 0L
+                useIntentStart && card.startPositionMs != null -> card.startPositionMs
                 savedPos == null -> ((card.timelineTime ?: 0.0) * 1000).toLong()
                 savedPos.watched -> 0L
                 else -> (savedPos.time * 1000).toLong()
             }
-            player.setMediaSource(buildMediaSource(url))
+            player.setMediaSource(buildMediaSource(url, card.takeIf { useIntentStart }))
             if (startMs > 0) player.seekTo(startMs)
             player.prepare()
             player.playWhenReady = true
@@ -194,13 +199,37 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    private fun buildMediaSource(url: String): MediaSource {
-        val item = MediaItem.fromUri(Uri.parse(url))
+    private fun buildMediaSource(url: String, card: CardMeta?): MediaSource {
         val factory = dataSourceFactory!!
-        return if (isHls(url))
+        val subtitleConfigs = card?.subtitles.orEmpty().mapNotNull { sub ->
+            val uri = runCatching { Uri.parse(sub.uri) }.getOrNull() ?: return@mapNotNull null
+            MediaItem.SubtitleConfiguration.Builder(uri)
+                .setMimeType(subtitleMimeType(sub.uri))
+                .setLabel(sub.name)
+                .setSelectionFlags(if (sub.enabled) C.SELECTION_FLAG_DEFAULT else 0)
+                .build()
+        }
+        val item = MediaItem.Builder()
+            .setUri(Uri.parse(url))
+            .apply { if (subtitleConfigs.isNotEmpty()) setSubtitleConfigurations(subtitleConfigs) }
+            .build()
+        // Sideloaded subtitles require DefaultMediaSourceFactory (it merges the
+        // subtitle sources); the HLS-specific factory does not.
+        return if (isHls(url) && subtitleConfigs.isEmpty())
             HlsMediaSource.Factory(factory).setAllowChunklessPreparation(true).createMediaSource(item)
         else
             DefaultMediaSourceFactory(factory).createMediaSource(item)
+    }
+
+    private fun subtitleMimeType(uri: String): String {
+        val path = uri.substringBefore('?').lowercase()
+        return when {
+            path.endsWith(".srt") -> MimeTypes.APPLICATION_SUBRIP
+            path.endsWith(".vtt") -> MimeTypes.TEXT_VTT
+            path.endsWith(".ass") || path.endsWith(".ssa") -> MimeTypes.TEXT_SSA
+            path.endsWith(".ttml") || path.endsWith(".dfxp") || path.endsWith(".xml") -> MimeTypes.APPLICATION_TTML
+            else -> MimeTypes.APPLICATION_SUBRIP
+        }
     }
 
     private fun isHls(url: String) = url.contains(".m3u8", ignoreCase = true)

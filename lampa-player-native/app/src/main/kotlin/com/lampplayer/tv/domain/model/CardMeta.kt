@@ -19,6 +19,12 @@ data class CardMeta(
     val headers: Map<String, String> = emptyMap(),
     val timelineTime: Double? = null,
     val timelineDuration: Double? = null,
+    // Explicit resume position in milliseconds (MX/VLC-style `position` extra).
+    // Takes priority over timelineTime when present; `fromStart` forces start at 0.
+    val startPositionMs: Long? = null,
+    val fromStart: Boolean = false,
+    // External subtitle tracks passed via intent (MX `subs` / VLC `subtitles_location`).
+    val subtitles: List<ExternalSubtitle> = emptyList(),
     // Episodes list for serials (from Lampa JSON)
     val episodes: List<EpisodeItem> = emptyList(),
     val currentEpisodeIndex: Int = 0,
@@ -26,6 +32,13 @@ data class CardMeta(
     val epgTitle: String? = null,
     val epgStart: String? = null,
     val epgEnd: String? = null,
+)
+
+/** External subtitle track supplied through the launch intent. */
+data class ExternalSubtitle(
+    val uri: String,
+    val name: String? = null,
+    val enabled: Boolean = false,
 )
 
 val CardMeta.isSerial: Boolean get() = seasonNumber != null || episodes.isNotEmpty()
