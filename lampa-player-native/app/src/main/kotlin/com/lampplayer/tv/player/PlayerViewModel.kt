@@ -316,7 +316,10 @@ class PlayerViewModel @Inject constructor(
         }
         override fun onEnded() {
             viewModelScope.launch { saveCurrentPosition(ended = true) }
-            if (settings.autonext) viewModelScope.launch { navigateNext() }
+            // Advance only if there's a real in-player next; otherwise stay (don't
+            // surprise-exit to Lampa) and show controls.
+            if (hasInPlayerNext()) viewModelScope.launch { navigateNext() }
+            else _uiState.update { it.copy(osdVisible = true) }
         }
         override fun onError(message: String) {
             _uiState.update { it.copy(hasError = true, errorMessage = "libVLC: $message") }
@@ -654,11 +657,20 @@ class PlayerViewModel @Inject constructor(
         val cur = currentMs / 1000.0; val dur = durationMs / 1000.0
         val showSkip = settings.skipIntro && introSkipManager.shouldShowSkipButton(cur, _uiState.value.introEnd.takeIf { it > 0 })
         _uiState.update { it.copy(showSkipIntro = showSkip) }
-        if (settings.autonext && !_uiState.value.infoOverlayVisible) {
+        // Only offer auto-next when the player actually has a playable next episode
+        // (balancer stream URLs aren't delivered, so the in-player playlist is empty
+        // for externally-launched series — don't promise an auto-start we can't keep).
+        if (settings.autonext && hasInPlayerNext() && !_uiState.value.infoOverlayVisible) {
             autoNextManager.checkAndStart(dur, cur, settings.autonextDelay, viewModelScope,
                 onTick = { t -> _uiState.update { it.copy(autoNextCountdown = t) } },
                 onNext = { viewModelScope.launch { navigateNext() } })
         }
+    }
+
+    /** True only when a next episode with a playable URL exists inside the player. */
+    private fun hasInPlayerNext(): Boolean {
+        val st = _uiState.value
+        return st.episodes.isNotEmpty() && st.currentEpisodeIndex + 1 < st.episodes.size
     }
 
     private fun navigateNext() {
@@ -757,7 +769,8 @@ class PlayerViewModel @Inject constructor(
                 _uiState.update { it.copy(isLoading = state == Player.STATE_BUFFERING) }
                 if (state == Player.STATE_ENDED) {
                     viewModelScope.launch { saveCurrentPosition(ended = true) }
-                    if (settings.autonext) viewModelScope.launch { navigateNext() }
+                    if (hasInPlayerNext()) viewModelScope.launch { navigateNext() }
+                    else _uiState.update { it.copy(osdVisible = true) }
                 }
             }
             override fun onIsPlayingChanged(isPlaying: Boolean) =
