@@ -124,6 +124,7 @@ class PlayerViewModel @Inject constructor(
     private var osdHideJob: Job? = null
     private var vlcPollJob: Job? = null
     private var sleepJob: Job? = null
+    private var metaJob: Job? = null
     private var settings = AppSettings()
     private val errorRecovery = ErrorRecoveryManager()
     private var didAutoFallback = false
@@ -147,7 +148,7 @@ class PlayerViewModel @Inject constructor(
                 positionDataStore.savePosition(url, PlaybackPosition(time = p, duration = d, percent = pct, watched = pct >= 90))
             }
         }
-        saveJob?.cancel(); diagJob?.cancel(); vlcPollJob?.cancel(); osdHideJob?.cancel()
+        saveJob?.cancel(); diagJob?.cancel(); vlcPollJob?.cancel(); osdHideJob?.cancel(); metaJob?.cancel()
         if (::player.isInitialized) runCatching { player.release() }
         runCatching { vlc?.release() }; vlc = null
         usingVlc = false
@@ -570,13 +571,17 @@ class PlayerViewModel @Inject constructor(
     }
 
     private fun loadMetadata(tmdbId: Int, isSerial: Boolean, card: CardMeta) {
-        viewModelScope.launch {
+        // Cancel any in-flight request from a previous film so a slow response
+        // can't clobber the current film's metadata (stale title/poster).
+        metaJob?.cancel()
+        metaJob = viewModelScope.launch {
             val meta = tmdbRepository.getMetadata(tmdbId, isSerial) ?: return@launch
             val title = meta.title ?: meta.name ?: card.title
             val year = (meta.release_date ?: meta.first_air_date)?.take(4) ?: ""
             val rating = meta.vote_average?.let { "★ %.1f".format(it) } ?: ""
             val info = listOfNotNull(year.ifEmpty { null }, rating.ifEmpty { null }, card.quality).joinToString(" · ")
-            // Enhance metadata with TMDB data and show splash overlay
+            // Enrich the metadata used by the info overlay. No auto-splash — the
+            // card is shown only on ↓ (user request).
             _uiState.update { s ->
                 s.copy(
                     metadata = PlayerUiState.MetadataDisplay(
@@ -585,11 +590,8 @@ class PlayerViewModel @Inject constructor(
                         cast = "",
                         posterUrl = TmdbRepository.posterUrl(meta.poster_path) ?: card.posterUrl,
                     ),
-                    showMetadata = true,
                 )
             }
-            delay(6000)
-            _uiState.update { it.copy(showMetadata = false) }
         }
     }
 
@@ -817,7 +819,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     override fun onCleared() {
-        saveJob?.cancel(); diagJob?.cancel(); osdHideJob?.cancel(); vlcPollJob?.cancel(); sleepJob?.cancel()
+        saveJob?.cancel(); diagJob?.cancel(); osdHideJob?.cancel(); vlcPollJob?.cancel(); sleepJob?.cancel(); metaJob?.cancel()
         viewModelScope.launch { saveCurrentPosition() }
         if (::player.isInitialized) player.release()
         vlc?.release(); vlc = null
