@@ -9,8 +9,22 @@
 (function () {
     'use strict';
 
-    var PACKAGE = 'com.lampplayer.tv';
+    var PACKAGE = 'com.lampplayer.tv';   // дефолт; можно переопределить в настройках
     var PLUGIN_NAME = 'lmnp';
+
+    // Целевой package (настраиваемый — спека Part 2).
+    function pkg() {
+        try {
+            var v = Lampa.Storage.get(PLUGIN_NAME + '_package', PACKAGE);
+            return (typeof v === 'string' && v.trim()) ? v.trim() : PACKAGE;
+        } catch (_) { return PACKAGE; }
+    }
+
+    // Включён ли запуск через нативный плеер (тумблер в настройках).
+    function enabled() {
+        try { return Lampa.Storage.get(PLUGIN_NAME + '_on', true) !== false; }
+        catch (_) { return true; }
+    }
 
     // ── Формирование Chrome-совместимого intent URI ───────────────────────
     // intent://HOST/PATH#Intent;scheme=SCHEME;package=...;S.lampa_data=JSON;end
@@ -25,7 +39,7 @@
             + ';scheme=' + scheme
             + ';action=android.intent.action.VIEW'
             + ';type=video/*'
-            + ';package=' + PACKAGE
+            + ';package=' + pkg()
             + ';S.lampa_data=' + encodeURIComponent(json)
             + ';end;';
     }
@@ -323,6 +337,32 @@
         return null;
     }
 
+    // ── Субтитры ──────────────────────────────────────────────────────────
+    // Lampa передаёт сабы как [{label, url}] в video.subtitles; балансеры — в
+    // file.subtitles / data.subtitles. Кладём их в JSON как [{url,label,enable}],
+    // нативный парсер читает поле `subtitles`.
+    function getSubtitles(data, file, card) {
+        var out = [];
+        [ (file && file.subtitles), (data && data.subtitles), (card && card.subtitles) ]
+            .forEach(function (arr) {
+                if (!Array.isArray(arr)) return;
+                arr.forEach(function (s) {
+                    if (!s) return;
+                    var url = (typeof s === 'string') ? s
+                            : (typeof s.url === 'string') ? s.url
+                            : (typeof s.link === 'string') ? s.link : '';
+                    if (!url || !/^https?:|^file:|^content:/.test(url)) return;
+                    if (out.some(function (e) { return e.url === url; })) return;  // дедуп
+                    out.push({
+                        url:    url,
+                        label:  (s && (s.label || s.name)) || null,
+                        enable: !!(s && (s.default || s.enable)),
+                    });
+                });
+            });
+        return out;
+    }
+
     // ── Список эпизодов ───────────────────────────────────────────────────
     function buildEpisodes(playlist, idx) {
         if (!playlist || playlist.length < 2) return null;
@@ -383,6 +423,9 @@
             episodes:       buildEpisodes(playlist, episodeIndex),
             episode_index:  episodeIndex || 0,
         };
+        // Субтитры — массивом (нативный парсер читает поле `subtitles`).
+        var subs = getSubtitles(fileData, epgData, c);
+        if (subs.length) card.subtitles = subs;
         if (epg.epg_title) {
             card.epg_title = epg.epg_title;
             card.epg_start = epg.epg_start || null;
@@ -423,6 +466,7 @@
         // поэтому наш window.location.href перезаписывает Lampa's в очереди
         // навигации — APK получает наш intent с lampa_data.
         Lampa.Player.listener.follow('start', function (e) {
+            if (!enabled()) return;                       // тумблер «Нативный плеер»
             if (Date.now() - _lastLaunch < 6000) return;
 
             // Сканируем всё доступное состояние Lampa прямо в момент запуска
@@ -477,7 +521,7 @@
         // Нужно вызвать каждую из них, дождаться ответа и только тогда слать intent.
         try {
             Lampa.PlayerPlaylist.listener.follow('change', function () {
-                if (!_pendingUrl) return;
+                if (!enabled() || !_pendingUrl) return;
                 var pl = getPlaylist();
                 if (!pl.list || pl.list.length < 2) return;
 
@@ -613,6 +657,14 @@
                 field: { name: 'Нативный плеер', description: 'Запускать видео через Native Player APK' },
                 onChange: function (v) {
                     try { Lampa.Storage.set(PLUGIN_NAME + '_on', v); } catch (_) {}
+                }
+            });
+            Lampa.SettingsApi.addParam({
+                component: PLUGIN_NAME,
+                param: { name: PLUGIN_NAME + '_package', type: 'input', default: PACKAGE },
+                field: { name: 'Package плеера', description: 'applicationId внешнего плеера (по умолчанию ' + PACKAGE + ')' },
+                onChange: function (v) {
+                    try { Lampa.Storage.set(PLUGIN_NAME + '_package', (v || PACKAGE)); } catch (_) {}
                 }
             });
         } catch (e) {}
