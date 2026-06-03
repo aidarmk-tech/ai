@@ -25,6 +25,8 @@ data class AppSettings(
     val diag: Boolean = false,
     // Sleep timer in minutes; 0 = off.
     val sleepTimerMin: Int = 0,
+    // OSD auto-hide after N seconds of inactivity.
+    val osdTimeoutSec: Int = 10,
 )
 
 @Singleton
@@ -40,6 +42,7 @@ class SettingsDataStore @Inject constructor(
         val SKIP_INTRO = booleanPreferencesKey("skip_intro")
         val DIAG = booleanPreferencesKey("diag")
         val SLEEP_TIMER = intPreferencesKey("sleep_timer_min")
+        val OSD_TIMEOUT = intPreferencesKey("osd_timeout_sec")
     }
 
     val settings: Flow<AppSettings> = context.settingsDataStore.data
@@ -55,6 +58,7 @@ class SettingsDataStore @Inject constructor(
                 skipIntro = prefs[Keys.SKIP_INTRO] ?: true,
                 diag = prefs[Keys.DIAG] ?: false,
                 sleepTimerMin = prefs[Keys.SLEEP_TIMER] ?: 0,
+                osdTimeoutSec = prefs[Keys.OSD_TIMEOUT] ?: 10,
             )
         }
 
@@ -70,4 +74,5 @@ class SettingsDataStore @Inject constructor(
     suspend fun setSkipIntro(enabled: Boolean) = update { this[Keys.SKIP_INTRO] = enabled }
     suspend fun setDiag(enabled: Boolean) = update { this[Keys.DIAG] = enabled }
     suspend fun setSleepTimer(minutes: Int) = update { this[Keys.SLEEP_TIMER] = minutes }
+    suspend fun setOsdTimeout(seconds: Int) = update { this[Keys.OSD_TIMEOUT] = seconds }
 }

@@ -697,7 +697,7 @@ class PlayerViewModel @Inject constructor(
     private fun scheduleOsdHide() {
         osdHideJob?.cancel()
         osdHideJob = viewModelScope.launch {
-            delay(4000)
+            delay(settings.osdTimeoutSec.coerceAtLeast(3) * 1000L)
             if (engIsPlaying() && !_uiState.value.infoOverlayVisible && !_uiState.value.tracksOverlayVisible)
                 _uiState.update { it.copy(osdVisible = false) }
         }

@@ -35,9 +35,11 @@ class SettingsViewModel @Inject constructor(
     fun setSkipIntro(v: Boolean) = viewModelScope.launch { store.setSkipIntro(v) }
     fun setDiag(v: Boolean) = viewModelScope.launch { store.setDiag(v) }
     fun setSleepTimer(min: Int) = viewModelScope.launch { store.setSleepTimer(min) }
+    fun setOsdTimeout(sec: Int) = viewModelScope.launch { store.setOsdTimeout(sec) }
 }
 
 private val SLEEP_OPTIONS = listOf(0, 15, 30, 45, 60, 90)
+private val OSD_OPTIONS = listOf(5, 10, 15, 30, 60)
 
 @AndroidEntryPoint
 class SettingsActivity : AppCompatActivity() {
@@ -109,6 +111,18 @@ class SettingsActivity : AppCompatActivity() {
             }
             override fun onNothingSelected(p: AdapterView<*>?) {}
         }
+
+        val osdAdapter = ArrayAdapter(
+            this, android.R.layout.simple_spinner_item, OSD_OPTIONS.map { "$it с" },
+        ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        binding.spinnerOsdTimeout.adapter = osdAdapter
+        binding.spinnerOsdTimeout.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(p: AdapterView<*>?, v: android.view.View?, pos: Int, id: Long) {
+                if (ignoreSpinnerEvent) return
+                vm.setOsdTimeout(OSD_OPTIONS[pos.coerceIn(0, OSD_OPTIONS.size - 1)])
+            }
+            override fun onNothingSelected(p: AdapterView<*>?) {}
+        }
     }
 
     private fun setupSwitches() {
@@ -129,6 +143,7 @@ class SettingsActivity : AppCompatActivity() {
         binding.switchSkipIntro.isChecked = s.skipIntro
         binding.switchDiag.isChecked = s.diag
         binding.spinnerSleep.setSelection(SLEEP_OPTIONS.indexOf(s.sleepTimerMin).coerceAtLeast(0))
+        binding.spinnerOsdTimeout.setSelection(OSD_OPTIONS.indexOf(s.osdTimeoutSec).coerceAtLeast(0))
         binding.spinnerDelay.isEnabled = s.autonext
         ignoreSpinnerEvent = false
     }

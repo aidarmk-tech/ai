@@ -56,6 +56,10 @@ class PlayerActivity : AppCompatActivity() {
     // Netflix-style OSD focus model: true = the scrubber owns ←/→ (seek);
     // false = focus is on the button row (←/→ move between buttons).
     private var scrubberFocused = true
+    // Drill-down: when the info overlay is open, ↓ moves focus into the episodes list.
+    private var episodesFocused = false
+    private var tracksWasVisible = false
+    private var infoWasVisible = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -169,7 +173,6 @@ class PlayerActivity : AppCompatActivity() {
         binding.btnForward.setOnClickListener { doSeek(true, fast = false); vm.showOsd() }
         binding.btnPrev.setOnClickListener { vm.onPrevEpisode(); vm.showOsd() }
         binding.btnNext.setOnClickListener { vm.onNextEpisode(); vm.showOsd() }
-        binding.btnTracks.setOnClickListener { vm.toggleTracksOverlay() }
         binding.btnSpeed.setOnClickListener { vm.cyclePlaybackSpeed(); vm.showOsd() }
         binding.btnAspect.setOnClickListener { vm.cycleScaleMode(); vm.showOsd() }
         binding.btnInfo.setOnClickListener { vm.toggleInfoOverlay() }
@@ -229,9 +232,27 @@ class PlayerActivity : AppCompatActivity() {
                 // Overlays
                 binding.infoOverlay.isVisible = s.infoOverlayVisible
                 if (s.infoOverlayVisible) applyInfoOverlay(s)
-
                 binding.tracksOverlay.isVisible = s.tracksOverlayVisible
                 if (s.tracksOverlayVisible) applyTracksOverlay(s)
+
+                if (!s.infoOverlayVisible) episodesFocused = false
+
+                // Trap focus inside an open overlay (#1): block the OSD's focusables
+                // so keys stay within the overlay, not the controls behind it.
+                val overlayUp = s.tracksOverlayVisible || s.infoOverlayVisible
+                val overlayWasUp = tracksWasVisible || infoWasVisible
+                if (overlayUp != overlayWasUp) {
+                    binding.osdContainer.descendantFocusability =
+                        if (overlayUp) android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
+                        else android.view.ViewGroup.FOCUS_AFTER_DESCENDANTS
+                    if (!overlayUp && s.osdVisible) {
+                        (if (scrubberFocused) binding.scrubber else binding.btnPlayPause).requestFocus()
+                    }
+                }
+                if (s.tracksOverlayVisible && !tracksWasVisible) binding.rvAudioList.requestFocus()
+                if (s.infoOverlayVisible && !infoWasVisible) episodesFocused = false  // open at description
+                tracksWasVisible = s.tracksOverlayVisible
+                infoWasVisible = s.infoOverlayVisible
 
                 binding.progressBuffering.isVisible = s.isLoading && !s.isPlaying && !s.hasError
                 binding.errorContainer.isVisible = s.hasError
@@ -345,6 +366,13 @@ class PlayerActivity : AppCompatActivity() {
 
     // ─── Key handling ──────────────────────────────────────────────
 
+    private fun enterButtonZone() {
+        binding.osdContainer.descendantFocusability = android.view.ViewGroup.FOCUS_AFTER_DESCENDANTS
+        scrubberFocused = false
+        binding.btnPlayPause.requestFocus()
+        vm.showOsd()
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         val s = vm.uiState.value
         val osdVisible = s.osdVisible
@@ -356,20 +384,33 @@ class PlayerActivity : AppCompatActivity() {
             if (keyCode == KeyEvent.KEYCODE_BACK) return true
         }
 
-        // ── Tracks overlay (↑): BACK закрывает ────────────────────
+        // ── Tracks overlay (↑): фокус заперт внутри окна, BACK закрывает ──
         if (s.tracksOverlayVisible) {
             return when (keyCode) {
-                KeyEvent.KEYCODE_BACK,
-                KeyEvent.KEYCODE_DPAD_UP -> { vm.hideTracksOverlay(); true }
+                KeyEvent.KEYCODE_BACK -> { vm.hideTracksOverlay(); true }
+                // ↑/↓ scroll within a list, ←/→ switch between audio/subtitle
+                // columns — all handled by the (trapped) Android focus.
                 else -> super.onKeyDown(keyCode, event)
             }
         }
 
-        // ── Info overlay (↓↓): BACK/↑ закрывает ──────────────────
+        // ── Info overlay: описание (↓↓), затем серии (↓↓↓) ───────
         if (s.infoOverlayVisible) {
+            val hasEpisodes = s.episodes.size > 1
             return when (keyCode) {
-                KeyEvent.KEYCODE_BACK,
-                KeyEvent.KEYCODE_DPAD_UP -> { vm.hideInfoOverlay(); true }
+                KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    if (!episodesFocused && hasEpisodes) {
+                        episodesFocused = true; binding.rvInfoList.requestFocus(); true
+                    } else super.onKeyDown(keyCode, event)   // scroll list
+                }
+                KeyEvent.KEYCODE_BACK -> {
+                    if (episodesFocused) { episodesFocused = false; true }   // step up to description
+                    else { vm.hideInfoOverlay(); enterButtonZone(); true }
+                }
+                KeyEvent.KEYCODE_DPAD_UP -> {
+                    if (episodesFocused) super.onKeyDown(keyCode, event)     // scroll list up
+                    else { vm.hideInfoOverlay(); enterButtonZone(); true }
+                }
                 else -> super.onKeyDown(keyCode, event)
             }
         }
