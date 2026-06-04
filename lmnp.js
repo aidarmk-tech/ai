@@ -767,29 +767,36 @@
         };
     }
 
-    // Точечный зонд EPG: данные в Lampa есть (грид показывает «Сейчас/Потом»),
-    // но не в объекте канала. Ищем по модулям Lampa, глобалам, инстансу активности.
+    // Финальный зонд: модуль Lampa.PlayerIPTV + объект активности + пример канала.
     function probeEpg(list, pos) {
         function ks(o, n) {
             try { return (o && typeof o === 'object') ? Object.keys(o).slice(0, n || 25) : (typeof o); }
-            catch (e) { return 'err'; }
+            catch (e) { return 'e'; }
         }
-        var ch = (list && list[pos]) || {};
-        var out = { ch: ks(ch, 40), hasEPG: !!(window.Lampa && Lampa.EPG) };
+        function sample(c) {
+            if (!c || typeof c !== 'object') return c;
+            var s = {};
+            Object.keys(c).slice(0, 25).forEach(function (k) {
+                var v = c[k];
+                s[k] = (v && typeof v === 'object') ? ('[' + (Array.isArray(v) ? 'arr' + v.length : 'obj') + ']')
+                                                    : ('' + v).slice(0, 30);
+            });
+            return s;
+        }
+        var out = {};
         try {
-            out.lampa = Object.keys(Lampa).filter(function (k) { return /tv|epg|iptv|chan/i.test(k); });
-            out.win = Object.keys(window).filter(function (k) { return /epg|xmltv|tvg/i.test(k); }).slice(0, 15);
+            out.piptv = ks(Lampa.PlayerIPTV, 45);
             var act = Lampa.Activity.active && Lampa.Activity.active();
-            if (act) {
-                out.act  = Object.keys(act).slice(0, 25);
-                out.url  = (act.url || '').slice(0, 90);
-                out.inst = ks(act.activity, 30);
-                out.comp = ks(act.component, 30);
+            if (act && act.activity) {
+                var o = act.activity.object;
+                out.objKeys = ks(o, 40);
+                var lst = o && (o.channels || o.list || o.items || o.playlist || o.data || o.results);
+                if (Array.isArray(lst) && lst.length) {
+                    out.listLen = lst.length;
+                    out.ch = sample(lst[Math.min(pos || 0, lst.length - 1)] || lst[0]);
+                }
             }
-            try {
-                var ce = Lampa.Storage && Lampa.Storage.cache && Lampa.Storage.cache('epg', 0, false);
-                out.storEpg = ce ? (Array.isArray(ce) ? 'arr' + ce.length : typeof ce) : 'none';
-            } catch (e) {}
+            out.glob = Object.keys(window).filter(function (k) { return /epg|gettv|genres_/i.test(k); }).slice(0, 20);
         } catch (e) { out.err = String(e); }
         return JSON.stringify(out);
     }
