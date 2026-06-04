@@ -770,26 +770,41 @@
     // Расширенный зонд EPG: объект канала пустой (title/url/thumbnail), значит
     // программа лежит в Lampa.EPG или в активности — выясняем где.
     function probeEpg(list, pos) {
+        function sample(o) {
+            if (!o || typeof o !== 'object') return o;
+            var r = {};
+            Object.keys(o).slice(0, 30).forEach(function (k) {
+                var v = o[k];
+                r[k] = (v && typeof v === 'object') ? ('[' + (Array.isArray(v) ? 'arr' + v.length : 'obj') + ']') : v;
+            });
+            return r;
+        }
         var ch = (list && list[pos]) || {};
-        var out = { chKeys: Object.keys(ch).slice(0, 60),
-                    ch: { title: ch.title, id: ch.id || ch.tvg_id || ch.tvg, epg: ch.epg, programs: ch.programs } };
-        try {
-            out.hasEPG = !!(window.Lampa && Lampa.EPG);
-            if (out.hasEPG) {
-                out.epgKeys = Object.keys(Lampa.EPG).slice(0, 30);
-                try { out.now = Lampa.EPG.now ? Lampa.EPG.now(ch) : undefined; } catch (e) { out.nowErr = String(e); }
-                try { out.get = Lampa.EPG.get ? Lampa.EPG.get(ch) : undefined; } catch (e) {}
-            }
-        } catch (e) { out.epgErr = String(e); }
+        var out = { chKeys: Object.keys(ch).slice(0, 40), hasEPG: !!(window.Lampa && Lampa.EPG) };
         try {
             var act = Lampa.Activity.active && Lampa.Activity.active();
             if (act) {
                 out.actKeys = Object.keys(act).slice(0, 30);
-                if (act.epg) out.actEpg = true;
-                if (act.source) out.source = act.source;
-                if (act.params) out.paramKeys = Object.keys(act.params).slice(0, 30);
+                // channel groups → пробуем достать «толстый» объект канала
+                var grp = act.groups;
+                if (grp) {
+                    if (Array.isArray(grp) && grp.length) {
+                        out.grp0 = Object.keys(grp[0] || {}).slice(0, 20);
+                        var chs = grp[0].channels || grp[0].list || grp[0].items || grp[0].playlist;
+                        if (chs && chs.length) out.grpCh = sample(chs[0]);
+                    } else if (typeof grp === 'object') {
+                        out.grpKeys = Object.keys(grp).slice(0, 20);
+                        var firstKey = Object.keys(grp)[0];
+                        var arr = firstKey && grp[firstKey];
+                        if (Array.isArray(arr) && arr.length) out.grpCh = sample(arr[0]);
+                    }
+                }
+                if (act.channels && act.channels.length) out.actCh = sample(act.channels[0]);
+                if (act.component && typeof act.component === 'object')
+                    out.compKeys = Object.keys(act.component).slice(0, 30);
+                if (act.page && typeof act.page === 'object') out.pageKeys = Object.keys(act.page).slice(0, 20);
             }
-        } catch (e) {}
+        } catch (e) { out.err = String(e); }
         return JSON.stringify(out);
     }
 
