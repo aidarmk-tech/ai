@@ -767,43 +767,29 @@
         };
     }
 
-    // Расширенный зонд EPG: объект канала пустой (title/url/thumbnail), значит
-    // программа лежит в Lampa.EPG или в активности — выясняем где.
+    // Точечный зонд EPG: данные в Lampa есть (грид показывает «Сейчас/Потом»),
+    // но не в объекте канала. Ищем по модулям Lampa, глобалам, инстансу активности.
     function probeEpg(list, pos) {
-        function sample(o) {
-            if (!o || typeof o !== 'object') return o;
-            var r = {};
-            Object.keys(o).slice(0, 30).forEach(function (k) {
-                var v = o[k];
-                r[k] = (v && typeof v === 'object') ? ('[' + (Array.isArray(v) ? 'arr' + v.length : 'obj') + ']') : v;
-            });
-            return r;
+        function ks(o, n) {
+            try { return (o && typeof o === 'object') ? Object.keys(o).slice(0, n || 25) : (typeof o); }
+            catch (e) { return 'err'; }
         }
         var ch = (list && list[pos]) || {};
-        var out = { chKeys: Object.keys(ch).slice(0, 40), hasEPG: !!(window.Lampa && Lampa.EPG) };
+        var out = { ch: ks(ch, 40), hasEPG: !!(window.Lampa && Lampa.EPG) };
         try {
+            out.lampa = Object.keys(Lampa).filter(function (k) { return /tv|epg|iptv|chan/i.test(k); });
+            out.win = Object.keys(window).filter(function (k) { return /epg|xmltv|tvg/i.test(k); }).slice(0, 15);
             var act = Lampa.Activity.active && Lampa.Activity.active();
             if (act) {
-                out.actKeys = Object.keys(act).slice(0, 30);
-                // channel groups → пробуем достать «толстый» объект канала
-                var grp = act.groups;
-                if (grp) {
-                    if (Array.isArray(grp) && grp.length) {
-                        out.grp0 = Object.keys(grp[0] || {}).slice(0, 20);
-                        var chs = grp[0].channels || grp[0].list || grp[0].items || grp[0].playlist;
-                        if (chs && chs.length) out.grpCh = sample(chs[0]);
-                    } else if (typeof grp === 'object') {
-                        out.grpKeys = Object.keys(grp).slice(0, 20);
-                        var firstKey = Object.keys(grp)[0];
-                        var arr = firstKey && grp[firstKey];
-                        if (Array.isArray(arr) && arr.length) out.grpCh = sample(arr[0]);
-                    }
-                }
-                if (act.channels && act.channels.length) out.actCh = sample(act.channels[0]);
-                if (act.component && typeof act.component === 'object')
-                    out.compKeys = Object.keys(act.component).slice(0, 30);
-                if (act.page && typeof act.page === 'object') out.pageKeys = Object.keys(act.page).slice(0, 20);
+                out.act  = Object.keys(act).slice(0, 25);
+                out.url  = (act.url || '').slice(0, 90);
+                out.inst = ks(act.activity, 30);
+                out.comp = ks(act.component, 30);
             }
+            try {
+                var ce = Lampa.Storage && Lampa.Storage.cache && Lampa.Storage.cache('epg', 0, false);
+                out.storEpg = ce ? (Array.isArray(ce) ? 'arr' + ce.length : typeof ce) : 'none';
+            } catch (e) {}
         } catch (e) { out.err = String(e); }
         return JSON.stringify(out);
     }
