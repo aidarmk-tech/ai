@@ -709,59 +709,88 @@
                                     /^lmpmeta:\/\//.test(video.title);
                 if (enabled() && externalPlayerSelected() &&
                     video && typeof video === 'object' && video.url && !alreadyPacked) {
-                    var rawCard  = findCard(video, video);
-                    var cardData = buildCard(rawCard, video, video, null, 0);
-                    // Шлём конверт только если реально есть метаданные (а не одна озвучка)
-                    if (cardData && (cardData.tmdb_id || cardData.overview || cardData.poster_url)) {
-                        var g = getPlaylist();
-                        var list = null, pos = 0;
-                        if (g.list && g.list.length > 1)            { list = g.list; pos = g.pos || 0; }
-                        else if (video.playlist && video.playlist.length > 1) { list = video.playlist; pos = 0; }
+
+                    var origTitle = (typeof video.title === 'string') ? video.title : '';
+                    var g = getPlaylist();
+                    var list = null, pos = 0;
+                    if (g.list && g.list.length > 1)                      { list = g.list; pos = g.pos || 0; }
+                    else if (video.playlist && video.playlist.length > 1) { list = video.playlist; pos = 0; }
+                    var iptv = isIptvList(list) || !!video.iptv ||
+                               !!(list && list[pos] && (list[pos].tv || list[pos].iptv));
+
+                    // Для IPTV берём имя канала (а НЕ старую TMDB-карточку сериала).
+                    var cardData = iptv ? null : buildCard(findCard(video, video), video, video, null, 0);
+                    var hasMeta  = iptv || (cardData && (cardData.tmdb_id || cardData.overview || cardData.poster_url));
+
+                    if (hasMeta) {
+                        var finishPack = function () {
+                            try {
+                                var meta;
+                                if (iptv) {
+                                    var ch0 = (list && list[pos]) || {};
+                                    meta = { title: (ch0.title || ch0.name || origTitle || 'IPTV'), iptv: true };
+                                } else {
+                                    meta = compactMeta(cardData);
+                                    var cpl = buildCompactPlaylist(list, pos);   // title fallback (окно)
+                                    if (cpl) meta.pl = cpl;
+                                }
+                                cleanMeta(meta);
+                                if (meta.title || meta.tmdb_id || meta.iptv)
+                                    video.title = 'lmpmeta://' + b64utf8(JSON.stringify(meta));
+
+                                // Полный плейлист + диагностика — через заголовки (без лимита title).
+                                var hdr = {};
+                                var full = buildFullPlaylist(list, pos);
+                                if (full) hdr['X-Lmnp-Pl'] = b64utf8(JSON.stringify(full));
+                                if (iptv) hdr['X-Lmnp-Dbg'] = b64utf8(probeEpg(list, pos).slice(0, 6000));
+                                if (Object.keys(hdr).length)
+                                    video.headers = Object.assign({}, video.headers || {}, hdr);
+                            } catch (e) {}
+                            _origPlay.apply(self, args);
+                        };
 
                         if (list) {
-                            // Есть плейлист — дорезолвим ленивые ссылки окна, потом стартуем.
-                            try { Lampa.Noty.show('Готовлю серии…'); } catch (_) {}
-                            resolveWindow(list, pos, function () {
-                                try {
-                                    var iptv = isIptvList(list);
-                                    var meta = compactMeta(cardData);
-                                    var cpl  = buildCompactPlaylist(list, pos);   // title fallback (окно)
-                                    if (cpl) meta.pl = cpl;
-                                    if (iptv) meta.iptv = true;
-                                    cleanMeta(meta);
-                                    if (meta.title || meta.tmdb_id)
-                                        video.title = 'lmpmeta://' + b64utf8(JSON.stringify(meta));
-
-                                    // Полный плейлист + диагностика — через заголовки (без лимита title).
-                                    var hdr = {};
-                                    var full = buildFullPlaylist(list, pos);
-                                    if (full) hdr['X-Lmnp-Pl'] = b64utf8(JSON.stringify(full));
-                                    if (iptv) {
-                                        var ch = list[pos] || list[0] || {};
-                                        hdr['X-Lmnp-Dbg'] = b64utf8(JSON.stringify({
-                                            keys: Object.keys(ch).slice(0, 60),
-                                            epg: ch.epg, programs: ch.programs, tv: ch.tv,
-                                            current: ch.current, timeline: ch.timeline,
-                                        }).slice(0, 6000));
-                                    }
-                                    if (Object.keys(hdr).length)
-                                        video.headers = Object.assign({}, video.headers || {}, hdr);
-                                } catch (e) {}
-                                _origPlay.apply(self, args);
-                            });
+                            try { Lampa.Noty.show(iptv ? 'Готовлю каналы…' : 'Готовлю серии…'); } catch (_) {}
+                            resolveWindow(list, pos, finishPack);
                             return;   // запуск отложен до резолва ссылок
                         }
 
                         // Плейлиста нет (фильм/одиночная серия) — пакуем сразу.
-                        var meta = compactMeta(cardData);
+                        var meta = iptv ? { title: origTitle || 'IPTV', iptv: true } : compactMeta(cardData);
                         cleanMeta(meta);
-                        if (meta.title || meta.tmdb_id)
+                        if (meta.title || meta.tmdb_id || meta.iptv)
                             video.title = 'lmpmeta://' + b64utf8(JSON.stringify(meta));
                     }
                 }
             } catch (e) {}
             return _origPlay.apply(self, args);
         };
+    }
+
+    // Расширенный зонд EPG: объект канала пустой (title/url/thumbnail), значит
+    // программа лежит в Lampa.EPG или в активности — выясняем где.
+    function probeEpg(list, pos) {
+        var ch = (list && list[pos]) || {};
+        var out = { chKeys: Object.keys(ch).slice(0, 60),
+                    ch: { title: ch.title, id: ch.id || ch.tvg_id || ch.tvg, epg: ch.epg, programs: ch.programs } };
+        try {
+            out.hasEPG = !!(window.Lampa && Lampa.EPG);
+            if (out.hasEPG) {
+                out.epgKeys = Object.keys(Lampa.EPG).slice(0, 30);
+                try { out.now = Lampa.EPG.now ? Lampa.EPG.now(ch) : undefined; } catch (e) { out.nowErr = String(e); }
+                try { out.get = Lampa.EPG.get ? Lampa.EPG.get(ch) : undefined; } catch (e) {}
+            }
+        } catch (e) { out.epgErr = String(e); }
+        try {
+            var act = Lampa.Activity.active && Lampa.Activity.active();
+            if (act) {
+                out.actKeys = Object.keys(act).slice(0, 30);
+                if (act.epg) out.actEpg = true;
+                if (act.source) out.source = act.source;
+                if (act.params) out.paramKeys = Object.keys(act.params).slice(0, 30);
+            }
+        } catch (e) {}
+        return JSON.stringify(out);
     }
 
     // ── Хук на регистрацию плагинов-балансеров ───────────────────────────
