@@ -738,11 +738,10 @@
                                 if (meta.title || meta.tmdb_id || meta.iptv)
                                     video.title = 'lmpmeta://' + b64utf8(JSON.stringify(meta));
 
-                                // Полный плейлист + диагностика — через заголовки (без лимита title).
+                                // Полный плейлист — через заголовок (без лимита title).
                                 var hdr = {};
                                 var full = buildFullPlaylist(list, pos);
                                 if (full) hdr['X-Lmnp-Pl'] = b64utf8(JSON.stringify(full));
-                                if (iptv) hdr['X-Lmnp-Dbg'] = b64utf8(probeEpg(list, pos).slice(0, 6000));
                                 if (Object.keys(hdr).length)
                                     video.headers = Object.assign({}, video.headers || {}, hdr);
                             } catch (e) {}
