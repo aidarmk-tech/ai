@@ -313,8 +313,34 @@
             }
         } catch (_) {}
         try { if (!list && Lampa.Player.playlist) list = Lampa.Player.playlist(); } catch (_) {}
-        if (list && list.length && (list[0].tv || list[0].iptv)) { list = null; pos = 0; }
+        // (IPTV channel lists are now kept — the player uses them as a channel list)
         return { list: list, pos: pos };
+    }
+
+    function isIptvList(list) {
+        return !!(list && list[0] && (list[0].tv || list[0].iptv));
+    }
+
+    // Полный плейлист (все серии/каналы) для заголовка X-Lmnp-Pl — без лимита title.
+    // Записи без строкового URL включаются (u:''), чтобы список был полным; играбельные
+    // подсветятся, остальные затемнятся в плеере.
+    function buildFullPlaylist(list, pos) {
+        if (!list || list.length < 2) return null;
+        var CAP = 600;
+        var n = Math.min(list.length, CAP);
+        var items = [];
+        for (var i = 0; i < n; i++) {
+            var it = list[i] || {};
+            var url = (typeof it.url === 'string') ? it.url
+                    : (typeof it.file === 'string') ? it.file : '';
+            items.push({
+                u: url || '',
+                e: it.episode || (i + 1),
+                s: it.season || null,
+                t: (it.title || it.name || '').toString().slice(0, 60) || null,
+            });
+        }
+        return { items: items, pi: Math.min(Math.max(0, pos || 0), items.length - 1) };
     }
 
     // ── EPG ───────────────────────────────────────────────────────────────
@@ -697,12 +723,29 @@
                             try { Lampa.Noty.show('Готовлю серии…'); } catch (_) {}
                             resolveWindow(list, pos, function () {
                                 try {
+                                    var iptv = isIptvList(list);
                                     var meta = compactMeta(cardData);
-                                    var cpl  = buildCompactPlaylist(list, pos);
+                                    var cpl  = buildCompactPlaylist(list, pos);   // title fallback (окно)
                                     if (cpl) meta.pl = cpl;
+                                    if (iptv) meta.iptv = true;
                                     cleanMeta(meta);
                                     if (meta.title || meta.tmdb_id)
                                         video.title = 'lmpmeta://' + b64utf8(JSON.stringify(meta));
+
+                                    // Полный плейлист + диагностика — через заголовки (без лимита title).
+                                    var hdr = {};
+                                    var full = buildFullPlaylist(list, pos);
+                                    if (full) hdr['X-Lmnp-Pl'] = b64utf8(JSON.stringify(full));
+                                    if (iptv) {
+                                        var ch = list[pos] || list[0] || {};
+                                        hdr['X-Lmnp-Dbg'] = b64utf8(JSON.stringify({
+                                            keys: Object.keys(ch).slice(0, 60),
+                                            epg: ch.epg, programs: ch.programs, tv: ch.tv,
+                                            current: ch.current, timeline: ch.timeline,
+                                        }).slice(0, 6000));
+                                    }
+                                    if (Object.keys(hdr).length)
+                                        video.headers = Object.assign({}, video.headers || {}, hdr);
                                 } catch (e) {}
                                 _origPlay.apply(self, args);
                             });

@@ -101,14 +101,22 @@ class PlayerActivity : AppCompatActivity() {
     private fun maybeShowIntentDebug(card: com.lampplayer.tv.domain.model.CardMeta) {
         val noMeta = card.tmdbId == null && card.overview.isNullOrBlank() &&
             card.posterUrl.isNullOrBlank() && card.backdropUrl.isNullOrBlank()
-        if (!noMeta) return
+        // Also surface the IPTV diagnostic dump (channel/EPG object shape) when present.
+        val dbg = card.debugInfo
+        if (!noMeta && dbg == null) return
         val dump = buildString {
-            append("⚠ Метаданные не пришли\n")
-            append(IntentParser.debugDump(intent))
-            append("\n— разобрано —\n")
-            append("title: ").append(card.title.take(60)).append('\n')
-            append("tmdb: ").append(card.tmdbId ?: "—")
-            append("  poster: ").append(if (card.posterUrl != null) "да" else "нет")
+            if (noMeta) {
+                append("⚠ Метаданные не пришли\n")
+                append(IntentParser.debugDump(intent))
+                append("\n— разобрано —\n")
+                append("title: ").append(card.title.take(60)).append('\n')
+                append("tmdb: ").append(card.tmdbId ?: "—")
+                append("  poster: ").append(if (card.posterUrl != null) "да" else "нет")
+            }
+            if (dbg != null) {
+                if (isNotEmpty()) append("\n\n")
+                append("IPTV channel/EPG dump:\n").append(dbg.take(2000))
+            }
         }
         binding.intentDebug.text = dump
         binding.intentDebug.isVisible = true

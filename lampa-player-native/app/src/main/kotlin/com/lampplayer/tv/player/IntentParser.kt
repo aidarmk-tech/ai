@@ -84,7 +84,36 @@ object IntentParser {
             epgTitle = str("epg_title"),
             epgStart = str("epg_start"),
             epgEnd = str("epg_end"),
+            iptv = obj.get("iptv")?.takeIf { !it.isJsonNull }?.asBoolean ?: false,
         )
+    }
+
+    /** Pull the full playlist + IPTV diagnostic out of the forwarded headers (X-Lmnp-*). */
+    private data class HeaderExtras(
+        val headers: Map<String, String>,
+        val episodes: List<EpisodeItem>,
+        val playlistIndex: Int,
+        val debugInfo: String?,
+    )
+
+    private fun extractHeaderExtras(headers: Map<String, String>): HeaderExtras {
+        if (headers.isEmpty()) return HeaderExtras(headers, emptyList(), 0, null)
+        val plKey = headers.keys.firstOrNull { it.equals("X-Lmnp-Pl", true) }
+        val dbgKey = headers.keys.firstOrNull { it.equals("X-Lmnp-Dbg", true) }
+        if (plKey == null && dbgKey == null) return HeaderExtras(headers, emptyList(), 0, null)
+
+        val clean = headers.filterKeys { it != plKey && it != dbgKey }
+        var episodes: List<EpisodeItem> = emptyList()
+        var pi = 0
+        plKey?.let { k ->
+            runCatching {
+                val obj = JsonParser.parseString(decodeMaybeBase64(headers.getValue(k))).asJsonObject
+                episodes = parseCompactPlaylist(obj)
+                pi = obj.get("pi")?.takeIf { !it.isJsonNull }?.asInt ?: 0
+            }
+        }
+        val dbg = dbgKey?.let { runCatching { decodeMaybeBase64(headers.getValue(it)) }.getOrNull() }
+        return HeaderExtras(clean, episodes, pi, dbg)
     }
 
     // ─── Standard ACTION_VIEW with intent extras (backward compat) ─
@@ -111,7 +140,8 @@ object IntentParser {
             return Pair(url, mergeStandardExtras(card, intent, extras))
         }
 
-        val headers = parseHeadersFromExtras(extras)
+        val hx = extractHeaderExtras(parseHeadersFromExtras(extras))
+        val headers = hx.headers
 
         val timelineBundle = extras?.getBundle("timeline")
         val timelineTime = timelineBundle?.getDouble("time")
@@ -146,22 +176,27 @@ object IntentParser {
             startPositionMs = parsePositionMs(extras),
             fromStart = extras?.getBoolean("from_start", false) ?: false,
             subtitles = parseSubtitlesFromExtras(intent, extras),
-            episodes = parseEpisodes(extras?.getString("episodes")),
-            currentEpisodeIndex = extras?.getInt("episode_index", 0) ?: 0,
+            episodes = hx.episodes.ifEmpty { parseEpisodes(extras?.getString("episodes")) },
+            currentEpisodeIndex = if (hx.episodes.isNotEmpty()) hx.playlistIndex else (extras?.getInt("episode_index", 0) ?: 0),
             epgTitle = extras?.getString("epg_title"),
             epgStart = extras?.getString("epg_start"),
             epgEnd = extras?.getString("epg_end"),
+            debugInfo = hx.debugInfo,
         )
         return Pair(url, card)
     }
 
     /** Overlay MX/VLC-style extras onto a card already built from a metadata envelope. */
     private fun mergeStandardExtras(card: CardMeta, intent: Intent, extras: android.os.Bundle?): CardMeta {
-        val extraHeaders = parseHeadersFromExtras(extras)
+        val hx = extractHeaderExtras(parseHeadersFromExtras(extras))
         val extraSubs = parseSubtitlesFromExtras(intent, extras)
         val pos = parsePositionMs(extras)
         return card.copy(
-            headers = if (card.headers.isNotEmpty()) card.headers else extraHeaders,
+            headers = if (card.headers.isNotEmpty()) card.headers else hx.headers,
+            // Full playlist from the header wins over the small title-envelope window.
+            episodes = if (hx.episodes.isNotEmpty()) hx.episodes else card.episodes,
+            currentEpisodeIndex = if (hx.episodes.isNotEmpty()) hx.playlistIndex else card.currentEpisodeIndex,
+            debugInfo = hx.debugInfo ?: card.debugInfo,
             subtitles = if (extraSubs.isNotEmpty()) card.subtitles + extraSubs else card.subtitles,
             startPositionMs = card.startPositionMs ?: pos,
             fromStart = card.fromStart || (extras?.getBoolean("from_start", false) ?: false),
