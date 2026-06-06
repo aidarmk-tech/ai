@@ -1,0 +1,190 @@
+package com.lampplayer.tv.data.epg
+
+import android.util.Xml
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.BufferedInputStream
+import java.io.InputStream
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.zip.GZIPInputStream
+
+data class EpgProgramme(val start: Long, val stop: Long, val title: String, val desc: String)
+
+/**
+ * IPTV EPG from the playlist's own data: fetch the m3u (it carries `url-tvg`
+ * pointing at an XMLTV guide, plus per-channel `tvg-id`), then fetch+parse the
+ * XMLTV and expose programmes per channel. Channels are matched by tvg-id (via
+ * the m3u) or, failing that, by normalized display name.
+ */
+class EpgRepository {
+
+    private var loadedSrc: String? = null
+    private var programmesById: Map<String, List<EpgProgramme>> = emptyMap()
+    private var nameToId: MutableMap<String, String> = mutableMapOf()   // m3u + xmltv display-names
+    private var urlToId: MutableMap<String, String> = mutableMapOf()    // m3u stream url → tvg-id
+
+    val isLoaded: Boolean get() = programmesById.isNotEmpty()
+
+    /** Idempotent: parse the m3u + XMLTV once per source URL. Safe to call repeatedly. */
+    suspend fun ensureLoaded(srcUrl: String): Boolean = withContext(Dispatchers.IO) {
+        if (srcUrl == loadedSrc && programmesById.isNotEmpty()) return@withContext true
+        runCatching {
+            nameToId = mutableMapOf(); urlToId = mutableMapOf()
+            val m3u = httpText(srcUrl) ?: return@runCatching false
+            val xmltvUrl = parseM3u(m3u)
+            if (xmltvUrl.isNullOrBlank()) return@runCatching false
+            httpStream(absolute(xmltvUrl, srcUrl))?.use { ins ->
+                programmesById = parseXmltv(ins)
+            }
+            loadedSrc = srcUrl
+            programmesById.isNotEmpty()
+        }.getOrDefault(false)
+    }
+
+    /** Programmes for a channel, newest-relevant first. Empty if unmatched. */
+    fun programmes(title: String?, streamUrl: String?): List<EpgProgramme> {
+        val id = streamUrl?.let { urlToId[it] }
+            ?: title?.let { nameToId[normalize(it)] }
+            ?: return emptyList()
+        return programmesById[id].orEmpty()
+    }
+
+    fun current(title: String?, streamUrl: String?): EpgProgramme? {
+        val now = System.currentTimeMillis()
+        return programmes(title, streamUrl).firstOrNull { now in it.start until it.stop }
+    }
+
+    // ─── m3u ───────────────────────────────────────────────────────
+    // Reads `url-tvg`/`x-tvg-url` and per-channel `tvg-id` + name; fills name/url maps.
+    private fun parseM3u(text: String): String? {
+        var xmltv: String? = null
+        val headerTvg = Regex("""(?:url-tvg|x-tvg-url)\s*=\s*"([^"]+)"""", RegexOption.IGNORE_CASE)
+            .find(text.substringBefore('\n'))?.groupValues?.get(1)
+            ?: Regex("""(?:url-tvg|x-tvg-url)\s*=\s*"([^"]+)"""", RegexOption.IGNORE_CASE)
+                .find(text)?.groupValues?.get(1)
+        xmltv = headerTvg?.substringBefore(',')?.trim()   // url-tvg may be comma-separated; take first
+
+        val extinf = Regex("""tvg-id\s*=\s*"([^"]*)"""", RegexOption.IGNORE_CASE)
+        val lines = text.lines()
+        var i = 0
+        while (i < lines.size) {
+            val line = lines[i]
+            if (line.startsWith("#EXTINF", true)) {
+                val tvgId = extinf.find(line)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
+                val name = line.substringAfterLast(',').trim()
+                // next non-comment line is the stream url
+                var j = i + 1
+                while (j < lines.size && lines[j].trimStart().startsWith("#")) j++
+                val url = lines.getOrNull(j)?.trim()
+                if (tvgId != null) {
+                    if (name.isNotBlank()) nameToId[normalize(name)] = tvgId
+                    if (!url.isNullOrBlank()) urlToId[url] = tvgId
+                }
+                i = j
+            } else i++
+        }
+        return xmltv
+    }
+
+    // ─── XMLTV ─────────────────────────────────────────────────────
+    private fun parseXmltv(input: InputStream): Map<String, List<EpgProgramme>> {
+        val keepAfter = System.currentTimeMillis() - 2 * 3600_000L   // drop deep past
+        val result = HashMap<String, MutableList<EpgProgramme>>()
+        val parser = Xml.newPullParser()
+        parser.setInput(input, null)
+        var event = parser.eventType
+        var curId: String? = null
+        var curStart = 0L; var curStop = 0L; var curChan = ""
+        var title = ""; var desc = ""
+        var text = ""
+        while (event != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
+            when (event) {
+                org.xmlpull.v1.XmlPullParser.START_TAG -> when (parser.name) {
+                    "channel" -> curId = parser.getAttributeValue(null, "id")
+                    "display-name" -> {} // captured via text on END_TAG
+                    "programme" -> {
+                        curChan = parser.getAttributeValue(null, "channel") ?: ""
+                        curStart = parseXmltvTime(parser.getAttributeValue(null, "start"))
+                        curStop = parseXmltvTime(parser.getAttributeValue(null, "stop"))
+                        title = ""; desc = ""
+                    }
+                    "title", "desc" -> text = ""
+                }
+                org.xmlpull.v1.XmlPullParser.TEXT -> text = parser.text ?: ""
+                org.xmlpull.v1.XmlPullParser.END_TAG -> when (parser.name) {
+                    "display-name" -> {
+                        val id = curId
+                        val key = if (id != null && text.isNotBlank()) normalize(text) else null
+                        if (id != null && key != null && !nameToId.containsKey(key)) nameToId[key] = id
+                    }
+                    "channel" -> curId = null
+                    "title" -> title = text.trim()
+                    "desc" -> desc = text.trim()
+                    "programme" -> {
+                        if (curChan.isNotBlank() && curStop >= keepAfter && curStart > 0) {
+                            val list = result.getOrPut(curChan) { mutableListOf() }
+                            if (list.size < 60) list.add(EpgProgramme(curStart, curStop, title, desc))
+                        }
+                    }
+                }
+            }
+            event = parser.next()
+        }
+        result.values.forEach { it.sortBy { p -> p.start } }
+        return result
+    }
+
+    /** XMLTV time: "yyyyMMddHHmmss" optionally " +HHMM". */
+    private fun parseXmltvTime(s: String?): Long {
+        if (s.isNullOrBlank()) return 0L
+        return try {
+            val m = Regex("""(\d{14})(?:\s*([+-]\d{4}))?""").find(s) ?: return 0L
+            val dt = m.groupValues[1]
+            val tz = m.groupValues[2].ifBlank { "+0000" }
+            val fmt = java.text.SimpleDateFormat("yyyyMMddHHmmssZ", java.util.Locale.US)
+            fmt.parse(dt + tz)?.time ?: 0L
+        } catch (e: Exception) { 0L }
+    }
+
+    private fun normalize(s: String): String =
+        s.lowercase().replace(Regex("""\b(hd|fhd|uhd|4k|sd|\+|hevc|h265|h\.265)\b"""), "")
+            .replace(Regex("[^a-zа-я0-9]"), "").trim()
+
+    // ─── HTTP ──────────────────────────────────────────────────────
+    private fun httpText(url: String): String? =
+        httpStream(url)?.use { it.readBytes().toString(Charsets.UTF_8) }
+
+    private fun httpStream(url: String): InputStream? {
+        return try {
+            var u = URL(url); var redirects = 0
+            while (true) {
+                val c = (u.openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 15000; readTimeout = 30000
+                    instanceFollowRedirects = false
+                    setRequestProperty("User-Agent", "Mozilla/5.0")
+                    setRequestProperty("Accept-Encoding", "gzip")
+                }
+                val code = c.responseCode
+                if (code in 300..399 && redirects++ < 5) {
+                    u = URL(u, c.getHeaderField("Location")); c.disconnect(); continue
+                }
+                if (code != 200) { c.disconnect(); return null }
+                var ins: InputStream = BufferedInputStream(c.inputStream)
+                val gz = c.contentEncoding?.contains("gzip", true) == true ||
+                    url.endsWith(".gz", true)
+                if (gz) ins = GZIPInputStream(ins)
+                else {
+                    ins.mark(2)
+                    val b0 = ins.read(); val b1 = ins.read(); ins.reset()
+                    if (b0 == 0x1f && b1 == 0x8b) ins = GZIPInputStream(ins)
+                }
+                return ins
+            }
+            @Suppress("UNREACHABLE_CODE") null
+        } catch (e: Exception) { null }
+    }
+
+    private fun absolute(url: String, base: String): String =
+        try { if (url.startsWith("http")) url else URL(URL(base), url).toString() } catch (e: Exception) { url }
+}

@@ -17,6 +17,8 @@ import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import com.lampplayer.tv.data.datastore.AppSettings
 import com.lampplayer.tv.data.datastore.PositionDataStore
 import com.lampplayer.tv.data.datastore.SettingsDataStore
+import com.lampplayer.tv.data.epg.EpgProgramme
+import com.lampplayer.tv.data.epg.EpgRepository
 import com.lampplayer.tv.data.tmdb.TmdbRepository
 import com.lampplayer.tv.domain.model.*
 import com.lampplayer.tv.engine.EngineListener
@@ -70,6 +72,8 @@ data class PlayerUiState(
     val playbackSpeed: Float = 1f,
     val scaleMode: VideoScaleMode = VideoScaleMode.AUTO,
     val videoAspect: Float = 0f,
+    // IPTV electronic programme guide for the current channel (formatted now/next).
+    val epgText: String = "",
     // Rich episode list fetched from TMDB (series only).
     val episodeRows: List<EpisodeRow> = emptyList(),
 ) {
@@ -139,6 +143,8 @@ class PlayerViewModel @Inject constructor(
     private var sleepJob: Job? = null
     private var metaJob: Job? = null
     private var episodesJob: Job? = null
+    private var epgJob: Job? = null
+    private val epgRepository = EpgRepository()
     private var settings = AppSettings()
     private val errorRecovery = ErrorRecoveryManager()
     private var didAutoFallback = false
@@ -162,7 +168,7 @@ class PlayerViewModel @Inject constructor(
                 positionDataStore.savePosition(url, PlaybackPosition(time = p, duration = d, percent = pct, watched = pct >= 90))
             }
         }
-        saveJob?.cancel(); diagJob?.cancel(); vlcPollJob?.cancel(); osdHideJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel()
+        saveJob?.cancel(); diagJob?.cancel(); vlcPollJob?.cancel(); osdHideJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel(); epgJob?.cancel()
         if (::player.isInitialized) runCatching { player.release() }
         runCatching { vlc?.release() }; vlc = null
         usingVlc = false
@@ -205,6 +211,7 @@ class PlayerViewModel @Inject constructor(
         populateMetadataFromCard(card)
         card.tmdbId?.let { loadMetadata(it, card.isSerial, card) }
         loadEpisodes(card)
+        loadEpg(card)
     }
 
     /**
@@ -250,6 +257,42 @@ class PlayerViewModel @Inject constructor(
             }
             _uiState.update { it.copy(episodeRows = rows) }
         }
+    }
+
+    /** IPTV EPG: load the playlist's XMLTV (once) and format now/next for the current channel. */
+    private fun loadEpg(card: CardMeta) {
+        val src = card.iptvSource?.takeIf { card.iptv && it.isNotBlank() }
+        if (src == null) { _uiState.update { it.copy(epgText = "") }; return }
+        epgJob?.cancel()
+        epgJob = viewModelScope.launch {
+            if (epgRepository.ensureLoaded(src)) refreshEpgText()
+        }
+    }
+
+    private fun refreshEpgText() {
+        val card = currentCard ?: return
+        if (!card.iptv) return
+        val progs = epgRepository.programmes(card.title, currentUrl)
+        _uiState.update { it.copy(epgText = formatEpg(progs)) }
+    }
+
+    private fun formatEpg(progs: List<EpgProgramme>): String {
+        if (progs.isEmpty()) return ""
+        val now = System.currentTimeMillis()
+        val fmt = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+        val cur = progs.firstOrNull { now in it.start until it.stop }
+        val sb = StringBuilder()
+        cur?.let {
+            sb.append("Сейчас  ").append(fmt.format(it.start)).append("–").append(fmt.format(it.stop))
+                .append("  ").append(it.title)
+            if (it.desc.isNotBlank()) sb.append("\n").append(it.desc.take(160))
+        }
+        val upcoming = progs.filter { it.start >= (cur?.stop ?: now) }.take(5)
+        if (upcoming.isNotEmpty()) {
+            if (sb.isNotEmpty()) sb.append("\n\nДалее:")
+            upcoming.forEach { sb.append("\n  ").append(fmt.format(it.start)).append("  ").append(it.title) }
+        }
+        return sb.toString()
     }
 
     /** Play an episode chosen from the list (only when it has a playable URL). */
@@ -608,6 +651,7 @@ class PlayerViewModel @Inject constructor(
                     episodeRows = s.episodeRows.map { it.copy(current = it.number == episode.episode) },
                 )
             }
+            if (updated?.iptv == true) refreshEpgText()   // EPG for the newly selected channel
             if (usingVlc) {
                 val card = currentCard ?: return@launch
                 vlc?.setMedia(appContext, episode.url, card.headers, 0L, emptyList(), hardwareDecode = true)
@@ -920,7 +964,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     override fun onCleared() {
-        saveJob?.cancel(); diagJob?.cancel(); osdHideJob?.cancel(); vlcPollJob?.cancel(); sleepJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel()
+        saveJob?.cancel(); diagJob?.cancel(); osdHideJob?.cancel(); vlcPollJob?.cancel(); sleepJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel(); epgJob?.cancel()
         viewModelScope.launch { saveCurrentPosition() }
         if (::player.isInitialized) player.release()
         vlc?.release(); vlc = null

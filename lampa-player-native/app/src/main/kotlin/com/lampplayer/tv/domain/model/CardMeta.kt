@@ -35,6 +35,8 @@ data class CardMeta(
     // IPTV channel list (vs series episodes) + diagnostic dump for EPG bring-up.
     val iptv: Boolean = false,
     val debugInfo: String? = null,
+    // IPTV m3u source URL (carries url-tvg/XMLTV + tvg-id) for EPG.
+    val iptvSource: String? = null,
 )
 
 /** External subtitle track supplied through the launch intent. */

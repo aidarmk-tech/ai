@@ -94,15 +94,17 @@ object IntentParser {
         val episodes: List<EpisodeItem>,
         val playlistIndex: Int,
         val debugInfo: String?,
+        val source: String?,
     )
 
     private fun extractHeaderExtras(headers: Map<String, String>): HeaderExtras {
-        if (headers.isEmpty()) return HeaderExtras(headers, emptyList(), 0, null)
+        if (headers.isEmpty()) return HeaderExtras(headers, emptyList(), 0, null, null)
         val plKey = headers.keys.firstOrNull { it.equals("X-Lmnp-Pl", true) }
         val dbgKey = headers.keys.firstOrNull { it.equals("X-Lmnp-Dbg", true) }
-        if (plKey == null && dbgKey == null) return HeaderExtras(headers, emptyList(), 0, null)
+        val srcKey = headers.keys.firstOrNull { it.equals("X-Lmnp-Src", true) }
+        if (plKey == null && dbgKey == null && srcKey == null) return HeaderExtras(headers, emptyList(), 0, null, null)
 
-        val clean = headers.filterKeys { it != plKey && it != dbgKey }
+        val clean = headers.filterKeys { it != plKey && it != dbgKey && it != srcKey }
         var episodes: List<EpisodeItem> = emptyList()
         var pi = 0
         plKey?.let { k ->
@@ -113,7 +115,8 @@ object IntentParser {
             }
         }
         val dbg = dbgKey?.let { runCatching { decodeMaybeBase64(headers.getValue(it)) }.getOrNull() }
-        return HeaderExtras(clean, episodes, pi, dbg)
+        val src = srcKey?.let { runCatching { decodeMaybeBase64(headers.getValue(it)) }.getOrNull() }
+        return HeaderExtras(clean, episodes, pi, dbg, src)
     }
 
     // ─── Standard ACTION_VIEW with intent extras (backward compat) ─
@@ -182,6 +185,7 @@ object IntentParser {
             epgStart = extras?.getString("epg_start"),
             epgEnd = extras?.getString("epg_end"),
             debugInfo = hx.debugInfo,
+            iptvSource = hx.source,
         )
         return Pair(url, card)
     }
@@ -197,6 +201,7 @@ object IntentParser {
             episodes = if (hx.episodes.isNotEmpty()) hx.episodes else card.episodes,
             currentEpisodeIndex = if (hx.episodes.isNotEmpty()) hx.playlistIndex else card.currentEpisodeIndex,
             debugInfo = hx.debugInfo ?: card.debugInfo,
+            iptvSource = hx.source ?: card.iptvSource,
             subtitles = if (extraSubs.isNotEmpty()) card.subtitles + extraSubs else card.subtitles,
             startPositionMs = card.startPositionMs ?: pos,
             fromStart = card.fromStart || (extras?.getBoolean("from_start", false) ?: false),

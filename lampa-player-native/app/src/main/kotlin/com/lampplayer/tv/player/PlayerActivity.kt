@@ -331,19 +331,23 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun applyInfoOverlay(s: PlayerUiState) {
+        val isIptv = s.card?.iptv == true
         val meta = s.metadata
         binding.overlayMetaSection.isVisible = meta != null || s.title.isNotEmpty()
         binding.tvOverlayMetaTitle.text = meta?.title ?: s.title
         binding.tvOverlayMetaInfo.text = meta?.info ?: ""
-        binding.tvOverlayMetaOverview.text = meta?.overview ?: ""
-        if (!meta?.posterUrl.isNullOrEmpty()) {
+        // For IPTV the "overview" area shows the EPG (now + next) of the current channel.
+        binding.tvOverlayMetaOverview.text =
+            if (isIptv && s.epgText.isNotEmpty()) s.epgText else (meta?.overview ?: "")
+        binding.ivOverlayPoster.isVisible = !isIptv
+        if (!isIptv && !meta?.posterUrl.isNullOrEmpty()) {
             Glide.with(this).load(meta!!.posterUrl)
                 .transition(DrawableTransitionOptions.withCrossFade())
                 .into(binding.ivOverlayPoster)
         }
 
-        // EPG
-        val epgText = buildString {
+        // Legacy single-line EPG (from the card) — only when we have no full guide.
+        val epgText = if (isIptv && s.epgText.isNotEmpty()) "" else buildString {
             s.card?.epgTitle?.let { append(it) }
             s.card?.epgStart?.let { if (isNotEmpty()) append("\n"); append(it) }
             s.card?.epgEnd?.let { append(" — $it") }

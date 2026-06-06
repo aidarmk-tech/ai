@@ -321,6 +321,15 @@
         return !!(list && list[0] && (list[0].tv || list[0].iptv));
     }
 
+    // m3u-источник IPTV (в нём url-tvg для XMLTV и tvg-id каналов) — для EPG.
+    function iptvSource() {
+        try {
+            var act = Lampa.Activity.active && Lampa.Activity.active();
+            if (act && typeof act.url === 'string' && /^https?:/.test(act.url)) return act.url;
+        } catch (_) {}
+        return '';
+    }
+
     // Полный плейлист (все серии/каналы) для заголовка X-Lmnp-Pl — без лимита title.
     // Записи без строкового URL включаются (u:''), чтобы список был полным; играбельные
     // подсветятся, остальные затемнятся в плеере.
@@ -742,6 +751,11 @@
                                 var hdr = {};
                                 var full = buildFullPlaylist(list, pos);
                                 if (full) hdr['X-Lmnp-Pl'] = b64utf8(JSON.stringify(full));
+                                // Источник m3u (для EPG: в нём url-tvg + tvg-id каналов).
+                                if (iptv) {
+                                    var src = iptvSource();
+                                    if (src) hdr['X-Lmnp-Src'] = b64utf8(src);
+                                }
                                 if (Object.keys(hdr).length)
                                     video.headers = Object.assign({}, video.headers || {}, hdr);
                             } catch (e) {}
