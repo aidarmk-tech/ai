@@ -226,6 +226,7 @@ class PlayerActivity : AppCompatActivity() {
                 binding.tvEpisodeBadge.text = "${s.currentEpisodeIndex + 1}/${s.episodes.size}"
                 binding.btnSpeed.text = formatSpeed(s.playbackSpeed)
                 binding.btnAspect.text = when (s.scaleMode) {
+                    com.lampplayer.tv.player.VideoScaleMode.AUTO -> "AUTO"
                     com.lampplayer.tv.player.VideoScaleMode.FIT -> "FIT"
                     com.lampplayer.tv.player.VideoScaleMode.FILL -> "FILL"
                     com.lampplayer.tv.player.VideoScaleMode.ZOOM -> "ZOOM"
@@ -235,6 +236,7 @@ class PlayerActivity : AppCompatActivity() {
                         androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL
                     com.lampplayer.tv.player.VideoScaleMode.ZOOM ->
                         androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                    com.lampplayer.tv.player.VideoScaleMode.AUTO -> autoResizeMode(s.videoAspect)
                     else -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
                 }
 
@@ -392,6 +394,32 @@ class PlayerActivity : AppCompatActivity() {
 
     // ─── Key handling ──────────────────────────────────────────────
 
+    /** AUTO sizing: zoom to fill when the aspect mismatch (black bars) is small, else fit. */
+    private fun autoResizeMode(videoAspect: Float): Int {
+        val fit = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+        val zoom = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+        if (videoAspect <= 0f) return fit
+        val dm = resources.displayMetrics
+        val screen = dm.widthPixels.toFloat() / dm.heightPixels.coerceAtLeast(1)
+        val ratio = kotlin.math.max(videoAspect / screen, screen / videoAspect)
+        return if (ratio <= 1.15f) zoom else fit
+    }
+
+    /** Index of the currently-playing item in the episode list (for scroll/focus). */
+    private fun currentEpisodeListIndex(): Int =
+        if (binding.rvInfoList.adapter === episodeRowAdapter) episodeRowAdapter.currentIndex()
+        else vm.uiState.value.currentEpisodeIndex
+
+    private fun focusCurrentEpisode() {
+        val idx = currentEpisodeListIndex()
+        (binding.rvInfoList.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(idx, 0)
+            ?: binding.rvInfoList.scrollToPosition(idx)
+        binding.rvInfoList.post {
+            (binding.rvInfoList.findViewHolderForAdapterPosition(idx)?.itemView
+                ?: binding.rvInfoList).requestFocus()
+        }
+    }
+
     private fun enterButtonZone() {
         binding.osdContainer.descendantFocusability = android.view.ViewGroup.FOCUS_AFTER_DESCENDANTS
         scrubberFocused = false
@@ -426,7 +454,7 @@ class PlayerActivity : AppCompatActivity() {
             return when (keyCode) {
                 KeyEvent.KEYCODE_DPAD_DOWN -> {
                     if (!episodesFocused && hasEpisodes) {
-                        episodesFocused = true; binding.rvInfoList.requestFocus(); true
+                        episodesFocused = true; focusCurrentEpisode(); true   // land on current episode
                     } else super.onKeyDown(keyCode, event)   // scroll list
                 }
                 KeyEvent.KEYCODE_BACK -> {

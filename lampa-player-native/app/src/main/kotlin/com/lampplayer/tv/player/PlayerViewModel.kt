@@ -33,8 +33,9 @@ enum class InfoPanelTab { EPISODES, AUDIO, SUBTITLES, EPG }
 /** Selectable playback speeds cycled by the OSD speed button. */
 private val SPEED_STEPS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
 
-/** Video sizing mode. ExoPlayer maps these to PlayerView resizeMode; libVLC supports FIT/FILL. */
-enum class VideoScaleMode { FIT, FILL, ZOOM }
+/** Video sizing mode. ExoPlayer maps these to PlayerView resizeMode; libVLC supports FIT/FILL.
+ *  AUTO = fit, but auto-zoom to fill when black bars are thin (small aspect mismatch). */
+enum class VideoScaleMode { AUTO, FIT, FILL, ZOOM }
 
 data class PlayerUiState(
     val title: String = "",
@@ -67,7 +68,8 @@ data class PlayerUiState(
     val selectedSubtitleIndex: Int = -1,
     val videoInfo: String = "",
     val playbackSpeed: Float = 1f,
-    val scaleMode: VideoScaleMode = VideoScaleMode.FIT,
+    val scaleMode: VideoScaleMode = VideoScaleMode.AUTO,
+    val videoAspect: Float = 0f,
     // Rich episode list fetched from TMDB (series only).
     val episodeRows: List<EpisodeRow> = emptyList(),
 ) {
@@ -502,7 +504,7 @@ class PlayerViewModel @Inject constructor(
     /** Re-apply rate + sizing after (re)loading media — VLC resets them per media. */
     private fun reapplyRate() {
         if (currentRate != 1f) applyRate(currentRate)
-        if (usingVlc && _uiState.value.scaleMode != VideoScaleMode.FIT) applyScaleMode(_uiState.value.scaleMode)
+        if (usingVlc && _uiState.value.scaleMode == VideoScaleMode.FILL) applyScaleMode(_uiState.value.scaleMode)
     }
 
     fun cyclePlaybackSpeed() {
@@ -519,9 +521,9 @@ class PlayerViewModel @Inject constructor(
 
     fun cycleScaleMode() {
         // libVLC has no reliable keep-aspect crop without video-track dims, so it
-        // cycles FIT↔FILL only; ExoPlayer offers the full FIT→FILL→ZOOM set.
-        val order = if (usingVlc) listOf(VideoScaleMode.FIT, VideoScaleMode.FILL)
-                    else listOf(VideoScaleMode.FIT, VideoScaleMode.FILL, VideoScaleMode.ZOOM)
+        // cycles AUTO↔FILL only; ExoPlayer offers AUTO→FIT→FILL→ZOOM.
+        val order = if (usingVlc) listOf(VideoScaleMode.AUTO, VideoScaleMode.FILL)
+                    else listOf(VideoScaleMode.AUTO, VideoScaleMode.FIT, VideoScaleMode.FILL, VideoScaleMode.ZOOM)
         val idx = order.indexOf(_uiState.value.scaleMode).coerceAtLeast(0)
         val next = order[(idx + 1) % order.size]
         _uiState.update { it.copy(scaleMode = next) }
@@ -532,7 +534,7 @@ class PlayerViewModel @Inject constructor(
         if (!usingVlc) return
         when (mode) {
             VideoScaleMode.FILL -> { vlc?.setAspectRatio(displayAspect); vlc?.setScale(0f) }
-            else -> { vlc?.setAspectRatio(null); vlc?.setScale(0f) }   // FIT (and unreachable ZOOM)
+            else -> { vlc?.setAspectRatio(null); vlc?.setScale(0f) }   // AUTO/FIT
         }
     }
 
@@ -860,7 +862,11 @@ class PlayerViewModel @Inject constructor(
                 if (afmt.channelCount > 0) append("${afmt.channelCount}ch  ")
             }
         }.trim()
-        _uiState.update { it.copy(videoInfo = info) }
+        val aspect = if (vfmt != null && vfmt.width > 0 && vfmt.height > 0) {
+            val par = if (vfmt.pixelWidthHeightRatio > 0f) vfmt.pixelWidthHeightRatio else 1f
+            (vfmt.width * par) / vfmt.height
+        } else 0f
+        _uiState.update { it.copy(videoInfo = info, videoAspect = aspect) }
     }
 
     private fun isDecodeError(e: PlaybackException): Boolean = e.errorCode in setOf(
