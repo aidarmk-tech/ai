@@ -16,6 +16,13 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0.0"
+
+        // TV boxes/sticks are ARM only. Dropping x86/x86_64 roughly halves the
+        // APK (libVLC ships large native libs per ABI) so it installs on
+        // low-storage devices like the Mi TV Stick.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     buildTypes {
