@@ -14,8 +14,9 @@ android {
         applicationId = "com.lampplayer.tv"
         minSdk = 21
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        // Overridable from CI (-PverCode / -PverName) so each build is upgradeable.
+        versionCode = (project.findProperty("verCode") as String?)?.toIntOrNull() ?: 1
+        versionName = (project.findProperty("verName") as String?) ?: "1.0.0"
 
         // TV boxes/sticks are ARM only. Dropping x86/x86_64 roughly halves the
         // APK (libVLC ships large native libs per ABI) so it installs on

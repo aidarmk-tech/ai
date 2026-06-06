@@ -9,6 +9,9 @@ on:
       - ".github/workflows/build-lampa-player.yml"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -30,14 +33,45 @@ jobs:
 
       - name: Build Debug APK
         working-directory: lampa-player-native
-        run: gradle assembleDebug --no-daemon --stacktrace
+        run: gradle assembleDebug --no-daemon --stacktrace -PverCode=${{ github.run_number }} -PverName=1.0.${{ github.run_number }}
+
+      - name: Stage APK
+        run: |
+          mkdir -p dist
+          cp lampa-player-native/app/build/outputs/apk/debug/app-debug.apk dist/LampPlayer.apk
+          ls -lh dist/LampPlayer.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: LampaPlayer-debug-${{ github.run_number }}
-          path: lampa-player-native/app/build/outputs/apk/debug/app-debug.apk
+          path: dist/LampPlayer.apk
           retention-days: 30
 
-      - name: Show APK size
-        run: ls -lh lampa-player-native/app/build/outputs/apk/debug/app-debug.apk
+      # ── Auto-update publishing (main only) ──────────────────────────────
+      - name: Publish rolling release (main)
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: auto
+          name: LampPlayer (auto)
+          body: "Rolling auto-update build #${{ github.run_number }}"
+          files: dist/LampPlayer.apk
+
+      - name: Update version.json on Pages (main)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          cat > version.json <<EOF
+          {
+            "versionCode": ${{ github.run_number }},
+            "versionName": "1.0.${{ github.run_number }}",
+            "url": "https://github.com/${{ github.repository }}/releases/download/auto/LampPlayer.apk",
+            "notes": "Авто-сборка #${{ github.run_number }}"
+          }
+          EOF
+          git config user.email "github-actions@github.com"
+          git config user.name "GitHub Actions"
+          git add version.json
+          git diff --staged --quiet || git commit -m "chore: publish update version.json #${{ github.run_number }} [skip ci]"
+          git pull --rebase origin main || true
+          git push origin HEAD:main

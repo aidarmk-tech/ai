@@ -90,6 +90,23 @@ class PlayerActivity : AppCompatActivity() {
         setupLists()
         setupOsdClicks()
         observeState()
+        maybeCheckUpdate()
+    }
+
+    /** Once-a-day background update check → unobtrusive toast (install from Settings). */
+    private fun maybeCheckUpdate() {
+        val prefs = getSharedPreferences("update", MODE_PRIVATE)
+        if (System.currentTimeMillis() - prefs.getLong("last", 0) < 24 * 3600_000L) return
+        prefs.edit().putLong("last", System.currentTimeMillis()).apply()
+        lifecycleScope.launch {
+            val info = com.lampplayer.tv.update.UpdateManager.check(com.lampplayer.tv.BuildConfig.VERSION_CODE)
+                ?: return@launch
+            Toast.makeText(
+                this@PlayerActivity,
+                "Доступно обновление LampPlayer ${info.versionName} — Настройки → Обновить",
+                Toast.LENGTH_LONG,
+            ).show()
+        }
     }
 
     private var debugVisible = false

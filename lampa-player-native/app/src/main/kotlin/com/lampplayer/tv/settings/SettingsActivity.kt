@@ -61,6 +61,32 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         binding.btnClose.setOnClickListener { finish() }
+
+        binding.tvUpdateStatus.text = "Версия ${com.lampplayer.tv.BuildConfig.VERSION_NAME}"
+        binding.btnUpdate.setOnClickListener { checkAndUpdate() }
+    }
+
+    private fun checkAndUpdate() {
+        binding.btnUpdate.isEnabled = false
+        binding.tvUpdateStatus.text = "Проверка…"
+        lifecycleScope.launch {
+            val info = com.lampplayer.tv.update.UpdateManager.check(com.lampplayer.tv.BuildConfig.VERSION_CODE)
+            if (info == null) {
+                binding.tvUpdateStatus.text = "Установлена последняя версия (${com.lampplayer.tv.BuildConfig.VERSION_NAME})"
+                binding.btnUpdate.isEnabled = true
+                return@launch
+            }
+            binding.tvUpdateStatus.text = "Загрузка ${info.versionName}…"
+            val file = com.lampplayer.tv.update.UpdateManager.download(this@SettingsActivity, info.url)
+            if (file == null) {
+                binding.tvUpdateStatus.text = "Не удалось скачать обновление"
+                binding.btnUpdate.isEnabled = true
+                return@launch
+            }
+            binding.tvUpdateStatus.text = "Установка ${info.versionName}…"
+            binding.btnUpdate.isEnabled = true
+            com.lampplayer.tv.update.UpdateManager.install(this@SettingsActivity, file)
+        }
     }
 
     private fun setupSpinners() {
