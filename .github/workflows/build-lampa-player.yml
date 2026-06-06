@@ -48,20 +48,11 @@ jobs:
           path: dist/LampPlayer.apk
           retention-days: 30
 
-      # ── Auto-update publishing (main only) ──────────────────────────────
-      - name: Publish rolling release (main)
-        if: github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: auto
-          name: LampPlayer (auto)
-          body: "Rolling auto-update build #${{ github.run_number }}"
-          files: dist/LampPlayer.apk
-
-      - name: Update version.json on Pages (main)
+      # ── Auto-update publishing (main only): APK + version.json as release assets ──
+      - name: Write version.json
         if: github.ref == 'refs/heads/main'
         run: |
-          cat > version.json <<EOF
+          cat > dist/version.json <<EOF
           {
             "versionCode": ${{ github.run_number }},
             "versionName": "1.0.${{ github.run_number }}",
@@ -69,9 +60,15 @@ jobs:
             "notes": "Авто-сборка #${{ github.run_number }}"
           }
           EOF
-          git config user.email "github-actions@github.com"
-          git config user.name "GitHub Actions"
-          git add version.json
-          git diff --staged --quiet || git commit -m "chore: publish update version.json #${{ github.run_number }} [skip ci]"
-          git pull --rebase origin main || true
-          git push origin HEAD:main
+          cat dist/version.json
+
+      - name: Publish rolling release (main)
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: auto
+          name: LampPlayer (auto)
+          body: "Rolling auto-update build #${{ github.run_number }}"
+          files: |
+            dist/LampPlayer.apk
+            dist/version.json

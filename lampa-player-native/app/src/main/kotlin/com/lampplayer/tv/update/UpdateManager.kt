@@ -24,7 +24,8 @@ data class UpdateInfo(
  * shows a one-tap confirm.
  */
 object UpdateManager {
-    private const val VERSION_URL = "https://aidarmk-tech.github.io/ai/version.json"
+    // Served as an asset of the rolling 'auto' release (no repo commits needed).
+    private const val VERSION_URL = "https://github.com/aidarmk-tech/ai/releases/download/auto/version.json"
 
     /** Returns update info if version.json advertises a newer versionCode, else null. */
     suspend fun check(currentCode: Int): UpdateInfo? = withContext(Dispatchers.IO) {
