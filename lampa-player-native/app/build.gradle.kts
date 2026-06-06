@@ -26,8 +26,23 @@ android {
         }
     }
 
+    signingConfigs {
+        // Fixed key so every CI build shares one signature → updates install over
+        // each other (the auto-generated debug key differs per CI run otherwise).
+        create("stable") {
+            storeFile = file("${rootProject.projectDir}/keystore/lampplayer.jks")
+            storePassword = "lampplayer"
+            keyAlias = "lampplayer"
+            keyPassword = "lampplayer"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("stable")
+        }
         release {
+            signingConfig = signingConfigs.getByName("stable")
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
