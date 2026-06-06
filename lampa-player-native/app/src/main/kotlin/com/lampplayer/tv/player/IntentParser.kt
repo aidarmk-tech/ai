@@ -115,7 +115,10 @@ object IntentParser {
             }
         }
         val dbg = dbgKey?.let { runCatching { decodeMaybeBase64(headers.getValue(it)) }.getOrNull() }
-        val src = srcKey?.let { runCatching { decodeMaybeBase64(headers.getValue(it)) }.getOrNull() }
+        // src is a plain URL (not JSON) — always base64-decode it.
+        val src = srcKey?.let {
+            runCatching { String(Base64.decode(headers.getValue(it), Base64.DEFAULT), Charsets.UTF_8) }.getOrNull()
+        }
         return HeaderExtras(clean, episodes, pi, dbg, src)
     }
 
