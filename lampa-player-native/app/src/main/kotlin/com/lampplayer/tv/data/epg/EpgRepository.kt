@@ -25,21 +25,32 @@ class EpgRepository {
     private var urlToId: MutableMap<String, String> = mutableMapOf()    // m3u stream url → tvg-id
 
     val isLoaded: Boolean get() = programmesById.isNotEmpty()
+    var lastStatus: String = "не загружено"
+        private set
 
     /** Idempotent: parse the m3u + XMLTV once per source URL. Safe to call repeatedly. */
     suspend fun ensureLoaded(srcUrl: String): Boolean = withContext(Dispatchers.IO) {
         if (srcUrl == loadedSrc && programmesById.isNotEmpty()) return@withContext true
         runCatching {
             nameToId = mutableMapOf(); urlToId = mutableMapOf()
-            val m3u = httpText(srcUrl) ?: return@runCatching false
+            val m3u = httpText(srcUrl)
+            if (m3u == null) { lastStatus = "m3u не загрузился"; return@runCatching false }
             val xmltvUrl = parseM3u(m3u)
-            if (xmltvUrl.isNullOrBlank()) return@runCatching false
+            if (xmltvUrl.isNullOrBlank()) { lastStatus = "в m3u нет url-tvg (каналов: ${nameToId.size})"; return@runCatching false }
             httpStream(absolute(xmltvUrl, srcUrl))?.use { ins ->
                 programmesById = parseXmltv(ins)
             }
             loadedSrc = srcUrl
+            lastStatus = "каналов m3u: ${urlToId.size}/${nameToId.size}, программ-каналов XMLTV: ${programmesById.size}; xmltv=${xmltvUrl.take(60)}"
             programmesById.isNotEmpty()
-        }.getOrDefault(false)
+        }.getOrElse { lastStatus = "ошибка: ${it.message}"; false }
+    }
+
+    /** Diagnostic: how the current channel maps to the guide. */
+    fun matchDebug(title: String?, streamUrl: String?): String {
+        val key = title?.let { normalize(it) } ?: ""
+        val id = streamUrl?.let { urlToId[it] } ?: nameToId[key]
+        return "ключ='$key' id=${id ?: "—"} прог=${id?.let { programmesById[it]?.size } ?: 0}"
     }
 
     /** Programmes for a channel, newest-relevant first. Empty if unmatched. */

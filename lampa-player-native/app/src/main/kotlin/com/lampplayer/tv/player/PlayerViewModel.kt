@@ -265,15 +265,21 @@ class PlayerViewModel @Inject constructor(
         if (src == null) { _uiState.update { it.copy(epgText = "") }; return }
         epgJob?.cancel()
         epgJob = viewModelScope.launch {
-            if (epgRepository.ensureLoaded(src)) refreshEpgText()
+            epgRepository.ensureLoaded(src)
+            refreshEpgText()   // shows the guide, or a diagnostic when Diagnostics is on
         }
     }
 
     private fun refreshEpgText() {
         val card = currentCard ?: return
         if (!card.iptv) return
-        val progs = epgRepository.programmes(card.title, currentUrl)
-        _uiState.update { it.copy(epgText = formatEpg(progs)) }
+        val text = formatEpg(epgRepository.programmes(card.title, currentUrl))
+        val out = when {
+            text.isNotEmpty() -> text
+            settings.diag -> "EPG ⚠ ${epgRepository.lastStatus}\n${epgRepository.matchDebug(card.title, currentUrl)}\nsrc=${card.iptvSource?.take(80) ?: "—"}"
+            else -> ""
+        }
+        _uiState.update { it.copy(epgText = out) }
     }
 
     private fun formatEpg(progs: List<EpgProgramme>): String {
@@ -637,9 +643,12 @@ class PlayerViewModel @Inject constructor(
             saveCurrentPosition()
             currentUrl = episode.url
             // Update the card's season/episode so the title + badge reflect the new episode.
+            val wasIptv = currentCard?.iptv == true
             val updated = currentCard?.copy(
-                seasonNumber = episode.season ?: currentCard?.seasonNumber,
-                episodeNumber = episode.episode ?: currentCard?.episodeNumber,
+                // IPTV: the item title IS the channel name; series keep the show title + S/E.
+                title = if (wasIptv) episode.title else (currentCard?.title ?: ""),
+                seasonNumber = if (wasIptv) null else (episode.season ?: currentCard?.seasonNumber),
+                episodeNumber = if (wasIptv) null else (episode.episode ?: currentCard?.episodeNumber),
             )
             if (updated != null) currentCard = updated
             _uiState.update { s ->
@@ -651,7 +660,7 @@ class PlayerViewModel @Inject constructor(
                     episodeRows = s.episodeRows.map { it.copy(current = it.number == episode.episode) },
                 )
             }
-            if (updated?.iptv == true) refreshEpgText()   // EPG for the newly selected channel
+            if (wasIptv) refreshEpgText()   // EPG for the newly selected channel
             if (usingVlc) {
                 val card = currentCard ?: return@launch
                 vlc?.setMedia(appContext, episode.url, card.headers, 0L, emptyList(), hardwareDecode = true)
