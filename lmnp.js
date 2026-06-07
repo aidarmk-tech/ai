@@ -330,6 +330,26 @@
         return '';
     }
 
+    // Считываем текущую программу прямо из отрисованного Lampa EPG-блока
+    // (выбранный канал). Готовый текст уезжает в плеер — без парсинга XMLTV.
+    function scrapeEpg() {
+        try {
+            function t(sel) { var e = document.querySelector(sel); return e ? e.textContent.replace(/\s+/g, ' ').trim() : ''; }
+            var title = t('.jsEpgTitle');
+            if (!title) return '';
+            var time = t('.jsEpgTime');
+            var desc = t('.jsEpgDesc');
+            var s = 'Сейчас' + (time && time.indexOf('88') < 0 ? ' ' + time : '') + '  ' + title;
+            if (desc) s += '\n' + desc.slice(0, 220);
+            var a = document.querySelector('.jsEpgAfter');
+            if (a) {
+                var after = a.textContent.replace(/\s+/g, ' ').trim().slice(0, 300);
+                if (after) s += '\n\n' + after;
+            }
+            return s;
+        } catch (e) { return ''; }
+    }
+
     // Полный плейлист (все серии/каналы) для заголовка X-Lmnp-Pl — без лимита title.
     // Записи без строкового URL включаются (u:''), чтобы список был полным; играбельные
     // подсветятся, остальные затемнятся в плеере.
@@ -751,8 +771,11 @@
                                 var hdr = {};
                                 var full = buildFullPlaylist(list, pos);
                                 if (full) hdr['X-Lmnp-Pl'] = b64utf8(JSON.stringify(full));
-                                // Источник m3u (для EPG: в нём url-tvg + tvg-id каналов).
+                                // EPG: сначала готовая программа из отрисованного Lampa
+                                // (текущий канал), плюс m3u-источник как запасной (XMLTV).
                                 if (iptv) {
+                                    var epgNow = scrapeEpg();
+                                    if (epgNow) hdr['X-Lmnp-Epg'] = b64utf8(epgNow);
                                     var src = iptvSource();
                                     if (src) hdr['X-Lmnp-Src'] = b64utf8(src);
                                 }

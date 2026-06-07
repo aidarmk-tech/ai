@@ -261,6 +261,11 @@ class PlayerViewModel @Inject constructor(
 
     /** IPTV EPG: load the playlist's XMLTV (once) and format now/next for the current channel. */
     private fun loadEpg(card: CardMeta) {
+        // Prefer the programme Lampa already rendered (scraped by the plugin) — instant, no XMLTV.
+        card.iptvEpg?.takeIf { card.iptv && it.isNotBlank() }?.let {
+            _uiState.update { s -> s.copy(epgText = it) }
+            return
+        }
         val src = card.iptvSource?.takeIf { card.iptv && it.isNotBlank() }
         if (src == null) {
             _uiState.update { it.copy(epgText = if (card.iptv) "Программа недоступна · нет источника (src)" else "") }
@@ -654,6 +659,8 @@ class PlayerViewModel @Inject constructor(
                 title = if (wasIptv) episode.title else (currentCard?.title ?: ""),
                 seasonNumber = if (wasIptv) null else (episode.season ?: currentCard?.seasonNumber),
                 episodeNumber = if (wasIptv) null else (episode.episode ?: currentCard?.episodeNumber),
+                // scraped EPG was for the launched channel only — clear on switch.
+                iptvEpg = if (wasIptv) null else currentCard?.iptvEpg,
             )
             if (updated != null) currentCard = updated
             _uiState.update { s ->

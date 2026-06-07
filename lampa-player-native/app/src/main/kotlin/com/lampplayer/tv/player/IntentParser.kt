@@ -95,16 +95,19 @@ object IntentParser {
         val playlistIndex: Int,
         val debugInfo: String?,
         val source: String?,
+        val epg: String?,
     )
 
     private fun extractHeaderExtras(headers: Map<String, String>): HeaderExtras {
-        if (headers.isEmpty()) return HeaderExtras(headers, emptyList(), 0, null, null)
+        if (headers.isEmpty()) return HeaderExtras(headers, emptyList(), 0, null, null, null)
         val plKey = headers.keys.firstOrNull { it.equals("X-Lmnp-Pl", true) }
         val dbgKey = headers.keys.firstOrNull { it.equals("X-Lmnp-Dbg", true) }
         val srcKey = headers.keys.firstOrNull { it.equals("X-Lmnp-Src", true) }
-        if (plKey == null && dbgKey == null && srcKey == null) return HeaderExtras(headers, emptyList(), 0, null, null)
+        val epgKey = headers.keys.firstOrNull { it.equals("X-Lmnp-Epg", true) }
+        if (plKey == null && dbgKey == null && srcKey == null && epgKey == null)
+            return HeaderExtras(headers, emptyList(), 0, null, null, null)
 
-        val clean = headers.filterKeys { it != plKey && it != dbgKey && it != srcKey }
+        val clean = headers.filterKeys { it != plKey && it != dbgKey && it != srcKey && it != epgKey }
         var episodes: List<EpisodeItem> = emptyList()
         var pi = 0
         plKey?.let { k ->
@@ -119,7 +122,10 @@ object IntentParser {
         val src = srcKey?.let {
             runCatching { String(Base64.decode(headers.getValue(it), Base64.DEFAULT), Charsets.UTF_8) }.getOrNull()
         }
-        return HeaderExtras(clean, episodes, pi, dbg, src)
+        val epg = epgKey?.let {
+            runCatching { String(Base64.decode(headers.getValue(it), Base64.DEFAULT), Charsets.UTF_8) }.getOrNull()
+        }
+        return HeaderExtras(clean, episodes, pi, dbg, src, epg)
     }
 
     // ─── Standard ACTION_VIEW with intent extras (backward compat) ─
@@ -189,6 +195,7 @@ object IntentParser {
             epgEnd = extras?.getString("epg_end"),
             debugInfo = hx.debugInfo,
             iptvSource = hx.source,
+            iptvEpg = hx.epg,
         )
         return Pair(url, card)
     }
@@ -205,6 +212,7 @@ object IntentParser {
             currentEpisodeIndex = if (hx.episodes.isNotEmpty()) hx.playlistIndex else card.currentEpisodeIndex,
             debugInfo = hx.debugInfo ?: card.debugInfo,
             iptvSource = hx.source ?: card.iptvSource,
+            iptvEpg = hx.epg ?: card.iptvEpg,
             subtitles = if (extraSubs.isNotEmpty()) card.subtitles + extraSubs else card.subtitles,
             startPositionMs = card.startPositionMs ?: pos,
             fromStart = card.fromStart || (extras?.getBoolean("from_start", false) ?: false),

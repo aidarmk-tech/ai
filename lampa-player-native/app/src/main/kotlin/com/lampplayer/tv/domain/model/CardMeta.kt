@@ -37,6 +37,8 @@ data class CardMeta(
     val debugInfo: String? = null,
     // IPTV m3u source URL (carries url-tvg/XMLTV + tvg-id) for EPG.
     val iptvSource: String? = null,
+    // Current-channel programme scraped from Lampa's rendered EPG (ready to show).
+    val iptvEpg: String? = null,
 )
 
 /** External subtitle track supplied through the launch intent. */
