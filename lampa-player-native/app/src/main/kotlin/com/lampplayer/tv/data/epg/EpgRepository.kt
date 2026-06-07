@@ -40,6 +40,7 @@ class EpgRepository {
 
     private val gson = Gson()
     private val cacheTtlMs = 12 * 3600_000L
+    private var timedOut = false
 
     /** Idempotent: load from disk cache (≤12h), else fetch+parse the m3u/XMLTV and cache it. */
     suspend fun ensureLoaded(context: Context, srcUrl: String): Boolean = withContext(Dispatchers.IO) {
@@ -70,10 +71,12 @@ class EpgRepository {
             lastStatus = "качаю XMLTV…"
             val ins = httpStream(absolute(xmltvUrl, srcUrl))
             if (ins == null) { lastStatus = "XMLTV не скачался: ${xmltvUrl.take(70)}"; return@runCatching false }
-            ins.use { programmesById = parseXmltv(it) }
+            val deadline = System.currentTimeMillis() + 40_000L      // hard cap: never hang
+            ins.use { programmesById = parseXmltv(it, deadline) }
             loadedSrc = srcUrl
-            lastStatus = "XMLTV: каналов-прог=${programmesById.size}, m3u-имён=${nameToId.size}"
-            if (programmesById.isNotEmpty()) {
+            lastStatus = (if (timedOut) "XMLTV таймаут (слишком большой), частично: " else "XMLTV: ") +
+                "каналов-прог=${programmesById.size}, m3u-имён=${nameToId.size}"
+            if (programmesById.isNotEmpty() && !timedOut) {   // cache only a complete parse
                 runCatching {
                     cacheFile.writeText(gson.toJson(EpgCache(System.currentTimeMillis(), programmesById, nameToId, urlToId)))
                 }
@@ -135,7 +138,9 @@ class EpgRepository {
     }
 
     // ─── XMLTV ─────────────────────────────────────────────────────
-    private fun parseXmltv(input: InputStream): Map<String, List<EpgProgramme>> {
+    // deadline bounds total download+parse time (it pulls from the stream), so a
+    // huge guide can't hang forever — we keep whatever we parsed before the cutoff.
+    private fun parseXmltv(input: InputStream, deadlineMs: Long): Map<String, List<EpgProgramme>> {
         val keepAfter = System.currentTimeMillis() - 2 * 3600_000L   // drop deep past
         val result = HashMap<String, MutableList<EpgProgramme>>()
         val parser = Xml.newPullParser()
@@ -145,7 +150,10 @@ class EpgRepository {
         var curStart = 0L; var curStop = 0L; var curChan = ""
         var title = ""; var desc = ""
         var text = ""
+        var ticks = 0
+        timedOut = false
         while (event != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
+            if ((++ticks and 0x1FFF) == 0 && System.currentTimeMillis() > deadlineMs) { timedOut = true; break }
             when (event) {
                 org.xmlpull.v1.XmlPullParser.START_TAG -> when (parser.name) {
                     "channel" -> curId = parser.getAttributeValue(null, "id")
@@ -207,7 +215,7 @@ class EpgRepository {
             var u = URL(url); var redirects = 0
             while (true) {
                 val c = (u.openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 15000; readTimeout = 30000
+                    connectTimeout = 12000; readTimeout = 20000
                     instanceFollowRedirects = false
                     setRequestProperty("User-Agent", "Mozilla/5.0")
                     setRequestProperty("Accept-Encoding", "gzip")
