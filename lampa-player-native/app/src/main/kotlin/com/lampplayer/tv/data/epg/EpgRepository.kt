@@ -1,15 +1,25 @@
 package com.lampplayer.tv.data.epg
 
+import android.content.Context
 import android.util.Xml
+import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.BufferedInputStream
+import java.io.File
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.zip.GZIPInputStream
 
 data class EpgProgramme(val start: Long, val stop: Long, val title: String, val desc: String)
+
+private data class EpgCache(
+    val ts: Long,
+    val programmes: Map<String, List<EpgProgramme>>,
+    val names: Map<String, String>,
+    val urls: Map<String, String>,
+)
 
 /**
  * IPTV EPG from the playlist's own data: fetch the m3u (it carries `url-tvg`
@@ -28,9 +38,28 @@ class EpgRepository {
     var lastStatus: String = "не загружено"
         private set
 
-    /** Idempotent: parse the m3u + XMLTV once per source URL. Safe to call repeatedly. */
-    suspend fun ensureLoaded(srcUrl: String): Boolean = withContext(Dispatchers.IO) {
+    private val gson = Gson()
+    private val cacheTtlMs = 12 * 3600_000L
+
+    /** Idempotent: load from disk cache (≤12h), else fetch+parse the m3u/XMLTV and cache it. */
+    suspend fun ensureLoaded(context: Context, srcUrl: String): Boolean = withContext(Dispatchers.IO) {
         if (srcUrl == loadedSrc && programmesById.isNotEmpty()) return@withContext true
+        // 1) disk cache
+        val cacheFile = File(File(context.cacheDir, "epg").apply { mkdirs() }, "${srcUrl.hashCode()}.json")
+        if (cacheFile.exists() && System.currentTimeMillis() - cacheFile.lastModified() < cacheTtlMs) {
+            runCatching {
+                val c = gson.fromJson(cacheFile.readText(), EpgCache::class.java)
+                if (c != null && c.programmes.isNotEmpty()) {
+                    programmesById = c.programmes
+                    nameToId = c.names.toMutableMap()
+                    urlToId = c.urls.toMutableMap()
+                    loadedSrc = srcUrl
+                    lastStatus = "из кэша: каналов-прог=${programmesById.size}"
+                }
+            }
+            if (programmesById.isNotEmpty()) return@withContext true
+        }
+        // 2) network
         runCatching {
             nameToId = mutableMapOf(); urlToId = mutableMapOf()
             lastStatus = "качаю m3u…"
@@ -44,6 +73,11 @@ class EpgRepository {
             ins.use { programmesById = parseXmltv(it) }
             loadedSrc = srcUrl
             lastStatus = "XMLTV: каналов-прог=${programmesById.size}, m3u-имён=${nameToId.size}"
+            if (programmesById.isNotEmpty()) {
+                runCatching {
+                    cacheFile.writeText(gson.toJson(EpgCache(System.currentTimeMillis(), programmesById, nameToId, urlToId)))
+                }
+            }
             programmesById.isNotEmpty()
         }.getOrElse { lastStatus = "ошибка: ${it.message}"; false }
     }

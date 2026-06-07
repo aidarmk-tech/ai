@@ -269,7 +269,7 @@ class PlayerViewModel @Inject constructor(
         _uiState.update { it.copy(epgText = "Загрузка программы…") }   // immediate feedback
         epgJob?.cancel()
         epgJob = viewModelScope.launch {
-            epgRepository.ensureLoaded(src)
+            epgRepository.ensureLoaded(appContext, src)
             refreshEpgText()   // shows the guide, or the reason it's empty
         }
     }
