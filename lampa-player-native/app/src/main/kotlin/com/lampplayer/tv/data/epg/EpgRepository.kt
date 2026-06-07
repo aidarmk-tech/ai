@@ -33,15 +33,17 @@ class EpgRepository {
         if (srcUrl == loadedSrc && programmesById.isNotEmpty()) return@withContext true
         runCatching {
             nameToId = mutableMapOf(); urlToId = mutableMapOf()
+            lastStatus = "качаю m3u…"
             val m3u = httpText(srcUrl)
             if (m3u == null) { lastStatus = "m3u не загрузился"; return@runCatching false }
             val xmltvUrl = parseM3u(m3u)
             if (xmltvUrl.isNullOrBlank()) { lastStatus = "в m3u нет url-tvg (каналов: ${nameToId.size})"; return@runCatching false }
-            httpStream(absolute(xmltvUrl, srcUrl))?.use { ins ->
-                programmesById = parseXmltv(ins)
-            }
+            lastStatus = "качаю XMLTV…"
+            val ins = httpStream(absolute(xmltvUrl, srcUrl))
+            if (ins == null) { lastStatus = "XMLTV не скачался: ${xmltvUrl.take(70)}"; return@runCatching false }
+            ins.use { programmesById = parseXmltv(it) }
             loadedSrc = srcUrl
-            lastStatus = "каналов m3u: ${urlToId.size}/${nameToId.size}, программ-каналов XMLTV: ${programmesById.size}; xmltv=${xmltvUrl.take(60)}"
+            lastStatus = "XMLTV: каналов-прог=${programmesById.size}, m3u-имён=${nameToId.size}"
             programmesById.isNotEmpty()
         }.getOrElse { lastStatus = "ошибка: ${it.message}"; false }
     }
@@ -50,7 +52,7 @@ class EpgRepository {
     fun matchDebug(title: String?, streamUrl: String?): String {
         val key = title?.let { normalize(it) } ?: ""
         val id = streamUrl?.let { urlToId[it] } ?: nameToId[key]
-        return "ключ='$key' id=${id ?: "—"} прог=${id?.let { programmesById[it]?.size } ?: 0}"
+        return "ключ='$key' id=${id ?: "—"} прог=${id?.let { programmesById[it]?.size } ?: 0} xmltvIds=${programmesById.keys.take(3)}"
     }
 
     /** Programmes for a channel, newest-relevant first. Empty if unmatched. */

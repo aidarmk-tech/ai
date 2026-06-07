@@ -351,7 +351,8 @@ class PlayerActivity : AppCompatActivity() {
         val isIptv = s.card?.iptv == true
         val meta = s.metadata
         binding.overlayMetaSection.isVisible = meta != null || s.title.isNotEmpty()
-        binding.tvOverlayMetaTitle.text = meta?.title ?: s.title
+        // For IPTV always show the live channel name (metadata can lag a channel switch).
+        binding.tvOverlayMetaTitle.text = if (isIptv) s.title else (meta?.title ?: s.title)
         binding.tvOverlayMetaInfo.text = meta?.info ?: ""
         // For IPTV the "overview" area shows the EPG (now + next) of the current channel.
         binding.tvOverlayMetaOverview.text =

@@ -660,7 +660,7 @@ class PlayerViewModel @Inject constructor(
                     episodeRows = s.episodeRows.map { it.copy(current = it.number == episode.episode) },
                 )
             }
-            if (wasIptv) refreshEpgText()   // EPG for the newly selected channel
+            if (wasIptv && updated != null) { populateMetadataFromCard(updated); loadEpg(updated) }   // refresh title + EPG for new channel
             if (usingVlc) {
                 val card = currentCard ?: return@launch
                 vlc?.setMedia(appContext, episode.url, card.headers, 0L, emptyList(), hardwareDecode = true)
@@ -773,6 +773,8 @@ class PlayerViewModel @Inject constructor(
     /** True only when a next episode with a playable URL exists inside the player. */
     private fun hasInPlayerNext(): Boolean {
         val st = _uiState.value
+        // Never auto-advance IPTV: channels are live, not an ordered episode list.
+        if (st.card?.iptv == true) return false
         return st.episodes.isNotEmpty() && st.currentEpisodeIndex + 1 < st.episodes.size
     }
 
