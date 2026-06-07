@@ -336,18 +336,28 @@
         try {
             function t(sel) { var e = document.querySelector(sel); return e ? e.textContent.replace(/\s+/g, ' ').trim() : ''; }
             var title = t('.jsEpgTitle');
-            if (!title) return '';
-            var time = t('.jsEpgTime');
-            var desc = t('.jsEpgDesc');
-            var s = 'Сейчас' + (time && time.indexOf('88') < 0 ? ' ' + time : '') + '  ' + title;
-            if (desc) s += '\n' + desc.slice(0, 220);
-            var a = document.querySelector('.jsEpgAfter');
-            if (a) {
-                var after = a.textContent.replace(/\s+/g, ' ').trim().slice(0, 300);
-                if (after) s += '\n\n' + after;
+            if (title) {
+                var time = t('.jsEpgTime');
+                var desc = t('.jsEpgDesc');
+                var s = 'Сейчас' + (time && time.indexOf('88') < 0 ? ' ' + time : '') + '  ' + title;
+                if (desc) s += '\n' + desc.slice(0, 220);
+                var a = document.querySelector('.jsEpgAfter');
+                if (a) {
+                    var after = a.textContent.replace(/\s+/g, ' ').trim().slice(0, 300);
+                    if (after) s += '\n\n' + after;
+                }
+                return s;
             }
-            return s;
-        } catch (e) { return ''; }
+            // Диагностика: EPG-блок не найден — покажем, что есть в DOM.
+            var els = document.querySelectorAll('[class*="epg" i]');
+            var seen = [];
+            for (var i = 0; i < els.length && seen.length < 6; i++) {
+                var c = ('' + (els[i].className || '')).slice(0, 40);
+                var tx = (els[i].textContent || '').replace(/\s+/g, ' ').trim().slice(0, 24);
+                if (c) seen.push(c + (tx ? ' = ' + tx : ''));
+            }
+            return 'EPG-скрейп пуст (v14); epg-эл=' + els.length + (seen.length ? '\n' + seen.join('\n') : '');
+        } catch (e) { return 'EPG-скрейп ошибка: ' + e; }
     }
 
     // Полный плейлист (все серии/каналы) для заголовка X-Lmnp-Pl — без лимита title.
