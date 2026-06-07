@@ -276,8 +276,9 @@ class PlayerViewModel @Inject constructor(
         val text = formatEpg(epgRepository.programmes(card.title, currentUrl))
         val out = when {
             text.isNotEmpty() -> text
-            settings.diag -> "EPG ⚠ ${epgRepository.lastStatus}\n${epgRepository.matchDebug(card.title, currentUrl)}\nsrc=${card.iptvSource?.take(80) ?: "—"}"
-            else -> ""
+            // Always surface a short reason (no need to enable Diagnostics); verbose with diag.
+            else -> "Программа недоступна · ${epgRepository.lastStatus}" +
+                if (settings.diag) "\n${epgRepository.matchDebug(card.title, currentUrl)}\nsrc=${card.iptvSource?.take(80) ?: "—"}" else ""
         }
         _uiState.update { it.copy(epgText = out) }
     }
