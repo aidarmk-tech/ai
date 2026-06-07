@@ -262,11 +262,15 @@ class PlayerViewModel @Inject constructor(
     /** IPTV EPG: load the playlist's XMLTV (once) and format now/next for the current channel. */
     private fun loadEpg(card: CardMeta) {
         val src = card.iptvSource?.takeIf { card.iptv && it.isNotBlank() }
-        if (src == null) { _uiState.update { it.copy(epgText = "") }; return }
+        if (src == null) {
+            _uiState.update { it.copy(epgText = if (card.iptv) "Программа недоступна · нет источника (src)" else "") }
+            return
+        }
+        _uiState.update { it.copy(epgText = "Загрузка программы…") }   // immediate feedback
         epgJob?.cancel()
         epgJob = viewModelScope.launch {
             epgRepository.ensureLoaded(src)
-            refreshEpgText()   // shows the guide, or a diagnostic when Diagnostics is on
+            refreshEpgText()   // shows the guide, or the reason it's empty
         }
     }
 

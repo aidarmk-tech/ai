@@ -354,9 +354,9 @@ class PlayerActivity : AppCompatActivity() {
         // For IPTV always show the live channel name (metadata can lag a channel switch).
         binding.tvOverlayMetaTitle.text = if (isIptv) s.title else (meta?.title ?: s.title)
         binding.tvOverlayMetaInfo.text = meta?.info ?: ""
-        // For IPTV the "overview" area shows the EPG (now + next) of the current channel.
+        // EPG (IPTV) or overview (films/series) — whichever is present.
         binding.tvOverlayMetaOverview.text =
-            if (isIptv && s.epgText.isNotEmpty()) s.epgText else (meta?.overview ?: "")
+            if (s.epgText.isNotEmpty()) s.epgText else (meta?.overview ?: "")
         binding.ivOverlayPoster.isVisible = !isIptv
         if (!isIptv && !meta?.posterUrl.isNullOrEmpty()) {
             Glide.with(this).load(meta!!.posterUrl)
