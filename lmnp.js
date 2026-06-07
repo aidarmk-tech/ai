@@ -330,57 +330,60 @@
         return '';
     }
 
-    // Считываем текущую программу прямо из отрисованного Lampa EPG-блока.
-    // В списке IPTV каждый канал несёт свой `.js-epgTitle` (их сотни), поэтому
-    // выбираем блок именно запускаемого канала: по фокусу/выделению, иначе по
-    // совпадению имени канала, иначе — первый. Готовый текст уезжает в плеер.
+    // Считываем программу прямо из отрисованного Lampa EPG-блока запускаемого
+    // канала: расписание — это список строк `.js-epgTitle` со временем. Берём
+    // «Сейчас» (строка с активным прогрессом, иначе первая) и «Далее» — следующую,
+    // каждую со временем начала. Готовый текст уезжает в плеер (без XMLTV).
     function scrapeEpg(channelName) {
         try {
             function clean(e) { return e ? (e.textContent || '').replace(/\s+/g, ' ').trim() : ''; }
-            function norm(s) { return ('' + (s || '')).toLowerCase().replace(/[^a-zа-я0-9]/g, ''); }
-            // ближайший «контейнер канала» вокруг элемента программы
-            function card(el) {
-                var n = el;
-                for (var k = 0; n && k < 8; k++, n = n.parentElement) {
-                    var c = '' + (n.className || '');
-                    if (/\b(card|channel|line|item|selector)\b/i.test(c) &&
-                        (n.querySelector('.js-epgTitle') || /epg/i.test(c) === false)) {
-                        if (n.querySelector('.js-epgTitle')) return n;
-                    }
+            // строка-расписание вокруг заголовка программы (где есть и время, и прогресс)
+            function rowOf(titleEl) {
+                var n = titleEl;
+                for (var k = 0; k < 4 && n.parentElement; k++) {
+                    n = n.parentElement;
+                    if (n.querySelector('.js-epgTime') || n.querySelector('.js-epgProgress') ||
+                        /\b\d{1,2}:\d{2}\b/.test(n.textContent || '')) return n;
                 }
-                return el.parentElement || el;
+                return titleEl.parentElement || titleEl;
             }
-            function sub(scope, sel) { var e = scope.querySelector(sel); return e ? clean(e) : ''; }
-            function build(scope) {
-                var title = sub(scope, '.js-epgTitle');
-                if (!title) return '';
-                var time = sub(scope, '.js-epgTime');
-                var desc = sub(scope, '.js-epgDesc');
-                var s = 'Сейчас' + (time && time.indexOf('88') < 0 ? ' ' + time : '') + '  ' + title;
-                if (desc) s += '\n' + desc.slice(0, 220);
-                var after = sub(scope, '.js-epgAfter') || sub(scope, '.js-epgNext');
-                if (after) s += '\n\nДалее: ' + after.slice(0, 300);
-                return s;
+            function timeOf(row) {
+                var t = row.querySelector && row.querySelector('.js-epgTime');
+                var v = t ? clean(t) : (row.textContent || '');
+                var m = v.match(/\b\d{1,2}:\d{2}\b/);
+                return m ? m[0] : '';
+            }
+            // активный прогресс (0<width<100%) — признак текущей передачи
+            function activePct(row) {
+                var p = row.querySelector && row.querySelector('.js-epgProgress');
+                if (!p) return NaN;
+                var w = (p.getAttribute('style') || '') + ' ' + ((p.style && p.style.width) || '');
+                var m = w.match(/width\s*:\s*([\d.]+)%/i) || w.match(/([\d.]+)%/);
+                return m ? parseFloat(m[1]) : NaN;
             }
 
-            var titles = document.querySelectorAll('.js-epgTitle');
+            var titles = Array.prototype.slice.call(document.querySelectorAll('.js-epgTitle'));
             if (titles.length) {
-                var wantNorm = norm(channelName);
-                var focusScope = null, nameScope = null;
+                var nowIdx = -1;
                 for (var i = 0; i < titles.length; i++) {
-                    var sc = card(titles[i]);
-                    var cls = '' + (sc.className || '');
-                    if (!focusScope && /\b(focus|selected|active|hover)\b/i.test(cls)) focusScope = sc;
-                    if (wantNorm && !nameScope) {
-                        // имя канала где-то в карточке, но не в самом блоке программы
-                        var nm = sc.querySelector('.card__title, .channel__name, .js-channelTitle, .title');
-                        if (nm && norm(clean(nm)).indexOf(wantNorm) >= 0) nameScope = sc;
-                        else if (norm(sc.textContent).indexOf(wantNorm) >= 0) nameScope = sc;
-                    }
+                    var pct = activePct(rowOf(titles[i]));
+                    if (!isNaN(pct) && pct > 0 && pct < 100) { nowIdx = i; break; }
                 }
-                var scope = focusScope || nameScope || card(titles[0]);
-                var out = build(scope);
-                if (out) return out;
+                if (nowIdx < 0) nowIdx = 0;   // Lampa обычно режет прошлое — первая = текущая
+                function entry(idx) {
+                    if (idx < 0 || idx >= titles.length) return null;
+                    var r = rowOf(titles[idx]);
+                    var t = clean(titles[idx]);
+                    return t ? { t: t, tm: timeOf(r), row: r } : null;
+                }
+                var now = entry(nowIdx), nxt = entry(nowIdx + 1);
+                if (now) {
+                    var s = 'Сейчас' + (now.tm ? '  ' + now.tm : '') + '  ' + now.t;
+                    var d = now.row.querySelector && now.row.querySelector('.js-epgDesc');
+                    if (d) { var dt = clean(d); if (dt) s += '\n' + dt.slice(0, 200); }
+                    if (nxt) s += '\n\nДалее' + (nxt.tm ? '  ' + nxt.tm : '') + '  ' + nxt.t;
+                    return s;
+                }
             }
 
             // Диагностика: EPG-блок не найден — покажем, что есть в DOM.
@@ -391,7 +394,7 @@
                 var tx = (els[j].textContent || '').replace(/\s+/g, ' ').trim().slice(0, 24);
                 if (c2) seen.push(c2 + (tx ? ' = ' + tx : ''));
             }
-            return 'EPG-скрейп пуст (v16); js-epgTitle=' + titles.length + ', epg-эл=' + els.length +
+            return 'EPG-скрейп пуст (v17); js-epgTitle=' + titles.length + ', epg-эл=' + els.length +
                 (seen.length ? '\n' + seen.join('\n') : '');
         } catch (e) { return 'EPG-скрейп ошибка: ' + e; }
     }

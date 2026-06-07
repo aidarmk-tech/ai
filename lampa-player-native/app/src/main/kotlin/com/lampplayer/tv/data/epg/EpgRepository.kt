@@ -41,10 +41,16 @@ class EpgRepository {
     private val gson = Gson()
     private val cacheTtlMs = 12 * 3600_000L
     private var timedOut = false
+    // Sources whose XMLTV is too big to parse in time — never retry (would hang every switch).
+    private val deadSrcs = HashSet<String>()
+
+    /** True once a source has been ruled out as too big — callers can skip it instantly. */
+    fun isDead(srcUrl: String?): Boolean = srcUrl != null && deadSrcs.contains(srcUrl)
 
     /** Idempotent: load from disk cache (≤12h), else fetch+parse the m3u/XMLTV and cache it. */
     suspend fun ensureLoaded(context: Context, srcUrl: String): Boolean = withContext(Dispatchers.IO) {
         if (srcUrl == loadedSrc && programmesById.isNotEmpty()) return@withContext true
+        if (deadSrcs.contains(srcUrl)) { lastStatus = "XMLTV слишком большой (пропущен)"; return@withContext false }
         // 1) disk cache
         val cacheFile = File(File(context.cacheDir, "epg").apply { mkdirs() }, "${srcUrl.hashCode()}.json")
         if (cacheFile.exists() && System.currentTimeMillis() - cacheFile.lastModified() < cacheTtlMs) {
@@ -81,6 +87,8 @@ class EpgRepository {
                     cacheFile.writeText(gson.toJson(EpgCache(System.currentTimeMillis(), programmesById, nameToId, urlToId)))
                 }
             }
+            // Too big to finish in time → blacklist so we don't re-download it on every channel switch.
+            if (timedOut) deadSrcs.add(srcUrl)
             programmesById.isNotEmpty()
         }.getOrElse { lastStatus = "ошибка: ${it.message}"; false }
     }

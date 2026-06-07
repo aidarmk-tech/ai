@@ -261,21 +261,22 @@ class PlayerViewModel @Inject constructor(
 
     /** IPTV EPG: load the playlist's XMLTV (once) and format now/next for the current channel. */
     private fun loadEpg(card: CardMeta) {
+        if (!card.iptv) { _uiState.update { it.copy(epgText = "") }; return }
         // Prefer the programme Lampa already rendered (scraped by the plugin) — instant, no XMLTV.
-        card.iptvEpg?.takeIf { card.iptv && it.isNotBlank() }?.let {
+        card.iptvEpg?.takeIf { it.isNotBlank() }?.let {
             _uiState.update { s -> s.copy(epgText = it) }
             return
         }
-        val src = card.iptvSource?.takeIf { card.iptv && it.isNotBlank() }
-        if (src == null) {
-            _uiState.update { it.copy(epgText = if (card.iptv) "Программа недоступна · нет источника (src)" else "") }
-            return
-        }
-        _uiState.update { it.copy(epgText = "Загрузка программы…") }   // immediate feedback
+        // No scraped guide (e.g. channel switched inside the player). Show "Нет программы" right
+        // away — never block the UI — and only try the XMLTV guide in the background if the source
+        // hasn't already been ruled out as too big (which is what used to hang on every switch).
+        _uiState.update { it.copy(epgText = "Нет программы") }
+        val src = card.iptvSource?.takeIf { it.isNotBlank() } ?: return
+        if (epgRepository.isDead(src)) return
         epgJob?.cancel()
         epgJob = viewModelScope.launch {
             epgRepository.ensureLoaded(appContext, src)
-            refreshEpgText()   // shows the guide, or the reason it's empty
+            refreshEpgText()   // upgrades to the guide if it loaded; stays "Нет программы" otherwise
         }
     }
 
@@ -285,9 +286,8 @@ class PlayerViewModel @Inject constructor(
         val text = formatEpg(epgRepository.programmes(card.title, currentUrl))
         val out = when {
             text.isNotEmpty() -> text
-            // Clean for users: hide when no guide; show the verbose reason only with Diagnostics.
-            settings.diag -> "Программа недоступна · ${epgRepository.lastStatus}\n${epgRepository.matchDebug(card.title, currentUrl)}\nsrc=${card.iptvSource?.take(80) ?: "—"}"
-            else -> ""
+            settings.diag -> "Нет программы · ${epgRepository.lastStatus}\n${epgRepository.matchDebug(card.title, currentUrl)}\nsrc=${card.iptvSource?.take(80) ?: "—"}"
+            else -> "Нет программы"
         }
         _uiState.update { it.copy(epgText = out) }
     }
