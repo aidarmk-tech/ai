@@ -297,11 +297,11 @@ class PlayerActivity : AppCompatActivity() {
                     binding.scrubber.requestFocus()
                 }
 
-                // Overlays
-                binding.infoOverlay.isVisible = s.infoOverlayVisible
+                // Overlays — fade/slide in for a less abrupt feel
                 if (s.infoOverlayVisible) applyInfoOverlay(s)
-                binding.tracksOverlay.isVisible = s.tracksOverlayVisible
+                setOverlayVisible(binding.infoOverlay, s.infoOverlayVisible, slideY = 28f)
                 if (s.tracksOverlayVisible) applyTracksOverlay(s)
+                setOverlayVisible(binding.tracksOverlay, s.tracksOverlayVisible, slideX = 90f)
 
                 if (!s.infoOverlayVisible) episodesFocused = false
 
@@ -356,7 +356,7 @@ class PlayerActivity : AppCompatActivity() {
         }
 
         lifecycleScope.launch { vm.navigateToNext.collect { finishWithResult(completed = true) } }
-        lifecycleScope.launch { vm.showExitDialog.collect { showExitDialog() } }
+        lifecycleScope.launch { vm.showExitDialog.collect { promptExit() } }
         // AUTO fallback handed playback to libVLC — rebind the render surface.
         lifecycleScope.launch { vm.engineSwitched.collect { bindEngineSurface() } }
 
@@ -380,6 +380,20 @@ class PlayerActivity : AppCompatActivity() {
                     }
                 }
             }
+        }
+    }
+
+    /** Fade + slide an overlay in/out (slideX/Y is the off-screen offset it animates from/to). */
+    private fun setOverlayVisible(view: android.view.View, visible: Boolean, slideX: Float = 0f, slideY: Float = 0f) {
+        if (visible) {
+            if (!view.isVisible) {
+                view.alpha = 0f; view.translationX = slideX; view.translationY = slideY
+                view.isVisible = true
+            }
+            view.animate().alpha(1f).translationX(0f).translationY(0f).setDuration(180).start()
+        } else if (view.isVisible) {
+            view.animate().alpha(0f).translationX(slideX).translationY(slideY).setDuration(150)
+                .withEndAction { view.isVisible = false; view.alpha = 1f }.start()
         }
     }
 
@@ -666,15 +680,19 @@ class PlayerActivity : AppCompatActivity() {
 
     // ─── Helpers ───────────────────────────────────────────────────
 
-    private fun showExitDialog() {
-        vm.pausePlayback()
-        AlertDialog.Builder(this)
-            .setTitle(R.string.exit_dialog_title)
-            .setMessage(R.string.exit_dialog_message)
-            .setPositiveButton(R.string.action_exit) { _, _ -> finishWithResult() }
-            .setNegativeButton(R.string.action_cancel) { _, _ -> vm.resumePlayback() }
-            .setOnCancelListener { vm.resumePlayback() }
-            .show()
+    // Double-tap BACK to exit: first press arms a brief window + hint toast,
+    // a second press within it leaves the player; otherwise it disarms quietly.
+    private var backExitArmed = false
+    private var backExitJob: Job? = null
+
+    private fun promptExit() {
+        if (backExitArmed) { backExitJob?.cancel(); finishWithResult(); return }
+        backExitArmed = true
+        Toast.makeText(this, R.string.exit_press_again, Toast.LENGTH_SHORT).show()
+        backExitJob = lifecycleScope.launch {
+            delay(2000)
+            backExitArmed = false
+        }
     }
 
     private fun finishWithResult(completed: Boolean = false) {

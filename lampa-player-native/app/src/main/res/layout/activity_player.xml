@@ -412,7 +412,7 @@
         android:layout_height="match_parent"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:background="#F2070708"
+        android:background="@drawable/bg_info_scrim"
         android:paddingHorizontal="@dimen/safe_margin"
         android:paddingVertical="@dimen/space_lg"
         android:visibility="gone">
@@ -459,14 +459,14 @@
                 android:textColor="@color/text_primary" android:textSize="16sp"
                 android:visibility="gone" />
 
-            <!-- Формат видео -->
+            <!-- Формат видео — чистый чип качества -->
             <TextView android:id="@+id/tv_overlay_video_info"
                 android:layout_width="wrap_content" android:layout_height="wrap_content"
                 android:layout_marginTop="@dimen/space_md"
-                android:background="@drawable/bg_diag"
+                android:background="@drawable/bg_pill"
                 android:textColor="@color/text_secondary"
-                android:fontFamily="monospace" android:textSize="13sp"
-                android:padding="@dimen/space_xs"
+                android:textSize="14sp"
+                android:paddingHorizontal="14dp" android:paddingVertical="7dp"
                 android:visibility="gone" />
         </LinearLayout>
 

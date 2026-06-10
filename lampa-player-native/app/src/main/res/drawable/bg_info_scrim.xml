@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Info overlay backdrop: dark where the text sits (left), a touch lighter on the
+     right so the video subtly shows through behind the episodes panel. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <gradient
+        android:angle="0"
+        android:startColor="#F2070708"
+        android:centerColor="#E6070708"
+        android:endColor="#C2070708"
+        android:type="linear" />
+</shape>

@@ -972,24 +972,59 @@ class PlayerViewModel @Inject constructor(
     private fun updateVideoInfo() {
         val vfmt = player.videoFormat
         val afmt = player.audioFormat
-        val info = buildString {
-            if (vfmt != null) {
-                if (vfmt.width > 0) append("${vfmt.width}×${vfmt.height}  ")
-                if (vfmt.frameRate > 0) append("%.0ffps  ".format(vfmt.frameRate))
-                vfmt.codecs?.let { append("$it  ") }
-                if (vfmt.bitrate > 0) append("${vfmt.bitrate / 1000}kbps  ")
-            }
-            if (afmt != null) {
-                afmt.language?.let { append("Аудио: $it  ") }
-                afmt.codecs?.let { append("$it  ") }
-                if (afmt.channelCount > 0) append("${afmt.channelCount}ch  ")
-            }
-        }.trim()
+        val parts = mutableListOf<String>()
+        if (vfmt != null) {
+            resolutionLabel(vfmt.width, vfmt.height)?.let { parts.add(it) }
+            if (vfmt.frameRate > 0) parts.add("%.0f fps".format(vfmt.frameRate))
+            codecLabel(vfmt.codecs)?.let { parts.add(it) }
+            if (vfmt.bitrate > 0) parts.add("%.1f Мбит/с".format(vfmt.bitrate / 1_000_000f))
+        }
+        if (afmt != null) {
+            val a = buildString {
+                codecLabel(afmt.codecs)?.let { append(it) }
+                if (afmt.channelCount == 1) append(" Моно")
+                else if (afmt.channelCount == 2) append(" Стерео")
+                else if (afmt.channelCount > 2) append(" ${afmt.channelCount}.0")
+            }.trim()
+            if (a.isNotBlank()) parts.add(a)
+        }
+        val info = parts.joinToString("  ·  ")
         val aspect = if (vfmt != null && vfmt.width > 0 && vfmt.height > 0) {
             val par = if (vfmt.pixelWidthHeightRatio > 0f) vfmt.pixelWidthHeightRatio else 1f
             (vfmt.width * par) / vfmt.height
         } else 0f
         _uiState.update { it.copy(videoInfo = info, videoAspect = aspect) }
+    }
+
+    /** Map a height to a familiar resolution label (2160p / 1080p / 720p …). */
+    private fun resolutionLabel(w: Int, h: Int): String? = when {
+        h <= 0 || w <= 0 -> null
+        h >= 2000 -> "4K"
+        h >= 1400 -> "1440p"
+        h >= 1000 -> "1080p"
+        h >= 700 -> "720p"
+        h >= 540 -> "576p"
+        else -> "${h}p"
+    }
+
+    /** Turn a raw codec string (avc1.640028, hev1…, mp4a.40.2) into a friendly name. */
+    private fun codecLabel(codecs: String?): String? {
+        val c = codecs?.lowercase()?.trim().orEmpty()
+        return when {
+            c.isBlank() -> null
+            c.startsWith("avc") || c.contains("h264") -> "H.264"
+            c.startsWith("hev") || c.startsWith("hvc") || c.contains("h265") -> "HEVC"
+            c.startsWith("av01") -> "AV1"
+            c.startsWith("vp9") -> "VP9"
+            c.startsWith("vp09") -> "VP9"
+            c.startsWith("mp4a") || c.contains("aac") -> "AAC"
+            c.startsWith("ec-3") || c.contains("eac3") -> "E-AC3"
+            c.startsWith("ac-3") || c.contains("ac3") -> "AC3"
+            c.contains("dts") -> "DTS"
+            c.contains("opus") -> "Opus"
+            c.contains("mp3") -> "MP3"
+            else -> c.substringBefore('.').uppercase()
+        }
     }
 
     private fun isDecodeError(e: PlaybackException): Boolean = e.errorCode in setOf(
