@@ -394,7 +394,7 @@
                 var tx = (els[j].textContent || '').replace(/\s+/g, ' ').trim().slice(0, 24);
                 if (c2) seen.push(c2 + (tx ? ' = ' + tx : ''));
             }
-            return 'EPG-скрейп пуст (v17); js-epgTitle=' + titles.length + ', epg-эл=' + els.length +
+            return 'EPG-скрейп пуст (v18); js-epgTitle=' + titles.length + ', epg-эл=' + els.length +
                 (seen.length ? '\n' + seen.join('\n') : '');
         } catch (e) { return 'EPG-скрейп ошибка: ' + e; }
     }

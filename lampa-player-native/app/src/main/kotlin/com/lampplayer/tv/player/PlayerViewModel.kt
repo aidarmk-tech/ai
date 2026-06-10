@@ -276,7 +276,7 @@ class PlayerViewModel @Inject constructor(
         // No scraped guide at all. Show "Нет программы" right away — never block the UI — and
         // only try the XMLTV guide in the background if the source hasn't already been ruled
         // out as too big (which is what used to hang on every switch).
-        _uiState.update { it.copy(epgText = "Нет программы") }
+        _uiState.update { it.copy(epgText = epgNoneText(card)) }
         val src = card.iptvSource?.takeIf { it.isNotBlank() } ?: return
         if (epgRepository.isDead(src)) return
         epgJob?.cancel()
@@ -292,11 +292,20 @@ class PlayerViewModel @Inject constructor(
         val text = formatEpg(epgRepository.programmes(card.title, currentUrl))
         val out = when {
             text.isNotEmpty() -> text
-            settings.diag -> "Нет программы · ${epgRepository.lastStatus}\n${epgRepository.matchDebug(card.title, currentUrl)}" +
-                "\nкарта=${card.iptvEpgMap.size} ключ='${normChannel(card.title)}' src=${card.iptvSource?.take(80) ?: "—"}"
+            settings.diag -> epgNoneText(card) + "\nXMLTV: ${epgRepository.lastStatus}\n${epgRepository.matchDebug(card.title, currentUrl)}"
             else -> "Нет программы"
         }
         _uiState.update { it.copy(epgText = out) }
+    }
+
+    /** "Нет программы", plus — with Diagnostics on — why the launch-time map didn't match. */
+    private fun epgNoneText(card: CardMeta): String {
+        if (!settings.diag) return "Нет программы"
+        val age = if (card.iptvEpgTs > 0) " возраст=${(System.currentTimeMillis() - card.iptvEpgTs) / 60_000}м" else ""
+        val sample = card.iptvEpgMap.keys.take(3).joinToString(", ")
+        return "Нет программы · карта=${card.iptvEpgMap.size}$age ключ='${normChannel(card.title)}'" +
+            (if (sample.isNotEmpty()) "\nключи карты: $sample" else "") +
+            "\nsrc=${card.iptvSource?.take(60) ?: "—"}"
     }
 
     /**

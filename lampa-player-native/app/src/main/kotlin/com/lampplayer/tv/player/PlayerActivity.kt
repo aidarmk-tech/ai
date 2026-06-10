@@ -536,6 +536,10 @@ class PlayerActivity : AppCompatActivity() {
         }
 
         // ── OSD скрыт: любое действие открывает OSD на полосе ──────
+        // IPTV: перемотка живого эфира бессмысленна — ВПРАВО открывает программу.
+        if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && s.card?.iptv == true) {
+            vm.toggleInfoOverlay(); return true
+        }
         return when (keyCode) {
             KeyEvent.KEYCODE_DPAD_LEFT -> {
                 scrubberFocused = true; vm.showOsd(); doSeek(false, repeatCount = event.repeatCount); true
