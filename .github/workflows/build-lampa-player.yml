@@ -31,6 +31,20 @@ jobs:
         with:
           gradle-version: "8.7"
 
+      # Prefer the keystore from secrets (KEYSTORE_B64 = base64 of lampplayer.jks);
+      # fall back to the repo copy until the secret is configured.
+      - name: Restore signing keystore
+        run: |
+          mkdir -p lampa-player-native/keystore
+          if [ -n "${{ secrets.KEYSTORE_B64 }}" ]; then
+            echo "${{ secrets.KEYSTORE_B64 }}" | base64 -d > lampa-player-native/keystore/lampplayer.jks
+            echo "Using keystore from secrets"
+          elif [ -f lampa-player-native/keystore/lampplayer.jks ]; then
+            echo "Using keystore from repo (add KEYSTORE_B64 secret to remove it)"
+          else
+            echo "No keystore available" && exit 1
+          fi
+
       - name: Build Debug APK
         working-directory: lampa-player-native
         run: gradle assembleDebug --no-daemon --stacktrace -PverCode=${{ github.run_number }} -PverName=1.0.${{ github.run_number }}
@@ -52,11 +66,13 @@ jobs:
       - name: Write version.json
         if: github.ref == 'refs/heads/main'
         run: |
+          SHA256=$(sha256sum dist/LampPlayer.apk | cut -d' ' -f1)
           cat > dist/version.json <<EOF
           {
             "versionCode": ${{ github.run_number }},
             "versionName": "1.0.${{ github.run_number }}",
             "url": "https://github.com/${{ github.repository }}/releases/download/auto/LampPlayer.apk",
+            "sha256": "$SHA256",
             "notes": "Авто-сборка #${{ github.run_number }}"
           }
           EOF

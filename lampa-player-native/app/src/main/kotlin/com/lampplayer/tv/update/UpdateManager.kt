@@ -15,6 +15,8 @@ data class UpdateInfo(
     val versionName: String,
     val url: String,
     val notes: String,
+    // SHA-256 of the APK as published by CI; empty for releases predating the field.
+    val sha256: String,
 )
 
 /**
@@ -35,19 +37,41 @@ object UpdateManager {
             val code = o.optInt("versionCode", 0)
             val url = o.optString("url", "")
             if (code <= currentCode || url.isBlank()) return@runCatching null
-            UpdateInfo(code, o.optString("versionName", ""), url, o.optString("notes", ""))
+            UpdateInfo(code, o.optString("versionName", ""), url, o.optString("notes", ""), o.optString("sha256", ""))
         }.getOrNull()
     }
 
-    /** Download the APK to cacheDir/updates; returns the file or null on failure. */
-    suspend fun download(context: Context, url: String): File? = withContext(Dispatchers.IO) {
+    /**
+     * Download the APK to cacheDir/updates; returns the file or null on failure.
+     * When [expectedSha256] is non-blank the file's hash must match it — a mismatch
+     * (corrupt download or substituted file) discards the APK.
+     */
+    suspend fun download(context: Context, url: String, expectedSha256: String = ""): File? = withContext(Dispatchers.IO) {
         runCatching {
             val dir = File(context.cacheDir, "updates").apply { mkdirs() }
             dir.listFiles()?.forEach { it.delete() }
             val out = File(dir, "lampplayer.apk")
             openStream(url).use { input -> out.outputStream().use { input.copyTo(it) } }
-            out.takeIf { it.length() > 100_000 }   // sanity: a real APK
+            if (out.length() <= 100_000) return@runCatching null   // sanity: a real APK
+            if (expectedSha256.isNotBlank() && !sha256(out).equals(expectedSha256, ignoreCase = true)) {
+                out.delete()
+                return@runCatching null
+            }
+            out
         }.getOrNull()
+    }
+
+    private fun sha256(file: File): String {
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { ins ->
+            val buf = ByteArray(64 * 1024)
+            while (true) {
+                val n = ins.read(buf)
+                if (n < 0) break
+                md.update(buf, 0, n)
+            }
+        }
+        return md.digest().joinToString("") { "%02x".format(it) }
     }
 
     fun install(context: Context, file: File) {

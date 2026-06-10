@@ -1,7 +1,11 @@
 package com.lampplayer.tv.engine
 
 import android.content.Context
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.net.Uri
+import android.os.Build
 import com.lampplayer.tv.domain.model.ExternalSubtitle
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
@@ -29,6 +33,55 @@ class VlcController(
     private val libVlc: LibVLC
     private val mediaPlayer: MediaPlayer
     private var lastDuration: Long = -1L
+
+    // libVLC doesn't manage audio focus (ExoPlayer does) — request/abandon it ourselves
+    // so we pause when another app needs sound instead of playing on top of it.
+    private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    private var focusRequest: AudioFocusRequest? = null
+    private var pausedByFocusLoss = false
+    private val focusListener = AudioManager.OnAudioFocusChangeListener { change ->
+        when (change) {
+            AudioManager.AUDIOFOCUS_LOSS,
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                if (isPlaying) { pausedByFocusLoss = true; pause() }
+            }
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                if (pausedByFocusLoss) { pausedByFocusLoss = false; play() }
+            }
+        }
+    }
+
+    private fun requestAudioFocus() {
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+                            .build()
+                    )
+                    .setOnAudioFocusChangeListener(focusListener)
+                    .build()
+                focusRequest = req
+                audioManager.requestAudioFocus(req)
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.requestAudioFocus(focusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN)
+            }
+        }
+    }
+
+    private fun abandonAudioFocus() {
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.abandonAudioFocus(focusListener)
+            }
+        }
+    }
 
     init {
         val options = arrayListOf(
@@ -82,6 +135,7 @@ class VlcController(
                 mediaPlayer.addSlave(IMedia.Slave.Type.Subtitle, Uri.parse(sub.uri), sub.enabled)
             }
         }
+        requestAudioFocus()
         mediaPlayer.play()
     }
 
@@ -126,6 +180,7 @@ class VlcController(
     override fun setSubtitleDelayMs(delayMs: Long) { mediaPlayer.setSpuDelay(delayMs * 1000) }
 
     override fun release() {
+        abandonAudioFocus()
         runCatching { mediaPlayer.stop() }
         runCatching { mediaPlayer.detachViews() }
         runCatching { mediaPlayer.release() }

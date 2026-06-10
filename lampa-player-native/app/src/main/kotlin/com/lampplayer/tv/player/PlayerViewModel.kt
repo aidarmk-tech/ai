@@ -141,6 +141,7 @@ class PlayerViewModel @Inject constructor(
     private var osdHideJob: Job? = null
     private var vlcPollJob: Job? = null
     private var sleepJob: Job? = null
+    private var retryJob: Job? = null
     private var metaJob: Job? = null
     private var episodesJob: Job? = null
     private var epgJob: Job? = null
@@ -168,7 +169,7 @@ class PlayerViewModel @Inject constructor(
                 positionDataStore.savePosition(url, PlaybackPosition(time = p, duration = d, percent = pct, watched = pct >= 90))
             }
         }
-        saveJob?.cancel(); diagJob?.cancel(); vlcPollJob?.cancel(); osdHideJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel(); epgJob?.cancel()
+        saveJob?.cancel(); diagJob?.cancel(); vlcPollJob?.cancel(); osdHideJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel(); epgJob?.cancel(); retryJob?.cancel()
         if (::player.isInitialized) runCatching { player.release() }
         runCatching { vlc?.release() }; vlc = null
         usingVlc = false
@@ -361,6 +362,14 @@ class PlayerViewModel @Inject constructor(
             .setLoadControl(loadControl)
             .setTrackSelector(trackSelector)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory!!))
+            // handleAudioFocus=true: pause/duck when another app needs audio.
+            .setAudioAttributes(
+                androidx.media3.common.AudioAttributes.Builder()
+                    .setUsage(androidx.media3.common.C.USAGE_MEDIA)
+                    .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MOVIE)
+                    .build(),
+                true,
+            )
             .build()
             .also { setupPlayerListener(it) }
 
@@ -446,10 +455,12 @@ class PlayerViewModel @Inject constructor(
         didAutoFallback = true
         val card = currentCard ?: return
         val resumeMs = runCatching { player.currentPosition }.getOrDefault(0L)
-        runCatching { player.release() }
-        saveJob?.cancel(); diagJob?.cancel()
-        _uiState.update { it.copy(hasError = false, isLoading = true) }
+        // Flip the engine flag BEFORE releasing ExoPlayer so concurrent position/seek
+        // accessors never route to the released instance.
         usingVlc = true
+        runCatching { player.release() }
+        saveJob?.cancel(); diagJob?.cancel(); retryJob?.cancel()
+        _uiState.update { it.copy(hasError = false, isLoading = true) }
         val profile = BufferProfile.fromType(settings.buffer)
         val controller = VlcController(appContext, profile.maxBufferLengthMs.toInt().coerceIn(1500, 60_000), vlcListener)
         vlc = controller
@@ -867,6 +878,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun retryPlayback() {
+        retryJob?.cancel()
         errorRecovery.reset()
         _uiState.update { it.copy(hasError = false) }
         if (usingVlc) vlc?.play() else { player.prepare(); player.play() }
@@ -900,6 +912,14 @@ class PlayerViewModel @Inject constructor(
                         fallbackToVlc()
                     } else {
                         _uiState.update { it.copy(hasError = true, errorMessage = buildErrorMessage(error)) }
+                    }
+                } else {
+                    // Retry with backoff so a dead network isn't hammered 3 times instantly.
+                    _uiState.update { it.copy(isLoading = true) }
+                    retryJob?.cancel()
+                    retryJob = viewModelScope.launch {
+                        delay(errorRecovery.retryDelayMs)
+                        if (!usingVlc) runCatching { p.prepare() }
                     }
                 }
             }
@@ -987,7 +1007,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     override fun onCleared() {
-        saveJob?.cancel(); diagJob?.cancel(); osdHideJob?.cancel(); vlcPollJob?.cancel(); sleepJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel(); epgJob?.cancel()
+        saveJob?.cancel(); diagJob?.cancel(); osdHideJob?.cancel(); vlcPollJob?.cancel(); sleepJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel(); epgJob?.cancel(); retryJob?.cancel()
         viewModelScope.launch { saveCurrentPosition() }
         if (::player.isInitialized) player.release()
         vlc?.release(); vlc = null

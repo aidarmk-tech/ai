@@ -77,9 +77,9 @@ class SettingsActivity : AppCompatActivity() {
                 return@launch
             }
             binding.tvUpdateStatus.text = "Загрузка ${info.versionName}…"
-            val file = com.lampplayer.tv.update.UpdateManager.download(this@SettingsActivity, info.url)
+            val file = com.lampplayer.tv.update.UpdateManager.download(this@SettingsActivity, info.url, info.sha256)
             if (file == null) {
-                binding.tvUpdateStatus.text = "Не удалось скачать обновление"
+                binding.tvUpdateStatus.text = "Не удалось скачать обновление (или файл не прошёл проверку)"
                 binding.btnUpdate.isEnabled = true
                 return@launch
             }
