@@ -394,35 +394,44 @@
                 var tx = (els[j].textContent || '').replace(/\s+/g, ' ').trim().slice(0, 24);
                 if (c2) seen.push(c2 + (tx ? ' = ' + tx : ''));
             }
-            return 'EPG-скрейп пуст (v18); js-epgTitle=' + titles.length + ', epg-эл=' + els.length +
+            return 'EPG-скрейп пуст (v19); js-epgTitle=' + titles.length + ', epg-эл=' + els.length +
                 (seen.length ? '\n' + seen.join('\n') : '');
         } catch (e) { return 'EPG-скрейп ошибка: ' + e; }
     }
 
-    // Карта «канал → текущая программа» по ВСЕМ отрисованным карточкам списка.
+    // Карта «канал → текущая программа» по отрисованным карточкам Lampa.
     // Уезжает в X-Lmnp-EpgMap: плеер берёт из неё программу при переключении
     // канала уже внутри себя (DOM Lampa в этот момент недоступен).
+    //
+    // Группируем БЕЗ привязки к именам классов: карточка канала — наименьший
+    // предок заголовка программы, который содержит ровно один `.js-epgTitle`
+    // (как только предок охватывает >1 заголовка — это уже список, не карточка).
+    // Поэтому значение `карта=N` в диагностике плеера само показывает, что в DOM:
+    //   N>1  → список каналов с текущей программой у каждого (вариант А работает);
+    //   N=1  → расписание одного выбранного канала (карты других каналов нет).
     function scrapeEpgMap() {
         try {
             function clean(e) { return e ? (e.textContent || '').replace(/\s+/g, ' ').trim() : ''; }
             function norm(s) { return ('' + (s || '')).toLowerCase().replace(/[^a-zа-я0-9]/g, ''); }
             var titles = document.querySelectorAll('.js-epgTitle');
             if (!titles.length) return null;
-            // карточка канала — ближайший предок с «карточным» классом
+
+            // наименьший предок, всё ещё охватывающий ровно один заголовок программы
             function cardOf(el) {
-                var n = el.parentElement;
-                for (var k = 0; n && k < 8; k++, n = n.parentElement) {
-                    if (/(card|item|channel|line|selector)/i.test('' + (n.className || ''))) return n;
+                var best = el.parentElement || el, n = best;
+                for (var k = 0; n && k < 10; k++, n = n.parentElement) {
+                    if (n.querySelectorAll && n.querySelectorAll('.js-epgTitle').length === 1) best = n;
+                    else break;
                 }
-                return el.parentElement;
+                return best;
             }
-            // имя канала = текст карточки без её EPG-блоков
+            // имя канала = текст карточки без её EPG-блоков (класс-агностично)
             function nameOf(cardEl) {
                 try {
                     var cl = cardEl.cloneNode(true);
-                    var eps = cl.querySelectorAll('[class*="epg"]');
-                    for (var i = eps.length - 1; i >= 0; i--) eps[i].parentNode.removeChild(eps[i]);
-                    return clean(cl).slice(0, 60);
+                    var eps = cl.querySelectorAll('[class*="epg" i], .js-epgTitle, .js-epgTime, .js-epgDesc, .js-epgProgress');
+                    for (var i = eps.length - 1; i >= 0; i--) if (eps[i].parentNode) eps[i].parentNode.removeChild(eps[i]);
+                    return clean(cl).replace(/\b\d{1,2}:\d{2}\b/g, '').replace(/\s+/g, ' ').trim().slice(0, 60);
                 } catch (_) { return ''; }
             }
             function timeOf(el) {
@@ -433,15 +442,17 @@
                 }
                 return '';
             }
-            // группируем заголовки программ по карточкам
+
+            // группируем заголовки по карточкам (по ссылке на DOM-узел)
             var cards = [], groups = [];
             for (var i = 0; i < titles.length; i++) {
                 var c = cardOf(titles[i]);
-                if (!c) continue;
-                var idx = cards.indexOf(c);
+                var idx = -1;
+                for (var q = 0; q < cards.length; q++) if (cards[q] === c) { idx = q; break; }
                 if (idx < 0) { cards.push(c); groups.push([titles[i]]); }
                 else groups[idx].push(titles[i]);
             }
+
             var ch = {}, size = 0, count = 0;
             for (var j = 0; j < cards.length; j++) {
                 var key = norm(nameOf(cards[j]));
