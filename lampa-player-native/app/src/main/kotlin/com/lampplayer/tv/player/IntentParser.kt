@@ -96,6 +96,8 @@ object IntentParser {
         val debugInfo: String?,
         val source: String?,
         val epg: String?,
+        val epgMap: Map<String, String> = emptyMap(),
+        val epgTs: Long = 0L,
     )
 
     private fun extractHeaderExtras(headers: Map<String, String>): HeaderExtras {
@@ -104,10 +106,11 @@ object IntentParser {
         val dbgKey = headers.keys.firstOrNull { it.equals("X-Lmnp-Dbg", true) }
         val srcKey = headers.keys.firstOrNull { it.equals("X-Lmnp-Src", true) }
         val epgKey = headers.keys.firstOrNull { it.equals("X-Lmnp-Epg", true) }
-        if (plKey == null && dbgKey == null && srcKey == null && epgKey == null)
+        val epgMapKey = headers.keys.firstOrNull { it.equals("X-Lmnp-EpgMap", true) }
+        if (plKey == null && dbgKey == null && srcKey == null && epgKey == null && epgMapKey == null)
             return HeaderExtras(headers, emptyList(), 0, null, null, null)
 
-        val clean = headers.filterKeys { it != plKey && it != dbgKey && it != srcKey && it != epgKey }
+        val clean = headers.filterKeys { it != plKey && it != dbgKey && it != srcKey && it != epgKey && it != epgMapKey }
         var episodes: List<EpisodeItem> = emptyList()
         var pi = 0
         plKey?.let { k ->
@@ -125,7 +128,23 @@ object IntentParser {
         val epg = epgKey?.let {
             runCatching { String(Base64.decode(headers.getValue(it), Base64.DEFAULT), Charsets.UTF_8) }.getOrNull()
         }
-        return HeaderExtras(clean, episodes, pi, dbg, src, epg)
+        // Programme map: base64 → { ts: epochMs, ch: { normName: text } }.
+        var epgMap: Map<String, String> = emptyMap()
+        var epgTs = 0L
+        epgMapKey?.let { k ->
+            runCatching {
+                val o = JsonParser.parseString(
+                    String(Base64.decode(headers.getValue(k), Base64.DEFAULT), Charsets.UTF_8)
+                ).asJsonObject
+                epgTs = o.get("ts")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
+                epgMap = o.get("ch")?.takeIf { it.isJsonObject }?.asJsonObject
+                    ?.entrySet()
+                    ?.mapNotNull { (name, v) -> v.takeIf { it.isJsonPrimitive }?.asString?.let { name to it } }
+                    ?.toMap()
+                    ?: emptyMap()
+            }
+        }
+        return HeaderExtras(clean, episodes, pi, dbg, src, epg, epgMap, epgTs)
     }
 
     // ─── Standard ACTION_VIEW with intent extras (backward compat) ─
@@ -196,6 +215,8 @@ object IntentParser {
             debugInfo = hx.debugInfo,
             iptvSource = hx.source,
             iptvEpg = hx.epg,
+            iptvEpgMap = hx.epgMap,
+            iptvEpgTs = hx.epgTs,
         )
         return Pair(url, card)
     }
@@ -213,6 +234,8 @@ object IntentParser {
             debugInfo = hx.debugInfo ?: card.debugInfo,
             iptvSource = hx.source ?: card.iptvSource,
             iptvEpg = hx.epg ?: card.iptvEpg,
+            iptvEpgMap = if (hx.epgMap.isNotEmpty()) hx.epgMap else card.iptvEpgMap,
+            iptvEpgTs = if (hx.epgMap.isNotEmpty()) hx.epgTs else card.iptvEpgTs,
             subtitles = if (extraSubs.isNotEmpty()) card.subtitles + extraSubs else card.subtitles,
             startPositionMs = card.startPositionMs ?: pos,
             fromStart = card.fromStart || (extras?.getBoolean("from_start", false) ?: false),

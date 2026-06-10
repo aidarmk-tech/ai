@@ -39,6 +39,11 @@ data class CardMeta(
     val iptvSource: String? = null,
     // Current-channel programme scraped from Lampa's rendered EPG (ready to show).
     val iptvEpg: String? = null,
+    // Programme map for ALL channels rendered in Lampa's list at launch
+    // (normalized name → text) — used when switching channels in-player.
+    val iptvEpgMap: Map<String, String> = emptyMap(),
+    // When the map was scraped (epoch ms): entries go stale as programmes end.
+    val iptvEpgTs: Long = 0L,
 )
 
 /** External subtitle track supplied through the launch intent. */

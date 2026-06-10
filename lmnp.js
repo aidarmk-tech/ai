@@ -399,6 +399,75 @@
         } catch (e) { return 'EPG-скрейп ошибка: ' + e; }
     }
 
+    // Карта «канал → текущая программа» по ВСЕМ отрисованным карточкам списка.
+    // Уезжает в X-Lmnp-EpgMap: плеер берёт из неё программу при переключении
+    // канала уже внутри себя (DOM Lampa в этот момент недоступен).
+    function scrapeEpgMap() {
+        try {
+            function clean(e) { return e ? (e.textContent || '').replace(/\s+/g, ' ').trim() : ''; }
+            function norm(s) { return ('' + (s || '')).toLowerCase().replace(/[^a-zа-я0-9]/g, ''); }
+            var titles = document.querySelectorAll('.js-epgTitle');
+            if (!titles.length) return null;
+            // карточка канала — ближайший предок с «карточным» классом
+            function cardOf(el) {
+                var n = el.parentElement;
+                for (var k = 0; n && k < 8; k++, n = n.parentElement) {
+                    if (/(card|item|channel|line|selector)/i.test('' + (n.className || ''))) return n;
+                }
+                return el.parentElement;
+            }
+            // имя канала = текст карточки без её EPG-блоков
+            function nameOf(cardEl) {
+                try {
+                    var cl = cardEl.cloneNode(true);
+                    var eps = cl.querySelectorAll('[class*="epg"]');
+                    for (var i = eps.length - 1; i >= 0; i--) eps[i].parentNode.removeChild(eps[i]);
+                    return clean(cl).slice(0, 60);
+                } catch (_) { return ''; }
+            }
+            function timeOf(el) {
+                var n = el;
+                for (var k = 0; k < 3 && n; k++, n = n.parentElement) {
+                    var m = (n.textContent || '').match(/\b\d{1,2}:\d{2}\b/);
+                    if (m) return m[0];
+                }
+                return '';
+            }
+            // группируем заголовки программ по карточкам
+            var cards = [], groups = [];
+            for (var i = 0; i < titles.length; i++) {
+                var c = cardOf(titles[i]);
+                if (!c) continue;
+                var idx = cards.indexOf(c);
+                if (idx < 0) { cards.push(c); groups.push([titles[i]]); }
+                else groups[idx].push(titles[i]);
+            }
+            var ch = {}, size = 0, count = 0;
+            for (var j = 0; j < cards.length; j++) {
+                var key = norm(nameOf(cards[j]));
+                if (!key || ch[key]) continue;
+                var t0 = clean(groups[j][0]);
+                if (!t0) continue;
+                var s = 'Сейчас';
+                var tm0 = timeOf(groups[j][0]);
+                if (tm0) s += '  ' + tm0;
+                s += '  ' + t0.slice(0, 80);
+                if (groups[j][1]) {
+                    var t1 = clean(groups[j][1]);
+                    if (t1) {
+                        var tm1 = timeOf(groups[j][1]);
+                        s += '\nДалее' + (tm1 ? '  ' + tm1 : '') + '  ' + t1.slice(0, 80);
+                    }
+                }
+                ch[key] = s;
+                count++;
+                size += key.length + s.length + 8;
+                if (size > 100000) break;   // потолок размера заголовка
+            }
+            return count ? { ts: Date.now(), ch: ch } : null;
+        } catch (e) { return null; }
+    }
+
     // Полный плейлист (все серии/каналы) для заголовка X-Lmnp-Pl — без лимита title.
     // Записи без строкового URL включаются (u:''), чтобы список был полным; играбельные
     // подсветятся, остальные затемнятся в плеере.
@@ -825,6 +894,9 @@
                                 if (iptv) {
                                     var epgNow = scrapeEpg(meta.title);
                                     if (epgNow) hdr['X-Lmnp-Epg'] = b64utf8(epgNow);
+                                    // карта программ всех каналов — для переключения внутри плеера
+                                    var epgMap = scrapeEpgMap();
+                                    if (epgMap) hdr['X-Lmnp-EpgMap'] = b64utf8(JSON.stringify(epgMap));
                                     var src = iptvSource();
                                     if (src) hdr['X-Lmnp-Src'] = b64utf8(src);
                                 }

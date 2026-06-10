@@ -268,9 +268,14 @@ class PlayerViewModel @Inject constructor(
             _uiState.update { s -> s.copy(epgText = it) }
             return
         }
-        // No scraped guide (e.g. channel switched inside the player). Show "Нет программы" right
-        // away — never block the UI — and only try the XMLTV guide in the background if the source
-        // hasn't already been ruled out as too big (which is what used to hang on every switch).
+        // Channel switched in-player: look it up in the all-channels map scraped at launch.
+        lookupEpgMap(card)?.let {
+            _uiState.update { s -> s.copy(epgText = it) }
+            return
+        }
+        // No scraped guide at all. Show "Нет программы" right away — never block the UI — and
+        // only try the XMLTV guide in the background if the source hasn't already been ruled
+        // out as too big (which is what used to hang on every switch).
         _uiState.update { it.copy(epgText = "Нет программы") }
         val src = card.iptvSource?.takeIf { it.isNotBlank() } ?: return
         if (epgRepository.isDead(src)) return
@@ -287,11 +292,33 @@ class PlayerViewModel @Inject constructor(
         val text = formatEpg(epgRepository.programmes(card.title, currentUrl))
         val out = when {
             text.isNotEmpty() -> text
-            settings.diag -> "Нет программы · ${epgRepository.lastStatus}\n${epgRepository.matchDebug(card.title, currentUrl)}\nsrc=${card.iptvSource?.take(80) ?: "—"}"
+            settings.diag -> "Нет программы · ${epgRepository.lastStatus}\n${epgRepository.matchDebug(card.title, currentUrl)}" +
+                "\nкарта=${card.iptvEpgMap.size} ключ='${normChannel(card.title)}' src=${card.iptvSource?.take(80) ?: "—"}"
             else -> "Нет программы"
         }
         _uiState.update { it.copy(epgText = out) }
     }
+
+    /**
+     * Programme for [card]'s channel from the launch-time map (scraped from Lampa's
+     * channel list). Entries describe "now" at scrape time, so the whole map expires
+     * after 2h. Matched by normalized name: exact, else containment (closest length).
+     */
+    private fun lookupEpgMap(card: CardMeta): String? {
+        if (card.iptvEpgMap.isEmpty()) return null
+        if (card.iptvEpgTs > 0 && System.currentTimeMillis() - card.iptvEpgTs > 2 * 3600_000L) return null
+        val key = normChannel(card.title)
+        if (key.isBlank()) return null
+        card.iptvEpgMap[key]?.let { return it }
+        return card.iptvEpgMap.entries
+            .filter { it.key.contains(key) || key.contains(it.key) }
+            .minByOrNull { kotlin.math.abs(it.key.length - key.length) }
+            ?.value
+    }
+
+    /** Must mirror the plugin's norm(): lowercase, strip everything but [a-zа-я0-9]. */
+    private fun normChannel(s: String): String =
+        s.lowercase().replace(Regex("[^a-zа-я0-9]"), "")
 
     private fun formatEpg(progs: List<EpgProgramme>): String {
         if (progs.isEmpty()) return ""
