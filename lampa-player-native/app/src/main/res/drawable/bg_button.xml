@@ -1,22 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Frameless icon/pill button: subtle in rest, accent fill on focus (no border).
+     Large corner radius turns square buttons into circles, wide ones into capsules. -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_focused="true">
         <shape>
-            <solid android:color="#1E1E2A" />
-            <stroke android:width="3dp" android:color="#3D7EFF" />
-            <corners android:radius="8dp" />
+            <solid android:color="@color/accent_primary" />
+            <corners android:radius="28dp" />
         </shape>
     </item>
     <item android:state_pressed="true">
         <shape>
-            <solid android:color="#2A5FD9" />
-            <corners android:radius="8dp" />
+            <solid android:color="@color/accent_pressed" />
+            <corners android:radius="28dp" />
         </shape>
     </item>
     <item>
         <shape>
-            <solid android:color="#1E1E2A" />
-            <corners android:radius="8dp" />
+            <solid android:color="#1FFFFFFF" />
+            <corners android:radius="28dp" />
         </shape>
     </item>
 </selector>

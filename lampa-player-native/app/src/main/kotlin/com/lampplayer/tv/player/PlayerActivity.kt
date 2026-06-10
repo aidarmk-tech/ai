@@ -68,6 +68,10 @@ class PlayerActivity : AppCompatActivity() {
     private var tracksWasVisible = false
     private var infoWasVisible = false
 
+    // IPTV channel card (slides up on switch) + which channel it last showed.
+    private var lastChannelKey: String? = null
+    private var channelCardJob: Job? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -222,6 +226,19 @@ class PlayerActivity : AppCompatActivity() {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
         binding.metadataOverlay.setOnClickListener { hideMetadataOverlay() }
+
+        // Frameless TV focus: grow + lift the focused control instead of a boxed border.
+        listOf(
+            binding.btnInfo, binding.btnMarkIntro, binding.btnPrev, binding.btnRewind,
+            binding.btnPlayPause, binding.btnForward, binding.btnNext,
+            binding.btnSpeed, binding.btnAspect, binding.btnSettings,
+        ).forEach { v ->
+            v.setOnFocusChangeListener { view, focused ->
+                val s = if (focused) 1.18f else 1f
+                view.animate().scaleX(s).scaleY(s).setDuration(140).start()
+                view.elevation = if (focused) 12f else 0f
+            }
+        }
     }
 
     // ─── State observation ─────────────────────────────────────────
@@ -236,8 +253,7 @@ class PlayerActivity : AppCompatActivity() {
                 binding.tvTranslator.isVisible = s.translator.isNotEmpty()
                 binding.tvTranslator.text = s.translator
                 binding.btnPlayPause.setImageResource(
-                    if (s.isPlaying) android.R.drawable.ic_media_pause
-                    else android.R.drawable.ic_media_play
+                    if (s.isPlaying) R.drawable.ic_pause else R.drawable.ic_play
                 )
                 binding.tvEpisodeBadge.isVisible = s.episodes.size > 1
                 binding.tvEpisodeBadge.text = "${s.currentEpisodeIndex + 1}/${s.episodes.size}"
@@ -255,6 +271,22 @@ class PlayerActivity : AppCompatActivity() {
                         androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                     com.lampplayer.tv.player.VideoScaleMode.AUTO -> autoResizeMode(s.videoAspect)
                     else -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                }
+
+                // IPTV vs VOD bottom bar: live channels have no timeline to scrub.
+                val isIptv = s.card?.iptv == true
+                binding.vodProgressGroup.isVisible = !isIptv
+                binding.liveGroup.isVisible = isIptv
+                if (isIptv) {
+                    binding.tvClock.text = formatClock()
+                    binding.tvLiveNow.text = s.epgText.lineSequence().firstOrNull()
+                        ?.removePrefix("Сейчас")?.trim().orEmpty()
+                    // Channel switched (or just opened) → slide the channel card up.
+                    val key = s.title + "|" + s.epgText.take(40)
+                    if (key != lastChannelKey) { lastChannelKey = key; showChannelCard(s) }
+                } else if (lastChannelKey != null) {
+                    lastChannelKey = null
+                    binding.channelCard.isVisible = false
                 }
 
                 // OSD — default focus on the scrubber (Netflix-style)
@@ -332,6 +364,10 @@ class PlayerActivity : AppCompatActivity() {
         lifecycleScope.launch {
             while (isActive) {
                 delay(500)
+                if (vm.uiState.value.card?.iptv == true) {
+                    binding.tvClock.text = formatClock()
+                    continue
+                }
                 val pos = vm.positionMs()
                 val dur = vm.durationMs()
                 if (dur > 0) {
@@ -347,8 +383,37 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
+    private fun formatClock(): String =
+        java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
+
+    /** IPTV: slide a compact channel card up from the bottom; auto-hide after 4s. */
+    private fun showChannelCard(s: PlayerUiState) {
+        val lines = s.epgText.lines().filter { it.isNotBlank() }
+        val now = lines.firstOrNull { it.startsWith("Сейчас") }?.removePrefix("Сейчас")?.trim()
+        val next = lines.firstOrNull { it.startsWith("Далее") }?.trim()
+        binding.tvCardChannel.text = s.title
+        binding.tvCardNow.text = now?.let { "Сейчас  $it" } ?: "Нет программы"
+        binding.tvCardNext.isVisible = next != null
+        binding.tvCardNext.text = next.orEmpty()
+
+        val card = binding.channelCard
+        channelCardJob?.cancel()
+        if (!card.isVisible) {
+            card.translationY = 40f
+            card.alpha = 0f
+            card.isVisible = true
+        }
+        card.animate().translationY(0f).alpha(1f).setDuration(200).start()
+        channelCardJob = lifecycleScope.launch {
+            delay(4000)
+            card.animate().translationY(40f).alpha(0f).setDuration(200)
+                .withEndAction { card.isVisible = false }.start()
+        }
+    }
+
     private fun applyInfoOverlay(s: PlayerUiState) {
         val isIptv = s.card?.iptv == true
+        binding.tvEpisodesHeader.setText(if (isIptv) R.string.tab_channels else R.string.tab_episodes)
         val meta = s.metadata
         binding.overlayMetaSection.isVisible = meta != null || s.title.isNotEmpty()
         // For IPTV always show the live channel name (metadata can lag a channel switch).
