@@ -37,6 +37,7 @@
 
         <!-- TOP bar -->
         <LinearLayout
+            android:id="@+id/top_bar"
             android:layout_width="match_parent"
             android:layout_height="160dp"
             android:layout_gravity="top"
@@ -208,6 +209,7 @@
 
             <!-- Ряд кнопок (тонкие иконки по центру, прокрутка при переполнении) -->
             <HorizontalScrollView
+                android:id="@+id/button_row"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:scrollbars="none"

@@ -81,6 +81,9 @@ class PlayerActivity : AppCompatActivity() {
     // True while shown as a Picture-in-Picture window (suppress all on-screen controls).
     private var inPip = false
 
+    // Seek-bar-only mode: ←/→ shows just the progress scrubber, not the full button row.
+    private var seekBarOnly = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -307,7 +310,10 @@ class PlayerActivity : AppCompatActivity() {
                 // bottom and would otherwise overlap the controls.
                 val osdShown = s.osdVisible && !s.infoOverlayVisible && !s.tracksOverlayVisible
                 binding.osdContainer.isVisible = osdShown
-                if (!s.osdVisible) scrubberFocused = true   // reset zone when hidden
+                if (!s.osdVisible) { scrubberFocused = true; seekBarOnly = false }   // reset when hidden
+                // Seek-only: keep just the scrubber; hide the top bar + button row.
+                binding.topBar.isVisible = osdShown && !seekBarOnly
+                binding.buttonRow.isVisible = osdShown && !seekBarOnly
                 if (osdShown && osdWasHidden && scrubberFocused) {
                     binding.scrubber.requestFocus()
                 }
@@ -595,9 +601,17 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun enterButtonZone() {
         binding.osdContainer.descendantFocusability = android.view.ViewGroup.FOCUS_AFTER_DESCENDANTS
+        expandOsd()
         scrubberFocused = false
         binding.btnPlayPause.requestFocus()
         vm.showOsd()
+    }
+
+    /** Leave seek-only mode: reveal the top bar + button row (full controls). */
+    private fun expandOsd() {
+        seekBarOnly = false
+        binding.topBar.isVisible = true
+        binding.buttonRow.isVisible = true
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
@@ -673,7 +687,7 @@ class PlayerActivity : AppCompatActivity() {
                     KeyEvent.KEYCODE_DPAD_CENTER,
                     KeyEvent.KEYCODE_ENTER -> { vm.onKeyOk(); vm.showOsd(); true }
                     KeyEvent.KEYCODE_DPAD_DOWN -> {
-                        scrubberFocused = false; binding.btnPlayPause.requestFocus(); vm.showOsd(); true
+                        expandOsd(); scrubberFocused = false; binding.btnPlayPause.requestFocus(); vm.showOsd(); true
                     }
                     KeyEvent.KEYCODE_DPAD_UP -> { vm.toggleTracksOverlay(); true }
                     KeyEvent.KEYCODE_INFO, KeyEvent.KEYCODE_MENU -> { vm.toggleInfoOverlay(); true }
@@ -703,19 +717,19 @@ class PlayerActivity : AppCompatActivity() {
         }
         return when (keyCode) {
             KeyEvent.KEYCODE_DPAD_LEFT -> {
-                scrubberFocused = true; vm.showOsd(); doSeek(false, repeatCount = event.repeatCount); true
+                seekBarOnly = true; scrubberFocused = true; vm.showOsd(); doSeek(false, repeatCount = event.repeatCount); true
             }
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                scrubberFocused = true; vm.showOsd(); doSeek(true, repeatCount = event.repeatCount); true
+                seekBarOnly = true; scrubberFocused = true; vm.showOsd(); doSeek(true, repeatCount = event.repeatCount); true
             }
             KeyEvent.KEYCODE_PAGE_UP,
-            KeyEvent.KEYCODE_CHANNEL_UP -> { vm.onKeyPageUp(); scrubberFocused = true; vm.showOsd(); true }
+            KeyEvent.KEYCODE_CHANNEL_UP -> { vm.onKeyPageUp(); seekBarOnly = true; scrubberFocused = true; vm.showOsd(); true }
             KeyEvent.KEYCODE_PAGE_DOWN,
-            KeyEvent.KEYCODE_CHANNEL_DOWN -> { vm.onKeyPageDown(); scrubberFocused = true; vm.showOsd(); true }
+            KeyEvent.KEYCODE_CHANNEL_DOWN -> { vm.onKeyPageDown(); seekBarOnly = true; scrubberFocused = true; vm.showOsd(); true }
             KeyEvent.KEYCODE_DPAD_UP -> { vm.toggleTracksOverlay(); true }
             KeyEvent.KEYCODE_DPAD_DOWN,
             KeyEvent.KEYCODE_DPAD_CENTER,
-            KeyEvent.KEYCODE_ENTER -> { scrubberFocused = true; vm.showOsd(); true }
+            KeyEvent.KEYCODE_ENTER -> { seekBarOnly = false; scrubberFocused = true; vm.showOsd(); true }
             KeyEvent.KEYCODE_INFO,
             KeyEvent.KEYCODE_MENU -> { vm.toggleInfoOverlay(); true }
             KeyEvent.KEYCODE_BACK -> { vm.onKeyBack(false, false); true }
