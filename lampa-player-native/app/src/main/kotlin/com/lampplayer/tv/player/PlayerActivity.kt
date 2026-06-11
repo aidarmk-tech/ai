@@ -379,6 +379,16 @@ class PlayerActivity : AppCompatActivity() {
 
         lifecycleScope.launch { vm.navigateToNext.collect { finishWithResult(completed = true) } }
         lifecycleScope.launch { vm.showExitDialog.collect { promptExit() } }
+        lifecycleScope.launch { vm.resumedFromMs.collect { showResumeCard(it) } }
+        lifecycleScope.launch {
+            vm.weakStreamHint.collect {
+                Toast.makeText(
+                    this@PlayerActivity,
+                    "Слабый поток: попробуйте увеличить буфер в Настройках или выбрать другое качество в Lampa",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+        }
         // AUTO fallback handed playback to libVLC — rebind the render surface.
         lifecycleScope.launch { vm.engineSwitched.collect { bindEngineSurface() } }
 
@@ -454,6 +464,27 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun formatClock(): String =
         java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
+
+    // Resume card: visible briefly after auto-resume; ← while shown restarts from zero.
+    private var resumeCardJob: Job? = null
+
+    private fun showResumeCard(fromMs: Long) {
+        binding.tvResumeText.text = "▶  Продолжаем с ${formatTime(fromMs)}"
+        binding.resumeCard.alpha = 0f
+        binding.resumeCard.isVisible = true
+        binding.resumeCard.animate().alpha(1f).setDuration(200).start()
+        resumeCardJob?.cancel()
+        resumeCardJob = lifecycleScope.launch {
+            delay(6000)
+            binding.resumeCard.animate().alpha(0f).setDuration(200)
+                .withEndAction { binding.resumeCard.isVisible = false }.start()
+        }
+    }
+
+    private fun hideResumeCard() {
+        resumeCardJob?.cancel()
+        binding.resumeCard.isVisible = false
+    }
 
     /** Accumulate a typed channel number, show it, then commit after a short pause. */
     private fun onZapDigit(digit: Int) {
@@ -617,6 +648,16 @@ class PlayerActivity : AppCompatActivity() {
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         val s = vm.uiState.value
         val osdVisible = s.osdVisible
+
+        // Resume card: ← restarts from the beginning while it's on screen.
+        if (binding.resumeCard.isVisible) {
+            hideResumeCard()
+            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_MEDIA_PREVIOUS) {
+                vm.seekToMs(0)
+                return true
+            }
+            // any other key: just dismiss the card and handle the key normally
+        }
 
         // Diagnostic overlay: any key dismisses it first.
         if (debugVisible) {

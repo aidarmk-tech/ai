@@ -120,6 +120,27 @@ class PlayerViewModel @Inject constructor(
     private val _playEpisode = MutableSharedFlow<EpisodeItem>()
     val playEpisode: SharedFlow<EpisodeItem> = _playEpisode.asSharedFlow()
 
+    /** Emitted once when playback resumes from a saved position (ms) — shows the resume card. */
+    private val _resumedFromMs = MutableSharedFlow<Long>(extraBufferCapacity = 1)
+    val resumedFromMs: SharedFlow<Long> = _resumedFromMs.asSharedFlow()
+
+    /** Emitted once per session when the stream keeps rebuffering — show a friendly hint. */
+    private val _weakStreamHint = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val weakStreamHint: SharedFlow<Unit> = _weakStreamHint.asSharedFlow()
+    private var everReady = false
+    private var weakHintShown = false
+    private val rebufferTimes = ArrayDeque<Long>()
+
+    private fun onRebuffer() {
+        val now = System.currentTimeMillis()
+        rebufferTimes.addLast(now)
+        while (rebufferTimes.isNotEmpty() && now - rebufferTimes.first() > 90_000) rebufferTimes.removeFirst()
+        if (rebufferTimes.size >= 3 && !weakHintShown) {
+            weakHintShown = true
+            _weakStreamHint.tryEmit(Unit)
+        }
+    }
+
     // ExoPlayer instance — only initialized when the active engine is ExoPlayer.
     // Guard external/internal access with [usingVlc]; in VLC mode it is never created.
     lateinit var player: ExoPlayer
@@ -176,6 +197,7 @@ class PlayerViewModel @Inject constructor(
         runCatching { vlc?.release() }; vlc = null
         usingVlc = false
         didAutoFallback = false
+        everReady = false; weakHintShown = false; rebufferTimes.clear()
         currentRate = 1f
         currentUrl = ""
         currentCard = null
@@ -201,6 +223,11 @@ class PlayerViewModel @Inject constructor(
                 episodes = card.episodes, currentEpisodeIndex = card.currentEpisodeIndex,
             )
         }
+
+        // Restore remembered playback prefs: volume boost + scale mode survive restarts.
+        currentBoost = settings.volumeBoost.coerceIn(100, 200)
+        val savedScale = runCatching { VideoScaleMode.valueOf(settings.scaleMode) }.getOrDefault(VideoScaleMode.AUTO)
+        _uiState.update { it.copy(volumeBoost = currentBoost, scaleMode = savedScale) }
 
         // Engine selection (see EngineType). "vlc" → libVLC immediately;
         // "exoplayer"/"auto" → ExoPlayer (AUTO falls back to libVLC on fatal decode errors).
@@ -447,6 +474,7 @@ class PlayerViewModel @Inject constructor(
             )
             reapplyRate()
             startVlcPoll()
+            if (!card.iptv && startMs > 60_000) _resumedFromMs.tryEmit(startMs)   // "Продолжаем с …"
         }
     }
 
@@ -526,6 +554,7 @@ class PlayerViewModel @Inject constructor(
             if (startMs > 0) player.seekTo(startMs)
             player.prepare()
             player.playWhenReady = true
+            if (!card.iptv && startMs > 60_000) _resumedFromMs.tryEmit(startMs)   // "Продолжаем с …"
 
             val showData = positionDataStore.getShowData(card)
             if (showData != null && settings.rememberTracks) {
@@ -634,6 +663,7 @@ class PlayerViewModel @Inject constructor(
         val next = boostSteps[(idx + 1) % boostSteps.size]
         applyBoost(next)
         _uiState.update { it.copy(volumeBoost = next) }
+        viewModelScope.launch { settingsDataStore.setVolumeBoost(next) }   // survives restarts
     }
 
     private fun applyBoost(percent: Int) {
@@ -674,6 +704,7 @@ class PlayerViewModel @Inject constructor(
         val next = order[(idx + 1) % order.size]
         _uiState.update { it.copy(scaleMode = next) }
         applyScaleMode(next)   // ExoPlayer sizing is applied by the Activity via resizeMode
+        viewModelScope.launch { settingsDataStore.setScaleMode(next.name) }   // survives restarts
     }
 
     private fun applyScaleMode(mode: VideoScaleMode) {
@@ -990,6 +1021,12 @@ class PlayerViewModel @Inject constructor(
         p.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 _uiState.update { it.copy(isLoading = state == Player.STATE_BUFFERING) }
+                if (state == Player.STATE_READY) {
+                    everReady = true
+                    // Audio session exists only now — (re)attach the loudness boost.
+                    if (currentBoost > 100) applyBoost(currentBoost)
+                }
+                if (state == Player.STATE_BUFFERING && everReady) onRebuffer()
                 if (state == Player.STATE_ENDED) {
                     viewModelScope.launch { saveCurrentPosition(ended = true) }
                     if (hasInPlayerNext()) viewModelScope.launch { navigateNext() }

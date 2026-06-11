@@ -346,6 +346,32 @@
             android:fontFamily="sans-serif-medium" />
     </LinearLayout>
 
+    <!-- ═══ Resume card: "Продолжаем с 47:12 · ← Сначала" (auto-hides) ═══ -->
+    <LinearLayout
+        android:id="@+id/resume_card"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|start"
+        android:layout_marginStart="@dimen/safe_margin"
+        android:layout_marginBottom="220dp"
+        android:orientation="vertical"
+        android:background="@drawable/bg_channel_card"
+        android:padding="@dimen/space_md"
+        android:elevation="8dp"
+        android:visibility="gone">
+
+        <TextView android:id="@+id/tv_resume_text"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:textColor="@color/text_primary" android:textSize="18sp"
+            android:fontFamily="sans-serif-medium" />
+
+        <TextView
+            android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="←  смотреть сначала"
+            android:textColor="@color/text_secondary" android:textSize="14sp" />
+    </LinearLayout>
+
     <!-- ═══ Channel-number zap overlay (IPTV: type a number on the remote) ═══ -->
     <TextView
         android:id="@+id/tv_zap_number"

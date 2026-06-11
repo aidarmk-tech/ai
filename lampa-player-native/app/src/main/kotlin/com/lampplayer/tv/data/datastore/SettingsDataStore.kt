@@ -27,6 +27,9 @@ data class AppSettings(
     val sleepTimerMin: Int = 0,
     // OSD auto-hide after N seconds of inactivity.
     val osdTimeoutSec: Int = 10,
+    // Remembered between sessions: volume boost % (100–200) and video scale mode name.
+    val volumeBoost: Int = 100,
+    val scaleMode: String = "AUTO",
 )
 
 @Singleton
@@ -43,6 +46,8 @@ class SettingsDataStore @Inject constructor(
         val DIAG = booleanPreferencesKey("diag")
         val SLEEP_TIMER = intPreferencesKey("sleep_timer_min")
         val OSD_TIMEOUT = intPreferencesKey("osd_timeout_sec")
+        val VOLUME_BOOST = intPreferencesKey("volume_boost")
+        val SCALE_MODE = stringPreferencesKey("scale_mode")
     }
 
     val settings: Flow<AppSettings> = context.settingsDataStore.data
@@ -59,6 +64,8 @@ class SettingsDataStore @Inject constructor(
                 diag = prefs[Keys.DIAG] ?: false,
                 sleepTimerMin = prefs[Keys.SLEEP_TIMER] ?: 0,
                 osdTimeoutSec = prefs[Keys.OSD_TIMEOUT] ?: 10,
+                volumeBoost = prefs[Keys.VOLUME_BOOST] ?: 100,
+                scaleMode = prefs[Keys.SCALE_MODE] ?: "AUTO",
             )
         }
 
@@ -75,4 +82,6 @@ class SettingsDataStore @Inject constructor(
     suspend fun setDiag(enabled: Boolean) = update { this[Keys.DIAG] = enabled }
     suspend fun setSleepTimer(minutes: Int) = update { this[Keys.SLEEP_TIMER] = minutes }
     suspend fun setOsdTimeout(seconds: Int) = update { this[Keys.OSD_TIMEOUT] = seconds }
+    suspend fun setVolumeBoost(percent: Int) = update { this[Keys.VOLUME_BOOST] = percent }
+    suspend fun setScaleMode(mode: String) = update { this[Keys.SCALE_MODE] = mode }
 }
