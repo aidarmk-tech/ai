@@ -303,9 +303,12 @@ class PlayerActivity : AppCompatActivity() {
 
                 // OSD — default focus on the scrubber (Netflix-style)
                 val osdWasHidden = !binding.osdContainer.isVisible
-                binding.osdContainer.isVisible = s.osdVisible
+                // Hide the OSD while an overlay is up — the compact info panel sits at the
+                // bottom and would otherwise overlap the controls.
+                val osdShown = s.osdVisible && !s.infoOverlayVisible && !s.tracksOverlayVisible
+                binding.osdContainer.isVisible = osdShown
                 if (!s.osdVisible) scrubberFocused = true   // reset zone when hidden
-                if (s.osdVisible && osdWasHidden && scrubberFocused) {
+                if (osdShown && osdWasHidden && scrubberFocused) {
                     binding.scrubber.requestFocus()
                 }
 

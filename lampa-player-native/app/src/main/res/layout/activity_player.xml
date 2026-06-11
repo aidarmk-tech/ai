@@ -435,27 +435,29 @@
         android:lineSpacingMultiplier="1.1"
         android:padding="@dimen/space_sm" android:visibility="gone" />
 
-    <!-- ═══ INFO OVERLAY (↓): инфо о контенте + серии (full-screen) ═══ -->
+    <!-- ═══ INFO OVERLAY (↓): компактная нижняя карточка, видео видно сверху ═══ -->
     <LinearLayout
         android:id="@+id/info_overlay"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
+        android:layout_height="320dp"
+        android:layout_gravity="bottom"
+        android:layout_marginHorizontal="@dimen/safe_margin"
+        android:layout_marginBottom="@dimen/space_md"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:background="@drawable/bg_info_scrim"
-        android:paddingHorizontal="@dimen/safe_margin"
-        android:paddingVertical="@dimen/space_lg"
+        android:background="@drawable/bg_info_panel"
+        android:padding="@dimen/space_md"
         android:visibility="gone">
 
         <!-- Постер -->
         <ImageView android:id="@+id/iv_overlay_poster"
-            android:layout_width="220dp"
-            android:layout_height="330dp"
+            android:layout_width="186dp"
+            android:layout_height="match_parent"
             android:scaleType="centerCrop"
             android:background="@color/bg_surface"
-            android:layout_marginEnd="@dimen/space_lg" />
+            android:layout_marginEnd="@dimen/space_md" />
 
-        <!-- Текстовый блок: название + мета + описание (широкий, читаемый) -->
+        <!-- Текстовый блок: название + мета + описание -->
         <LinearLayout
             android:id="@+id/overlay_meta_section"
             android:layout_width="0dp"
@@ -466,46 +468,47 @@
 
             <TextView android:id="@+id/tv_overlay_meta_title"
                 android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:textColor="@color/text_primary" android:textSize="34sp"
+                android:textColor="@color/text_primary" android:textSize="26sp"
                 android:fontFamily="sans-serif-medium"
-                android:maxLines="2" android:ellipsize="end"
-                android:layout_marginBottom="@dimen/space_sm" />
+                android:maxLines="1" android:ellipsize="end"
+                android:layout_marginBottom="@dimen/space_xs" />
 
             <TextView android:id="@+id/tv_overlay_meta_info"
                 android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:textColor="@color/accent_primary" android:textSize="17sp"
-                android:layout_marginBottom="@dimen/space_md" />
+                android:textColor="@color/accent_primary" android:textSize="15sp"
+                android:layout_marginBottom="@dimen/space_sm" />
 
             <TextView android:id="@+id/tv_overlay_meta_overview"
                 android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:textColor="@color/text_secondary" android:textSize="18sp"
-                android:lineSpacingMultiplier="1.25"
-                android:maxLines="8" android:ellipsize="end" />
+                android:textColor="@color/text_secondary" android:textSize="15sp"
+                android:lineSpacingMultiplier="1.2"
+                android:maxLines="5" android:ellipsize="end" />
 
             <!-- EPG -->
             <TextView android:id="@+id/tv_overlay_epg"
                 android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/space_md"
-                android:textColor="@color/text_primary" android:textSize="16sp"
+                android:layout_marginTop="@dimen/space_sm"
+                android:textColor="@color/text_primary" android:textSize="15sp"
+                android:maxLines="4" android:ellipsize="end"
                 android:visibility="gone" />
 
             <!-- Формат видео — чистый чип качества -->
             <TextView android:id="@+id/tv_overlay_video_info"
                 android:layout_width="wrap_content" android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/space_md"
+                android:layout_marginTop="@dimen/space_sm"
                 android:background="@drawable/bg_pill"
                 android:textColor="@color/text_secondary"
-                android:textSize="14sp"
-                android:paddingHorizontal="14dp" android:paddingVertical="7dp"
+                android:textSize="13sp"
+                android:paddingHorizontal="12dp" android:paddingVertical="6dp"
                 android:visibility="gone" />
         </LinearLayout>
 
-        <!-- Панель «Серии» — только когда есть серии -->
+        <!-- Панель «Серии/Каналы» — только когда есть список -->
         <LinearLayout
             android:id="@+id/episodes_panel"
-            android:layout_width="380dp"
+            android:layout_width="360dp"
             android:layout_height="match_parent"
-            android:layout_marginStart="@dimen/space_lg"
+            android:layout_marginStart="@dimen/space_md"
             android:orientation="vertical"
             android:background="@color/bg_elevated"
             android:visibility="gone">
@@ -513,12 +516,12 @@
             <TextView
                 android:id="@+id/tv_episodes_header"
                 android:layout_width="match_parent"
-                android:layout_height="52dp"
+                android:layout_height="44dp"
                 android:text="@string/tab_episodes"
                 android:gravity="center_vertical"
                 android:paddingHorizontal="@dimen/space_md"
                 android:textColor="@color/accent_primary"
-                android:textSize="16sp"
+                android:textSize="15sp"
                 android:fontFamily="sans-serif-medium"
                 android:background="@color/bg_surface" />
 
@@ -539,7 +542,7 @@
                 android:layout_weight="1"
                 android:padding="@dimen/space_md"
                 android:textColor="@color/text_primary"
-                android:textSize="17sp"
+                android:textSize="15sp"
                 android:visibility="gone" />
         </LinearLayout>
     </LinearLayout>
