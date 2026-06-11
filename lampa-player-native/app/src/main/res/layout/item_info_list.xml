@@ -26,15 +26,11 @@
         android:layout_marginEnd="@dimen/space_sm"
         android:visibility="gone" />
 
-    <TextView
+    <com.lampplayer.tv.player.MarqueeTextView
         android:id="@+id/tv_label"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_weight="1"
         android:textColor="@color/text_secondary"
-        android:textSize="18sp"
-        android:singleLine="true"
-        android:ellipsize="marquee"
-        android:marqueeRepeatLimit="marquee_forever"
-        android:scrollHorizontally="true" />
+        android:textSize="18sp" />
 </LinearLayout>

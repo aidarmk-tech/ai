@@ -22,22 +22,14 @@
         android:layout_weight="1"
         android:orientation="vertical">
 
-        <TextView android:id="@+id/tv_ep_name"
+        <com.lampplayer.tv.player.MarqueeTextView android:id="@+id/tv_ep_name"
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:textColor="@color/text_primary" android:textSize="16sp"
-            android:fontFamily="sans-serif-medium"
-            android:singleLine="true"
-            android:ellipsize="marquee"
-            android:marqueeRepeatLimit="marquee_forever"
-            android:scrollHorizontally="true" />
+            android:fontFamily="sans-serif-medium" />
 
-        <TextView android:id="@+id/tv_ep_overview"
+        <com.lampplayer.tv.player.MarqueeTextView android:id="@+id/tv_ep_overview"
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:textColor="@color/text_secondary" android:textSize="13sp"
-            android:layout_marginTop="2dp"
-            android:singleLine="true"
-            android:ellipsize="marquee"
-            android:marqueeRepeatLimit="marquee_forever"
-            android:scrollHorizontally="true" />
+            android:layout_marginTop="2dp" />
     </LinearLayout>
 </LinearLayout>
