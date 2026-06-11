@@ -47,6 +47,7 @@ class InfoListAdapter<T>(
             b.root.setOnFocusChangeListener { v, focused ->
                 v.scaleX = if (focused) 1.05f else 1f
                 v.scaleY = if (focused) 1.05f else 1f
+                b.tvLabel.isSelected = focused   // run the marquee on the focused row
             }
         }
     }

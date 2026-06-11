@@ -26,12 +26,18 @@
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:textColor="@color/text_primary" android:textSize="16sp"
             android:fontFamily="sans-serif-medium"
-            android:maxLines="1" android:ellipsize="end" />
+            android:singleLine="true"
+            android:ellipsize="marquee"
+            android:marqueeRepeatLimit="marquee_forever"
+            android:scrollHorizontally="true" />
 
         <TextView android:id="@+id/tv_ep_overview"
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:textColor="@color/text_secondary" android:textSize="13sp"
             android:layout_marginTop="2dp"
-            android:maxLines="2" android:ellipsize="end" />
+            android:singleLine="true"
+            android:ellipsize="marquee"
+            android:marqueeRepeatLimit="marquee_forever"
+            android:scrollHorizontally="true" />
     </LinearLayout>
 </LinearLayout>

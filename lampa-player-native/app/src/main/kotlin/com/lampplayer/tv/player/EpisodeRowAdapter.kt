@@ -38,6 +38,13 @@ class EpisodeRowAdapter(
             holder.b.epStill.setImageDrawable(null)
         }
         holder.b.root.setOnClickListener { onSelected(e) }
+        // Marquee runs only on the focused row → full title/synopsis scrolls into view.
+        holder.b.root.setOnFocusChangeListener { _, focused ->
+            holder.b.tvEpName.isSelected = focused
+            holder.b.tvEpOverview.isSelected = focused
+            val s = if (focused) 1.04f else 1f
+            holder.b.root.animate().scaleX(s).scaleY(s).setDuration(120).start()
+        }
     }
 
     override fun getItemCount(): Int = items.size

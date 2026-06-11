@@ -33,6 +33,8 @@
         android:layout_weight="1"
         android:textColor="@color/text_secondary"
         android:textSize="18sp"
-        android:maxLines="1"
-        android:ellipsize="end" />
+        android:singleLine="true"
+        android:ellipsize="marquee"
+        android:marqueeRepeatLimit="marquee_forever"
+        android:scrollHorizontally="true" />
 </LinearLayout>
