@@ -8,6 +8,7 @@ import android.widget.Toast
 import androidx.activity.viewModels
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.util.UnstableApi
@@ -356,6 +357,7 @@ class PlayerActivity : AppCompatActivity() {
                         Glide.with(this@PlayerActivity).load(meta.posterUrl)
                             .transition(DrawableTransitionOptions.withCrossFade())
                             .into(binding.ivMetaPoster)
+                        applyPosterAccent(meta.posterUrl)
                     }
                 }
             }
@@ -387,6 +389,39 @@ class PlayerActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    // Poster-driven accent: tint a few runtime-tintable views to match the artwork.
+    private var lastAccentUrl: String? = null
+
+    private fun applyPosterAccent(posterUrl: String?) {
+        if (posterUrl.isNullOrEmpty() || posterUrl == lastAccentUrl) return
+        lastAccentUrl = posterUrl
+        Glide.with(this).asBitmap().load(posterUrl).into(
+            object : com.bumptech.glide.request.target.CustomTarget<android.graphics.Bitmap>() {
+                override fun onResourceReady(
+                    res: android.graphics.Bitmap,
+                    t: com.bumptech.glide.request.transition.Transition<in android.graphics.Bitmap>?,
+                ) {
+                    androidx.palette.graphics.Palette.from(res).clearFilters().generate { p ->
+                        val base = ContextCompat.getColor(this@PlayerActivity, R.color.accent_primary)
+                        val accent = p?.let {
+                            it.getVibrantColor(it.getLightVibrantColor(it.getDominantColor(base)))
+                        } ?: base
+                        applyAccentColor(accent)
+                    }
+                }
+                override fun onLoadCleared(placeholder: android.graphics.drawable.Drawable?) {}
+            }
+        )
+    }
+
+    private fun applyAccentColor(color: Int) {
+        val tint = android.content.res.ColorStateList.valueOf(color)
+        binding.progressBar.progressTintList = tint
+        binding.tvMetaInfo.setTextColor(color)
+        binding.tvOverlayMetaInfo.setTextColor(color)
+        binding.tvEpisodesHeader.setTextColor(color)
     }
 
     /** Fade + slide an overlay in/out (slideX/Y is the off-screen offset it animates from/to). */

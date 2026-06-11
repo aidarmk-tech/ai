@@ -101,6 +101,7 @@ dependencies {
     implementation(libs.coroutines.android)
 
     implementation(libs.glide)
+    implementation(libs.androidx.palette)
 }
 
 kapt {

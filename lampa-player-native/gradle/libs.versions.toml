@@ -61,6 +61,9 @@ coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutin
 # Glide
 glide = { group = "com.github.bumptech.glide", name = "glide", version.ref = "glide" }
 
+# Palette (poster-driven accent colour)
+androidx-palette = { group = "androidx.palette", name = "palette-ktx", version = "1.0.0" }
+
 # libVLC (fallback playback engine — bundles all ABIs)
 libvlc-all = { group = "org.videolan.android", name = "libvlc-all", version.ref = "libvlc" }
 
