@@ -291,6 +291,18 @@
                         android:contentDescription="Соотношение / зум"
                         android:focusable="true" android:layout_marginHorizontal="6dp" />
 
+                    <Button android:id="@+id/btn_volume"
+                        android:layout_width="wrap_content" android:layout_height="48dp"
+                        android:minWidth="64dp"
+                        android:paddingHorizontal="12dp"
+                        android:text="100%"
+                        android:textColor="@color/text_primary"
+                        android:textSize="14sp"
+                        android:textAllCaps="false"
+                        android:background="@drawable/bg_button"
+                        android:contentDescription="Громкость"
+                        android:focusable="true" android:layout_marginHorizontal="6dp" />
+
                     <ImageButton android:id="@+id/btn_settings"
                         android:layout_width="48dp" android:layout_height="48dp"
                         android:src="@drawable/ic_settings"
@@ -331,6 +343,24 @@
             android:textSize="48sp"
             android:fontFamily="sans-serif-medium" />
     </LinearLayout>
+
+    <!-- ═══ Channel-number zap overlay (IPTV: type a number on the remote) ═══ -->
+    <TextView
+        android:id="@+id/tv_zap_number"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="120dp"
+        android:layout_marginEnd="@dimen/safe_margin"
+        android:background="@drawable/bg_channel_card"
+        android:textColor="@color/text_primary"
+        android:textSize="56sp"
+        android:fontFamily="sans-serif-medium"
+        android:minWidth="120dp"
+        android:gravity="center"
+        android:paddingHorizontal="28dp"
+        android:paddingVertical="12dp"
+        android:visibility="gone" />
 
     <!-- Skip Intro -->
     <Button android:id="@+id/btn_skip_intro"

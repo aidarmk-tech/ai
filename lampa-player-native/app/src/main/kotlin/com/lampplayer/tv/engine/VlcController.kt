@@ -166,6 +166,9 @@ class VlcController(
     override fun seekTo(ms: Long) { mediaPlayer.time = ms.coerceAtLeast(0) }
     override fun setRate(rate: Float) { mediaPlayer.rate = rate }
 
+    /** libVLC supports software gain up to 200% via the audio volume (0..200). */
+    fun setVolume(percent: Int) { runCatching { mediaPlayer.setVolume(percent.coerceIn(0, 200)) } }
+
     override fun audioTracks(): List<EngineTrack> =
         mediaPlayer.audioTracks?.map { EngineTrack(it.id, it.name) } ?: emptyList()
 

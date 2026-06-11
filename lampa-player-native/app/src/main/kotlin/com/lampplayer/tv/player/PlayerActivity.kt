@@ -72,6 +72,10 @@ class PlayerActivity : AppCompatActivity() {
     private var lastChannelKey: String? = null
     private var channelCardJob: Job? = null
 
+    // IPTV channel-number zapping (type digits on the remote → jump to channel N).
+    private var zapBuffer = ""
+    private var zapJob: Job? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -213,6 +217,7 @@ class PlayerActivity : AppCompatActivity() {
         binding.btnNext.setOnClickListener { vm.onNextEpisode(); vm.showOsd() }
         binding.btnSpeed.setOnClickListener { vm.cyclePlaybackSpeed(); vm.showOsd() }
         binding.btnAspect.setOnClickListener { vm.cycleScaleMode(); vm.showOsd() }
+        binding.btnVolume.setOnClickListener { vm.cycleVolumeBoost(); vm.showOsd() }
         binding.btnInfo.setOnClickListener { vm.toggleInfoOverlay() }
         binding.btnMarkIntro.setOnClickListener {
             vm.markIntro()
@@ -231,7 +236,7 @@ class PlayerActivity : AppCompatActivity() {
         listOf(
             binding.btnInfo, binding.btnMarkIntro, binding.btnPrev, binding.btnRewind,
             binding.btnPlayPause, binding.btnForward, binding.btnNext,
-            binding.btnSpeed, binding.btnAspect, binding.btnSettings,
+            binding.btnSpeed, binding.btnAspect, binding.btnVolume, binding.btnSettings,
         ).forEach { v ->
             v.setOnFocusChangeListener { view, focused ->
                 val s = if (focused) 1.18f else 1f
@@ -258,6 +263,7 @@ class PlayerActivity : AppCompatActivity() {
                 binding.tvEpisodeBadge.isVisible = s.episodes.size > 1
                 binding.tvEpisodeBadge.text = "${s.currentEpisodeIndex + 1}/${s.episodes.size}"
                 binding.btnSpeed.text = formatSpeed(s.playbackSpeed)
+                binding.btnVolume.text = "${s.volumeBoost}%"
                 binding.btnAspect.text = when (s.scaleMode) {
                     com.lampplayer.tv.player.VideoScaleMode.AUTO -> "AUTO"
                     com.lampplayer.tv.player.VideoScaleMode.FIT -> "FIT"
@@ -399,6 +405,22 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun formatClock(): String =
         java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
+
+    /** Accumulate a typed channel number, show it, then commit after a short pause. */
+    private fun onZapDigit(digit: Int) {
+        if (zapBuffer.length >= 4) zapBuffer = ""
+        zapBuffer += digit.toString()
+        binding.tvZapNumber.text = zapBuffer
+        binding.tvZapNumber.isVisible = true
+        zapJob?.cancel()
+        zapJob = lifecycleScope.launch {
+            delay(1500)
+            val n = zapBuffer.toIntOrNull()
+            zapBuffer = ""
+            binding.tvZapNumber.isVisible = false
+            if (n != null) vm.zapToChannel(n)
+        }
+    }
 
     /** IPTV: slide a compact channel card up from the bottom; auto-hide after 4s. */
     private fun showChannelCard(s: PlayerUiState) {
@@ -568,6 +590,16 @@ class PlayerActivity : AppCompatActivity() {
                 }
                 else -> super.onKeyDown(keyCode, event)
             }
+        }
+
+        // ── IPTV: цифры на пульте — переход к каналу по номеру ──────
+        if (s.card?.iptv == true) {
+            val digit = when (keyCode) {
+                in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 -> keyCode - KeyEvent.KEYCODE_0
+                in KeyEvent.KEYCODE_NUMPAD_0..KeyEvent.KEYCODE_NUMPAD_9 -> keyCode - KeyEvent.KEYCODE_NUMPAD_0
+                else -> -1
+            }
+            if (digit >= 0) { onZapDigit(digit); return true }
         }
 
         // ── Медиа-кнопки — всегда обрабатываем ───────────────────

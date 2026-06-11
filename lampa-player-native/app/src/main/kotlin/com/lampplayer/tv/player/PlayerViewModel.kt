@@ -70,6 +70,7 @@ data class PlayerUiState(
     val selectedSubtitleIndex: Int = -1,
     val videoInfo: String = "",
     val playbackSpeed: Float = 1f,
+    val volumeBoost: Int = 100,
     val scaleMode: VideoScaleMode = VideoScaleMode.AUTO,
     val videoAspect: Float = 0f,
     // IPTV electronic programme guide for the current channel (formatted now/next).
@@ -170,6 +171,7 @@ class PlayerViewModel @Inject constructor(
             }
         }
         saveJob?.cancel(); diagJob?.cancel(); vlcPollJob?.cancel(); osdHideJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel(); epgJob?.cancel(); retryJob?.cancel()
+        releaseLoudness()
         if (::player.isInitialized) runCatching { player.release() }
         runCatching { vlc?.release() }; vlc = null
         usingVlc = false
@@ -494,6 +496,7 @@ class PlayerViewModel @Inject constructor(
         // Flip the engine flag BEFORE releasing ExoPlayer so concurrent position/seek
         // accessors never route to the released instance.
         usingVlc = true
+        releaseLoudness()   // Exo effect is bound to the Exo session we're releasing
         runCatching { player.release() }
         saveJob?.cancel(); diagJob?.cancel(); retryJob?.cancel()
         _uiState.update { it.copy(hasError = false, isLoading = true) }
@@ -610,6 +613,7 @@ class PlayerViewModel @Inject constructor(
     /** Re-apply rate + sizing after (re)loading media — VLC resets them per media. */
     private fun reapplyRate() {
         if (currentRate != 1f) applyRate(currentRate)
+        if (currentBoost != 100) applyBoost(currentBoost)
         if (usingVlc && _uiState.value.scaleMode == VideoScaleMode.FILL) applyScaleMode(_uiState.value.scaleMode)
     }
 
@@ -618,6 +622,42 @@ class PlayerViewModel @Inject constructor(
         val next = SPEED_STEPS[(idx + 1) % SPEED_STEPS.size]
         applyRate(next)
         _uiState.update { it.copy(playbackSpeed = next) }
+    }
+
+    // ─── Volume boost (>100% for quiet content on weak TV speakers) ────────
+    private var currentBoost = 100
+    private var loudness: android.media.audiofx.LoudnessEnhancer? = null
+    private val boostSteps = listOf(100, 125, 150, 200)
+
+    fun cycleVolumeBoost() {
+        val idx = boostSteps.indexOf(currentBoost).coerceAtLeast(0)
+        val next = boostSteps[(idx + 1) % boostSteps.size]
+        applyBoost(next)
+        _uiState.update { it.copy(volumeBoost = next) }
+    }
+
+    private fun applyBoost(percent: Int) {
+        currentBoost = percent
+        if (usingVlc) { vlc?.setVolume(percent); return }
+        if (!::player.isInitialized) return
+        if (percent <= 100) {
+            runCatching { loudness?.enabled = false }
+            return
+        }
+        // LoudnessEnhancer gain is in millibels: 20·log10(ratio) dB → ×100.
+        val gainMb = (2000.0 * kotlin.math.log10(percent / 100.0)).toInt()
+        runCatching {
+            val sid = player.audioSessionId
+            if (sid == 0) return@runCatching
+            if (loudness == null) loudness = android.media.audiofx.LoudnessEnhancer(sid)
+            loudness?.setTargetGain(gainMb)
+            loudness?.enabled = true
+        }
+    }
+
+    private fun releaseLoudness() {
+        runCatching { loudness?.release() }
+        loudness = null
     }
 
     // ─── Video sizing (aspect / zoom) ──────────────────────────────
@@ -698,6 +738,9 @@ class PlayerViewModel @Inject constructor(
     fun selectEpisode(episode: EpisodeItem) {
         viewModelScope.launch {
             saveCurrentPosition()
+            // Remember the channel we're leaving so "previous channel" can flip back.
+            if (currentCard?.iptv == true && episode.index != _uiState.value.currentEpisodeIndex)
+                prevChannelIndex = _uiState.value.currentEpisodeIndex
             currentUrl = episode.url
             // Update the card's season/episode so the title + badge reflect the new episode.
             val wasIptv = currentCard?.iptv == true
@@ -877,6 +920,21 @@ class PlayerViewModel @Inject constructor(
     fun onKeyPageUp() = engSeekTo(engPositionMs() + 30_000)
     fun onKeyPageDown() = engSeekTo((engPositionMs() - 30_000).coerceAtLeast(0))
     fun onKeyOk() { if (engIsPlaying()) pausePlayback() else resumePlayback() }
+
+    // Last IPTV channel watched (for the "previous channel" toggle, TV-style).
+    private var prevChannelIndex: Int? = null
+
+    /** IPTV: jump straight to channel number N (1-based) typed on the remote. */
+    fun zapToChannel(number: Int) {
+        if (_uiState.value.card?.iptv != true) return
+        _uiState.value.episodes.getOrNull(number - 1)?.let { selectEpisode(it) }
+    }
+
+    /** IPTV: flip back to the channel watched before the current one. */
+    fun switchPreviousChannel() {
+        val idx = prevChannelIndex ?: return
+        _uiState.value.episodes.getOrNull(idx)?.let { selectEpisode(it) }
+    }
 
     fun onNextEpisode() {
         val state = _uiState.value
@@ -1079,6 +1137,7 @@ class PlayerViewModel @Inject constructor(
 
     override fun onCleared() {
         saveJob?.cancel(); diagJob?.cancel(); osdHideJob?.cancel(); vlcPollJob?.cancel(); sleepJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel(); epgJob?.cancel(); retryJob?.cancel()
+        releaseLoudness()
         viewModelScope.launch { saveCurrentPosition() }
         if (::player.isInitialized) player.release()
         vlc?.release(); vlc = null
