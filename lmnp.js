@@ -491,11 +491,16 @@
             var it = list[i] || {};
             var url = (typeof it.url === 'string') ? it.url
                     : (typeof it.file === 'string') ? it.file : '';
+            // Логотип канала (tvg-logo) — разные балансеры кладут его по-разному.
+            var logo = it.logo || it.tvg_logo || it.img || it.icon ||
+                       (it.tvg && it.tvg.logo) || '';
+            logo = (typeof logo === 'string' && /^https?:\/\//.test(logo)) ? logo : '';
             items.push({
                 u: url || '',
                 e: it.episode || (i + 1),
                 s: it.season || null,
                 t: (it.title || it.name || '').toString().slice(0, 60) || null,
+                l: logo || null,
             });
         }
         return { items: items, pi: Math.min(Math.max(0, pos || 0), items.length - 1) };

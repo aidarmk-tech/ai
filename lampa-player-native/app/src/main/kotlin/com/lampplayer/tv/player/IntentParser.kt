@@ -344,6 +344,7 @@ object IntentParser {
                 url = u,
                 season = o.get("s")?.takeIf { !it.isJsonNull }?.asInt,
                 episode = ep,
+                logoUrl = o.get("l")?.takeIf { !it.isJsonNull }?.asString?.ifBlank { null },
             )
         }
     }

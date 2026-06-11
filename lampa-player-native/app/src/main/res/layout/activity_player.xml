@@ -682,6 +682,15 @@
         android:elevation="8dp"
         android:visibility="gone">
 
+        <ImageView
+            android:id="@+id/iv_card_logo"
+            android:layout_width="72dp"
+            android:layout_height="48dp"
+            android:layout_gravity="center_vertical"
+            android:scaleType="fitCenter"
+            android:layout_marginEnd="@dimen/space_md"
+            android:visibility="gone" />
+
         <View
             android:layout_width="4dp"
             android:layout_height="match_parent"

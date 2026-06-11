@@ -35,7 +35,8 @@ class PlayerActivity : AppCompatActivity() {
 
     private val episodeAdapter = InfoListAdapter<EpisodeItem>(
         labelOf = { it.title },
-        onSelected = { vm.selectEpisode(it) }
+        onSelected = { vm.selectEpisode(it) },
+        logoOf = { it.logoUrl },
     )
     // Rich TMDB episode list; plays the episode when a playable URL is available.
     private val episodeRowAdapter = EpisodeRowAdapter(
@@ -76,6 +77,9 @@ class PlayerActivity : AppCompatActivity() {
     // IPTV channel-number zapping (type digits on the remote → jump to channel N).
     private var zapBuffer = ""
     private var zapJob: Job? = null
+
+    // True while shown as a Picture-in-Picture window (suppress all on-screen controls).
+    private var inPip = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -252,6 +256,7 @@ class PlayerActivity : AppCompatActivity() {
     private fun observeState() {
         lifecycleScope.launch {
             vm.uiState.collectLatest { s ->
+                if (inPip) return@collectLatest   // no controls while in a PiP window
                 // Top bar
                 binding.tvTitle.text = s.title
                 binding.tvQuality.isVisible = s.quality.isNotEmpty()
@@ -466,6 +471,13 @@ class PlayerActivity : AppCompatActivity() {
         binding.tvCardNow.text = now?.let { "Сейчас  $it" } ?: "Нет программы"
         binding.tvCardNext.isVisible = next != null
         binding.tvCardNext.text = next.orEmpty()
+        val logo = s.episodes.getOrNull(s.currentEpisodeIndex)?.logoUrl
+        if (logo.isNullOrBlank()) {
+            binding.ivCardLogo.isVisible = false
+        } else {
+            binding.ivCardLogo.isVisible = true
+            Glide.with(this).load(logo).into(binding.ivCardLogo)
+        }
 
         val card = binding.channelCard
         channelCardJob?.cancel()
@@ -779,7 +791,47 @@ class PlayerActivity : AppCompatActivity() {
         finish()
     }
 
-    override fun onStop() { super.onStop(); vm.pausePlayback() }
+    // ─── Picture-in-Picture ────────────────────────────────────────
+    private val supportsPip: Boolean
+        get() = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
+            packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE)
+
+    /** Shrink to a floating window so the user can keep watching while using other apps. */
+    private fun enterPip() {
+        if (!supportsPip || vm.uiState.value.hasError) return
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O) return
+        val a = vm.uiState.value.videoAspect.takeIf { it > 0f } ?: (16f / 9f)
+        val ratio = android.util.Rational((a * 1000).toInt().coerceIn(418, 2390), 1000)
+        runCatching {
+            enterPictureInPictureMode(
+                android.app.PictureInPictureParams.Builder().setAspectRatio(ratio).build()
+            )
+        }
+    }
+
+    // Pressing HOME while watching tucks the player into a PiP window (where supported).
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (vm.isPlayingNow()) enterPip()
+    }
+
+    override fun onPictureInPictureModeChanged(isInPip: Boolean, newConfig: android.content.res.Configuration) {
+        super.onPictureInPictureModeChanged(isInPip, newConfig)
+        inPip = isInPip
+        // Hide every control/overlay so the PiP window shows clean video.
+        if (isInPip) {
+            binding.osdContainer.isVisible = false
+            binding.infoOverlay.isVisible = false
+            binding.tracksOverlay.isVisible = false
+            binding.channelCard.isVisible = false
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // Keep playing in PiP; only pause when actually backgrounded.
+        if (!(supportsPip && isInPictureInPictureMode)) vm.pausePlayback()
+    }
 
     private fun formatSpeed(rate: Float): String {
         val s = if (rate % 1f == 0f) rate.toInt().toString() else rate.toString().trimEnd('0').trimEnd('.')
