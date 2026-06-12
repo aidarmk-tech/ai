@@ -169,6 +169,12 @@ class VlcController(
     /** libVLC supports software gain up to 200% via the audio volume (0..200). */
     fun setVolume(percent: Int) { runCatching { mediaPlayer.setVolume(percent.coerceIn(0, 200)) } }
 
+    /** Content frame rate from the active video track (0 if unknown) — for AFR. */
+    fun videoFps(): Float = runCatching {
+        val t = mediaPlayer.currentVideoTrack ?: return@runCatching 0f
+        if (t.frameRateDen > 0) t.frameRateNum.toFloat() / t.frameRateDen else 0f
+    }.getOrDefault(0f)
+
     override fun audioTracks(): List<EngineTrack> =
         mediaPlayer.audioTracks?.map { EngineTrack(it.id, it.name) } ?: emptyList()
 

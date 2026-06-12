@@ -288,6 +288,9 @@ class PlayerActivity : AppCompatActivity() {
                     else -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
                 }
 
+                // AFR: switch the panel to the content frame rate once it's known.
+                if (s.settings.afr && s.videoFps > 0f) applyAfr(s.videoFps)
+
                 // IPTV vs VOD bottom bar: live channels have no timeline to scrub.
                 val isIptv = s.card?.iptv == true
                 binding.vodProgressGroup.isVisible = !isIptv
@@ -832,21 +835,62 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Hand the resume point back to Lampa. The Android wrappers read MX-Player-style
+     * extras with getIntExtra(), so the MX keys MUST be Int (a Long silently reads as
+     * the default = lost position). VLC-style mirrors stay Long per VLC's contract.
+     */
     private fun finishWithResult(completed: Boolean = false) {
         val (posMs, durMs, percent) = vm.buildResultExtras()
         val done = completed || percent >= 90
         setResult(RESULT_OK, Intent().apply {
-            // Lampa / generic contract
-            putExtra("position", posMs)
-            putExtra("duration", durMs)
-            putExtra("watched_percent", percent)
-            putExtra("completed", done)
+            // MX / Just Player convention (lampa wrappers parse these as Int ms)
+            putExtra("position", posMs.toInt())
+            putExtra("duration", durMs.toInt())
             putExtra("end_by", if (done) "playback_completion" else "user")
-            // VLC-style mirrors for broader compatibility
+            // VLC convention (Long ms)
             putExtra("extra_position", posMs)
             putExtra("extra_duration", durMs)
+            // Generic flags some forks look at
+            putExtra("watched_percent", percent)
+            putExtra("completed", done)
+            putExtra("ended", done)
         })
         finish()
+    }
+
+    // ─── AFR: match the display refresh rate to the content frame rate ─────
+    private var lastAfrFps = 0f
+
+    /**
+     * Pick a display mode (same resolution as current) whose refresh rate is an
+     * integer multiple of the content fps and switch to it. Prefers the exact rate
+     * (24 for 24fps) over multiples (48). The system restores the default mode
+     * when the window goes away. Causes a brief HDMI re-sync (~1s black) — that's
+     * inherent to AFR.
+     */
+    private fun applyAfr(fps: Float) {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M) return
+        if (fps < 10f || fps == lastAfrFps) return
+        lastAfrFps = fps
+        runCatching {
+            val display = windowManager.defaultDisplay ?: return
+            val active = display.mode
+            val candidates = display.supportedModes
+                .filter { it.physicalWidth == active.physicalWidth && it.physicalHeight == active.physicalHeight }
+            // 29.97/23.976 ↔ 30/24: NTSC rates need a tolerant match against both bases.
+            fun matches(refresh: Float, base: Float): Boolean {
+                val k = (refresh / base).let { Math.round(it) }
+                if (k < 1) return false
+                return kotlin.math.abs(refresh - base * k) < 0.12f * k
+            }
+            val best = candidates
+                .filter { matches(it.refreshRate, fps) }
+                .minByOrNull { Math.round(it.refreshRate / fps) }   // exact rate first, then 2×…
+                ?: return
+            if (best.modeId == active.modeId) return
+            window.attributes = window.attributes.apply { preferredDisplayModeId = best.modeId }
+        }
     }
 
     // ─── Picture-in-Picture ────────────────────────────────────────

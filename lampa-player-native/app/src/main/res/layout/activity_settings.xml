@@ -165,6 +165,20 @@
                 android:background="@drawable/bg_button" android:focusable="true" android:popupBackground="@color/bg_elevated" />
         </LinearLayout>
 
+        <!-- AFR -->
+        <LinearLayout android:layout_width="match_parent" android:layout_height="64dp"
+            android:orientation="horizontal" android:gravity="center_vertical"
+            android:layout_marginBottom="@dimen/space_sm">
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="AFR — авточастота кадров" android:textColor="@color/text_primary" android:textSize="18sp" />
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="Переключать частоту экрана под видео (экран моргнёт при смене)" android:textColor="@color/text_secondary" android:textSize="14sp" />
+            </LinearLayout>
+            <Switch android:id="@+id/switch_afr" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:thumbTint="@color/accent_primary" android:trackTint="@color/bg_elevated" android:focusable="true" />
+        </LinearLayout>
+
         <!-- DIAGNOSTICS -->
         <LinearLayout android:layout_width="match_parent" android:layout_height="64dp"
             android:orientation="horizontal" android:gravity="center_vertical">

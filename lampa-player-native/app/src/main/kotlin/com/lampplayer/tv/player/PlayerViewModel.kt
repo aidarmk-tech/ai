@@ -73,6 +73,8 @@ data class PlayerUiState(
     val volumeBoost: Int = 100,
     val scaleMode: VideoScaleMode = VideoScaleMode.AUTO,
     val videoAspect: Float = 0f,
+    // Content frame rate (for AFR); 0 = unknown.
+    val videoFps: Float = 0f,
     // IPTV electronic programme guide for the current channel (formatted now/next).
     val epgText: String = "",
     // Rich episode list fetched from TMDB (series only).
@@ -479,7 +481,9 @@ class PlayerViewModel @Inject constructor(
     }
 
     private val vlcListener = object : EngineListener {
-        override fun onPlaying() { _uiState.update { it.copy(isPlaying = true, isLoading = false) } }
+        override fun onPlaying() {
+            _uiState.update { it.copy(isPlaying = true, isLoading = false, videoFps = vlc?.videoFps() ?: 0f) }
+        }
         override fun onPaused() { _uiState.update { it.copy(isPlaying = false) } }
         override fun onBuffering(percent: Float) {
             _uiState.update { it.copy(isLoading = percent < 100f) }
@@ -1088,7 +1092,8 @@ class PlayerViewModel @Inject constructor(
             val par = if (vfmt.pixelWidthHeightRatio > 0f) vfmt.pixelWidthHeightRatio else 1f
             (vfmt.width * par) / vfmt.height
         } else 0f
-        _uiState.update { it.copy(videoInfo = info, videoAspect = aspect) }
+        val fps = vfmt?.frameRate?.takeIf { it > 0f } ?: 0f
+        _uiState.update { it.copy(videoInfo = info, videoAspect = aspect, videoFps = fps) }
     }
 
     /** Map a height to a familiar resolution label (2160p / 1080p / 720p …). */

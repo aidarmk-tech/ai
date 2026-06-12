@@ -30,6 +30,8 @@ data class AppSettings(
     // Remembered between sessions: volume boost % (100–200) and video scale mode name.
     val volumeBoost: Int = 100,
     val scaleMode: String = "AUTO",
+    // AFR: switch the display refresh rate to match the content frame rate.
+    val afr: Boolean = false,
 )
 
 @Singleton
@@ -48,6 +50,7 @@ class SettingsDataStore @Inject constructor(
         val OSD_TIMEOUT = intPreferencesKey("osd_timeout_sec")
         val VOLUME_BOOST = intPreferencesKey("volume_boost")
         val SCALE_MODE = stringPreferencesKey("scale_mode")
+        val AFR = booleanPreferencesKey("afr")
     }
 
     val settings: Flow<AppSettings> = context.settingsDataStore.data
@@ -66,6 +69,7 @@ class SettingsDataStore @Inject constructor(
                 osdTimeoutSec = prefs[Keys.OSD_TIMEOUT] ?: 10,
                 volumeBoost = prefs[Keys.VOLUME_BOOST] ?: 100,
                 scaleMode = prefs[Keys.SCALE_MODE] ?: "AUTO",
+                afr = prefs[Keys.AFR] ?: false,
             )
         }
 
@@ -84,4 +88,5 @@ class SettingsDataStore @Inject constructor(
     suspend fun setOsdTimeout(seconds: Int) = update { this[Keys.OSD_TIMEOUT] = seconds }
     suspend fun setVolumeBoost(percent: Int) = update { this[Keys.VOLUME_BOOST] = percent }
     suspend fun setScaleMode(mode: String) = update { this[Keys.SCALE_MODE] = mode }
+    suspend fun setAfr(enabled: Boolean) = update { this[Keys.AFR] = enabled }
 }
