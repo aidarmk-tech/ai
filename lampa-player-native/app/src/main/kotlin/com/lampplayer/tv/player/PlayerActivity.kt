@@ -132,6 +132,9 @@ class PlayerActivity : AppCompatActivity() {
      * so we can see on-device which channel survived. Dismiss with BACK; auto-hides.
      */
     private fun maybeShowIntentDebug(card: com.lampplayer.tv.domain.model.CardMeta) {
+        // Only a debugging aid: never pop it for normal users (torrents/direct links
+        // legitimately arrive without TMDB metadata). Enable "Диагностика" to see it.
+        if (!vm.uiState.value.settings.diag) return
         // IPTV legitimately has no TMDB metadata — don't flag it as "missing".
         if (card.iptv && card.debugInfo == null) return
         val noMeta = card.tmdbId == null && card.overview.isNullOrBlank() &&

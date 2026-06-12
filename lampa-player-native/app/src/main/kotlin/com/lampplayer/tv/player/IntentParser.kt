@@ -60,7 +60,7 @@ object IntentParser {
         val subtitles = subtitlesFromJson(obj)
 
         return CardMeta(
-            title = str("title") ?: extractTitleFromUrl(url),
+            title = cleanTitle(str("title")).ifEmpty { extractTitleFromUrl(url) },
             originalTitle = str("original_title"),
             tmdbId = int("tmdb_id"),
             imdbId = str("imdb_id"),
@@ -183,9 +183,8 @@ object IntentParser {
         val tmdbId = extras?.getInt("tmdb_id", -1)?.takeIf { it > 0 }
             ?: extras?.getString("tmdb_id")?.toIntOrNull()?.takeIf { it > 0 }
 
-        val title = extras?.getString("title")
-            ?: extras?.getString("android.intent.extra.TITLE")
-            ?: extractTitleFromUrl(url)
+        val title = cleanTitle(extras?.getString("title") ?: extras?.getString("android.intent.extra.TITLE"))
+            .ifEmpty { extractTitleFromUrl(url) }
 
         val card = CardMeta(
             title = title,
@@ -384,6 +383,13 @@ object IntentParser {
     private fun extractTitleFromUrl(url: String): String =
         url.substringAfterLast("/").substringBeforeLast(".")
             .replace(Regex("[_\\-]+"), " ").trim().ifEmpty { "" }
+
+    /** Strip noise tags Lampa/TorrServe prepend to torrent titles, e.g. "[LAMPA] Фильм". */
+    private fun cleanTitle(raw: String?): String {
+        if (raw == null) return ""
+        return raw.replace(Regex("""^\s*\[(?:lampa|torrent|ts|torrserve|торрент)]\s*""", RegexOption.IGNORE_CASE), "")
+            .trim()
+    }
 
     /**
      * Human-readable dump of exactly what arrived in the launch intent — used by the
