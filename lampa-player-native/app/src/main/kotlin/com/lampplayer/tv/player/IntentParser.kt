@@ -193,9 +193,12 @@ object IntentParser {
             imdbId = extras?.getString("imdb_id"),
             seasonNumber = extras?.getInt("season_number", -1)?.takeIf { it > 0 },
             episodeNumber = extras?.getInt("episode_number", -1)?.takeIf { it > 0 },
-            posterUrl = extras?.getString("poster_url"),
-            backdropUrl = extras?.getString("backdrop_url"),
-            overview = extras?.getString("overview"),
+            // Lampa torrent/standard launches send a plain `poster` (not `poster_url`).
+            posterUrl = imageUrl(extras?.getString("poster_url") ?: extras?.getString("poster")
+                ?: extras?.getString("img")),
+            backdropUrl = imageUrl(extras?.getString("backdrop_url") ?: extras?.getString("background")
+                ?: extras?.getString("backdrop")),
+            overview = extras?.getString("overview") ?: extras?.getString("description"),
             releaseYear = extras?.getInt("release_year", -1)?.takeIf { it > 0 },
             rating = extras?.getFloat("rating", -1f)?.takeIf { it > 0 },
             quality = extras?.getString("quality"),
@@ -383,6 +386,16 @@ object IntentParser {
     private fun extractTitleFromUrl(url: String): String =
         url.substringAfterLast("/").substringBeforeLast(".")
             .replace(Regex("[_\\-]+"), " ").trim().ifEmpty { "" }
+
+    /** Normalize an image value: pass full URLs through, expand bare TMDB paths ("/x.jpg"). */
+    private fun imageUrl(v: String?): String? {
+        val s = v?.trim()?.ifEmpty { null } ?: return null
+        return when {
+            s.startsWith("http", true) -> s
+            s.startsWith("/") -> "https://image.tmdb.org/t/p/w500$s"
+            else -> s
+        }
+    }
 
     /** Strip noise tags Lampa/TorrServe prepend to torrent titles, e.g. "[LAMPA] Фильм". */
     private fun cleanTitle(raw: String?): String {

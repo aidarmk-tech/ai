@@ -95,8 +95,6 @@ class PlayerActivity : AppCompatActivity() {
             finish(); return
         }
 
-        maybeShowIntentDebug(card)
-
         val dm = resources.displayMetrics
         vm.setDisplayAspect("${dm.widthPixels}:${dm.heightPixels}")
 
@@ -126,35 +124,24 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private var debugVisible = false
+    private var intentDebugDone = false
 
     /**
-     * Show the intent-diagnostic overlay automatically when no rich metadata arrived,
-     * so we can see on-device which channel survived. Dismiss with BACK; auto-hides.
+     * Show the full intent dump on screen (only with Diagnostics on). Called once per
+     * launch from the settings-aware state collector, so the diag flag is loaded by then.
      */
-    private fun maybeShowIntentDebug(card: com.lampplayer.tv.domain.model.CardMeta) {
-        // Only a debugging aid: never pop it for normal users (torrents/direct links
-        // legitimately arrive without TMDB metadata). Enable "Диагностика" to see it.
-        if (!vm.uiState.value.settings.diag) return
-        // IPTV legitimately has no TMDB metadata — don't flag it as "missing".
-        if (card.iptv && card.debugInfo == null) return
+    private fun showIntentDebug(card: com.lampplayer.tv.domain.model.CardMeta) {
         val noMeta = card.tmdbId == null && card.overview.isNullOrBlank() &&
             card.posterUrl.isNullOrBlank() && card.backdropUrl.isNullOrBlank()
-        // Also surface the IPTV diagnostic dump (channel/EPG object shape) when present.
-        val dbg = card.debugInfo
-        if (!noMeta && dbg == null) return
         val dump = buildString {
-            if (noMeta) {
-                append("⚠ Метаданные не пришли\n")
-                append(IntentParser.debugDump(intent))
-                append("\n— разобрано —\n")
-                append("title: ").append(card.title.take(60)).append('\n')
-                append("tmdb: ").append(card.tmdbId ?: "—")
-                append("  poster: ").append(if (card.posterUrl != null) "да" else "нет")
-            }
-            if (dbg != null) {
-                if (isNotEmpty()) append("\n\n")
-                append("IPTV channel/EPG dump:\n").append(dbg.take(2000))
-            }
+            append(if (noMeta) "⚠ Метаданные не пришли\n" else "✓ Метаданные есть\n")
+            append(IntentParser.debugDump(intent))
+            append("\n— разобрано —\n")
+            append("title: ").append(card.title.take(60)).append('\n')
+            append("tmdb: ").append(card.tmdbId ?: "—")
+            append("  poster: ").append(if (card.posterUrl != null) "да" else "нет")
+            append("  iptv: ").append(if (card.iptv) "да" else "нет")
+            card.debugInfo?.let { append("\n\nIPTV dump:\n").append(it.take(2000)) }
         }
         binding.intentDebug.text = dump
         binding.intentDebug.isVisible = true
@@ -199,7 +186,7 @@ class PlayerActivity : AppCompatActivity() {
         // Different media → full clean restart (singleTask reuses this activity).
         setIntent(intent)
         vm.resetForNewMedia()
-        maybeShowIntentDebug(card)
+        intentDebugDone = false
         vm.initPlayer(this, url, card)
         bindEngineSurface()
     }
@@ -263,6 +250,11 @@ class PlayerActivity : AppCompatActivity() {
         lifecycleScope.launch {
             vm.uiState.collectLatest { s ->
                 if (inPip) return@collectLatest   // no controls while in a PiP window
+                // Intent diagnostic — once per launch, after settings (diag flag) loaded.
+                if (!intentDebugDone && s.card != null && s.settings.diag) {
+                    intentDebugDone = true
+                    showIntentDebug(s.card)
+                }
                 // Top bar
                 binding.tvTitle.text = s.title
                 binding.tvQuality.isVisible = s.quality.isNotEmpty()
