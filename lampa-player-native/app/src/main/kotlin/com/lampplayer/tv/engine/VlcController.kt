@@ -181,8 +181,12 @@ class VlcController(
     override fun subtitleTracks(): List<EngineTrack> =
         mediaPlayer.spuTracks?.map { EngineTrack(it.id, it.name) } ?: emptyList()
 
-    override fun selectAudio(id: Int) { mediaPlayer.setAudioTrack(id) }
-    override fun selectSubtitle(id: Int) { mediaPlayer.setSpuTrack(id) }
+    override fun selectAudio(id: Int) { runCatching { mediaPlayer.setAudioTrack(id) } }
+    override fun selectSubtitle(id: Int) { runCatching { mediaPlayer.setSpuTrack(id) } }
+
+    /** Currently-selected track ids — used to verify a switch actually took effect. */
+    fun currentAudioTrackId(): Int = runCatching { mediaPlayer.audioTrack }.getOrDefault(-99)
+    fun currentSpuTrackId(): Int = runCatching { mediaPlayer.spuTrack }.getOrDefault(-99)
 
     override fun setAspectRatio(ratio: String?) { mediaPlayer.setAspectRatio(ratio) }
     override fun setScale(scale: Float) { mediaPlayer.setScale(scale) }

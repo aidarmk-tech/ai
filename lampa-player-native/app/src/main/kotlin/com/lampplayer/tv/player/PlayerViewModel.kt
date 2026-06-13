@@ -820,8 +820,16 @@ class PlayerViewModel @Inject constructor(
     fun selectAudio(index: Int) {
         val card = currentCard ?: return
         if (usingVlc) {
-            // Select by the id from the same snapshot the list was built from.
-            vlcAudio.getOrNull(index)?.let { vlc?.selectAudio(it.id) }
+            val v = vlc; val track = vlcAudio.getOrNull(index)
+            if (v != null && track != null) {
+                // libVLC builds disagree on whether setAudioTrack takes the track id or
+                // the list position — try the id, verify, and fall back to the index.
+                v.selectAudio(track.id)
+                if (v.currentAudioTrackId() != track.id) v.selectAudio(index)
+                if (settings.diag) _uiState.update {
+                    it.copy(diagText = "audio→ ${track.name} id=${track.id} pos=$index now=${v.currentAudioTrackId()}")
+                }
+            }
         } else {
             trackMemoryManager.onAudioSelected(player, card, index, viewModelScope)
         }
@@ -831,7 +839,14 @@ class PlayerViewModel @Inject constructor(
     fun selectSubtitle(index: Int) {
         val card = currentCard ?: return
         if (usingVlc) {
-            vlcSubs.getOrNull(index)?.let { vlc?.selectSubtitle(it.id) }
+            val v = vlc; val track = vlcSubs.getOrNull(index)
+            if (v != null && track != null) {
+                v.selectSubtitle(track.id)
+                if (v.currentSpuTrackId() != track.id) v.selectSubtitle(index)
+                if (settings.diag) _uiState.update {
+                    it.copy(diagText = "sub→ ${track.name} id=${track.id} pos=$index now=${v.currentSpuTrackId()}")
+                }
+            }
         } else {
             trackMemoryManager.onSubtitleSelected(player, card, index, viewModelScope)
         }
