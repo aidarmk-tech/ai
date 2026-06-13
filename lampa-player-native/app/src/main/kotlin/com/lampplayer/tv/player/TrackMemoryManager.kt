@@ -58,7 +58,9 @@ class TrackMemoryManager @Inject constructor(
     private fun applySubtitleTrack(player: Player, savedIndex: Int?) {
         val params = player.trackSelectionParameters.buildUpon()
         if (savedIndex == null || savedIndex < 0) {
-            params.setIgnoredTextSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+            // Fully off: disable the whole text track type and drop any override.
+            params.clearOverridesOfType(C.TRACK_TYPE_TEXT)
+            params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
             player.trackSelectionParameters = params.build()
             return
         }
@@ -67,6 +69,7 @@ class TrackMemoryManager @Inject constructor(
         if (savedIndex >= subGroups.size) return
 
         val targetGroup = subGroups[savedIndex]
+        params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
         params.setOverrideForType(
             androidx.media3.common.TrackSelectionOverride(targetGroup.mediaTrackGroup, 0)
         )
@@ -75,17 +78,23 @@ class TrackMemoryManager @Inject constructor(
 
     fun getAudioTracks(tracks: Tracks): List<String> =
         tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
-            .mapIndexed { i, group ->
-                group.getTrackFormat(0).language?.let { lang ->
-                    "$i: $lang"
-                } ?: "$i: Audio ${i + 1}"
-            }
+            .mapIndexed { i, group -> "${i + 1}. " + langName(group.getTrackFormat(0).language) }
 
     fun getSubtitleTracks(tracks: Tracks): List<String> =
         tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
-            .mapIndexed { i, group ->
-                group.getTrackFormat(0).language?.let { lang ->
-                    "$i: $lang"
-                } ?: "$i: Subtitles ${i + 1}"
-            }
+            .mapIndexed { i, group -> "${i + 1}. " + langName(group.getTrackFormat(0).language) }
+
+    /** Friendly language label from an ISO code (best-effort, falls back to the code). */
+    private fun langName(code: String?): String {
+        val c = code?.lowercase()?.take(3) ?: return "Дорожка"
+        return mapOf(
+            "rus" to "Русский", "ru" to "Русский",
+            "eng" to "English", "en" to "English",
+            "ukr" to "Українська", "fra" to "Français", "fre" to "Français",
+            "deu" to "Deutsch", "ger" to "Deutsch", "spa" to "Español",
+            "ita" to "Italiano", "jpn" to "日本語", "kor" to "한국어",
+            "chi" to "中文", "zho" to "中文", "tur" to "Türkçe",
+            "pol" to "Polski", "kaz" to "Қазақша",
+        )[c] ?: code.uppercase()
+    }
 }

@@ -35,7 +35,7 @@ class PlayerActivity : AppCompatActivity() {
 
     private val episodeAdapter = InfoListAdapter<EpisodeItem>(
         labelOf = { it.title },
-        onSelected = { vm.selectEpisode(it) },
+        onSelected = { item, _ -> vm.selectEpisode(item) },
         logoOf = { it.logoUrl },
     )
     // Rich TMDB episode list; plays the episode when a playable URL is available.
@@ -47,11 +47,11 @@ class PlayerActivity : AppCompatActivity() {
     )
     private val audioAdapter = InfoListAdapter<String>(
         labelOf = { it },
-        onSelected = { vm.selectAudio(it.substringBefore(":").trim().toIntOrNull() ?: 0) }
+        onSelected = { _, pos -> vm.selectAudio(pos) }
     )
     private val subtitleAdapter = InfoListAdapter<String>(
         labelOf = { it },
-        onSelected = { vm.selectSubtitle(it.substringBefore(":").trim().toIntOrNull() ?: 0) }
+        onSelected = { _, pos -> vm.selectSubtitle(pos) }
     )
 
     // Seek preview state

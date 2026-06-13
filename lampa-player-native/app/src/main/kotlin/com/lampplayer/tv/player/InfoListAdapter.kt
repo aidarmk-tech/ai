@@ -10,7 +10,7 @@ import com.lampplayer.tv.databinding.ItemInfoListBinding
 
 class InfoListAdapter<T>(
     private val labelOf: (T) -> String,
-    private val onSelected: (T) -> Unit,
+    private val onSelected: (T, Int) -> Unit,
     // Optional channel logo (IPTV); null → text-only row (audio/subtitle lists).
     private val logoOf: (T) -> String? = { null },
 ) : RecyclerView.Adapter<InfoListAdapter<T>.VH>() {
@@ -43,7 +43,7 @@ class InfoListAdapter<T>(
                 b.ivLogo.visibility = android.view.View.VISIBLE
                 Glide.with(b.ivLogo).load(logo).into(b.ivLogo)
             }
-            b.root.setOnClickListener { onSelected(item) }
+            b.root.setOnClickListener { onSelected(item, bindingAdapterPosition) }
             b.root.setOnFocusChangeListener { v, focused ->
                 v.scaleX = if (focused) 1.05f else 1f
                 v.scaleY = if (focused) 1.05f else 1f

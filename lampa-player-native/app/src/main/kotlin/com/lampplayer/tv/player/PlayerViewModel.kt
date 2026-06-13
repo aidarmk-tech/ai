@@ -774,8 +774,15 @@ class PlayerViewModel @Inject constructor(
         }
         val tracks = player.currentTracks
         val audioTracks = trackMemoryManager.getAudioTracks(tracks)
-        val subTracks = trackMemoryManager.getSubtitleTracks(tracks)
-        _uiState.update { it.copy(audioTracks = audioTracks, subtitleTracks = subTracks) }
+        // ExoPlayer subtitles are off by default and have no native "off" entry — add one.
+        val subTracks = listOf("Выкл") + trackMemoryManager.getSubtitleTracks(tracks)
+        _uiState.update {
+            it.copy(
+                audioTracks = audioTracks,
+                subtitleTracks = subTracks,
+                selectedSubtitleIndex = if (it.selectedSubtitleIndex < 0) 0 else it.selectedSubtitleIndex,
+            )
+        }
     }
 
     fun selectEpisode(episode: EpisodeItem) {
@@ -848,7 +855,8 @@ class PlayerViewModel @Inject constructor(
                 }
             }
         } else {
-            trackMemoryManager.onSubtitleSelected(player, card, index, viewModelScope)
+            // Exo list: position 0 = "Выкл", position k = subtitle group (k-1).
+            trackMemoryManager.onSubtitleSelected(player, card, index - 1, viewModelScope)
         }
         _uiState.update { it.copy(selectedSubtitleIndex = index) }
     }
