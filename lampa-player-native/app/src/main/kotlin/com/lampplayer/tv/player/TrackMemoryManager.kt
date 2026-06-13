@@ -32,15 +32,13 @@ class TrackMemoryManager @Inject constructor(
     }
 
     fun onAudioSelected(player: Player, card: CardMeta, index: Int, scope: CoroutineScope) {
-        scope.launch {
-            positionDataStore.saveShowData(card, ShowData(audio = index))
-        }
+        applyAudioTrack(player, index)                                   // switch now…
+        scope.launch { positionDataStore.saveShowData(card, ShowData(audio = index)) }   // …and remember
     }
 
     fun onSubtitleSelected(player: Player, card: CardMeta, index: Int, scope: CoroutineScope) {
-        scope.launch {
-            positionDataStore.saveShowData(card, ShowData(subtitle = index))
-        }
+        applySubtitleTrack(player, index)                               // switch now…
+        scope.launch { positionDataStore.saveShowData(card, ShowData(subtitle = index)) }   // …and remember
     }
 
     private fun applyAudioTrack(player: Player, savedIndex: Int?) {
