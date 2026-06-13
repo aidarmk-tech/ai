@@ -944,15 +944,26 @@ class PlayerViewModel @Inject constructor(
         val st = _uiState.value
         // Never auto-advance IPTV: channels are live, not an ordered episode list.
         if (st.card?.iptv == true) return false
-        return st.episodes.isNotEmpty() && st.currentEpisodeIndex + 1 < st.episodes.size
+        val next = nextPlayableEpisode() ?: return false
+        return next.url.isNotBlank()
+    }
+
+    /** The episode after the one currently playing — located by URL so it's robust to
+     *  index/filtering gaps between currentEpisodeIndex and the playlist list. */
+    private fun nextPlayableEpisode(): EpisodeItem? {
+        val eps = _uiState.value.episodes
+        if (eps.isEmpty()) return null
+        val pos = eps.indexOfFirst { it.url == currentUrl }.takeIf { it >= 0 }
+            ?: _uiState.value.currentEpisodeIndex
+        return eps.getOrNull(pos + 1)
     }
 
     private fun navigateNext() {
-        val state = _uiState.value
-        val nextIdx = state.currentEpisodeIndex + 1
-        if (state.episodes.isNotEmpty() && nextIdx < state.episodes.size) {
-            selectEpisode(state.episodes[nextIdx])
+        val next = nextPlayableEpisode()
+        if (next != null && next.url.isNotBlank()) {
+            selectEpisode(next)
         } else {
+            // No resolved next inside the player → hand back to Lampa (it resolves+plays).
             viewModelScope.launch { _navigateToNext.emit(Unit) }
         }
     }
