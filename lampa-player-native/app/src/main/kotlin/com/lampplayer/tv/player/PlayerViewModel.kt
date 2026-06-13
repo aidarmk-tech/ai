@@ -22,6 +22,7 @@ import com.lampplayer.tv.data.epg.EpgRepository
 import com.lampplayer.tv.data.tmdb.TmdbRepository
 import com.lampplayer.tv.domain.model.*
 import com.lampplayer.tv.engine.EngineListener
+import com.lampplayer.tv.engine.EngineTrack
 import com.lampplayer.tv.engine.EngineType
 import com.lampplayer.tv.engine.VlcController
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -753,13 +754,20 @@ class PlayerViewModel @Inject constructor(
 
     fun setInfoPanelTab(tab: InfoPanelTab) = _uiState.update { it.copy(infoPanelTab = tab) }
 
+    // Snapshot of the VLC track lists currently shown, so a later selection maps to
+    // the exact same id the user picked (libVLC can reorder/refetch differently).
+    private var vlcAudio: List<EngineTrack> = emptyList()
+    private var vlcSubs: List<EngineTrack> = emptyList()
+
     private fun refreshTracks() {
         if (usingVlc) {
             val v = vlc ?: return
+            vlcAudio = v.audioTracks()
+            vlcSubs = v.subtitleTracks()
             _uiState.update {
                 it.copy(
-                    audioTracks = v.audioTracks().mapIndexed { i, t -> "$i: ${t.name}" },
-                    subtitleTracks = v.subtitleTracks().mapIndexed { i, t -> "$i: ${t.name}" },
+                    audioTracks = vlcAudio.mapIndexed { i, t -> "$i: ${t.name}" },
+                    subtitleTracks = vlcSubs.mapIndexed { i, t -> "$i: ${t.name}" },
                 )
             }
             return
@@ -812,7 +820,8 @@ class PlayerViewModel @Inject constructor(
     fun selectAudio(index: Int) {
         val card = currentCard ?: return
         if (usingVlc) {
-            vlc?.audioTracks()?.getOrNull(index)?.let { vlc?.selectAudio(it.id) }
+            // Select by the id from the same snapshot the list was built from.
+            vlcAudio.getOrNull(index)?.let { vlc?.selectAudio(it.id) }
         } else {
             trackMemoryManager.onAudioSelected(player, card, index, viewModelScope)
         }
@@ -822,7 +831,7 @@ class PlayerViewModel @Inject constructor(
     fun selectSubtitle(index: Int) {
         val card = currentCard ?: return
         if (usingVlc) {
-            vlc?.subtitleTracks()?.getOrNull(index)?.let { vlc?.selectSubtitle(it.id) }
+            vlcSubs.getOrNull(index)?.let { vlc?.selectSubtitle(it.id) }
         } else {
             trackMemoryManager.onSubtitleSelected(player, card, index, viewModelScope)
         }
