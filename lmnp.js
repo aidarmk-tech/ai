@@ -1048,39 +1048,48 @@
 
     function addSettings() {
         if (!window.Lampa || !Lampa.SettingsApi) return;
+        // Seed defaults in Storage first so older builds don't read an undefined value.
+        try { if (Lampa.Storage.get(PLUGIN_NAME + '_on', '__x') === '__x') Lampa.Storage.set(PLUGIN_NAME + '_on', true); } catch (_) {}
+        try { if (Lampa.Storage.get(PLUGIN_NAME + '_package', '__x') === '__x') Lampa.Storage.set(PLUGIN_NAME + '_package', PACKAGE); } catch (_) {}
+
         try {
             Lampa.SettingsApi.addComponent({
                 component: PLUGIN_NAME,
                 name: 'Native Player',
                 icon: '<svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>'
             });
-            Lampa.SettingsApi.addParam({
-                component: PLUGIN_NAME,
-                param: { name: PLUGIN_NAME + '_on', type: 'trigger', default: true },
-                field: { name: 'Нативный плеер', description: 'Запускать видео через Native Player APK' },
-                onChange: function (v) {
-                    try { Lampa.Storage.set(PLUGIN_NAME + '_on', v); } catch (_) {}
-                }
-            });
-            Lampa.SettingsApi.addParam({
-                component: PLUGIN_NAME,
-                param: { name: PLUGIN_NAME + '_package', type: 'input', default: PACKAGE },
-                field: { name: 'Package плеера', description: 'applicationId внешнего плеера (по умолчанию ' + PACKAGE + ')' },
-                onChange: function (v) {
-                    try { Lampa.Storage.set(PLUGIN_NAME + '_package', (v || PACKAGE)); } catch (_) {}
-                }
-            });
-        } catch (e) {}
+        } catch (_) {}
+
+        // Each param is added independently: a SettingsApi quirk on one Lampa build
+        // must not block the others (or, via start(), the player hook itself).
+        function safeParam(p) { try { Lampa.SettingsApi.addParam(p); } catch (_) {} }
+
+        safeParam({
+            component: PLUGIN_NAME,
+            param: { name: PLUGIN_NAME + '_on', type: 'trigger', 'default': true },
+            field: { name: 'Нативный плеер', description: 'Запускать видео через Native Player APK' },
+            onChange: function (v) {
+                try { Lampa.Storage.set(PLUGIN_NAME + '_on', v === true || v === 'true'); } catch (_) {}
+            }
+        });
+        safeParam({
+            component: PLUGIN_NAME,
+            param: { name: PLUGIN_NAME + '_package', type: 'input', 'default': PACKAGE },
+            field: { name: 'Package плеера', description: 'applicationId внешнего плеера (по умолчанию ' + PACKAGE + ')' },
+            onChange: function (v) {
+                try { Lampa.Storage.set(PLUGIN_NAME + '_package', (v || PACKAGE)); } catch (_) {}
+            }
+        });
     }
 
     // ── Инициализация ────────────────────────────────────────────────────
 
     function start() {
-        addSettings();
-        hookActivity();
-        hookPlugins();
-        hookPlayerPlay();
-        hookPlayer();
+        // Isolate each step: a failure in one (e.g. SettingsApi on a particular Lampa
+        // build) must never stop the player hook from installing.
+        [addSettings, hookActivity, hookPlugins, hookPlayerPlay, hookPlayer].forEach(function (f) {
+            try { f(); } catch (_) {}
+        });
         try { Lampa.Noty.show('Native Player подключён'); } catch (_) {}
     }
 
