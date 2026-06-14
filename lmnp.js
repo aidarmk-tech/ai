@@ -1072,14 +1072,10 @@
                 try { Lampa.Storage.set(PLUGIN_NAME + '_on', v === true || v === 'true'); } catch (_) {}
             }
         });
-        safeParam({
-            component: PLUGIN_NAME,
-            param: { name: PLUGIN_NAME + '_package', type: 'input', 'default': PACKAGE },
-            field: { name: 'Package плеера', description: 'applicationId внешнего плеера (по умолчанию ' + PACKAGE + ')' },
-            onChange: function (v) {
-                try { Lampa.Storage.set(PLUGIN_NAME + '_package', (v || PACKAGE)); } catch (_) {}
-            }
-        });
+        // NB: no 'input' param here — on some Lampa builds (incl. Bylampa) rendering
+        // a stored input value crashes the whole settings page
+        // ("Cannot read properties of undefined (reading '<value>')"). The target
+        // package is fixed (com.lampplayer.tv); override via Storage if ever needed.
     }
 
     // ── Инициализация ────────────────────────────────────────────────────
