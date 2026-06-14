@@ -532,7 +532,26 @@
                     android:textColor="@color/accent_primary" android:textSize="14sp"
                     android:visibility="gone" />
 
-                <!-- Раскрываемые детали: В ролях / Режиссёр / Сценарий / Жанры -->
+                <!-- Лента актёров с фото (раскрывается на ↓) -->
+                <TextView android:id="@+id/tv_cast_header"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/space_sm"
+                    android:text="В ролях"
+                    android:textColor="@color/text_primary" android:textSize="15sp"
+                    android:fontFamily="sans-serif-medium"
+                    android:visibility="gone" />
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/rv_cast"
+                    android:layout_width="match_parent"
+                    android:layout_height="148dp"
+                    android:layout_marginTop="6dp"
+                    android:clipToPadding="false"
+                    android:focusable="true"
+                    android:descendantFocusability="afterDescendants"
+                    android:visibility="gone" />
+
+                <!-- Раскрываемые детали: Режиссёр / Сценарий / Жанры -->
                 <TextView android:id="@+id/tv_overlay_details"
                     android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="@dimen/space_sm"

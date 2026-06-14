@@ -53,6 +53,7 @@ class PlayerActivity : AppCompatActivity() {
         labelOf = { it },
         onSelected = { _, pos -> vm.selectSubtitle(pos) }
     )
+    private val castAdapter = CastAdapter()
 
     // Seek preview state
     private var seekTargetMs = -1L
@@ -204,6 +205,9 @@ class PlayerActivity : AppCompatActivity() {
 
         binding.rvSubtitleList.layoutManager = LinearLayoutManager(this)
         binding.rvSubtitleList.adapter = subtitleAdapter
+
+        binding.rvCast.layoutManager = LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
+        binding.rvCast.adapter = castAdapter
     }
 
     // ─── OSD button clicks ─────────────────────────────────────────
@@ -552,11 +556,16 @@ class PlayerActivity : AppCompatActivity() {
                 .into(binding.ivOverlayPoster)
         }
 
-        // Extended details (cast/director/writers/genres) — hint until revealed with ↓.
+        // Extended details (cast photos + director/writers/genres) — revealed with ↓.
         val details = meta?.details.orEmpty()
+        val cast = meta?.castMembers.orEmpty()
+        castAdapter.setItems(cast)
         binding.tvOverlayDetails.text = details
+        val hasExtra = (details.isNotEmpty() || cast.isNotEmpty()) && !isIptv
         binding.tvOverlayDetails.isVisible = details.isNotEmpty() && detailsExpanded
-        binding.tvOverlayMore.isVisible = details.isNotEmpty() && !detailsExpanded && !isIptv
+        binding.tvCastHeader.isVisible = cast.isNotEmpty() && detailsExpanded
+        binding.rvCast.isVisible = cast.isNotEmpty() && detailsExpanded
+        binding.tvOverlayMore.isVisible = hasExtra && !detailsExpanded
 
         // Legacy single-line EPG (from the card) — only when we have no full guide.
         val epgText = if (isIptv && s.epgText.isNotEmpty()) "" else buildString {
@@ -636,13 +645,23 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
-    /** Reveal/hide the cast/crew block in the info panel (and the ▼ hint). */
+    /** Reveal/hide the cast row + crew block in the info panel (and the ▼ hint). */
     private fun setDetailsExpanded(expanded: Boolean) {
         detailsExpanded = expanded
         val hasDetails = binding.tvOverlayDetails.text.isNotEmpty()
+        val hasCast = castAdapter.itemCount > 0
         binding.tvOverlayDetails.isVisible = expanded && hasDetails
-        binding.tvOverlayMore.isVisible = !expanded && hasDetails
-        if (!expanded) binding.svOverlayMeta.smoothScrollTo(0, 0)
+        binding.tvCastHeader.isVisible = expanded && hasCast
+        binding.rvCast.isVisible = expanded && hasCast
+        binding.tvOverlayMore.isVisible = !expanded && (hasDetails || hasCast)
+        if (expanded && hasCast) {
+            binding.rvCast.post {
+                (binding.rvCast.findViewHolderForAdapterPosition(0)?.itemView
+                    ?: binding.rvCast).requestFocus()
+            }
+        } else if (!expanded) {
+            binding.svOverlayMeta.smoothScrollTo(0, 0)
+        }
     }
 
     private fun enterButtonZone() {
@@ -694,12 +713,12 @@ class PlayerActivity : AppCompatActivity() {
         // ── Info overlay: описание → детали (актёры/создатели) → серии ───────
         if (s.infoOverlayVisible) {
             val hasEpisodes = s.episodes.size > 1 || s.episodeRows.size > 1
-            val hasDetails = binding.tvOverlayDetails.text.isNotEmpty()
+            val hasExtra = binding.tvOverlayDetails.text.isNotEmpty() || castAdapter.itemCount > 0
             val step = (180 * resources.displayMetrics.density).toInt()
             return when (keyCode) {
                 KeyEvent.KEYCODE_DPAD_DOWN -> when {
                     episodesFocused -> super.onKeyDown(keyCode, event)     // scroll the episode list
-                    hasDetails && !detailsExpanded -> { setDetailsExpanded(true); true }
+                    hasExtra && !detailsExpanded -> { setDetailsExpanded(true); true }
                     binding.svOverlayMeta.canScrollVertically(1) -> {
                         binding.svOverlayMeta.smoothScrollBy(0, step); true   // reveal more cast/crew
                     }

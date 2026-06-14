@@ -57,6 +57,7 @@ data class TmdbPerson(
     val character: String? = null,
     val job: String? = null,
     val department: String? = null,
+    val profile_path: String? = null,
 )
 
 data class TmdbSeason(
