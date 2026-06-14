@@ -786,6 +786,8 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun selectEpisode(episode: EpisodeItem) {
+        autoNextManager.cancel()
+        _uiState.update { it.copy(autoNextCountdown = -1) }
         viewModelScope.launch {
             saveCurrentPosition()
             // Remember the channel we're leaving so "previous channel" can flip back.
@@ -959,6 +961,9 @@ class PlayerViewModel @Inject constructor(
     }
 
     private fun navigateNext() {
+        // Clear the "next episode in N s" overlay — the countdown just fired.
+        autoNextManager.cancel()
+        _uiState.update { it.copy(autoNextCountdown = -1) }
         val next = nextPlayableEpisode()
         if (next != null && next.url.isNotBlank()) {
             selectEpisode(next)
