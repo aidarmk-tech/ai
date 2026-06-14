@@ -27,12 +27,24 @@
     }
 
     // Есть ли нативный Android-мост Lampa (TV/мобильное приложение-обёртка).
-    // Если нет — мы в обычном браузере, и «внешний плеер» Lampa сама запустить
-    // не может: запускаем APK своим intent:// (Chrome на Android это понимает).
     function hasAndroidBridge() {
         try {
             return !!(window.Android && (typeof Android.openUrl === 'function' || typeof Android.open === 'function'))
                 || !!(window.LampaAndroid && typeof LampaAndroid.openUrl === 'function');
+        } catch (_) { return false; }
+    }
+
+    // НАСТОЯЩИЙ браузер (а не WebView Lampa-приложения). Только здесь можно
+    // запускать APK через intent:// навигацией — WebView приложения этого не умеет
+    // (ERR_UNKNOWN_URL_SCHEME) и запускает внешний плеер сам. Признаки приложения:
+    // наличие Android-моста или токен "wv"/Lampa в User-Agent.
+    function isPlainBrowser() {
+        try {
+            if (window.Android || window.LampaAndroid) return false;
+            var ua = (navigator.userAgent || '');
+            if (/\bwv\b/i.test(ua)) return false;          // Android System WebView (приложение)
+            if (/lampa/i.test(ua)) return false;           // кастомный UA обёртки Lampa
+            return /Mozilla|Chrome|Safari|Firefox/i.test(ua);
         } catch (_) { return false; }
     }
 
@@ -769,10 +781,9 @@
         // навигации — APK получает наш intent с lampa_data.
         Lampa.Player.listener.follow('start', function (e) {
             if (!enabled()) return;                       // тумблер «Нативный плеер»
-            // Если выбран внешний плеер И есть Android-мост — Lampa сама запустит APK,
-            // метаданные уедут через title-конверт (hookPlayerPlay). Свой intent не нужен.
-            // В браузере (моста нет) Lampa запустить внешний плеер не может — запускаем сами.
-            if (externalPlayerSelected() && hasAndroidBridge()) return;
+            // Внешний плеер: Lampa (приложение) сама запустит APK, метаданные уедут
+            // через title-конверт (hookPlayerPlay). Свой intent не нужен — иначе двойной запуск.
+            if (externalPlayerSelected()) return;
             if (Date.now() - _lastLaunch < 6000) return;
 
             // Сканируем всё доступное состояние Lampa прямо в момент запуска
@@ -894,9 +905,10 @@
                 var alreadyPacked = video && typeof video.title === 'string' &&
                                     /^lmpmeta:\/\//.test(video.title);
 
-                // Браузер (Chrome на Android, без Lampa-моста): Lampa внешний плеер
-                // запустить не может — открываем APK своим intent:// прямо здесь.
-                if (enabled() && !hasAndroidBridge() && !alreadyPacked &&
+                // ТОЛЬКО настоящий браузер (Chrome на Android): Lampa внешний плеер
+                // запустить не может — открываем APK своим intent://. В приложении
+                // (WebView) эта ветка не срабатывает — там запуск штатный, через Lampa.
+                if (enabled() && isPlainBrowser() && !alreadyPacked &&
                     video && typeof video === 'object' &&
                     typeof video.url === 'string' && /^https?:|^rtsp:|^udp:/.test(video.url) &&
                     Date.now() - _lastLaunch > 6000) {
