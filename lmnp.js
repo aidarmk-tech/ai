@@ -69,6 +69,15 @@
             + ';end;';
     }
 
+    // Для запуска ИЗ БРАУЗЕРА (Chrome) нужен intent на activity с категорией
+    // BROWSABLE. У фильтра https+video/* её нет (Chrome не находит плеер и зовёт
+    // Google Play), а у схемы lmnp:// — есть. Поэтому в браузере идём через lmnp://.
+    function buildLmnpIntentUri(videoUrl, json) {
+        var b64 = b64utf8(json);
+        return 'intent://play?url=' + encodeURIComponent(videoUrl) + '&d=' + encodeURIComponent(b64)
+            + '#Intent;scheme=lmnp;package=' + pkg() + ';end;';
+    }
+
     // ── Запуск APK ────────────────────────────────────────────────────────
     function launch(videoUrl, cardData) {
         var json      = JSON.stringify(cardData);
@@ -92,10 +101,14 @@
             }
         } catch (e) {}
 
-        // 2. Навигация (Chrome intent:// формат — корректно обрабатывается браузером)
-        try { window.location.href = intentUri; return true; } catch (e) {}
+        // 2. Браузер (Chrome на Android): запускаем через lmnp:// — его activity
+        //    объявлена BROWSABLE, поэтому Chrome открывает именно наш плеер.
+        try {
+            window.location.href = buildLmnpIntentUri(videoUrl, json); return true;
+        } catch (e) {}
 
-        // 3. lmnp:// запасная схема
+        // 3. Запасные схемы навигации
+        try { window.location.href = intentUri; return true; } catch (e) {}
         try {
             var b64 = btoa(unescape(encodeURIComponent(json)));
             window.location.href = 'lmnp://play?url=' + encodeURIComponent(videoUrl) + '&d=' + encodeURIComponent(b64);
