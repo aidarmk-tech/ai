@@ -26,6 +26,16 @@
         catch (_) { return true; }
     }
 
+    // Есть ли нативный Android-мост Lampa (TV/мобильное приложение-обёртка).
+    // Если нет — мы в обычном браузере, и «внешний плеер» Lampa сама запустить
+    // не может: запускаем APK своим intent:// (Chrome на Android это понимает).
+    function hasAndroidBridge() {
+        try {
+            return !!(window.Android && (typeof Android.openUrl === 'function' || typeof Android.open === 'function'))
+                || !!(window.LampaAndroid && typeof LampaAndroid.openUrl === 'function');
+        } catch (_) { return false; }
+    }
+
     // Выбран ли ВНЕШНИЙ плеер в Lampa (player_lauch != внутренний).
     // Если да — Lampa сама запустит APK штатным intent, и метаданные надо
     // упаковывать в title (этот канал реально доезжает). Если нет — наш APK
@@ -746,10 +756,10 @@
         // навигации — APK получает наш intent с lampa_data.
         Lampa.Player.listener.follow('start', function (e) {
             if (!enabled()) return;                       // тумблер «Нативный плеер»
-            // Если выбран внешний плеер — Lampa сама запустит APK, а метаданные
-            // уедут через title-конверт (hookPlayerPlay). Свой intent не нужен,
-            // иначе будет двойной запуск.
-            if (externalPlayerSelected()) return;
+            // Если выбран внешний плеер И есть Android-мост — Lampa сама запустит APK,
+            // метаданные уедут через title-конверт (hookPlayerPlay). Свой intent не нужен.
+            // В браузере (моста нет) Lampa запустить внешний плеер не может — запускаем сами.
+            if (externalPlayerSelected() && hasAndroidBridge()) return;
             if (Date.now() - _lastLaunch < 6000) return;
 
             // Сканируем всё доступное состояние Lampa прямо в момент запуска
@@ -870,6 +880,20 @@
             try {
                 var alreadyPacked = video && typeof video.title === 'string' &&
                                     /^lmpmeta:\/\//.test(video.title);
+
+                // Браузер (Chrome на Android, без Lampa-моста): Lampa внешний плеер
+                // запустить не может — открываем APK своим intent:// прямо здесь.
+                if (enabled() && !hasAndroidBridge() && !alreadyPacked &&
+                    video && typeof video === 'object' &&
+                    typeof video.url === 'string' && /^https?:|^rtsp:|^udp:/.test(video.url) &&
+                    Date.now() - _lastLaunch > 6000) {
+                    if (doLaunch(video.url, video, video)) {
+                        _lastLaunch = Date.now();
+                        try { stopWebViewPlayer(); } catch (_) {}
+                        return;   // встроенный плеер не запускаем
+                    }
+                }
+
                 if (enabled() && externalPlayerSelected() &&
                     video && typeof video === 'object' && video.url && !alreadyPacked) {
 
