@@ -485,51 +485,72 @@
             android:background="@color/bg_surface"
             android:layout_marginEnd="@dimen/space_md" />
 
-        <!-- Текстовый блок: название + мета + описание -->
-        <LinearLayout
-            android:id="@+id/overlay_meta_section"
+        <!-- Текстовый блок: название + мета + описание + (раскрываемые) детали -->
+        <ScrollView
+            android:id="@+id/sv_overlay_meta"
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1"
-            android:orientation="vertical"
-            android:gravity="center_vertical">
+            android:scrollbars="none"
+            android:fadeScrollbars="false">
 
-            <TextView android:id="@+id/tv_overlay_meta_title"
-                android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:textColor="@color/text_primary" android:textSize="26sp"
-                android:fontFamily="sans-serif-medium"
-                android:maxLines="1" android:ellipsize="end"
-                android:layout_marginBottom="@dimen/space_xs" />
+            <LinearLayout
+                android:id="@+id/overlay_meta_section"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
 
-            <TextView android:id="@+id/tv_overlay_meta_info"
-                android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:textColor="@color/accent_primary" android:textSize="15sp"
-                android:layout_marginBottom="@dimen/space_sm" />
+                <TextView android:id="@+id/tv_overlay_meta_title"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:textColor="@color/text_primary" android:textSize="26sp"
+                    android:fontFamily="sans-serif-medium"
+                    android:maxLines="2" android:ellipsize="end"
+                    android:layout_marginBottom="@dimen/space_xs" />
 
-            <TextView android:id="@+id/tv_overlay_meta_overview"
-                android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:textColor="@color/text_secondary" android:textSize="15sp"
-                android:lineSpacingMultiplier="1.2"
-                android:maxLines="5" android:ellipsize="end" />
+                <TextView android:id="@+id/tv_overlay_meta_info"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:textColor="@color/accent_primary" android:textSize="15sp"
+                    android:layout_marginBottom="@dimen/space_sm" />
 
-            <!-- EPG -->
-            <TextView android:id="@+id/tv_overlay_epg"
-                android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/space_sm"
-                android:textColor="@color/text_primary" android:textSize="15sp"
-                android:maxLines="4" android:ellipsize="end"
-                android:visibility="gone" />
+                <TextView android:id="@+id/tv_overlay_meta_overview"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:textColor="@color/text_secondary" android:textSize="15sp"
+                    android:lineSpacingMultiplier="1.2" />
 
-            <!-- Формат видео — чистый чип качества -->
-            <TextView android:id="@+id/tv_overlay_video_info"
-                android:layout_width="wrap_content" android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/space_sm"
-                android:background="@drawable/bg_pill"
-                android:textColor="@color/text_secondary"
-                android:textSize="13sp"
-                android:paddingHorizontal="12dp" android:paddingVertical="6dp"
-                android:visibility="gone" />
-        </LinearLayout>
+                <!-- EPG -->
+                <TextView android:id="@+id/tv_overlay_epg"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/space_sm"
+                    android:textColor="@color/text_primary" android:textSize="15sp"
+                    android:visibility="gone" />
+
+                <!-- Подсказка: раскрыть детали -->
+                <TextView android:id="@+id/tv_overlay_more"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/space_sm"
+                    android:text="▼ Актёры и создатели"
+                    android:textColor="@color/accent_primary" android:textSize="14sp"
+                    android:visibility="gone" />
+
+                <!-- Раскрываемые детали: В ролях / Режиссёр / Сценарий / Жанры -->
+                <TextView android:id="@+id/tv_overlay_details"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/space_sm"
+                    android:textColor="@color/text_secondary" android:textSize="14sp"
+                    android:lineSpacingMultiplier="1.25"
+                    android:visibility="gone" />
+
+                <!-- Формат видео — чистый чип качества -->
+                <TextView android:id="@+id/tv_overlay_video_info"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/space_sm"
+                    android:background="@drawable/bg_pill"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp"
+                    android:paddingHorizontal="12dp" android:paddingVertical="6dp"
+                    android:visibility="gone" />
+            </LinearLayout>
+        </ScrollView>
 
         <!-- Панель «Серии/Каналы» — только когда есть список -->
         <LinearLayout

@@ -40,6 +40,23 @@ data class TmdbMetadata(
     val vote_average: Float? = null,
     val release_date: String? = null,
     val first_air_date: String? = null,
+    val runtime: Int? = null,
+    val genres: List<TmdbGenre> = emptyList(),
+    val credits: TmdbCredits? = null,
+)
+
+data class TmdbGenre(val id: Int = 0, val name: String? = null)
+
+data class TmdbCredits(
+    val cast: List<TmdbPerson> = emptyList(),
+    val crew: List<TmdbPerson> = emptyList(),
+)
+
+data class TmdbPerson(
+    val name: String? = null,
+    val character: String? = null,
+    val job: String? = null,
+    val department: String? = null,
 )
 
 data class TmdbSeason(

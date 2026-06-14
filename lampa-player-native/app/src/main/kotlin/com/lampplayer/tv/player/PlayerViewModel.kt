@@ -87,6 +87,8 @@ data class PlayerUiState(
         val overview: String,
         val cast: String,
         val posterUrl: String?,
+        // Extended block revealed on ↓: В ролях / Режиссёр / Сценарий / Жанры.
+        val details: String = "",
     )
 
     data class EpisodeRow(
@@ -889,7 +891,10 @@ class PlayerViewModel @Inject constructor(
             val title = meta.title ?: meta.name ?: card.title
             val year = (meta.release_date ?: meta.first_air_date)?.take(4) ?: ""
             val rating = meta.vote_average?.let { "★ %.1f".format(it) } ?: ""
-            val info = listOfNotNull(year.ifEmpty { null }, rating.ifEmpty { null }, card.quality).joinToString(" · ")
+            val runtime = meta.runtime?.takeIf { it > 0 }?.let { "$it мин" } ?: ""
+            val info = listOfNotNull(year.ifEmpty { null }, rating.ifEmpty { null }, runtime.ifEmpty { null }, card.quality).joinToString(" · ")
+            val details = buildDetails(meta)
+            val castLine = meta.credits?.cast?.take(10)?.mapNotNull { it.name }?.joinToString(", ").orEmpty()
             // Enrich the metadata used by the info overlay. No auto-splash — the
             // card is shown only on ↓ (user request).
             _uiState.update { s ->
@@ -897,12 +902,41 @@ class PlayerViewModel @Inject constructor(
                     metadata = PlayerUiState.MetadataDisplay(
                         title = title, info = info,
                         overview = meta.overview ?: s.metadata?.overview ?: "",
-                        cast = "",
+                        cast = castLine,
                         posterUrl = TmdbRepository.posterUrl(meta.poster_path) ?: card.posterUrl,
+                        details = details,
                     ),
                 )
             }
         }
+    }
+
+    /** Build the expandable "В ролях / Режиссёр / Сценарий / Жанры" block from TMDB credits. */
+    private fun buildDetails(meta: com.lampplayer.tv.data.tmdb.TmdbMetadata): String {
+        val sb = StringBuilder()
+        val cast = meta.credits?.cast.orEmpty()
+            .take(12)
+            .mapNotNull { p -> p.name?.let { n -> if (!p.character.isNullOrBlank()) "$n — ${p.character}" else n } }
+        if (cast.isNotEmpty()) sb.append("В ролях\n").append(cast.joinToString("\n"))
+
+        val crew = meta.credits?.crew.orEmpty()
+        val directors = crew.filter { it.job == "Director" }.mapNotNull { it.name }.distinct()
+        if (directors.isNotEmpty()) {
+            if (sb.isNotEmpty()) sb.append("\n\n")
+            sb.append("Режиссёр: ").append(directors.joinToString(", "))
+        }
+        val writers = crew.filter { it.job in setOf("Writer", "Screenplay", "Story") || it.department == "Writing" }
+            .mapNotNull { it.name }.distinct().take(4)
+        if (writers.isNotEmpty()) {
+            if (sb.isNotEmpty()) sb.append("\n")
+            sb.append("Сценарий: ").append(writers.joinToString(", "))
+        }
+        val genres = meta.genres.mapNotNull { it.name }
+        if (genres.isNotEmpty()) {
+            if (sb.isNotEmpty()) sb.append("\n\n")
+            sb.append("Жанры: ").append(genres.joinToString(", "))
+        }
+        return sb.toString()
     }
 
     fun updateCardMeta(card: CardMeta) {

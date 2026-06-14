@@ -67,6 +67,8 @@ class PlayerActivity : AppCompatActivity() {
     private var scrubberFocused = true
     // Drill-down: when the info overlay is open, ↓ moves focus into the episodes list.
     private var episodesFocused = false
+    // Info overlay: cast/crew block revealed (and scrolled) with ↓ before episodes.
+    private var detailsExpanded = false
     private var tracksWasVisible = false
     private var infoWasVisible = false
 
@@ -322,7 +324,7 @@ class PlayerActivity : AppCompatActivity() {
                 if (s.tracksOverlayVisible) applyTracksOverlay(s)
                 setOverlayVisible(binding.tracksOverlay, s.tracksOverlayVisible, slideX = 90f)
 
-                if (!s.infoOverlayVisible) episodesFocused = false
+                if (!s.infoOverlayVisible) { episodesFocused = false; detailsExpanded = false }
 
                 // Trap focus inside an open overlay (#1): block the OSD's focusables
                 // so keys stay within the overlay, not the controls behind it.
@@ -337,7 +339,7 @@ class PlayerActivity : AppCompatActivity() {
                     }
                 }
                 if (s.tracksOverlayVisible && !tracksWasVisible) binding.rvAudioList.requestFocus()
-                if (s.infoOverlayVisible && !infoWasVisible) episodesFocused = false  // open at description
+                if (s.infoOverlayVisible && !infoWasVisible) { episodesFocused = false; detailsExpanded = false }  // open at description
                 tracksWasVisible = s.tracksOverlayVisible
                 infoWasVisible = s.infoOverlayVisible
 
@@ -550,6 +552,12 @@ class PlayerActivity : AppCompatActivity() {
                 .into(binding.ivOverlayPoster)
         }
 
+        // Extended details (cast/director/writers/genres) — hint until revealed with ↓.
+        val details = meta?.details.orEmpty()
+        binding.tvOverlayDetails.text = details
+        binding.tvOverlayDetails.isVisible = details.isNotEmpty() && detailsExpanded
+        binding.tvOverlayMore.isVisible = details.isNotEmpty() && !detailsExpanded && !isIptv
+
         // Legacy single-line EPG (from the card) — only when we have no full guide.
         val epgText = if (isIptv && s.epgText.isNotEmpty()) "" else buildString {
             s.card?.epgTitle?.let { append(it) }
@@ -628,6 +636,15 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
+    /** Reveal/hide the cast/crew block in the info panel (and the ▼ hint). */
+    private fun setDetailsExpanded(expanded: Boolean) {
+        detailsExpanded = expanded
+        val hasDetails = binding.tvOverlayDetails.text.isNotEmpty()
+        binding.tvOverlayDetails.isVisible = expanded && hasDetails
+        binding.tvOverlayMore.isVisible = !expanded && hasDetails
+        if (!expanded) binding.svOverlayMeta.smoothScrollTo(0, 0)
+    }
+
     private fun enterButtonZone() {
         binding.osdContainer.descendantFocusability = android.view.ViewGroup.FOCUS_AFTER_DESCENDANTS
         expandOsd()
@@ -674,22 +691,33 @@ class PlayerActivity : AppCompatActivity() {
             }
         }
 
-        // ── Info overlay: описание (↓↓), затем серии (↓↓↓) ───────
+        // ── Info overlay: описание → детали (актёры/создатели) → серии ───────
         if (s.infoOverlayVisible) {
             val hasEpisodes = s.episodes.size > 1 || s.episodeRows.size > 1
+            val hasDetails = binding.tvOverlayDetails.text.isNotEmpty()
+            val step = (180 * resources.displayMetrics.density).toInt()
             return when (keyCode) {
-                KeyEvent.KEYCODE_DPAD_DOWN -> {
-                    if (!episodesFocused && hasEpisodes) {
-                        episodesFocused = true; focusCurrentEpisode(); true   // land on current episode
-                    } else super.onKeyDown(keyCode, event)   // scroll list
+                KeyEvent.KEYCODE_DPAD_DOWN -> when {
+                    episodesFocused -> super.onKeyDown(keyCode, event)     // scroll the episode list
+                    hasDetails && !detailsExpanded -> { setDetailsExpanded(true); true }
+                    binding.svOverlayMeta.canScrollVertically(1) -> {
+                        binding.svOverlayMeta.smoothScrollBy(0, step); true   // reveal more cast/crew
+                    }
+                    hasEpisodes -> { episodesFocused = true; focusCurrentEpisode(); true }
+                    else -> true
                 }
-                KeyEvent.KEYCODE_BACK -> {
-                    if (episodesFocused) { episodesFocused = false; true }   // step up to description
-                    else { vm.hideInfoOverlay(); enterButtonZone(); true }
+                KeyEvent.KEYCODE_DPAD_UP -> when {
+                    episodesFocused -> super.onKeyDown(keyCode, event)
+                    binding.svOverlayMeta.canScrollVertically(-1) -> {
+                        binding.svOverlayMeta.smoothScrollBy(0, -step); true
+                    }
+                    detailsExpanded -> { setDetailsExpanded(false); true }
+                    else -> { vm.hideInfoOverlay(); enterButtonZone(); true }
                 }
-                KeyEvent.KEYCODE_DPAD_UP -> {
-                    if (episodesFocused) super.onKeyDown(keyCode, event)     // scroll list up
-                    else { vm.hideInfoOverlay(); enterButtonZone(); true }
+                KeyEvent.KEYCODE_BACK -> when {
+                    episodesFocused -> { episodesFocused = false; true }
+                    detailsExpanded -> { setDetailsExpanded(false); true }
+                    else -> { vm.hideInfoOverlay(); enterButtonZone(); true }
                 }
                 else -> super.onKeyDown(keyCode, event)
             }
