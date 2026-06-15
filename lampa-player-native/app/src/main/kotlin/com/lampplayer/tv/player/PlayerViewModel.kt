@@ -801,6 +801,13 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    /** OSD toggle: flip night mode, persist it, and apply to the running engine. */
+    fun toggleNightMode() {
+        val next = !settings.nightMode
+        applyNightMode(next)
+        viewModelScope.launch { settingsDataStore.setNightMode(next) }
+    }
+
     // ─── Video sizing (aspect / zoom) ──────────────────────────────
     // Screen ratio "W:H" used for libVLC FILL (stretch). Set by the Activity.
     private var displayAspect: String? = null

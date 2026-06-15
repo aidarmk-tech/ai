@@ -236,12 +236,12 @@
                     android:orientation="horizontal"
                     android:gravity="center">
 
-                    <ImageButton android:id="@+id/btn_mark_intro"
+                    <ImageButton android:id="@+id/btn_night"
                         android:layout_width="44dp" android:layout_height="44dp"
-                        android:src="@drawable/ic_edit"
+                        android:src="@drawable/ic_moon"
                         android:scaleType="centerInside" android:padding="11dp"
                         android:background="@drawable/bg_button"
-                        android:contentDescription="Отметить интро"
+                        android:contentDescription="Ночной режим"
                         android:focusable="true" android:layout_marginHorizontal="6dp" />
 
                     <ImageButton android:id="@+id/btn_prev"

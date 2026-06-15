@@ -223,10 +223,7 @@ class PlayerActivity : AppCompatActivity() {
         binding.btnAspect.setOnClickListener { vm.cycleScaleMode(); vm.showOsd() }
         binding.btnVolume.setOnClickListener { vm.cycleVolumeBoost(); vm.showOsd() }
         binding.btnInfo.setOnClickListener { vm.toggleInfoOverlay() }
-        binding.btnMarkIntro.setOnClickListener {
-            vm.markIntro()
-            Toast.makeText(this, getString(R.string.intro_marked, vm.positionMs() / 1000f), Toast.LENGTH_SHORT).show()
-        }
+        binding.btnNight.setOnClickListener { vm.toggleNightMode(); vm.showOsd() }
         binding.btnSkipIntro.setOnClickListener { vm.skipIntro() }
         binding.btnRetry.setOnClickListener { vm.retryPlayback() }
         binding.btnExit.setOnClickListener { finishWithResult() }
@@ -238,7 +235,7 @@ class PlayerActivity : AppCompatActivity() {
 
         // Frameless TV focus: grow + lift the focused control instead of a boxed border.
         listOf(
-            binding.btnInfo, binding.btnMarkIntro, binding.btnPrev, binding.btnRewind,
+            binding.btnInfo, binding.btnNight, binding.btnPrev, binding.btnRewind,
             binding.btnPlayPause, binding.btnForward, binding.btnNext,
             binding.btnSpeed, binding.btnAspect, binding.btnVolume, binding.btnSettings,
         ).forEach { v ->
@@ -274,6 +271,11 @@ class PlayerActivity : AppCompatActivity() {
                 binding.tvEpisodeBadge.text = "${s.currentEpisodeIndex + 1}/${s.episodes.size}"
                 binding.btnSpeed.text = formatSpeed(s.playbackSpeed)
                 binding.btnVolume.text = "${s.volumeBoost}%"
+                // Night-mode button lit when active.
+                binding.btnNight.setColorFilter(
+                    if (s.settings.nightMode) ContextCompat.getColor(this@PlayerActivity, R.color.accent_primary)
+                    else ContextCompat.getColor(this@PlayerActivity, R.color.text_primary)
+                )
                 binding.btnAspect.text = when (s.scaleMode) {
                     com.lampplayer.tv.player.VideoScaleMode.AUTO -> "AUTO"
                     com.lampplayer.tv.player.VideoScaleMode.FIT -> "FIT"
