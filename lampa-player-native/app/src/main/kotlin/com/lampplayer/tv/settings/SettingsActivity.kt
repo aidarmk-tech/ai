@@ -35,6 +35,7 @@ class SettingsViewModel @Inject constructor(
     fun setSkipIntro(v: Boolean) = viewModelScope.launch { store.setSkipIntro(v) }
     fun setDiag(v: Boolean) = viewModelScope.launch { store.setDiag(v) }
     fun setAfr(v: Boolean) = viewModelScope.launch { store.setAfr(v) }
+    fun setNightMode(v: Boolean) = viewModelScope.launch { store.setNightMode(v) }
     fun setSleepTimer(min: Int) = viewModelScope.launch { store.setSleepTimer(min) }
     fun setOsdTimeout(sec: Int) = viewModelScope.launch { store.setOsdTimeout(sec) }
 }
@@ -158,6 +159,7 @@ class SettingsActivity : AppCompatActivity() {
         binding.switchSkipIntro.setOnCheckedChangeListener { _, v -> if (!ignoreSpinnerEvent) vm.setSkipIntro(v) }
         binding.switchDiag.setOnCheckedChangeListener { _, v -> if (!ignoreSpinnerEvent) vm.setDiag(v) }
         binding.switchAfr.setOnCheckedChangeListener { _, v -> if (!ignoreSpinnerEvent) vm.setAfr(v) }
+        binding.switchNight.setOnCheckedChangeListener { _, v -> if (!ignoreSpinnerEvent) vm.setNightMode(v) }
     }
 
     private fun applySettings(s: AppSettings) {
@@ -171,6 +173,7 @@ class SettingsActivity : AppCompatActivity() {
         binding.switchSkipIntro.isChecked = s.skipIntro
         binding.switchDiag.isChecked = s.diag
         binding.switchAfr.isChecked = s.afr
+        binding.switchNight.isChecked = s.nightMode
         binding.spinnerSleep.setSelection(SLEEP_OPTIONS.indexOf(s.sleepTimerMin).coerceAtLeast(0))
         binding.spinnerOsdTimeout.setSelection(OSD_OPTIONS.indexOf(s.osdTimeoutSec).coerceAtLeast(0))
         binding.spinnerDelay.isEnabled = s.autonext

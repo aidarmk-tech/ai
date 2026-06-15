@@ -32,6 +32,8 @@ data class AppSettings(
     val scaleMode: String = "AUTO",
     // AFR: switch the display refresh rate to match the content frame rate.
     val afr: Boolean = false,
+    // Night mode: compress loud sounds and lift dialogue.
+    val nightMode: Boolean = false,
 )
 
 @Singleton
@@ -51,6 +53,7 @@ class SettingsDataStore @Inject constructor(
         val VOLUME_BOOST = intPreferencesKey("volume_boost")
         val SCALE_MODE = stringPreferencesKey("scale_mode")
         val AFR = booleanPreferencesKey("afr")
+        val NIGHT_MODE = booleanPreferencesKey("night_mode")
     }
 
     val settings: Flow<AppSettings> = context.settingsDataStore.data
@@ -70,6 +73,7 @@ class SettingsDataStore @Inject constructor(
                 volumeBoost = prefs[Keys.VOLUME_BOOST] ?: 100,
                 scaleMode = prefs[Keys.SCALE_MODE] ?: "AUTO",
                 afr = prefs[Keys.AFR] ?: false,
+                nightMode = prefs[Keys.NIGHT_MODE] ?: false,
             )
         }
 
@@ -89,4 +93,5 @@ class SettingsDataStore @Inject constructor(
     suspend fun setVolumeBoost(percent: Int) = update { this[Keys.VOLUME_BOOST] = percent }
     suspend fun setScaleMode(mode: String) = update { this[Keys.SCALE_MODE] = mode }
     suspend fun setAfr(enabled: Boolean) = update { this[Keys.AFR] = enabled }
+    suspend fun setNightMode(enabled: Boolean) = update { this[Keys.NIGHT_MODE] = enabled }
 }

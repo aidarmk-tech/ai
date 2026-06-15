@@ -204,6 +204,7 @@ class PlayerViewModel @Inject constructor(
         }
         saveJob?.cancel(); diagJob?.cancel(); vlcPollJob?.cancel(); osdHideJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel(); epgJob?.cancel(); retryJob?.cancel()
         releaseLoudness()
+        runCatching { nightModeCtl.release() }
         if (::player.isInitialized) runCatching { player.release() }
         runCatching { vlc?.release() }; vlc = null
         usingVlc = false
@@ -256,11 +257,16 @@ class PlayerViewModel @Inject constructor(
         else if (::player.isInitialized) runCatching { player.prepare(); player.playWhenReady = true }
     }
 
+    private var lastNightMode: Boolean? = null
+
     init {
         viewModelScope.launch {
             settingsDataStore.settings.collect { s ->
                 settings = s; _uiState.update { it.copy(settings = s) }
                 restartSleepTimer(s.sleepTimerMin)
+                // Apply night mode live when the user toggles it.
+                if (lastNightMode != null && lastNightMode != s.nightMode) applyNightMode(s.nightMode)
+                lastNightMode = s.nightMode
             }
         }
     }
@@ -524,6 +530,7 @@ class PlayerViewModel @Inject constructor(
                 startMs = startMs.coerceAtLeast(0),
                 subtitles = if (useIntentStart) card.subtitles else emptyList(),
                 hardwareDecode = true,
+                nightMode = settings.nightMode,
             )
             reapplyRate()
             startVlcPoll()
@@ -599,7 +606,7 @@ class PlayerViewModel @Inject constructor(
         val v = vlc ?: return
         runCatching {
             v.setMedia(appContext, currentUrl, card.headers, lastVlcPositionMs.coerceAtLeast(0),
-                emptyList(), hardwareDecode = true)
+                emptyList(), hardwareDecode = true, nightMode = settings.nightMode)
             reapplyRate()
         }
     }
@@ -618,13 +625,14 @@ class PlayerViewModel @Inject constructor(
         // accessors never route to the released instance.
         usingVlc = true
         releaseLoudness()   // Exo effect is bound to the Exo session we're releasing
+        runCatching { nightModeCtl.release() }
         runCatching { player.release() }
         saveJob?.cancel(); diagJob?.cancel(); retryJob?.cancel()
         _uiState.update { it.copy(hasError = false, isLoading = true) }
         val profile = BufferProfile.fromType(settings.buffer)
         val controller = VlcController(appContext, profile.maxBufferLengthMs.toInt().coerceIn(1500, 60_000), vlcListener)
         vlc = controller
-        controller.setMedia(appContext, currentUrl, card.headers, resumeMs.coerceAtLeast(0), card.subtitles, hardwareDecode = true)
+        controller.setMedia(appContext, currentUrl, card.headers, resumeMs.coerceAtLeast(0), card.subtitles, hardwareDecode = true, nightMode = settings.nightMode)
         reapplyRate()
         startVlcPoll()
         viewModelScope.launch { _engineSwitched.emit(Unit) }
@@ -750,6 +758,7 @@ class PlayerViewModel @Inject constructor(
     private var currentBoost = 100
     private var loudness: android.media.audiofx.LoudnessEnhancer? = null
     private val boostSteps = listOf(100, 125, 150, 200)
+    private val nightModeCtl = NightModeController()
 
     fun cycleVolumeBoost() {
         val idx = boostSteps.indexOf(currentBoost).coerceAtLeast(0)
@@ -781,6 +790,15 @@ class PlayerViewModel @Inject constructor(
     private fun releaseLoudness() {
         runCatching { loudness?.release() }
         loudness = null
+    }
+
+    /** Apply night mode to the active engine (ExoPlayer: live; libVLC: re-open at position). */
+    private fun applyNightMode(enabled: Boolean) {
+        if (usingVlc) {
+            retryVlc()   // libVLC needs the media re-opened to add/remove the compressor filter
+        } else if (::player.isInitialized) {
+            runCatching { nightModeCtl.apply(player.audioSessionId, enabled) }
+        }
     }
 
     // ─── Video sizing (aspect / zoom) ──────────────────────────────
@@ -905,7 +923,7 @@ class PlayerViewModel @Inject constructor(
             if (wasIptv && updated != null) { populateMetadataFromCard(updated); loadEpg(updated) }   // refresh title + EPG for new channel
             if (usingVlc) {
                 val card = currentCard ?: return@launch
-                vlc?.setMedia(appContext, episode.url, card.headers, 0L, emptyList(), hardwareDecode = true)
+                vlc?.setMedia(appContext, episode.url, card.headers, 0L, emptyList(), hardwareDecode = true, nightMode = settings.nightMode)
                 reapplyRate()
             } else {
                 player.stop()
@@ -1201,8 +1219,9 @@ class PlayerViewModel @Inject constructor(
                     errorRecovery.reset()
                     if (_uiState.value.reconnecting || _uiState.value.hasError)
                         _uiState.update { it.copy(reconnecting = false, hasError = false) }
-                    // Audio session exists only now — (re)attach the loudness boost.
+                    // Audio session exists only now — (re)attach the loudness boost + night mode.
                     if (currentBoost > 100) applyBoost(currentBoost)
+                    runCatching { nightModeCtl.apply(player.audioSessionId, settings.nightMode) }
                 }
                 if (state == Player.STATE_BUFFERING && everReady) onRebuffer()
                 if (state == Player.STATE_ENDED) {
@@ -1360,6 +1379,7 @@ class PlayerViewModel @Inject constructor(
     override fun onCleared() {
         saveJob?.cancel(); diagJob?.cancel(); osdHideJob?.cancel(); vlcPollJob?.cancel(); sleepJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel(); epgJob?.cancel(); retryJob?.cancel()
         releaseLoudness()
+        runCatching { nightModeCtl.release() }
         stopNetworkMonitor()
         viewModelScope.launch { saveCurrentPosition() }
         if (::player.isInitialized) player.release()

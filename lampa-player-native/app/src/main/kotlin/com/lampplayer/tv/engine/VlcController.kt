@@ -117,6 +117,7 @@ class VlcController(
         startMs: Long,
         subtitles: List<ExternalSubtitle>,
         hardwareDecode: Boolean,
+        nightMode: Boolean = false,
     ) {
         val media = Media(libVlc, Uri.parse(url)).apply {
             setHWDecoderEnabled(hardwareDecode, false)
@@ -126,6 +127,15 @@ class VlcController(
             headers.entries.firstOrNull { it.key.equals("Referer", true) || it.key.equals("Referrer", true) }
                 ?.let { addOption(":http-referrer=${it.value}") }
             if (startMs > 0) addOption(":start-time=${startMs / 1000}")
+            if (nightMode) {
+                // Compress loud content + make-up gain so dialogue stays audible.
+                addOption(":audio-filter=compressor")
+                addOption(":compressor-threshold=-26.0")
+                addOption(":compressor-ratio=6.0")
+                addOption(":compressor-makeup-gain=9.0")
+                addOption(":compressor-attack=5.0")
+                addOption(":compressor-release=120.0")
+            }
         }
         mediaPlayer.media = media
         media.release()
