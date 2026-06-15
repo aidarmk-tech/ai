@@ -347,7 +347,8 @@ class PlayerActivity : AppCompatActivity() {
                 tracksWasVisible = s.tracksOverlayVisible
                 infoWasVisible = s.infoOverlayVisible
 
-                binding.progressBuffering.isVisible = s.isLoading && !s.isPlaying && !s.hasError
+                binding.progressBuffering.isVisible = (s.isLoading || s.reconnecting) && !s.isPlaying && !s.hasError
+                binding.tvReconnect.isVisible = s.reconnecting && !s.isPlaying
                 binding.errorContainer.isVisible = s.hasError
                 binding.tvErrorMessage.text = s.errorMessage
                 binding.btnSkipIntro.isVisible = s.showSkipIntro && !s.hasError

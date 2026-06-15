@@ -29,6 +29,21 @@
         android:indeterminateTint="@color/accent_primary"
         android:visibility="gone" />
 
+    <!-- Reconnecting after a network drop -->
+    <TextView
+        android:id="@+id/tv_reconnect"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:layout_marginTop="96dp"
+        android:text="Нет соединения · переподключаемся…"
+        android:textColor="@color/text_primary"
+        android:textSize="16sp"
+        android:background="@drawable/bg_channel_card"
+        android:paddingHorizontal="20dp"
+        android:paddingVertical="10dp"
+        android:visibility="gone" />
+
     <!-- ═══ OSD ═══ -->
     <FrameLayout
         android:id="@+id/osd_container"

@@ -48,6 +48,8 @@ data class PlayerUiState(
     val isLoading: Boolean = false,
     val hasError: Boolean = false,
     val errorMessage: String = "",
+    // Network dropped: auto-reconnecting in the background (no fatal screen).
+    val reconnecting: Boolean = false,
     val osdVisible: Boolean = true,
     val showSkipIntro: Boolean = false,
     val introEnd: Double = 0.0,
@@ -207,10 +209,51 @@ class PlayerViewModel @Inject constructor(
         usingVlc = false
         didAutoFallback = false
         everReady = false; weakHintShown = false; rebufferTimes.clear()
+        vlcRetries = 0; lastVlcPositionMs = 0L
+        errorRecovery.reset()
         currentRate = 1f
         currentUrl = ""
         currentCard = null
         _uiState.value = PlayerUiState(settings = settings)
+    }
+
+    // ─── Network monitor: auto-resume when connectivity returns ────────────
+    private var connectivityManager: android.net.ConnectivityManager? = null
+    private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
+
+    private fun startNetworkMonitor() {
+        if (networkCallback != null) return
+        val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager ?: return
+        connectivityManager = cm
+        val cb = object : android.net.ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: android.net.Network) {
+                viewModelScope.launch { onNetworkBack() }
+            }
+        }
+        networkCallback = cb
+        runCatching {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                cm.registerDefaultNetworkCallback(cb)
+            } else {
+                val req = android.net.NetworkRequest.Builder()
+                    .addCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET).build()
+                cm.registerNetworkCallback(req, cb)
+            }
+        }
+    }
+
+    private fun stopNetworkMonitor() {
+        runCatching { networkCallback?.let { connectivityManager?.unregisterNetworkCallback(it) } }
+        networkCallback = null
+    }
+
+    /** Connectivity returned — if we're stalled/errored, reconnect immediately. */
+    private fun onNetworkBack() {
+        val s = _uiState.value
+        if (!s.reconnecting && !s.hasError) return     // healthy → nothing to do
+        retryJob?.cancel()
+        if (usingVlc) retryVlc()
+        else if (::player.isInitialized) runCatching { player.prepare(); player.playWhenReady = true }
     }
 
     init {
@@ -225,6 +268,7 @@ class PlayerViewModel @Inject constructor(
     fun initPlayer(context: Context, url: String, card: CardMeta) {
         currentUrl = url
         currentCard = card
+        startNetworkMonitor()
         _uiState.update {
             it.copy(
                 title = buildTitle(card), quality = card.quality ?: "",
@@ -417,8 +461,8 @@ class PlayerViewModel @Inject constructor(
                 if (!containsKey("User-Agent"))
                     put("User-Agent", "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/91.0 Mobile Safari/537.36")
             })
-            .setConnectTimeoutMs(15_000)
-            .setReadTimeoutMs(20_000)
+            .setConnectTimeoutMs(10_000)
+            .setReadTimeoutMs(10_000)
             .setAllowCrossProtocolRedirects(true)
 
         val loadControl = DefaultLoadControl.Builder()
@@ -489,7 +533,8 @@ class PlayerViewModel @Inject constructor(
 
     private val vlcListener = object : EngineListener {
         override fun onPlaying() {
-            _uiState.update { it.copy(isPlaying = true, isLoading = false, videoFps = vlc?.videoFps() ?: 0f) }
+            vlcRetries = 0
+            _uiState.update { it.copy(isPlaying = true, isLoading = false, reconnecting = false, hasError = false, videoFps = vlc?.videoFps() ?: 0f) }
         }
         override fun onPaused() { _uiState.update { it.copy(isPlaying = false) } }
         override fun onBuffering(percent: Float) {
@@ -503,7 +548,8 @@ class PlayerViewModel @Inject constructor(
             else _uiState.update { it.copy(osdVisible = true) }
         }
         override fun onError(message: String) {
-            _uiState.update { it.copy(hasError = true, errorMessage = "libVLC: $message") }
+            // Don't go straight to a fatal screen — try to reconnect (network drops).
+            scheduleVlcRetry()
         }
         override fun onTracksChanged() { if (_uiState.value.tracksOverlayVisible) refreshTracks() }
     }
@@ -514,11 +560,47 @@ class PlayerViewModel @Inject constructor(
             while (isActive) {
                 delay(1000)
                 val v = vlc ?: break
-                if (v.isPlaying && v.positionMs > 0 && v.durationMs > 0) saveCurrentPosition()
+                if (v.isPlaying && v.positionMs > 0 && v.durationMs > 0) {
+                    saveCurrentPosition()
+                    lastVlcPositionMs = v.positionMs           // for reconnect after a drop
+                    if (vlcRetries != 0) vlcRetries = 0        // healthy → reset retry counter
+                    if (_uiState.value.reconnecting) _uiState.update { it.copy(reconnecting = false) }
+                }
                 if (settings.diag) {
                     _uiState.update { it.copy(diagText = "libVLC  %ds / %ds".format(v.positionMs / 1000, v.durationMs / 1000)) }
                 }
             }
+        }
+    }
+
+    // libVLC has no built-in retry: on error, re-open the media at the last position
+    // with backoff (network drops should reconnect, not show a fatal screen).
+    private var lastVlcPositionMs = 0L
+    private var vlcRetries = 0
+    private val maxVlcRetries = 6
+
+    private fun scheduleVlcRetry() {
+        if (!usingVlc) return
+        if (vlcRetries >= maxVlcRetries) {
+            _uiState.update { it.copy(hasError = true, reconnecting = false, errorMessage = "Не удалось восстановить поток") }
+            return
+        }
+        vlcRetries++
+        _uiState.update { it.copy(isLoading = true, reconnecting = true, hasError = false) }
+        retryJob?.cancel()
+        retryJob = viewModelScope.launch {
+            delay((1000L shl vlcRetries.coerceIn(1, 4)))      // 2,4,8,16s
+            retryVlc()
+        }
+    }
+
+    private fun retryVlc() {
+        val card = currentCard ?: return
+        val v = vlc ?: return
+        runCatching {
+            v.setMedia(appContext, currentUrl, card.headers, lastVlcPositionMs.coerceAtLeast(0),
+                emptyList(), hardwareDecode = true)
+            reapplyRate()
         }
     }
 
@@ -1116,6 +1198,9 @@ class PlayerViewModel @Inject constructor(
                 _uiState.update { it.copy(isLoading = state == Player.STATE_BUFFERING) }
                 if (state == Player.STATE_READY) {
                     everReady = true
+                    errorRecovery.reset()
+                    if (_uiState.value.reconnecting || _uiState.value.hasError)
+                        _uiState.update { it.copy(reconnecting = false, hasError = false) }
                     // Audio session exists only now — (re)attach the loudness boost.
                     if (currentBoost > 100) applyBoost(currentBoost)
                 }
@@ -1129,17 +1214,23 @@ class PlayerViewModel @Inject constructor(
             override fun onIsPlayingChanged(isPlaying: Boolean) =
                 _uiState.update { it.copy(isPlaying = isPlaying) }
             override fun onPlayerError(error: PlaybackException) {
+                // Live edge fell behind (common after a stall on HLS/IPTV) → jump to live.
+                if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
+                    runCatching { p.seekToDefaultPosition(); p.prepare() }
+                    return
+                }
                 val action = errorRecovery.onError(error, p)
                 if (action == ErrorRecoveryManager.Action.SHOW_FATAL) {
                     // AUTO mode: a decode/container failure is exactly what libVLC may handle.
                     if (settings.engine == EngineType.AUTO && !didAutoFallback && isDecodeError(error)) {
                         fallbackToVlc()
                     } else {
-                        _uiState.update { it.copy(hasError = true, errorMessage = buildErrorMessage(error)) }
+                        _uiState.update { it.copy(hasError = true, reconnecting = false, errorMessage = buildErrorMessage(error)) }
                     }
                 } else {
-                    // Retry with backoff so a dead network isn't hammered 3 times instantly.
-                    _uiState.update { it.copy(isLoading = true) }
+                    // Retry with backoff. Network errors retry indefinitely (reconnecting),
+                    // so a dropped mobile connection recovers on its own.
+                    _uiState.update { it.copy(isLoading = true, reconnecting = errorRecovery.lastWasNetwork, hasError = false) }
                     retryJob?.cancel()
                     retryJob = viewModelScope.launch {
                         delay(errorRecovery.retryDelayMs)
@@ -1269,6 +1360,7 @@ class PlayerViewModel @Inject constructor(
     override fun onCleared() {
         saveJob?.cancel(); diagJob?.cancel(); osdHideJob?.cancel(); vlcPollJob?.cancel(); sleepJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel(); epgJob?.cancel(); retryJob?.cancel()
         releaseLoudness()
+        stopNetworkMonitor()
         viewModelScope.launch { saveCurrentPosition() }
         if (::player.isInitialized) player.release()
         vlc?.release(); vlc = null
