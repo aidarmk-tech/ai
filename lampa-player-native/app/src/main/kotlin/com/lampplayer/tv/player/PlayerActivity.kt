@@ -628,7 +628,10 @@ class PlayerActivity : AppCompatActivity() {
         val dm = resources.displayMetrics
         val screen = dm.widthPixels.toFloat() / dm.heightPixels.coerceAtLeast(1)
         val ratio = kotlin.math.max(videoAspect / screen, screen / videoAspect)
-        return if (ratio <= 1.15f) zoom else fit
+        // Fill (crop) up to a ~40% aspect mismatch — covers 4:3 and CinemaScope
+        // 2.0–2.4:1 on a 16:9 panel (crops the edges); only пропускаем экстремальные
+        // случаи (≈2.5:1+), где обрезка съела бы слишком много кадра.
+        return if (ratio <= 1.40f) zoom else fit
     }
 
     /** Index of the currently-playing item in the episode list (for scroll/focus). */
