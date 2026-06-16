@@ -804,6 +804,7 @@ class PlayerViewModel @Inject constructor(
     /** OSD toggle: flip night mode, persist it, and apply to the running engine. */
     fun toggleNightMode() {
         val next = !settings.nightMode
+        lastNightMode = next            // we apply it here — stop the settings collector re-applying
         applyNightMode(next)
         viewModelScope.launch { settingsDataStore.setNightMode(next) }
     }
@@ -1355,6 +1356,7 @@ class PlayerViewModel @Inject constructor(
         saveJob = viewModelScope.launch {
             while (isActive) {
                 delay(5000)
+                if (usingVlc || !::player.isInitialized) continue
                 if (player.isPlaying && player.currentPosition > 0 && player.duration != C.TIME_UNSET)
                     saveCurrentPosition()
             }
@@ -1365,6 +1367,7 @@ class PlayerViewModel @Inject constructor(
         diagJob = viewModelScope.launch {
             while (isActive) {
                 delay(1000)
+                if (usingVlc || !::player.isInitialized) continue
                 val buf = (player.bufferedPosition - player.currentPosition) / 1000.0
                 val fmt = player.videoFormat
                 _uiState.update {
