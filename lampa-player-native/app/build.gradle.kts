@@ -80,6 +80,7 @@ dependencies {
     implementation(libs.media3.exoplayer.rtsp)
     implementation(libs.media3.ui)
     implementation(libs.media3.session)
+    implementation(libs.androidx.media)
     implementation(libs.media3.datasource.okhttp)
 
     // libVLC — fallback engine for codecs/containers ExoPlayer can't handle

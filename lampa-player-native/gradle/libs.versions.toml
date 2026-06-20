@@ -38,6 +38,9 @@ media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "medi
 media3-session = { group = "androidx.media3", name = "media3-session", version.ref = "media3" }
 media3-datasource-okhttp = { group = "androidx.media3", name = "media3-datasource-okhttp", version.ref = "media3" }
 
+# MediaSession (legacy compat — engine-agnostic transport for voice/remote control)
+androidx-media = { group = "androidx.media", name = "media", version = "1.7.0" }
+
 # Room
 room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
 room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }

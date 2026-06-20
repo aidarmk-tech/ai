@@ -271,10 +271,69 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    // ─── MediaSession: voice ("стоп/перемотай/дальше") + remote/BT media keys ──
+    private var mediaSession: android.support.v4.media.session.MediaSessionCompat? = null
+
+    private fun setupMediaSession() {
+        if (mediaSession != null) return
+        runCatching {
+            val s = android.support.v4.media.session.MediaSessionCompat(appContext, "LampPlayer")
+            s.setCallback(object : android.support.v4.media.session.MediaSessionCompat.Callback() {
+                override fun onPlay() { resumePlayback(); updateMediaSession() }
+                override fun onPause() { pausePlayback(); updateMediaSession() }
+                override fun onStop() { pausePlayback(); updateMediaSession() }
+                override fun onSeekTo(pos: Long) { engSeekTo(pos); updateMediaSession() }
+                override fun onFastForward() { engSeekTo(engPositionMs() + 30_000); updateMediaSession() }
+                override fun onRewind() { engSeekTo((engPositionMs() - 10_000).coerceAtLeast(0)); updateMediaSession() }
+                override fun onSkipToNext() { onNextEpisode() }
+                override fun onSkipToPrevious() { onPrevEpisode() }
+            })
+            s.isActive = true
+            mediaSession = s
+        }
+    }
+
+    private fun updateMediaSession() {
+        val s = mediaSession ?: return
+        runCatching {
+            val playing = engIsPlaying()
+            val actions = android.support.v4.media.session.PlaybackStateCompat.ACTION_PLAY or
+                android.support.v4.media.session.PlaybackStateCompat.ACTION_PAUSE or
+                android.support.v4.media.session.PlaybackStateCompat.ACTION_PLAY_PAUSE or
+                android.support.v4.media.session.PlaybackStateCompat.ACTION_STOP or
+                android.support.v4.media.session.PlaybackStateCompat.ACTION_SEEK_TO or
+                android.support.v4.media.session.PlaybackStateCompat.ACTION_FAST_FORWARD or
+                android.support.v4.media.session.PlaybackStateCompat.ACTION_REWIND or
+                android.support.v4.media.session.PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
+                android.support.v4.media.session.PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
+            val state = if (playing) android.support.v4.media.session.PlaybackStateCompat.STATE_PLAYING
+                        else android.support.v4.media.session.PlaybackStateCompat.STATE_PAUSED
+            s.setPlaybackState(
+                android.support.v4.media.session.PlaybackStateCompat.Builder()
+                    .setActions(actions)
+                    .setState(state, engPositionMs(), if (playing) currentRate else 0f)
+                    .build()
+            )
+            val dur = engDurationMs()
+            s.setMetadata(
+                android.support.v4.media.MediaMetadataCompat.Builder()
+                    .putString(android.support.v4.media.MediaMetadataCompat.METADATA_KEY_TITLE, _uiState.value.title)
+                    .putLong(android.support.v4.media.MediaMetadataCompat.METADATA_KEY_DURATION, if (dur > 0) dur else 0L)
+                    .build()
+            )
+        }
+    }
+
+    private fun releaseMediaSession() {
+        runCatching { mediaSession?.isActive = false; mediaSession?.release() }
+        mediaSession = null
+    }
+
     fun initPlayer(context: Context, url: String, card: CardMeta) {
         currentUrl = url
         currentCard = card
         startNetworkMonitor()
+        setupMediaSession()
         _uiState.update {
             it.copy(
                 title = buildTitle(card), quality = card.quality ?: "",
@@ -301,6 +360,7 @@ class PlayerViewModel @Inject constructor(
         card.tmdbId?.let { loadMetadata(it, card.isSerial, card) }
         loadEpisodes(card)
         loadEpg(card)
+        updateMediaSession()
     }
 
     /**
@@ -542,8 +602,9 @@ class PlayerViewModel @Inject constructor(
         override fun onPlaying() {
             vlcRetries = 0
             _uiState.update { it.copy(isPlaying = true, isLoading = false, reconnecting = false, hasError = false, videoFps = vlc?.videoFps() ?: 0f) }
+            updateMediaSession()
         }
-        override fun onPaused() { _uiState.update { it.copy(isPlaying = false) } }
+        override fun onPaused() { _uiState.update { it.copy(isPlaying = false) }; updateMediaSession() }
         override fun onBuffering(percent: Float) {
             _uiState.update { it.copy(isLoading = percent < 100f) }
         }
@@ -729,7 +790,7 @@ class PlayerViewModel @Inject constructor(
         else -> 0L
     }
     fun isPlayingNow(): Boolean = engIsPlaying()
-    fun seekToMs(ms: Long) = engSeekTo(ms)
+    fun seekToMs(ms: Long) { engSeekTo(ms); updateMediaSession() }
     fun pausePlayback() { if (usingVlc) vlc?.pause() else if (::player.isInitialized) player.pause() }
     fun resumePlayback() { if (usingVlc) vlc?.play() else if (::player.isInitialized) player.play() }
 
@@ -937,6 +998,7 @@ class PlayerViewModel @Inject constructor(
                 player.stop()
                 loadUrl(episode.url, currentCard!!)
             }
+            updateMediaSession()
         }
     }
 
@@ -1238,8 +1300,10 @@ class PlayerViewModel @Inject constructor(
                     else _uiState.update { it.copy(osdVisible = true) }
                 }
             }
-            override fun onIsPlayingChanged(isPlaying: Boolean) =
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
                 _uiState.update { it.copy(isPlaying = isPlaying) }
+                updateMediaSession()
+            }
             override fun onPlayerError(error: PlaybackException) {
                 // Live edge fell behind (common after a stall on HLS/IPTV) → jump to live.
                 if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
@@ -1391,6 +1455,7 @@ class PlayerViewModel @Inject constructor(
         releaseLoudness()
         runCatching { nightModeCtl.release() }
         stopNetworkMonitor()
+        releaseMediaSession()
         viewModelScope.launch { saveCurrentPosition() }
         if (::player.isInitialized) player.release()
         vlc?.release(); vlc = null
