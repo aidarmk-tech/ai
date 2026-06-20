@@ -361,6 +361,19 @@ class PlayerViewModel @Inject constructor(
         loadEpisodes(card)
         loadEpg(card)
         updateMediaSession()
+        detectIntroFromSubs(card)
+    }
+
+    /** Auto-detect the intro from an external subtitle (Phase 1: subs we already have). */
+    private fun detectIntroFromSubs(card: CardMeta) {
+        if (!settings.skipIntro || card.iptv) return
+        val sub = card.subtitles.firstOrNull { it.uri.isNotBlank() } ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            val ms = runCatching { SubtitleIntroDetector.detectIntroEndMs(appContext, sub.uri) }.getOrDefault(0L)
+            if (ms in 5_000L..330_000L && _uiState.value.introEnd <= 0.0) {
+                _uiState.update { it.copy(introEnd = ms / 1000.0) }
+            }
+        }
     }
 
     /**
