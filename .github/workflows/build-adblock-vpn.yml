@@ -1,0 +1,89 @@
+name: Build AdShield VPN APK
+
+on:
+  push:
+    branches: [ "claude/mobile-ad-blocker-vpn-ry5mmq", "main", "master" ]
+    paths:
+      - "adblock-vpn-native/**"
+      - ".github/workflows/build-adblock-vpn.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+
+      - name: Setup Gradle 8.7
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: "8.7"
+
+      # Prefer the keystore from secrets (KEYSTORE_B64 = base64 of lampplayer.jks);
+      # fall back to the repo copy until the secret is configured.
+      - name: Restore signing keystore
+        run: |
+          mkdir -p adblock-vpn-native/keystore
+          if [ -n "${{ secrets.KEYSTORE_B64 }}" ]; then
+            echo "${{ secrets.KEYSTORE_B64 }}" | base64 -d > adblock-vpn-native/keystore/lampplayer.jks
+            echo "Using keystore from secrets"
+          elif [ -f adblock-vpn-native/keystore/lampplayer.jks ]; then
+            echo "Using keystore from repo (add KEYSTORE_B64 secret to remove it)"
+          else
+            echo "No keystore available" && exit 1
+          fi
+
+      - name: Build Debug APK
+        working-directory: adblock-vpn-native
+        run: gradle assembleDebug --no-daemon --stacktrace -PverCode=${{ github.run_number }} -PverName=1.0.${{ github.run_number }}
+
+      - name: Stage APK
+        run: |
+          mkdir -p dist
+          cp adblock-vpn-native/app/build/outputs/apk/debug/app-debug.apk dist/AdShield.apk
+          ls -lh dist/AdShield.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AdShield-debug-${{ github.run_number }}
+          path: dist/AdShield.apk
+          retention-days: 30
+
+      # ── Rolling release on main: publish the APK as a downloadable asset ──
+      - name: Write version.json
+        if: github.ref == 'refs/heads/main'
+        run: |
+          SHA256=$(sha256sum dist/AdShield.apk | cut -d' ' -f1)
+          cat > dist/version.json <<EOF
+          {
+            "versionCode": ${{ github.run_number }},
+            "versionName": "1.0.${{ github.run_number }}",
+            "url": "https://github.com/${{ github.repository }}/releases/download/adshield-auto/AdShield.apk",
+            "sha256": "$SHA256",
+            "notes": "Авто-сборка #${{ github.run_number }}"
+          }
+          EOF
+          cat dist/version.json
+
+      - name: Publish rolling release (main)
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: adshield-auto
+          name: AdShield (auto)
+          body: "Rolling auto-update build #${{ github.run_number }}"
+          files: |
+            dist/AdShield.apk
+            dist/version.json

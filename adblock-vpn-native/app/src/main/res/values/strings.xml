@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AdShield</string>
+    <string name="tile_label">AdShield</string>
+    <string name="tile_on">Защита включена</string>
+    <string name="tile_off">Защита выключена</string>
+
+    <string name="title">Блокировщик рекламы</string>
+    <string name="subtitle">Локальный VPN фильтрует DNS и блокирует рекламу. Трафик никуда не передаётся.</string>
+
+    <string name="protection_label">Защита</string>
+    <string name="status_on">Защита активна</string>
+    <string name="status_off">Защита выключена</string>
+
+    <string name="list_size">Доменов в списке блокировки: %1$d</string>
+    <string name="blocked_stat">Заблокировано: %1$d из %2$d запросов</string>
+
+    <string name="update_button">Обновить список блокировки</string>
+    <string name="last_update">Обновлено: %1$s</string>
+    <string name="last_update_never">Список ещё не обновлялся (используется встроенный)</string>
+    <string name="update_done">Готово. Доменов в списке: %1$d</string>
+    <string name="update_failed">Не удалось обновить: %1$s</string>
+
+    <string name="tile_hint">Добавьте плитку «AdShield» в шторку быстрых настроек, чтобы включать и выключать защиту одним нажатием.</string>
+    <string name="consent_denied">Без разрешения VPN защита не может работать</string>
+
+    <string name="notif_channel">Защита AdShield</string>
+    <string name="notif_title">AdShield активен</string>
+    <string name="notif_text">Реклама блокируется через локальный VPN</string>
+    <string name="action_stop">Выключить</string>
+</resources>

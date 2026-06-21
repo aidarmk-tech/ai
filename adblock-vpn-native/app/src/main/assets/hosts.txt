@@ -1,0 +1,122 @@
+# AdShield bundled blocklist (offline default).
+# Format: hosts-style "0.0.0.0 domain" or a bare domain per line.
+# Tap "Обновить список блокировки" in the app to fetch a much larger list.
+
+# --- Google / DoubleClick ads & tracking ---
+0.0.0.0 doubleclick.net
+0.0.0.0 g.doubleclick.net
+0.0.0.0 googleadservices.com
+0.0.0.0 googlesyndication.com
+0.0.0.0 pagead2.googlesyndication.com
+0.0.0.0 adservice.google.com
+0.0.0.0 pubads.g.doubleclick.net
+0.0.0.0 securepubads.g.doubleclick.net
+0.0.0.0 googleads.g.doubleclick.net
+0.0.0.0 google-analytics.com
+0.0.0.0 ssl.google-analytics.com
+0.0.0.0 www.google-analytics.com
+0.0.0.0 analytics.google.com
+0.0.0.0 adsense.google.com
+0.0.0.0 admob.com
+0.0.0.0 app-measurement.com
+
+# --- Facebook / Meta tracking ---
+0.0.0.0 connect.facebook.net
+0.0.0.0 an.facebook.com
+0.0.0.0 graph.facebook.com
+0.0.0.0 pixel.facebook.com
+
+# --- Amazon ads ---
+0.0.0.0 amazon-adsystem.com
+0.0.0.0 aax.amazon-adsystem.com
+0.0.0.0 c.amazon-adsystem.com
+0.0.0.0 mads.amazon-adsystem.com
+
+# --- Major ad exchanges / SSPs ---
+0.0.0.0 adnxs.com
+0.0.0.0 ib.adnxs.com
+0.0.0.0 rubiconproject.com
+0.0.0.0 pubmatic.com
+0.0.0.0 openx.net
+0.0.0.0 casalemedia.com
+0.0.0.0 criteo.com
+0.0.0.0 criteo.net
+0.0.0.0 static.criteo.net
+0.0.0.0 taboola.com
+0.0.0.0 cdn.taboola.com
+0.0.0.0 outbrain.com
+0.0.0.0 mgid.com
+0.0.0.0 smartadserver.com
+0.0.0.0 adform.net
+0.0.0.0 3lift.com
+0.0.0.0 bidswitch.net
+0.0.0.0 sharethrough.com
+0.0.0.0 contextweb.com
+0.0.0.0 gumgum.com
+0.0.0.0 teads.tv
+0.0.0.0 spotxchange.com
+0.0.0.0 spotx.tv
+0.0.0.0 indexww.com
+0.0.0.0 yieldmo.com
+0.0.0.0 districtm.io
+0.0.0.0 adroll.com
+
+# --- Analytics / trackers ---
+0.0.0.0 scorecardresearch.com
+0.0.0.0 sb.scorecardresearch.com
+0.0.0.0 quantserve.com
+0.0.0.0 quantcount.com
+0.0.0.0 hotjar.com
+0.0.0.0 static.hotjar.com
+0.0.0.0 mixpanel.com
+0.0.0.0 segment.io
+0.0.0.0 api.segment.io
+0.0.0.0 branch.io
+0.0.0.0 amplitude.com
+0.0.0.0 api.amplitude.com
+0.0.0.0 bugsnag.com
+0.0.0.0 sentry.io
+0.0.0.0 newrelic.com
+0.0.0.0 chartbeat.com
+0.0.0.0 crashlytics.com
+0.0.0.0 flurry.com
+0.0.0.0 data.flurry.com
+0.0.0.0 adjust.com
+0.0.0.0 app.adjust.com
+0.0.0.0 appsflyer.com
+0.0.0.0 t.appsflyer.com
+0.0.0.0 kochava.com
+0.0.0.0 tracking.kochava.com
+
+# --- Mobile ad SDKs ---
+0.0.0.0 applovin.com
+0.0.0.0 ms.applovin.com
+0.0.0.0 unityads.unity3d.com
+0.0.0.0 mopub.com
+0.0.0.0 ads.mopub.com
+0.0.0.0 inmobi.com
+0.0.0.0 startappservice.com
+0.0.0.0 startappexchange.com
+0.0.0.0 vungle.com
+0.0.0.0 chartboost.com
+0.0.0.0 live.chartboost.com
+0.0.0.0 ironsrc.com
+0.0.0.0 supersonicads.com
+0.0.0.0 tapjoy.com
+0.0.0.0 ads.tapjoy.com
+0.0.0.0 adcolony.com
+0.0.0.0 ads30.adcolony.com
+
+# --- Russian / CIS ad & tracking networks ---
+0.0.0.0 an.yandex.ru
+0.0.0.0 mc.yandex.ru
+0.0.0.0 yandexadexchange.net
+0.0.0.0 adfox.ru
+0.0.0.0 ads.adfox.ru
+0.0.0.0 top-fwz1.mail.ru
+0.0.0.0 ad.mail.ru
+0.0.0.0 r.mradar.imgsmail.ru
+0.0.0.0 rs.mail.ru
+0.0.0.0 dsp.rambler.ru
+0.0.0.0 ads.vk.com
+0.0.0.0 ad.rutube.ru
