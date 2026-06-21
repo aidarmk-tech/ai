@@ -36,6 +36,34 @@
     <string name="notif_text">Реклама блокируется через локальный VPN</string>
     <string name="action_stop">Выключить</string>
 
+    <string name="auto_update_label">Авто-обновление списков (раз в сутки)</string>
+    <string name="custom_lists_button">Свои списки (URL)</string>
+    <string name="log_button">Журнал заблокированного</string>
+    <string name="update_app_button">Проверить обновление приложения</string>
+    <string name="update_app_checking">Проверяю обновление…</string>
+    <string name="update_app_none">У вас последняя версия</string>
+    <string name="update_app_available">Доступна версия %1$s. Скачать и установить?</string>
+    <string name="update_app_downloading">Скачиваю обновление…</string>
+    <string name="update_app_failed">Не удалось обновить приложение</string>
+    <string name="update_app_grant">Разрешите установку из этого приложения и повторите</string>
+    <string name="dialog_update">Обновить</string>
+    <string name="dialog_later">Позже</string>
+
+    <!-- Custom lists screen -->
+    <string name="custom_title">Свои списки</string>
+    <string name="custom_subtitle">Добавьте ссылки на свои списки блокировки (hosts, plain-domain или AdGuard-формат). Они скачиваются вместе с остальными при обновлении.</string>
+    <string name="custom_hint">https://example.com/blocklist.txt</string>
+    <string name="custom_bad">Введите корректную ссылку http(s)://…</string>
+    <string name="custom_empty">Своих списков пока нет</string>
+
+    <!-- Log screen -->
+    <string name="log_title">Журнал</string>
+    <string name="log_subtitle">Последние заблокированные домены. Нажмите «Разрешить», чтобы добавить домен в белый список.</string>
+    <string name="log_empty">Пока ничего не заблокировано</string>
+    <string name="log_allow">Разрешить</string>
+    <string name="log_clear">Очистить</string>
+    <string name="log_allowed">%1$s добавлен в белый список</string>
+
     <!-- Whitelist screen -->
     <string name="whitelist_title">Белый список</string>
     <string name="whitelist_subtitle">Эти домены никогда не блокируются, даже если они есть в списках. Полезно, если что-то перестало открываться.</string>

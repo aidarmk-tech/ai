@@ -36,6 +36,7 @@ class AdVpnService : VpnService() {
 
     private lateinit var blockList: BlockList
     private lateinit var upstream: String
+    private var doh: DohResolver? = null
     private val forwarders: ExecutorService = Executors.newFixedThreadPool(8)
     private val writeLock = Any()
 
@@ -55,6 +56,7 @@ class AdVpnService : VpnService() {
 
         blockList = BlockList.load(this)
         upstream = Prefs.upstreamDns(this)
+        doh = if (upstream.startsWith("https://")) DohResolver(this, upstream) else null
         VpnState.blockListSize.value = blockList.size
         VpnState.resetCounters()
 
@@ -114,6 +116,7 @@ class AdVpnService : VpnService() {
         val question = PacketUtil.parseQuestion(req.dnsPayload)
         if (question != null && blockList.isBlocked(question.name)) {
             VpnState.blockedCount.incrementAndGet()
+            VpnState.addBlocked(question.name)
             val dnsResponse = PacketUtil.buildBlockedResponse(req.dnsPayload, question)
             writePacket(output, PacketUtil.buildResponsePacket(req, dnsResponse))
             return
@@ -123,6 +126,21 @@ class AdVpnService : VpnService() {
     }
 
     private fun forwardUpstream(req: PacketUtil.DnsRequest, output: FileOutputStream) {
+        val resolver = doh
+        if (resolver != null) {
+            val response = runCatching { resolver.resolve(req.dnsPayload) }.getOrNull()
+            if (response != null) {
+                writePacket(output, PacketUtil.buildResponsePacket(req, response))
+                return
+            }
+            // DoH failed → fall back to plain UDP so resolution never fully breaks.
+            forwardUdp(req, output, DOH_FALLBACK_DNS)
+            return
+        }
+        forwardUdp(req, output, upstream)
+    }
+
+    private fun forwardUdp(req: PacketUtil.DnsRequest, output: FileOutputStream, server: String) {
         try {
             DatagramSocket().use { socket ->
                 // Critical: keep this socket OUT of our own VPN, or we'd loop.
@@ -131,8 +149,8 @@ class AdVpnService : VpnService() {
                     return
                 }
                 socket.soTimeout = UPSTREAM_TIMEOUT_MS
-                val server = InetAddress.getByName(upstream)
-                socket.send(DatagramPacket(req.dnsPayload, req.dnsPayload.size, server, 53))
+                val address = InetAddress.getByName(server)
+                socket.send(DatagramPacket(req.dnsPayload, req.dnsPayload.size, address, 53))
 
                 val buf = ByteArray(MTU)
                 val reply = DatagramPacket(buf, buf.size)
@@ -163,6 +181,7 @@ class AdVpnService : VpnService() {
         }
         isRunning = false
         VpnState.running.value = false
+        doh = null
         worker?.interrupt()
         worker = null
         runCatching { vpnInterface?.close() }
@@ -239,6 +258,7 @@ class AdVpnService : VpnService() {
         private const val VPN_MTU = 4096
         private const val MTU = 32767 // read/receive buffer size
         private const val UPSTREAM_TIMEOUT_MS = 5000
+        private const val DOH_FALLBACK_DNS = "1.1.1.1"
         private const val CHANNEL_ID = "adshield_vpn"
         private const val NOTIF_ID = 1001
 

@@ -63,7 +63,7 @@ jobs:
 
       # ── Rolling release on main: publish the APK as a downloadable asset ──
       - name: Write version.json
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/claude/mobile-ad-blocker-vpn-ry5mmq'
         run: |
           SHA256=$(sha256sum dist/AdShield.apk | cut -d' ' -f1)
           cat > dist/version.json <<EOF
@@ -78,7 +78,7 @@ jobs:
           cat dist/version.json
 
       - name: Publish rolling release (main)
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/claude/mobile-ad-blocker-vpn-ry5mmq'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: adshield-auto

@@ -62,6 +62,7 @@ class MainActivity : AppCompatActivity() {
 
         buildCategoryCheckboxes()
         setupDnsSpinner()
+        setupExtraControls()
         observeState()
         loadBlocklistSize()
         renderLastUpdate()
@@ -69,6 +70,8 @@ class MainActivity : AppCompatActivity() {
         if (intent?.getBooleanExtra(EXTRA_AUTO_ENABLE, false) == true) {
             enableProtection()
         }
+        // Silent check for a newer app version on launch.
+        checkAppUpdate(manual = false)
     }
 
     override fun onResume() {
@@ -160,19 +163,74 @@ class MainActivity : AppCompatActivity() {
         binding.spinnerDns.adapter = adapter
 
         suppressCallbacks = true
-        binding.spinnerDns.setSelection(DnsServers.indexOfIp(Prefs.upstreamDns(this)))
+        binding.spinnerDns.setSelection(DnsServers.indexOfKey(Prefs.upstreamDns(this)))
         suppressCallbacks = false
 
         binding.spinnerDns.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
                 if (suppressCallbacks) return
-                val ip = DnsServers.all[pos].ip
-                if (ip == Prefs.upstreamDns(this@MainActivity)) return // no real change
-                Prefs.setUpstreamDns(this@MainActivity, ip)
+                val key = DnsServers.all[pos].key
+                if (key == Prefs.upstreamDns(this@MainActivity)) return // no real change
+                Prefs.setUpstreamDns(this@MainActivity, key)
                 applyIfRunning()
             }
 
             override fun onNothingSelected(p: AdapterView<*>?) {}
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Auto-update + extra screens + app self-update
+    // ---------------------------------------------------------------------
+
+    private fun setupExtraControls() {
+        suppressCallbacks = true
+        binding.switchAutoUpdate.isChecked = Prefs.autoUpdate(this)
+        suppressCallbacks = false
+        binding.switchAutoUpdate.setOnCheckedChangeListener { _, checked ->
+            if (suppressCallbacks) return@setOnCheckedChangeListener
+            Prefs.setAutoUpdate(this, checked)
+            BlocklistUpdateWorker.reschedule(this)
+        }
+        binding.buttonCustomLists.setOnClickListener {
+            startActivity(Intent(this, CustomListsActivity::class.java))
+        }
+        binding.buttonLog.setOnClickListener {
+            startActivity(Intent(this, LogActivity::class.java))
+        }
+        binding.buttonUpdateApp.setOnClickListener { checkAppUpdate(manual = true) }
+
+        BlocklistUpdateWorker.reschedule(this)
+    }
+
+    private fun checkAppUpdate(manual: Boolean) {
+        if (manual) Toast.makeText(this, R.string.update_app_checking, Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch {
+            val info = AppUpdater.check()
+            if (info == null) {
+                if (manual) Toast.makeText(this@MainActivity, R.string.update_app_none, Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            androidx.appcompat.app.AlertDialog.Builder(this@MainActivity)
+                .setTitle(R.string.update_app_button)
+                .setMessage(getString(R.string.update_app_available, info.versionName) + "\n\n" + info.notes)
+                .setPositiveButton(R.string.dialog_update) { _, _ -> downloadAndInstall(info) }
+                .setNegativeButton(R.string.dialog_later, null)
+                .show()
+        }
+    }
+
+    private fun downloadAndInstall(info: AppUpdater.Info) {
+        Toast.makeText(this, R.string.update_app_downloading, Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch {
+            val apk = AppUpdater.download(this@MainActivity, info)
+            if (apk == null) {
+                Toast.makeText(this@MainActivity, R.string.update_app_failed, Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            if (!AppUpdater.install(this@MainActivity, apk)) {
+                Toast.makeText(this@MainActivity, R.string.update_app_grant, Toast.LENGTH_LONG).show()
+            }
         }
     }
 

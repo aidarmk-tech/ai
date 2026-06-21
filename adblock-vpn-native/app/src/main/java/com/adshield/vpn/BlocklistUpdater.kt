@@ -20,14 +20,26 @@ object BlocklistUpdater {
     suspend fun update(ctx: Context): Result = withContext(Dispatchers.IO) {
         val enabled = Prefs.enabledSources(ctx)
         val toFetch = BlocklistCatalog.sources.filter { enabled.contains(it.id) }
-        if (toFetch.isEmpty()) {
+        val customUrls = Prefs.customUrls(ctx)
+        if (toFetch.isEmpty() && customUrls.isEmpty()) {
             return@withContext Result.Error("Не выбрано ни одной категории")
         }
 
         val failed = mutableListOf<String>()
+        var attempted = 0
         for (source in toFetch) {
-            val ok = runCatching { download(ctx, source) }.getOrDefault(false)
+            attempted++
+            val ok = runCatching {
+                download(source.url, BlocklistCatalog.fileFor(ctx, source))
+            }.getOrDefault(false)
             if (!ok) failed.add(source.title)
+        }
+        for (url in customUrls) {
+            attempted++
+            val ok = runCatching {
+                download(url, BlocklistCatalog.fileForCustom(ctx, url))
+            }.getOrDefault(false)
+            if (!ok) failed.add(url)
         }
 
         // Reload to report an accurate, deduplicated domain count.
@@ -35,15 +47,15 @@ object BlocklistUpdater {
         Prefs.setLastUpdate(ctx, System.currentTimeMillis())
         VpnState.blockListSize.value = list.size
 
-        if (failed.size == toFetch.size) {
+        if (failed.size == attempted) {
             Result.Error("Не удалось скачать списки (нет сети?)")
         } else {
             Result.Success(list.size, failed)
         }
     }
 
-    private fun download(ctx: Context, source: BlocklistSource): Boolean {
-        val conn = (URL(source.url).openConnection() as HttpURLConnection).apply {
+    private fun download(url: String, target: File): Boolean {
+        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 15000
             readTimeout = 45000
             instanceFollowRedirects = true
@@ -51,7 +63,7 @@ object BlocklistUpdater {
         }
         try {
             if (conn.responseCode !in 200..299) return false
-            val tmp = File(BlocklistCatalog.fileFor(ctx, source).absolutePath + ".tmp")
+            val tmp = File(target.absolutePath + ".tmp")
             var total = 0L
             conn.inputStream.use { input ->
                 tmp.outputStream().use { out ->
@@ -65,7 +77,7 @@ object BlocklistUpdater {
                     }
                 }
             }
-            return tmp.renameTo(BlocklistCatalog.fileFor(ctx, source))
+            return tmp.renameTo(target)
         } finally {
             conn.disconnect()
         }

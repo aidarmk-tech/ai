@@ -10,6 +10,8 @@ androidx-activity-ktx = { group = "androidx.activity", name = "activity-ktx", ve
 lifecycle-runtime = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version = "2.8.2" }
 material = { group = "com.google.android.material", name = "material", version = "1.12.0" }
 coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+work-runtime = { group = "androidx.work", name = "work-runtime-ktx", version = "2.9.0" }
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version = "4.12.0" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

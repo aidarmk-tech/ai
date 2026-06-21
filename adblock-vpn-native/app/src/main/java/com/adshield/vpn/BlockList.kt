@@ -56,6 +56,13 @@ class BlockList private constructor(
                     runCatching { file.inputStream().use { parse(it, set) } }
                 }
             }
+            // User-added custom lists.
+            for (url in Prefs.customUrls(ctx)) {
+                val file = BlocklistCatalog.fileForCustom(ctx, url)
+                if (file.exists()) {
+                    runCatching { file.inputStream().use { parse(it, set) } }
+                }
+            }
 
             val whitelist = Prefs.whitelist(ctx).map { it.lowercase() }.toSet()
             return BlockList(set, whitelist)

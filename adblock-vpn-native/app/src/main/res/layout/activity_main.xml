@@ -140,6 +140,27 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp" />
 
+        <!-- Auto-update -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/auto_update_label"
+                android:textSize="15sp" />
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/switchAutoUpdate"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
+
         <!-- Actions -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/buttonUpdate"
@@ -163,6 +184,30 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:text="@string/whitelist_button" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/buttonCustomLists"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/custom_lists_button" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/buttonLog"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/log_button" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/buttonUpdateApp"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/update_app_button" />
 
         <TextView
             android:id="@+id/textLastUpdate"

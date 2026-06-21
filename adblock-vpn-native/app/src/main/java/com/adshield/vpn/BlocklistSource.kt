@@ -63,10 +63,22 @@ object BlocklistCatalog {
         val dir = File(ctx.filesDir, "lists").apply { mkdirs() }
         return File(dir, "${source.id}.txt")
     }
+
+    /** On-disk location of a user-added custom list URL. */
+    fun fileForCustom(ctx: Context, url: String): File {
+        val dir = File(ctx.filesDir, "lists").apply { mkdirs() }
+        return File(dir, "custom_${url.hashCode().toUInt()}.txt")
+    }
 }
 
-/** A selectable upstream resolver that allowed DNS queries are forwarded to. */
-data class DnsServer(val title: String, val ip: String)
+/**
+ * A selectable upstream resolver. [key] is either a plain IPv4 address (UDP
+ * DNS) or an `https://<ip>/dns-query` URL (DNS-over-HTTPS). DoH endpoints use
+ * IP literals on purpose so resolving them never loops back into our own VPN.
+ */
+data class DnsServer(val title: String, val key: String) {
+    val isDoh: Boolean get() = key.startsWith("https://")
+}
 
 object DnsServers {
     val all: List<DnsServer> = listOf(
@@ -75,7 +87,9 @@ object DnsServers {
         DnsServer("Quad9 (9.9.9.9)", "9.9.9.9"),
         DnsServer("AdGuard DNS (94.140.14.14)", "94.140.14.14"),
         DnsServer("Яндекс (77.88.8.8)", "77.88.8.8"),
+        DnsServer("Cloudflare DoH (шифрование)", "https://1.1.1.1/dns-query"),
+        DnsServer("Google DoH (шифрование)", "https://8.8.8.8/dns-query"),
     )
 
-    fun indexOfIp(ip: String): Int = all.indexOfFirst { it.ip == ip }.coerceAtLeast(0)
+    fun indexOfKey(key: String): Int = all.indexOfFirst { it.key == key }.coerceAtLeast(0)
 }

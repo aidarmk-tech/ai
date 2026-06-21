@@ -20,6 +20,23 @@ object VpnState {
     /** Total DNS queries seen since the service started. */
     val totalCount = AtomicLong(0)
 
+    /** Ring buffer of the most recently blocked domains (newest last). */
+    private const val LOG_CAPACITY = 200
+    private val recent = ArrayDeque<String>(LOG_CAPACITY)
+
+    @Synchronized
+    fun addBlocked(domain: String) {
+        if (recent.size >= LOG_CAPACITY) recent.removeFirst()
+        recent.addLast(domain)
+    }
+
+    /** Snapshot of the recent blocked domains, newest first. */
+    @Synchronized
+    fun recentBlocked(): List<String> = recent.toList().asReversed()
+
+    @Synchronized
+    fun clearLog() = recent.clear()
+
     fun resetCounters() {
         blockedCount.set(0)
         totalCount.set(0)

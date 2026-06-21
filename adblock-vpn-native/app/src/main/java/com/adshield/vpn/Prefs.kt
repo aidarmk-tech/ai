@@ -9,6 +9,8 @@ object Prefs {
     private const val KEY_LAST_UPDATE = "last_list_update"
     private const val KEY_ENABLED_SOURCES = "enabled_sources"
     private const val KEY_WHITELIST = "whitelist"
+    private const val KEY_CUSTOM_URLS = "custom_urls"
+    private const val KEY_AUTO_UPDATE = "auto_update"
 
     const val DEFAULT_UPSTREAM = "1.1.1.1"
 
@@ -55,6 +57,28 @@ object Prefs {
         current.remove(domain)
         prefs(ctx).edit().putStringSet(KEY_WHITELIST, current).apply()
     }
+
+    // --- Custom blocklist URLs ---
+    fun customUrls(ctx: Context): Set<String> =
+        prefs(ctx).getStringSet(KEY_CUSTOM_URLS, null)?.toSet() ?: emptySet()
+
+    fun addCustomUrl(ctx: Context, url: String) {
+        val current = customUrls(ctx).toMutableSet()
+        current.add(url.trim())
+        prefs(ctx).edit().putStringSet(KEY_CUSTOM_URLS, current).apply()
+    }
+
+    fun removeCustomUrl(ctx: Context, url: String) {
+        val current = customUrls(ctx).toMutableSet()
+        current.remove(url)
+        prefs(ctx).edit().putStringSet(KEY_CUSTOM_URLS, current).apply()
+    }
+
+    // --- Auto-update of blocklists ---
+    fun autoUpdate(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_AUTO_UPDATE, true)
+
+    fun setAutoUpdate(ctx: Context, enabled: Boolean) =
+        prefs(ctx).edit().putBoolean(KEY_AUTO_UPDATE, enabled).apply()
 
     /** Lowercase, strip scheme/path/leading dots; null if it isn't a domain. */
     fun normalize(raw: String): String? {

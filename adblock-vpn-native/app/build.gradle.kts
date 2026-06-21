@@ -64,4 +64,6 @@ dependencies {
     implementation(libs.lifecycle.runtime)
     implementation(libs.material)
     implementation(libs.coroutines.android)
+    implementation(libs.work.runtime)
+    implementation(libs.okhttp)
 }
