@@ -31,6 +31,13 @@ object BlocklistCatalog {
             defaultEnabled = true,
         ),
         BlocklistSource(
+            id = "ru_ads",
+            title = "Российская реклама",
+            description = "Реклама и трекеры рунета (NoADS_RU Extended)",
+            url = "https://raw.githubusercontent.com/Zalexanninev15/NoADS_RU/main/ads_list_extended.txt",
+            defaultEnabled = true,
+        ),
+        BlocklistSource(
             id = "malware",
             title = "Малварь и фишинг",
             description = "Вредоносные и мошеннические домены (Spam404)",

@@ -62,28 +62,74 @@ class BlockList private constructor(
         }
 
         /**
-         * Parse a hosts-format or plain-domain-list stream into [out].
-         * Accepts `0.0.0.0 ads.example.com`, `127.0.0.1 x.com` or a bare
-         * `ads.example.com`. Comments (`#`, `!`) and non-domains are skipped.
+         * Parse a blocklist stream into [out]. Understands three formats:
+         *  - hosts files: `0.0.0.0 ads.example.com` / `127.0.0.1 x.com`
+         *  - plain domain lists: `ads.example.com`
+         *  - AdGuard/uBlock filter lists: `||ads.example.com^`
+         *
+         * For AdGuard syntax we only take rules that block a WHOLE domain
+         * (`||domain^` or `||domain$modifiers`). Cosmetic rules (`##`), path
+         * rules (`||site.com/ads.js`), wildcards and exceptions (`@@`) are
+         * skipped — a DNS blocker can't honour them, and blindly taking the
+         * domain from a path rule would break legitimate sites (e.g. vk.com).
          */
         fun parse(stream: InputStream, out: HashSet<String>) {
             stream.bufferedReader().use { reader: BufferedReader ->
                 reader.forEachLine { raw ->
-                    var line = raw
-                    val hash = line.indexOf('#')
-                    if (hash >= 0) line = line.substring(0, hash)
-                    line = line.trim()
-                    if (line.isEmpty() || line.startsWith("!")) return@forEachLine
-                    val parts = line.split(Regex("\\s+"))
-                    val domain = (if (parts.size >= 2) parts[1] else parts[0])
-                        .lowercase().trimEnd('.')
-                    if (domain.isEmpty() || domain == "localhost" ||
-                        domain == "localhost.localdomain" || domain == "broadcasthost" ||
-                        domain == "0.0.0.0" || !domain.contains('.') || domain.contains('/')
-                    ) return@forEachLine
+                    val domain = domainFromLine(raw) ?: return@forEachLine
                     out.add(domain)
                 }
             }
+        }
+
+        private val DOMAIN_RE = Regex("^[a-z0-9_-]+(\\.[a-z0-9_-]+)+$")
+        private val IPV4_RE = Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")
+
+        private fun isIpAddress(s: String): Boolean =
+            IPV4_RE.matches(s) || s == "::1" || s == "::"
+
+        /** Extract a blockable domain from a single list line, or null. */
+        fun domainFromLine(raw: String): String? {
+            val line = raw.trim()
+            if (line.isEmpty()) return null
+            // Comments / headers / exceptions / cosmetic rules.
+            if (line[0] == '!' || line[0] == '#' || line[0] == '[') return null
+            if (line.startsWith("@@")) return null
+            if (line.contains("##") || line.contains("#@#") ||
+                line.contains("#?#") || line.contains("#\$#")
+            ) return null
+
+            val candidate: String = when {
+                // AdGuard/uBlock network rule.
+                line.startsWith("||") -> {
+                    val s = line.substring(2)
+                    val end = s.indexOfFirst { it == '^' || it == '/' || it == '$' || it == '*' || it == '?' }
+                    when {
+                        end < 0 -> s                         // ||domain
+                        s[end] == '^' || s[end] == '$' -> {
+                            // Modifiers after the domain. Context-specific ones
+                            // (`$domain=...`, negations `~...`) can't be honoured
+                            // by DNS and would over-block legitimate sites, so we
+                            // only take the domain when none are present.
+                            val mods = if (s[end] == '^') s.substring(end + 1) else s.substring(end)
+                            if (mods.contains("domain=") || mods.contains("~")) return null
+                            s.substring(0, end)
+                        }
+                        else -> return null                  // path rule / wildcard → skip
+                    }
+                }
+                // hosts format "<ip> <domain>" or a bare domain.
+                else -> {
+                    val parts = line.split(Regex("\\s+"))
+                    if (parts.size >= 2 && isIpAddress(parts[0])) parts[1] else parts[0]
+                }
+            }
+
+            val domain = candidate.lowercase().trim('.', ' ')
+            if (domain == "localhost" || domain == "localhost.localdomain" ||
+                domain == "broadcasthost" || domain == "0.0.0.0"
+            ) return null
+            return if (DOMAIN_RE.matches(domain)) domain else null
         }
     }
 }
