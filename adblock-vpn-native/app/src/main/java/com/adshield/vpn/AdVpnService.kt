@@ -60,10 +60,13 @@ class AdVpnService : VpnService() {
 
         val builder = Builder()
             .setSession(getString(R.string.app_name))
-            .addAddress(VPN_ADDRESS, 24)
-            .addDnsServer(VPN_ADDRESS)
+            // Interface address and the virtual DNS server MUST differ: if they
+            // are equal the kernel treats DNS packets as local delivery and they
+            // never reach the tunnel, so nothing resolves at all.
+            .addAddress(IFACE_ADDRESS, 32)
+            .addDnsServer(DNS_ADDRESS)
             // Route ONLY our virtual DNS server through the tunnel.
-            .addRoute(VPN_ADDRESS, 32)
+            .addRoute(DNS_ADDRESS, 32)
             .setBlocking(true)
             .setMtu(VPN_MTU)
 
@@ -231,7 +234,8 @@ class AdVpnService : VpnService() {
         const val ACTION_START = "com.adshield.vpn.START"
         const val ACTION_STOP = "com.adshield.vpn.STOP"
 
-        private const val VPN_ADDRESS = "10.111.222.3"
+        private const val IFACE_ADDRESS = "10.111.222.1" // our end of the tunnel
+        private const val DNS_ADDRESS = "10.111.222.2"   // virtual DNS server (must differ)
         private const val VPN_MTU = 4096
         private const val MTU = 32767 // read/receive buffer size
         private const val UPSTREAM_TIMEOUT_MS = 5000
