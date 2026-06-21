@@ -99,14 +99,48 @@
             android:text="@string/blocked_stat"
             android:textSize="15sp" />
 
+        <!-- Categories -->
         <TextView
-            android:id="@+id/textLastUpdate"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:textColor="#777777"
-            android:textSize="13sp" />
+            android:layout_marginTop="24dp"
+            android:text="@string/categories_title"
+            android:textColor="@color/brand_dark"
+            android:textSize="17sp"
+            android:textStyle="bold" />
 
+        <LinearLayout
+            android:id="@+id/categoryContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="vertical" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/categories_hint"
+            android:textColor="#777777"
+            android:textSize="12sp" />
+
+        <!-- Upstream DNS -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="@string/dns_title"
+            android:textColor="@color/brand_dark"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <Spinner
+            android:id="@+id/spinnerDns"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp" />
+
+        <!-- Actions -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/buttonUpdate"
             android:layout_width="match_parent"
@@ -122,10 +156,26 @@
             android:layout_marginTop="12dp"
             android:visibility="gone" />
 
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/buttonWhitelist"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/whitelist_button" />
+
+        <TextView
+            android:id="@+id/textLastUpdate"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:textColor="#777777"
+            android:textSize="13sp" />
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="28dp"
+            android:layout_marginTop="24dp"
             android:text="@string/tile_hint"
             android:textColor="#777777"
             android:textSize="13sp" />

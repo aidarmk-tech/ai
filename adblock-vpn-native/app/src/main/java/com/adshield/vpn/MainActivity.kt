@@ -8,6 +8,13 @@ import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import android.text.format.DateUtils
+import android.view.View
+import android.view.ViewGroup
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
+import android.widget.CheckBox
+import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -23,8 +30,8 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
 
-    /** Set while we programmatically flip the switch, to ignore the callback. */
-    private var suppressSwitch = false
+    /** Set while we programmatically change a control, to ignore its callback. */
+    private var suppressCallbacks = false
 
     private val vpnPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -45,12 +52,16 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         binding.switchProtection.setOnCheckedChangeListener { _, checked ->
-            if (suppressSwitch) return@setOnCheckedChangeListener
+            if (suppressCallbacks) return@setOnCheckedChangeListener
             if (checked) enableProtection() else AdVpnService.stop(this)
         }
-
         binding.buttonUpdate.setOnClickListener { updateBlocklist() }
+        binding.buttonWhitelist.setOnClickListener {
+            startActivity(Intent(this, WhitelistActivity::class.java))
+        }
 
+        buildCategoryCheckboxes()
+        setupDnsSpinner()
         observeState()
         loadBlocklistSize()
         renderLastUpdate()
@@ -60,19 +71,25 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Whitelist may have changed in the other screen → reflect new count.
+        loadBlocklistSize()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if (intent.getBooleanExtra(EXTRA_AUTO_ENABLE, false)) enableProtection()
     }
 
+    // ---------------------------------------------------------------------
+    // Protection toggle
+    // ---------------------------------------------------------------------
+
     private fun enableProtection() {
         maybeRequestNotificationPermission()
         val consent = VpnService.prepare(this)
-        if (consent == null) {
-            AdVpnService.start(this)
-        } else {
-            vpnPermissionLauncher.launch(consent)
-        }
+        if (consent == null) AdVpnService.start(this) else vpnPermissionLauncher.launch(consent)
     }
 
     private fun maybeRequestNotificationPermission() {
@@ -84,14 +101,90 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Restart the tunnel so a settings change takes effect immediately. */
+    private fun applyIfRunning() {
+        if (!VpnState.running.value) return
+        lifecycleScope.launch {
+            AdVpnService.stop(this@MainActivity)
+            delay(400)
+            AdVpnService.start(this@MainActivity)
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Categories
+    // ---------------------------------------------------------------------
+
+    private fun buildCategoryCheckboxes() {
+        val container = binding.categoryContainer
+        container.removeAllViews()
+        val enabled = Prefs.enabledSources(this)
+        for (source in BlocklistCatalog.sources) {
+            val check = CheckBox(this).apply {
+                text = source.title
+                textSize = 16f
+                isChecked = enabled.contains(source.id)
+                setOnCheckedChangeListener { _, isChecked ->
+                    if (suppressCallbacks) return@setOnCheckedChangeListener
+                    Prefs.setSourceEnabled(this@MainActivity, source.id, isChecked)
+                    applyIfRunning()
+                }
+            }
+            val desc = TextView(this).apply {
+                text = source.description
+                textSize = 12f
+                setTextColor(0xFF777777.toInt())
+                setPadding(dp(40), 0, 0, dp(8))
+            }
+            container.addView(
+                check,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+            container.addView(desc)
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Upstream DNS
+    // ---------------------------------------------------------------------
+
+    private fun setupDnsSpinner() {
+        val adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            DnsServers.all.map { it.title },
+        ).apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        binding.spinnerDns.adapter = adapter
+
+        suppressCallbacks = true
+        binding.spinnerDns.setSelection(DnsServers.indexOfIp(Prefs.upstreamDns(this)))
+        suppressCallbacks = false
+
+        binding.spinnerDns.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                if (suppressCallbacks) return
+                val ip = DnsServers.all[pos].ip
+                if (ip == Prefs.upstreamDns(this@MainActivity)) return // no real change
+                Prefs.setUpstreamDns(this@MainActivity, ip)
+                applyIfRunning()
+            }
+
+            override fun onNothingSelected(p: AdapterView<*>?) {}
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // State + stats
+    // ---------------------------------------------------------------------
+
     private fun observeState() {
-        // Switch + status text follow the real service state.
         lifecycleScope.launch {
             VpnState.running.collectLatest { running ->
                 refreshSwitch(running)
-                binding.textStatus.setText(
-                    if (running) R.string.status_on else R.string.status_off,
-                )
+                binding.textStatus.setText(if (running) R.string.status_on else R.string.status_off)
             }
         }
         lifecycleScope.launch {
@@ -99,21 +192,22 @@ class MainActivity : AppCompatActivity() {
                 binding.textListSize.text = getString(R.string.list_size, size)
             }
         }
-        // Live counters while the VPN is up.
         lifecycleScope.launch {
             while (true) {
-                val blocked = VpnState.blockedCount.get()
-                val total = VpnState.totalCount.get()
-                binding.textBlocked.text = getString(R.string.blocked_stat, blocked, total)
+                binding.textBlocked.text = getString(
+                    R.string.blocked_stat,
+                    VpnState.blockedCount.get(),
+                    VpnState.totalCount.get(),
+                )
                 delay(1000)
             }
         }
     }
 
     private fun refreshSwitch(on: Boolean) {
-        suppressSwitch = true
+        suppressCallbacks = true
         binding.switchProtection.isChecked = on
-        suppressSwitch = false
+        suppressCallbacks = false
     }
 
     private fun loadBlocklistSize() {
@@ -128,31 +222,24 @@ class MainActivity : AppCompatActivity() {
         binding.textLastUpdate.text = if (last == 0L) {
             getString(R.string.last_update_never)
         } else {
-            getString(
-                R.string.last_update,
-                DateUtils.getRelativeTimeSpanString(last).toString(),
-            )
+            getString(R.string.last_update, DateUtils.getRelativeTimeSpanString(last).toString())
         }
     }
 
     private fun updateBlocklist() {
         binding.buttonUpdate.isEnabled = false
-        binding.progressUpdate.visibility = android.view.View.VISIBLE
+        binding.progressUpdate.visibility = View.VISIBLE
         lifecycleScope.launch {
             when (val r = BlocklistUpdater.update(this@MainActivity)) {
                 is BlocklistUpdater.Result.Success -> {
-                    Toast.makeText(
-                        this@MainActivity,
-                        getString(R.string.update_done, r.domains),
-                        Toast.LENGTH_LONG,
-                    ).show()
-                    renderLastUpdate()
-                    if (VpnState.running.value) {
-                        // Apply the new list immediately by restarting the tunnel.
-                        AdVpnService.stop(this@MainActivity)
-                        delay(400)
-                        AdVpnService.start(this@MainActivity)
+                    val msg = if (r.failed.isEmpty()) {
+                        getString(R.string.update_done, r.domains)
+                    } else {
+                        getString(R.string.update_done_partial, r.domains, r.failed.joinToString(", "))
                     }
+                    Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
+                    renderLastUpdate()
+                    applyIfRunning()
                 }
                 is BlocklistUpdater.Result.Error ->
                     Toast.makeText(
@@ -161,10 +248,12 @@ class MainActivity : AppCompatActivity() {
                         Toast.LENGTH_LONG,
                     ).show()
             }
-            binding.progressUpdate.visibility = android.view.View.GONE
+            binding.progressUpdate.visibility = View.GONE
             binding.buttonUpdate.isEnabled = true
         }
     }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     companion object {
         const val EXTRA_AUTO_ENABLE = "auto_enable"

@@ -15,10 +15,17 @@
     <string name="list_size">Доменов в списке блокировки: %1$d</string>
     <string name="blocked_stat">Заблокировано: %1$d из %2$d запросов</string>
 
-    <string name="update_button">Обновить список блокировки</string>
+    <string name="categories_title">Что блокировать</string>
+    <string name="categories_hint">После изменения галочек нажмите «Обновить списки», чтобы скачать выбранные категории.</string>
+
+    <string name="dns_title">DNS-сервер (куда уходят разрешённые запросы)</string>
+
+    <string name="update_button">Обновить списки</string>
+    <string name="whitelist_button">Белый список (исключения)</string>
     <string name="last_update">Обновлено: %1$s</string>
-    <string name="last_update_never">Список ещё не обновлялся (используется встроенный)</string>
+    <string name="last_update_never">Списки ещё не скачивались (работает встроенный)</string>
     <string name="update_done">Готово. Доменов в списке: %1$d</string>
+    <string name="update_done_partial">Готово (%1$d доменов). Не скачано: %2$s</string>
     <string name="update_failed">Не удалось обновить: %1$s</string>
 
     <string name="tile_hint">Добавьте плитку «AdShield» в шторку быстрых настроек, чтобы включать и выключать защиту одним нажатием.</string>
@@ -28,4 +35,13 @@
     <string name="notif_title">AdShield активен</string>
     <string name="notif_text">Реклама блокируется через локальный VPN</string>
     <string name="action_stop">Выключить</string>
+
+    <!-- Whitelist screen -->
+    <string name="whitelist_title">Белый список</string>
+    <string name="whitelist_subtitle">Эти домены никогда не блокируются, даже если они есть в списках. Полезно, если что-то перестало открываться.</string>
+    <string name="whitelist_hint">Например: example.com</string>
+    <string name="whitelist_add">Добавить</string>
+    <string name="whitelist_empty">Список пуст</string>
+    <string name="whitelist_bad">Введите корректный домен (например, example.com)</string>
+    <string name="whitelist_remove">Удалить</string>
 </resources>

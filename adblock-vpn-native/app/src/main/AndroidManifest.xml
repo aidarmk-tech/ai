@@ -24,6 +24,11 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".WhitelistActivity"
+            android:exported="false"
+            android:parentActivityName=".MainActivity" />
+
         <!-- The local DNS-filtering VPN. BIND_VPN_SERVICE is granted by the OS. -->
         <service
             android:name=".AdVpnService"
