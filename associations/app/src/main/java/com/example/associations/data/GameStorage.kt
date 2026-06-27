@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.associations.model.GameState
@@ -30,6 +31,7 @@ class GameStorage(private val context: Context) {
         val SAVED_GAME = stringPreferencesKey("saved_game")
         val SOUND = booleanPreferencesKey("sound_enabled")
         val DARK = booleanPreferencesKey("dark_theme")
+        val LEVEL = intPreferencesKey("current_level")
     }
 
     val settingsFlow: Flow<Settings> = context.dataStore.data.map { prefs ->
@@ -59,6 +61,15 @@ class GameStorage(private val context: Context) {
         val json = prefs[Keys.SAVED_GAME] ?: return false
         val state = GameSerializer.fromJson(json)
         return state != null && !state.isWon
+    }
+
+    suspend fun loadLevel(): Int {
+        val prefs = context.dataStore.data.first()
+        return (prefs[Keys.LEVEL] ?: 1).coerceAtLeast(1)
+    }
+
+    suspend fun saveLevel(level: Int) {
+        context.dataStore.edit { it[Keys.LEVEL] = level.coerceAtLeast(1) }
     }
 
     suspend fun setSound(enabled: Boolean) {

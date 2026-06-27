@@ -24,8 +24,12 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     private val storage = GameStorage(app)
     private val sound = SoundManager()
 
-    private val _state = MutableStateFlow(GameLogic.newGame())
+    private val _state = MutableStateFlow(GameLogic.newGame(1))
     val state: StateFlow<GameState> = _state.asStateFlow()
+
+    /** Текущий уровень сложности игрока (растёт с каждой победой). */
+    private val _level = MutableStateFlow(1)
+    val level: StateFlow<Int> = _level.asStateFlow()
 
     /** Полная история для Undo. */
     private val history = ArrayDeque<GameState>()
@@ -37,14 +41,19 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
 
     private var timerJob: Job? = null
 
-    /** Пытается продолжить сохранённую партию; иначе раздаёт новую. */
+    init {
+        viewModelScope.launch { _level.value = storage.loadLevel() }
+    }
+
+    /** Пытается продолжить сохранённую партию; иначе раздаёт новую текущего уровня. */
     fun startOrResume() {
         viewModelScope.launch {
             val saved = storage.loadGame()
             if (saved != null && !saved.isWon) {
                 _state.value = saved
+                _level.value = saved.level
             } else {
-                _state.value = GameLogic.newGame()
+                _state.value = GameLogic.newGame(_level.value)
             }
             history.clear()
             _canUndo.value = false
@@ -52,8 +61,9 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Новая партия текущего уровня. */
     fun newGame() {
-        _state.value = GameLogic.newGame()
+        _state.value = GameLogic.newGame(_level.value)
         history.clear()
         _canUndo.value = false
         persist()
@@ -97,7 +107,13 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     private fun onWin() {
         stopTimer()
         sound.win(settings.value.soundEnabled)
-        viewModelScope.launch { storage.clearGame() }
+        // Повышаем уровень — следующая партия будет сложнее.
+        val next = _state.value.level + 1
+        _level.value = next
+        viewModelScope.launch {
+            storage.saveLevel(next)
+            storage.clearGame()
+        }
     }
 
     private fun commit(next: GameState) {

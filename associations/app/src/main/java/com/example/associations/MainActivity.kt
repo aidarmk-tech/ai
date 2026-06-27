@@ -40,6 +40,7 @@ class MainActivity : ComponentActivity() {
 private fun App() {
     val vm: GameViewModel = viewModel()
     val settings by vm.settings.collectAsStateValue()
+    val level by vm.level.collectAsStateValue()
 
     val context = LocalContext.current
     val storage = remember { GameStorage(context) }
@@ -67,6 +68,7 @@ private fun App() {
         Surface(modifier = Modifier.fillMaxSize()) {
             when (screen) {
                 Screen.MENU -> MenuScreen(
+                    level = level,
                     hasSavedGame = hasSaved,
                     onContinue = { vm.startOrResume(); screen = Screen.GAME },
                     onPlay = { vm.newGame(); screen = Screen.GAME },

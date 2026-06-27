@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.sp
 
 @Composable
 fun MenuScreen(
+    level: Int,
     hasSavedGame: Boolean,
     onContinue: () -> Unit,
     onPlay: () -> Unit,
@@ -47,7 +48,14 @@ fun MenuScreen(
             fontSize = 14.sp,
             color = MaterialTheme.colorScheme.onBackground
         )
-        Spacer(Modifier.height(36.dp))
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Текущий уровень: $level",
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.secondary
+        )
+        Spacer(Modifier.height(28.dp))
 
         if (hasSavedGame) {
             Button(

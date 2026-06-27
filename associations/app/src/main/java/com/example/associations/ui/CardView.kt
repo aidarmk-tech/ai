@@ -25,16 +25,23 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.associations.model.Card
 import com.example.associations.model.Category
-import com.example.associations.ui.theme.CategoryColors
 
 val CARD_WIDTH: Dp = 56.dp
 val CARD_HEIGHT: Dp = 84.dp
 
 fun categoryColor(category: Category): Color = when (category) {
-    Category.CITY -> CategoryColors.city
-    Category.FURNITURE -> CategoryColors.furniture
-    Category.ANIMAL -> CategoryColors.animal
-    Category.FOOD -> CategoryColors.food
+    Category.CITY -> Color(0xFF1565C0)
+    Category.FURNITURE -> Color(0xFF6D4C41)
+    Category.ANIMAL -> Color(0xFF2E7D32)
+    Category.FOOD -> Color(0xFFC62828)
+    Category.TRANSPORT -> Color(0xFF00838F)
+    Category.CONTAINER -> Color(0xFF8E24AA)
+    Category.WATER -> Color(0xFF0277BD)
+    Category.CLOTHES -> Color(0xFFAD1457)
+    Category.SPACE -> Color(0xFF283593)
+    Category.TIME -> Color(0xFFEF6C00)
+    Category.BUILDING -> Color(0xFF455A64)
+    Category.WEATHER -> Color(0xFF558B2F)
 }
 
 /** Рисует одну карту (лицом или рубашкой). */
@@ -109,6 +116,25 @@ fun CardView(
                     .fillMaxWidth()
                     .padding(top = 2.dp)
             )
+        }
+    }
+}
+
+/** Слот собранной категории — «колода ушла с поля». */
+@Composable
+fun CollectedSlot(icon: String, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(8.dp)
+    Box(
+        modifier = modifier
+            .size(CARD_WIDTH, CARD_HEIGHT)
+            .clip(shape)
+            .background(Color(0xFF2E7D32))
+            .border(2.dp, Color(0xFF00C853), shape),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(icon, fontSize = 20.sp)
+            Text("✓", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
         }
     }
 }

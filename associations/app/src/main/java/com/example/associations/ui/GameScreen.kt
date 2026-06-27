@@ -99,6 +99,9 @@ fun GameScreen(
             .background(MaterialTheme.colorScheme.background)
     ) {
         TopBar(
+            level = state.level,
+            collected = state.collected.size,
+            totalCategories = state.categories.size,
             moves = state.moves,
             elapsedSec = state.elapsedSec,
             canUndo = canUndo,
@@ -193,9 +196,10 @@ fun GameScreen(
 
     if (state.isWon) {
         WinDialog(
+            level = state.level,
             moves = state.moves,
             elapsedSec = state.elapsedSec,
-            onAgain = { vm.newGame() },
+            onNext = { vm.newGame() },
             onMenu = onMenu
         )
     }
@@ -205,6 +209,9 @@ fun GameScreen(
 
 @Composable
 private fun TopBar(
+    level: Int,
+    collected: Int,
+    totalCategories: Int,
     moves: Int,
     elapsedSec: Int,
     canUndo: Boolean,
@@ -220,8 +227,17 @@ private fun TopBar(
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Column {
-            Text("Ходы: $moves", fontSize = 13.sp, color = MaterialTheme.colorScheme.onBackground)
-            Text("Время: ${formatTime(elapsedSec)}", fontSize = 13.sp, color = MaterialTheme.colorScheme.onBackground)
+            Text(
+                "Уровень $level · собрано $collected/$totalCategories",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                "Ходы: $moves   Время: ${formatTime(elapsedSec)}",
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onBackground
+            )
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onUndo, enabled = canUndo) {
@@ -315,19 +331,17 @@ private fun TopPiles(
         // Foundations
         state.foundations.forEachIndexed { fi, foundation ->
             val pileIndex = GameState.FOUNDATION_START + fi
+            val isCollected = foundation.category != null && foundation.category in state.collected
             Box(
                 modifier = Modifier
                     .onGloballyPositioned { pileBounds[pileIndex] = it.boundsInRoot() }
                     .clickable { onTapPile(pileIndex) }
             ) {
                 val top = foundation.cards.lastOrNull()
-                if (top != null) {
-                    CardView(
-                        top,
-                        highlighted = legalTargets.contains(pileIndex)
-                    )
-                } else {
-                    EmptySlot(
+                when {
+                    isCollected -> CollectedSlot(foundation.category!!.icon)
+                    top != null -> CardView(top, highlighted = legalTargets.contains(pileIndex))
+                    else -> EmptySlot(
                         label = foundation.category?.icon,
                         highlighted = legalTargets.contains(pileIndex)
                     )
@@ -466,9 +480,10 @@ private fun DraggableCard(
 
 @Composable
 private fun WinDialog(
+    level: Int,
     moves: Int,
     elapsedSec: Int,
-    onAgain: () -> Unit,
+    onNext: () -> Unit,
     onMenu: () -> Unit
 ) {
     Box(
@@ -483,13 +498,19 @@ private fun WinDialog(
                 .padding(28.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text("Победа! 🎉", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+            Text("Уровень $level пройден! 🎉", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.height(12.dp))
             Text("Ходы: $moves", color = MaterialTheme.colorScheme.onSurface)
             Text("Время: ${formatTime(elapsedSec)}", color = MaterialTheme.colorScheme.onSurface)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Уровень ${level + 1} будет сложнее: больше категорий и длиннее цепочки.",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurface
+            )
             Spacer(Modifier.height(20.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = onAgain) { Text("Ещё раз") }
+                TextButton(onClick = onNext) { Text("Уровень ${level + 1} ▶") }
                 TextButton(onClick = onMenu) { Text("В меню") }
             }
         }
