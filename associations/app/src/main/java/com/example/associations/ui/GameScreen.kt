@@ -47,9 +47,11 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import kotlin.math.roundToInt
 import com.example.associations.game.GameLogic
 import com.example.associations.game.GameViewModel
 import com.example.associations.model.Card
@@ -99,7 +101,10 @@ fun GameScreen(vm: GameViewModel, onMenu: () -> Unit) {
                 val d = drag
                 if (d != null) {
                     val head = cardBounds[cardKey(d.fromPile, d.startIndex)]
-                    if (head != null) pileAt(head.center + dragOffset)?.let { vm.onMove(d.fromPile, d.startIndex, it) }
+                    val target = if (head != null) pileAt(head.center + dragOffset) else null
+                    val moved = target != null && vm.onMove(d.fromPile, d.startIndex, target)
+                    // Бросок «мимо» — пробуем авто-доводку на подходящий фундамент.
+                    if (!moved) vm.onAutoMove(d.fromPile, d.startIndex)
                 }
                 drag = null; dragOffset = Offset.Zero
             },
@@ -107,6 +112,7 @@ fun GameScreen(vm: GameViewModel, onMenu: () -> Unit) {
         )
     }
 
+    Box(modifier = Modifier.fillMaxSize()) {
     Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
         // Шапка.
         Row(
@@ -211,11 +217,30 @@ fun GameScreen(vm: GameViewModel, onMenu: () -> Unit) {
         }
     }
 
+    // Слой перетаскиваемой карты — рисуется поверх всех колонок и фундаментов.
+    val d = drag
+    if (d != null) {
+        val dragCard = state.piles[d.fromPile].cards.getOrNull(d.startIndex)
+        val rest = cardBounds[cardKey(d.fromPile, d.startIndex)]
+        if (dragCard != null && rest != null) {
+            val wDrag = if (d.fromPile == GameState.WASTE_INDEX) foundationW else cardW
+            val px = (rest.left + dragOffset.x).roundToInt()
+            val py = (rest.top + dragOffset.y).roundToInt()
+            CardFace(
+                card = dragCard,
+                w = wDrag,
+                modifier = Modifier.offset { IntOffset(px, py) }.zIndex(1000f),
+                selected = true
+            )
+        }
+    }
+
     if (state.isWon) {
         WinDialog(
             level = state.level, moves = state.moves, elapsedSec = state.elapsedSec,
             reward = reward, totalCoins = coins, onNext = { vm.newGame() }, onMenu = onMenu
         )
+    }
     }
 }
 
@@ -308,10 +333,11 @@ private fun DraggableCard(
     val isDragging = drag != null && drag.fromPile == pileIndex && cardIndex >= drag.startIndex
     val key = cardKey(pileIndex, cardIndex)
 
+    // Оригинал во время переноса прячем — его рисует верхний слой (см. GameScreen).
     val mod = Modifier
         .onGloballyPositioned { cardBounds[key] = it.boundsInRoot() }
-        .graphicsLayer { if (isDragging) { translationX = dragOffset.x; translationY = dragOffset.y } }
-        .zIndex(if (isDragging) 100f else cardIndex.toFloat())
+        .graphicsLayer { alpha = if (isDragging) 0f else 1f }
+        .zIndex(cardIndex.toFloat())
         .scale(if (selected) 1.06f else 1f)
         .pointerInput(pileIndex, cardIndex) { detectTapGesturesCompat(onTap = onTap, onDoubleTap = onDoubleTap) }
         .pointerInput(pileIndex, cardIndex) {
