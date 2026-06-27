@@ -3,8 +3,6 @@ package com.example.associations
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -12,7 +10,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -25,6 +22,7 @@ import com.example.associations.ui.HowToPlayScreen
 import com.example.associations.ui.MenuScreen
 import com.example.associations.ui.SettingsScreen
 import com.example.associations.ui.collectAsStateValue
+import com.example.associations.ui.theme.AppBackground
 import com.example.associations.ui.theme.AssociationsTheme
 
 private enum class Screen { MENU, GAME, HOWTO, SETTINGS }
@@ -41,6 +39,7 @@ private fun App() {
     val vm: GameViewModel = viewModel()
     val settings by vm.settings.collectAsStateValue()
     val level by vm.level.collectAsStateValue()
+    val coins by vm.coins.collectAsStateValue()
 
     val context = LocalContext.current
     val storage = remember { GameStorage(context) }
@@ -65,10 +64,11 @@ private fun App() {
     }
 
     AssociationsTheme(darkTheme = settings.darkTheme) {
-        Surface(modifier = Modifier.fillMaxSize()) {
+        AppBackground(darkTheme = settings.darkTheme) {
             when (screen) {
                 Screen.MENU -> MenuScreen(
                     level = level,
+                    coins = coins,
                     hasSavedGame = hasSaved,
                     onContinue = { vm.startOrResume(); screen = Screen.GAME },
                     onPlay = { vm.newGame(); screen = Screen.GAME },

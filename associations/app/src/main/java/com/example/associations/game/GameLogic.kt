@@ -2,69 +2,62 @@ package com.example.associations.game
 
 import com.example.associations.model.Card
 import com.example.associations.model.CardContent
-import com.example.associations.model.Category
+import com.example.associations.model.GROUP_SIZE
 import com.example.associations.model.GameState
-import com.example.associations.model.MAX_RANK_CAP
+import com.example.associations.model.Group
 import com.example.associations.model.Pile
 import com.example.associations.model.PileType
 import kotlin.random.Random
 
-/** Конфигурация одного уровня сложности. */
+/** Конфигурация уровня. */
 data class LevelConfig(
     val level: Int,
-    val categories: List<Category>,
-    val rankLength: Int,
+    val groups: List<Group>,
     val columns: Int
 ) {
-    val totalCards: Int get() = categories.size * rankLength
+    val totalCards: Int get() = groups.size * GROUP_SIZE
 }
 
 /**
- * Чистая игровая логика. Функции принимают [GameState] и возвращают новый
- * (или null, если ход нелегален) — без побочных эффектов.
+ * Чистая игровая логика (без побочных эффектов).
  *
- * Сложность растёт с уровнем: больше категорий, длиннее ассоциативные цепочки,
- * больше колонок. Размер колоды ограничен [MAX_TOTAL_CARDS] (≈100 карт).
- * Когда основание собрано до конца (1..M) — оно «уходит с поля»: карты убираются,
- * категория попадает в [GameState.collected], слот освобождается.
+ * Правила:
+ *  • ОСНОВУ можно положить только в пустой фундамент или на пустую колонку.
+ *  • ПРЕДМЕТ можно положить на фундамент своей группы (после основы, в любом
+ *    порядке), на колонку с верхней картой той же группы или на пустую колонку.
+ *  • Когда фундамент собран полностью (основа + все предметы) — он уходит с поля.
+ *  • Победа — когда собраны все группы уровня.
+ *
+ * Сложность растёт: уровень 1 — 4 группы, далее +1 группа за победу (до 12).
  */
 object GameLogic {
 
-    private const val MAX_TOTAL_CARDS = 100
-    private val ALL_CATEGORIES = Category.values().toList()
+    private val ALL_GROUPS = Group.values().toList()
 
-    /** Параметры уровня. С ростом уровня плавно увеличиваем масштаб. */
     fun levelConfig(level: Int): LevelConfig {
         val l = level.coerceAtLeast(1)
-        var categoriesCount = (3 + l).coerceIn(4, ALL_CATEGORIES.size)   // 4,5,6,...,12
-        var rankLength = (5 + (l - 1) / 2).coerceIn(6, MAX_RANK_CAP)     // 6,6,7,7,8,...
-        // Ограничиваем общий размер колоды.
-        while (categoriesCount * rankLength > MAX_TOTAL_CARDS) {
-            if (rankLength > 6) rankLength-- else categoriesCount--
-        }
-        val columns = (6 + l / 2).coerceIn(7, 9)
-        val categories = ALL_CATEGORIES.take(categoriesCount)
-        return LevelConfig(l, categories, rankLength, columns)
+        val groupCount = (3 + l).coerceIn(4, ALL_GROUPS.size) // 4,5,6,...,12
+        val columns = (groupCount + 3).coerceIn(6, 9)
+        return LevelConfig(l, ALL_GROUPS.take(groupCount), columns)
     }
 
     fun newGame(level: Int = 1, seed: Long = System.currentTimeMillis()): GameState {
         val config = levelConfig(level)
-        val deck = CardContent.buildDeck(config.categories, config.rankLength).toMutableList()
+        val deck = CardContent.buildDeck(config.groups).toMutableList()
         deck.shuffle(Random(seed))
 
-        // Раздаём ~2/3 карт по колонкам (почти равномерно), остальное — в Stock.
         val total = deck.size
-        val tableauTotal = (total * 2) / 3
         val columns = config.columns
+        // В поле — примерно половина карт (колонки неглубокие), остальное в колоду.
+        val tableauTotal = (total + 1) / 2
         val sizes = IntArray(columns) { tableauTotal / columns }
         repeat(tableauTotal % columns) { sizes[it]++ }
 
         val tableau = MutableList(columns) { mutableListOf<Card>() }
         var index = 0
         for (col in 0 until columns) {
-            val size = sizes[col]
-            for (row in 0 until size) {
-                val faceUp = row == size - 1 // открыта только верхняя карта
+            for (row in 0 until sizes[col]) {
+                val faceUp = row == sizes[col] - 1 // открыта только верхняя карта
                 tableau[col].add(deck[index].copy(faceUp = faceUp))
                 index++
             }
@@ -74,18 +67,13 @@ object GameLogic {
         val piles = buildList {
             add(Pile(PileType.STOCK, cards = stockCards))
             add(Pile(PileType.WASTE, cards = emptyList()))
-            for (category in config.categories) {
-                add(Pile(PileType.FOUNDATION, category = category, cards = emptyList()))
-            }
-            for (col in tableau) {
-                add(Pile(PileType.TABLEAU, cards = col.toList()))
-            }
+            repeat(config.groups.size) { add(Pile(PileType.FOUNDATION)) } // универсальные слоты
+            for (col in tableau) add(Pile(PileType.TABLEAU, cards = col.toList()))
         }
 
         return GameState(
             piles = piles,
-            categories = config.categories,
-            rankLength = config.rankLength,
+            groups = config.groups,
             level = config.level,
             collected = emptySet(),
             moves = 0,
@@ -94,34 +82,22 @@ object GameLogic {
         )
     }
 
-    // ----- Проверки легальности -------------------------------------------
+    // ----- Легальность -----------------------------------------------------
 
     fun canPlaceOnFoundation(card: Card, foundation: Pile): Boolean {
         if (foundation.type != PileType.FOUNDATION) return false
-        if (foundation.category != card.category) return false
-        val topRank = foundation.cards.lastOrNull()?.rank ?: 0
-        return card.rank == topRank + 1
+        return if (foundation.cards.isEmpty()) {
+            card.isBase // пустой слот принимает любую основу
+        } else {
+            !card.isBase && foundation.group == card.group // предмет своей группы
+        }
     }
 
     fun canPlaceOnTableau(card: Card, column: Pile): Boolean {
         if (column.type != PileType.TABLEAU) return false
-        val top = column.cards.lastOrNull() ?: return true // на пустую — любую
-        return card.rank == top.rank - 1 && card.category != top.category
-    }
-
-    /** Корректная ли серия с [startIndex]: открыта, убывает по рангу, чередует категории. */
-    fun isMovableRun(column: Pile, startIndex: Int): Boolean {
-        val cards = column.cards
-        if (startIndex < 0 || startIndex >= cards.size) return false
-        for (i in startIndex until cards.size) {
-            if (!cards[i].faceUp) return false
-        }
-        for (i in startIndex until cards.size - 1) {
-            val upper = cards[i]
-            val lower = cards[i + 1]
-            if (lower.rank != upper.rank - 1 || lower.category == upper.category) return false
-        }
-        return true
+        val top = column.cards.lastOrNull() ?: return true // на пустую — любую карту
+        if (card.isBase) return false                       // основу нельзя ставить на карту
+        return card.group == top.group                      // предмет на карту своей группы
     }
 
     // ----- Ходы ------------------------------------------------------------
@@ -148,48 +124,43 @@ object GameLogic {
         }
     }
 
-    /**
-     * Перемещение карты/серии из [fromPile] (с [cardIndex]) в [toPile].
-     * Если основание собирается полностью — оно уходит с поля (collected).
-     */
+    /** Перемещение одной (верхней) карты из [fromPile] в [toPile]. */
     fun move(state: GameState, fromPile: Int, cardIndex: Int, toPile: Int): GameState? {
         if (fromPile == toPile) return null
         val from = state.piles[fromPile]
         val to = state.piles[toPile]
-        if (cardIndex < 0 || cardIndex >= from.cards.size) return null
-
-        val moving = from.cards.subList(cardIndex, from.cards.size).toList()
-        if (moving.isEmpty()) return null
-        val head = moving.first()
-        if (!head.faceUp) return null
+        if (cardIndex != from.cards.lastIndex) return null // двигаем только верхнюю карту
+        val card = from.cards.lastOrNull() ?: return null
+        if (!card.faceUp) return null
+        if (from.type == PileType.FOUNDATION) return null  // с фундамента не снимаем
 
         when (to.type) {
             PileType.FOUNDATION -> {
-                if (moving.size != 1) return null
-                if (to.category != null && to.category in state.collected) return null
-                if (!canPlaceOnFoundation(head, to)) return null
+                if (to.group != null && to.group in state.collected) return null // слот уже собран
+                if (!canPlaceOnFoundation(card, to)) return null
             }
-            PileType.TABLEAU -> {
-                if (from.type == PileType.TABLEAU && !isMovableRun(from, cardIndex)) return null
-                if (!canPlaceOnTableau(head, to)) return null
-            }
+            PileType.TABLEAU -> if (!canPlaceOnTableau(card, to)) return null
             else -> return null
         }
 
-        // Убираем карты из источника, при необходимости переворачиваем открывшуюся.
-        var newFromCards = from.cards.dropLast(moving.size)
+        // Убираем карту из источника, открываем нижнюю при необходимости.
+        var newFromCards = from.cards.dropLast(1)
         if (from.type == PileType.TABLEAU && newFromCards.isNotEmpty() && !newFromCards.last().faceUp) {
             newFromCards = newFromCards.dropLast(1) + newFromCards.last().copy(faceUp = true)
         }
 
-        // Кладём на назначение; если основание собрано — оно уходит с поля.
+        // Кладём на назначение; фундамент закрепляем за группой; собранный — убираем.
         var newCollected = state.collected
-        val newToCards = to.cards + moving
-        val finalTo = if (to.type == PileType.FOUNDATION && newToCards.size == state.rankLength) {
-            newCollected = state.collected + to.category!!
-            to.copy(cards = emptyList())
-        } else {
-            to.copy(cards = newToCards)
+        val newToCards = to.cards + card
+        val finalTo = when {
+            to.type == PileType.FOUNDATION && newToCards.size == GROUP_SIZE -> {
+                newCollected = state.collected + card.group
+                Pile(PileType.FOUNDATION, group = card.group, cards = emptyList())
+            }
+            to.type == PileType.FOUNDATION -> {
+                to.copy(group = card.group, cards = newToCards)
+            }
+            else -> to.copy(cards = newToCards)
         }
 
         val result = state.replacePiles(
@@ -200,53 +171,37 @@ object GameLogic {
         return result.copy(isWon = checkWin(result))
     }
 
-    /** Авто-ход (двойной тап): верхнюю карту [fromPile] на подходящее основание. */
+    /** Авто-ход (двойной тап): верхнюю карту [fromPile] на подходящий фундамент. */
     fun autoToFoundation(state: GameState, fromPile: Int, cardIndex: Int): GameState? {
         val from = state.piles[fromPile]
         if (cardIndex != from.cards.lastIndex) return null
         val card = from.cards.lastOrNull() ?: return null
-        if (!card.faceUp) return null
+        if (!card.faceUp || from.type == PileType.FOUNDATION) return null
 
-        state.foundations.forEachIndexed { i, foundation ->
-            val foundationIndex = GameState.FOUNDATION_START + i
-            val notCollected = foundation.category == null || foundation.category !in state.collected
-            if (notCollected && canPlaceOnFoundation(card, foundation)) {
-                return move(state, fromPile, cardIndex, foundationIndex)
+        // Сначала пытаемся положить предмет на уже открытый фундамент его группы.
+        state.foundations.forEachIndexed { i, f ->
+            if (f.cards.isNotEmpty() && canPlaceOnFoundation(card, f)) {
+                return move(state, fromPile, cardIndex, GameState.FOUNDATION_START + i)
+            }
+        }
+        // Иначе — основу в первый свободный (не собранный) фундамент.
+        if (card.isBase) {
+            state.foundations.forEachIndexed { i, f ->
+                val free = f.cards.isEmpty() && (f.group == null || f.group !in state.collected)
+                if (free) return move(state, fromPile, cardIndex, GameState.FOUNDATION_START + i)
             }
         }
         return null
     }
 
-    /** Победа — когда все категории уровня собраны (ушли с поля). */
-    fun checkWin(state: GameState): Boolean =
-        state.collected.size == state.categories.size
+    fun checkWin(state: GameState): Boolean = state.collected.size == state.groups.size
 
-    fun hasAnyMove(state: GameState): Boolean {
-        if (state.stock.cards.isNotEmpty() || state.waste.cards.isNotEmpty()) return true
-        val sources = buildList {
-            state.waste.cards.lastOrNull()?.let { add(Triple(GameState.WASTE_INDEX, state.waste.cards.lastIndex, it)) }
-            state.tableau.forEachIndexed { ti, pile ->
-                val pileIndex = state.tableauStart + ti
-                pile.cards.forEachIndexed { ci, c -> if (c.faceUp) add(Triple(pileIndex, ci, c)) }
-            }
-        }
-        for ((pileIndex, ci, card) in sources) {
-            state.foundations.forEachIndexed { i, f ->
-                val notCollected = f.category == null || f.category !in state.collected
-                if (ci == state.piles[pileIndex].cards.lastIndex &&
-                    notCollected &&
-                    canPlaceOnFoundation(card, f)
-                ) return true
-            }
-            state.tableau.forEachIndexed { ti, t ->
-                val toIndex = state.tableauStart + ti
-                if (toIndex != pileIndex &&
-                    isMovableRun(state.piles[pileIndex], ci) &&
-                    canPlaceOnTableau(card, t)
-                ) return true
-            }
-        }
-        return false
+    /** Награда в монетах за пройденный уровень. */
+    fun coinsReward(level: Int, moves: Int, elapsedSec: Int): Int {
+        val base = 50 + level * 15
+        val timeBonus = (180 - elapsedSec).coerceAtLeast(0) / 3
+        val moveBonus = (level * GROUP_SIZE * 3 - moves).coerceAtLeast(0)
+        return base + timeBonus + moveBonus
     }
 
     // ----- Утилита ---------------------------------------------------------

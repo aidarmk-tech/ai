@@ -31,6 +31,12 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     private val _level = MutableStateFlow(1)
     val level: StateFlow<Int> = _level.asStateFlow()
 
+    /** Накопленные монеты-фишки и награда за последнюю победу. */
+    private val _coins = MutableStateFlow(0)
+    val coins: StateFlow<Int> = _coins.asStateFlow()
+    private val _lastReward = MutableStateFlow(0)
+    val lastReward: StateFlow<Int> = _lastReward.asStateFlow()
+
     /** Полная история для Undo. */
     private val history = ArrayDeque<GameState>()
     private val _canUndo = MutableStateFlow(false)
@@ -42,7 +48,10 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     private var timerJob: Job? = null
 
     init {
-        viewModelScope.launch { _level.value = storage.loadLevel() }
+        viewModelScope.launch {
+            _level.value = storage.loadLevel()
+            _coins.value = storage.loadCoins()
+        }
     }
 
     /** Пытается продолжить сохранённую партию; иначе раздаёт новую текущего уровня. */
@@ -107,10 +116,15 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     private fun onWin() {
         stopTimer()
         sound.win(settings.value.soundEnabled)
+        val s = _state.value
+        val reward = GameLogic.coinsReward(s.level, s.moves, s.elapsedSec)
+        _lastReward.value = reward
+        _coins.value += reward
         // Повышаем уровень — следующая партия будет сложнее.
-        val next = _state.value.level + 1
+        val next = s.level + 1
         _level.value = next
         viewModelScope.launch {
+            storage.addCoins(reward)
             storage.saveLevel(next)
             storage.clearGame()
         }

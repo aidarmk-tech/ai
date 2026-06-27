@@ -1,46 +1,38 @@
 package com.example.associations.data
 
 import com.example.associations.model.Card
-import com.example.associations.model.Category
 import com.example.associations.model.GameState
+import com.example.associations.model.Group
 import com.example.associations.model.Pile
 import com.example.associations.model.PileType
 import org.json.JSONArray
 import org.json.JSONObject
 
-/**
- * Ручная (без рефлексии) сериализация [GameState] в JSON и обратно через
- * встроенный org.json — чтобы не тянуть плагины сериализации.
- */
+/** Ручная сериализация [GameState] ↔ JSON через встроенный org.json. */
 object GameSerializer {
 
     fun toJson(state: GameState): String {
         val root = JSONObject()
         root.put("level", state.level)
-        root.put("rankLength", state.rankLength)
         root.put("moves", state.moves)
         root.put("elapsedSec", state.elapsedSec)
         root.put("isWon", state.isWon)
-
-        root.put("categories", JSONArray().apply {
-            state.categories.forEach { put(it.name) }
-        })
-        root.put("collected", JSONArray().apply {
-            state.collected.forEach { put(it.name) }
-        })
+        root.put("groups", JSONArray().apply { state.groups.forEach { put(it.name) } })
+        root.put("collected", JSONArray().apply { state.collected.forEach { put(it.name) } })
 
         val pilesArr = JSONArray()
         for (pile in state.piles) {
             val pileObj = JSONObject()
             pileObj.put("type", pile.type.name)
-            pileObj.put("category", pile.category?.name ?: JSONObject.NULL)
+            pileObj.put("group", pile.group?.name ?: JSONObject.NULL)
             val cardsArr = JSONArray()
             for (card in pile.cards) {
                 cardsArr.put(JSONObject().apply {
                     put("id", card.id)
-                    put("category", card.category.name)
-                    put("rank", card.rank)
+                    put("group", card.group.name)
+                    put("isBase", card.isBase)
                     put("title", card.title)
+                    put("icon", card.icon)
                     put("faceUp", card.faceUp)
                 })
             }
@@ -53,13 +45,12 @@ object GameSerializer {
 
     fun fromJson(json: String): GameState? = try {
         val root = JSONObject(json)
-
-        val categories = root.getJSONArray("categories").let { arr ->
-            (0 until arr.length()).map { Category.valueOf(arr.getString(it)) }
+        val groups = root.getJSONArray("groups").let { arr ->
+            (0 until arr.length()).map { Group.valueOf(arr.getString(it)) }
         }
         val collected = root.optJSONArray("collected").let { arr ->
             if (arr == null) emptySet()
-            else (0 until arr.length()).map { Category.valueOf(arr.getString(it)) }.toSet()
+            else (0 until arr.length()).map { Group.valueOf(arr.getString(it)) }.toSet()
         }
 
         val pilesArr = root.getJSONArray("piles")
@@ -67,27 +58,27 @@ object GameSerializer {
         for (i in 0 until pilesArr.length()) {
             val pileObj = pilesArr.getJSONObject(i)
             val type = PileType.valueOf(pileObj.getString("type"))
-            val categoryRaw = pileObj.opt("category")
-            val category = if (categoryRaw is String) Category.valueOf(categoryRaw) else null
+            val groupRaw = pileObj.opt("group")
+            val group = if (groupRaw is String) Group.valueOf(groupRaw) else null
             val cardsArr = pileObj.getJSONArray("cards")
             val cards = ArrayList<Card>(cardsArr.length())
             for (j in 0 until cardsArr.length()) {
                 val c = cardsArr.getJSONObject(j)
                 cards += Card(
                     id = c.getInt("id"),
-                    category = Category.valueOf(c.getString("category")),
-                    rank = c.getInt("rank"),
+                    group = Group.valueOf(c.getString("group")),
+                    isBase = c.getBoolean("isBase"),
                     title = c.getString("title"),
+                    icon = c.getString("icon"),
                     faceUp = c.getBoolean("faceUp")
                 )
             }
-            piles += Pile(type = type, category = category, cards = cards)
+            piles += Pile(type = type, group = group, cards = cards)
         }
 
         GameState(
             piles = piles,
-            categories = categories,
-            rankLength = root.optInt("rankLength", 6),
+            groups = groups,
             level = root.optInt("level", 1),
             collected = collected,
             moves = root.optInt("moves", 0),

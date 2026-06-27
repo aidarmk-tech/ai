@@ -18,7 +18,7 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 /** Пользовательские настройки приложения. */
 data class Settings(
     val soundEnabled: Boolean = true,
-    val darkTheme: Boolean = false
+    val darkTheme: Boolean = true
 )
 
 /**
@@ -32,12 +32,13 @@ class GameStorage(private val context: Context) {
         val SOUND = booleanPreferencesKey("sound_enabled")
         val DARK = booleanPreferencesKey("dark_theme")
         val LEVEL = intPreferencesKey("current_level")
+        val COINS = intPreferencesKey("coins")
     }
 
     val settingsFlow: Flow<Settings> = context.dataStore.data.map { prefs ->
         Settings(
             soundEnabled = prefs[Keys.SOUND] ?: true,
-            darkTheme = prefs[Keys.DARK] ?: false
+            darkTheme = prefs[Keys.DARK] ?: true
         )
     }
 
@@ -70,6 +71,15 @@ class GameStorage(private val context: Context) {
 
     suspend fun saveLevel(level: Int) {
         context.dataStore.edit { it[Keys.LEVEL] = level.coerceAtLeast(1) }
+    }
+
+    suspend fun loadCoins(): Int {
+        val prefs = context.dataStore.data.first()
+        return prefs[Keys.COINS] ?: 0
+    }
+
+    suspend fun addCoins(amount: Int) {
+        context.dataStore.edit { it[Keys.COINS] = (it[Keys.COINS] ?: 0) + amount }
     }
 
     suspend fun setSound(enabled: Boolean) {

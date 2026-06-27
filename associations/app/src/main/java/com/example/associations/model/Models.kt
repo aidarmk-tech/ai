@@ -1,36 +1,38 @@
 package com.example.associations.model
 
 /**
- * Категория карты. Внутри категории карта имеет ранг 1..M —
- * «ассоциативный порядок» (города по населению, мебель по размеру и т.д.).
+ * Ассоциативная группа. У каждой группы есть карта-ОСНОВА (сам концепт, напр.
+ * «Город», «Рыцарь») и набор ПРЕДМЕТОВ, которые с ней ассоциируются.
  *
- * Чтобы добавить новую категорию — допишите значение enum и список названий
- * в [CardContent] (минимум [MAX_RANK_CAP] элементов). Эмодзи легко заменить
- * на ресурс-картинку в UI.
+ * `color` — фирменный цвет группы (ARGB), используется для оформления карт.
+ * Новую группу добавить просто: дописать значение enum и список предметов в
+ * [CardContent].
  */
-enum class Category(val titleRu: String, val icon: String) {
-    CITY("Города", "🏙️"),
-    FURNITURE("Мебель", "🛋️"),
-    ANIMAL("Животные", "🐾"),
-    FOOD("Еда", "🍽️"),
-    TRANSPORT("Транспорт", "🚗"),
-    CONTAINER("Ёмкости", "🪣"),
-    WATER("Водоёмы", "🌊"),
-    CLOTHES("Одежда", "🧥"),
-    SPACE("Космос", "🪐"),
-    TIME("Время", "⏳"),
-    BUILDING("Постройки", "🏢"),
-    WEATHER("Погода", "🌧️")
+enum class Group(val title: String, val icon: String, val color: Long) {
+    CITY("Город", "🏙️", 0xFF3B82F6),
+    KNIGHT("Рыцарь", "⚔️", 0xFF8B5CF6),
+    KITCHEN("Кухня", "🍳", 0xFFEF4444),
+    SEA("Море", "🌊", 0xFF06B6D4),
+    SPACE("Космос", "🪐", 0xFF6366F1),
+    FOREST("Лес", "🌲", 0xFF22C55E),
+    SCHOOL("Школа", "🎒", 0xFFF59E0B),
+    SPORT("Спорт", "🏟️", 0xFFF97316),
+    MUSIC("Музыка", "🎵", 0xFFEC4899),
+    WINTER("Зима", "❄️", 0xFF38BDF8),
+    FARM("Ферма", "🌾", 0xFF84CC16),
+    CASTLE("Замок", "🏰", 0xFFA855F7)
 }
 
-/** Максимально возможный ранг (длина «ассоциативной цепочки»). */
-const val MAX_RANK_CAP = 10
+/** Предметов в каждой группе (+1 карта-основа = размер группы). */
+const val MEMBERS_PER_GROUP = 5
+const val GROUP_SIZE = MEMBERS_PER_GROUP + 1
 
 data class Card(
     val id: Int,
-    val category: Category,
-    val rank: Int,        // 1..M — ассоциативный порядок
-    val title: String,    // "Москва", "Диван"...
+    val group: Group,
+    val isBase: Boolean,     // true — карта-основа, false — предмет
+    val title: String,
+    val icon: String,
     val faceUp: Boolean = false
 )
 
@@ -38,28 +40,28 @@ enum class PileType { STOCK, WASTE, FOUNDATION, TABLEAU }
 
 data class Pile(
     val type: PileType,
-    val category: Category? = null,  // задаётся для FOUNDATION
+    val group: Group? = null,    // для FOUNDATION задаётся, когда положена основа
     val cards: List<Card> = emptyList()
 )
 
 /**
- * Полное состояние партии. Конфигурация уровня (набор категорий, длина ранга)
- * хранится прямо в состоянии — так UI и логика не зависят от глобальных констант.
+ * Состояние партии. Фундаменты (основания) — универсальные слоты: пустой слот
+ * принимает любую основу, после чего «закрепляется» за её группой и принимает
+ * её предметы. Собранная группа уходит с поля (в [collected]).
  *
- * Раскладка piles фиксирована: 0 — STOCK, 1 — WASTE, далее [categories].size
- * оснований, затем колонки tableau.
+ * Раскладка piles: 0 — STOCK, 1 — WASTE, далее [groups].size фундаментов,
+ * затем колонки tableau.
  */
 data class GameState(
     val piles: List<Pile>,
-    val categories: List<Category>,     // активные категории уровня
-    val rankLength: Int,                // M — длина цепочки на этом уровне
+    val groups: List<Group>,
     val level: Int = 1,
-    val collected: Set<Category> = emptySet(), // собранные (ушедшие с поля) категории
+    val collected: Set<Group> = emptySet(),
     val moves: Int = 0,
     val elapsedSec: Int = 0,
     val isWon: Boolean = false
 ) {
-    val foundationCount: Int get() = categories.size
+    val foundationCount: Int get() = groups.size
     val tableauStart: Int get() = FOUNDATION_START + foundationCount
 
     val stock: Pile get() = piles[STOCK_INDEX]
@@ -76,78 +78,55 @@ data class GameState(
     }
 }
 
-/**
- * Контент. Каждый список упорядочен по «ассоциативному» принципу (возрастание):
- * города — по населению, мебель/животные/постройки — по размеру, еда — по
- * «тяжести», транспорт — по скорости, время — по длительности и т.д.
- * Берётся первые M элементов под текущий уровень.
- */
+/** Контент: для каждой группы — список предметов (название, эмодзи). */
 object CardContent {
-    val titles: Map<Category, List<String>> = mapOf(
-        Category.CITY to listOf(
-            "Астана", "Алматы", "Берлин", "Лондон", "Москва",
-            "Каир", "Стамбул", "Дели", "Шанхай", "Токио"
+    val members: Map<Group, List<Pair<String, String>>> = mapOf(
+        Group.CITY to listOf(
+            "Москва" to "🏰", "Лондон" to "🎡", "Париж" to "🗼", "Токио" to "🗾", "Каир" to "🐫"
         ),
-        Category.FURNITURE to listOf(
-            "Табурет", "Стул", "Тумба", "Стол", "Комод",
-            "Кресло", "Шкаф", "Диван", "Кровать", "Гардероб"
+        Group.KNIGHT to listOf(
+            "Меч" to "🗡️", "Щит" to "🛡️", "Шлем" to "⛑️", "Доспехи" to "🦾", "Конь" to "🐴"
         ),
-        Category.ANIMAL to listOf(
-            "Мышь", "Кот", "Собака", "Волк", "Кабан",
-            "Лошадь", "Корова", "Медведь", "Носорог", "Слон"
+        Group.KITCHEN to listOf(
+            "Нож" to "🔪", "Ложка" to "🥄", "Тарелка" to "🍽️", "Кастрюля" to "🍲", "Чайник" to "🫖"
         ),
-        Category.FOOD to listOf(
-            "Яблоко", "Салат", "Суп", "Паста", "Пицца",
-            "Бургер", "Стейк", "Плов", "Торт", "Шашлык"
+        Group.SEA to listOf(
+            "Рыба" to "🐟", "Краб" to "🦀", "Корабль" to "🚢", "Осьминог" to "🐙", "Ракушка" to "🐚"
         ),
-        Category.TRANSPORT to listOf(
-            "Пешеход", "Велосипед", "Самокат", "Скутер", "Машина",
-            "Поезд", "Электричка", "Самолёт", "Истребитель", "Ракета"
+        Group.SPACE to listOf(
+            "Звезда" to "⭐", "Ракета" to "🚀", "Комета" to "☄️", "Луна" to "🌙", "Спутник" to "🛰️"
         ),
-        Category.CONTAINER to listOf(
-            "Напёрсток", "Рюмка", "Стакан", "Кружка", "Бутылка",
-            "Кувшин", "Ведро", "Бочка", "Цистерна", "Резервуар"
+        Group.FOREST to listOf(
+            "Дерево" to "🌳", "Гриб" to "🍄", "Лиса" to "🦊", "Сова" to "🦉", "Ягода" to "🫐"
         ),
-        Category.WATER to listOf(
-            "Лужа", "Ручей", "Пруд", "Озеро", "Река",
-            "Залив", "Канал", "Море", "Пролив", "Океан"
+        Group.SCHOOL to listOf(
+            "Книга" to "📖", "Ручка" to "🖊️", "Глобус" to "🌍", "Линейка" to "📐", "Карандаш" to "✏️"
         ),
-        Category.CLOTHES to listOf(
-            "Майка", "Футболка", "Рубашка", "Джемпер", "Худи",
-            "Жилет", "Кофта", "Куртка", "Пальто", "Шуба"
+        Group.SPORT to listOf(
+            "Мяч" to "⚽", "Кубок" to "🏆", "Кроссовки" to "👟", "Гиря" to "🏋️", "Медаль" to "🏅"
         ),
-        Category.SPACE to listOf(
-            "Астероид", "Спутник", "Луна", "Меркурий", "Марс",
-            "Земля", "Нептун", "Сатурн", "Юпитер", "Солнце"
+        Group.MUSIC to listOf(
+            "Гитара" to "🎸", "Скрипка" to "🎻", "Барабан" to "🥁", "Труба" to "🎺", "Микрофон" to "🎤"
         ),
-        Category.TIME to listOf(
-            "Секунда", "Минута", "Час", "Сутки", "Неделя",
-            "Месяц", "Год", "Век", "Тысячелетие", "Эра"
+        Group.WINTER to listOf(
+            "Снеговик" to "⛄", "Санки" to "🛷", "Ёлка" to "🎄", "Коньки" to "⛸️", "Варежка" to "🧤"
         ),
-        Category.BUILDING to listOf(
-            "Будка", "Сарай", "Изба", "Дом", "Коттедж",
-            "Башня", "Высотка", "Небоскрёб", "Телебашня", "Мегаполис"
+        Group.FARM to listOf(
+            "Корова" to "🐄", "Курица" to "🐔", "Трактор" to "🚜", "Свинья" to "🐖", "Овца" to "🐑"
         ),
-        Category.WEATHER to listOf(
-            "Роса", "Туман", "Морось", "Дождь", "Снег",
-            "Град", "Ливень", "Гроза", "Шторм", "Ураган"
+        Group.CASTLE to listOf(
+            "Корона" to "👑", "Трон" to "🪑", "Флаг" to "🚩", "Ключ" to "🗝️", "Дракон" to "🐉"
         )
     )
 
-    /** Колода для заданных категорий и длины ранга M. */
-    fun buildDeck(categories: List<Category>, rankLength: Int): List<Card> {
+    /** Колода для заданных групп: на каждую группу — основа + её предметы. */
+    fun buildDeck(groups: List<Group>): List<Card> {
         var id = 0
         val deck = mutableListOf<Card>()
-        for (category in categories) {
-            val names = titles.getValue(category)
-            for (rank in 1..rankLength) {
-                deck += Card(
-                    id = id++,
-                    category = category,
-                    rank = rank,
-                    title = names[rank - 1],
-                    faceUp = false
-                )
+        for (g in groups) {
+            deck += Card(id++, g, isBase = true, title = g.title, icon = g.icon)
+            for ((title, icon) in members.getValue(g)) {
+                deck += Card(id++, g, isBase = false, title = title, icon = icon)
             }
         }
         return deck
