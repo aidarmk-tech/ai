@@ -1202,9 +1202,12 @@ class PlayerViewModel @Inject constructor(
         if (end > 0) { engSeekTo((end * 1000).toLong()); _uiState.update { it.copy(showSkipIntro = false) } }
     }
 
-    fun markIntro() {
+    fun markIntro() = markIntroAt(engPositionMs())
+
+    /** Mark "intro ends at [ms]" (triple-RIGHT gesture); persists per show. */
+    fun markIntroAt(ms: Long) {
         val card = currentCard ?: return
-        introSkipManager.markIntro(card, engPositionMs() / 1000.0, viewModelScope) { saved ->
+        introSkipManager.markIntro(card, ms / 1000.0, viewModelScope) { saved ->
             _uiState.update { it.copy(introEnd = saved) }
         }
     }

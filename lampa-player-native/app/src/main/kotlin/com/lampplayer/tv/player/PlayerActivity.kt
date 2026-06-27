@@ -81,6 +81,28 @@ class PlayerActivity : AppCompatActivity() {
     private var zapBuffer = ""
     private var zapJob: Job? = null
 
+    // Triple-RIGHT gesture → mark "intro ends here" (no menu). Burst within 1.5s.
+    private var rightBurstCount = 0
+    private var rightBurstTime = 0L
+    private var rightBurstPosMs = 0L
+
+    /** Returns true if this RIGHT press completed the triple-tap intro mark. */
+    private fun handleRightForIntroMark(): Boolean {
+        if (vm.uiState.value.card?.iptv == true) return false
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - rightBurstTime > 1500) { rightBurstCount = 0; rightBurstPosMs = vm.positionMs() }
+        rightBurstTime = now
+        rightBurstCount++
+        if (rightBurstCount >= 3) {
+            rightBurstCount = 0
+            vm.markIntroAt(rightBurstPosMs)          // mark where the burst started…
+            vm.seekToMs(rightBurstPosMs)             // …and restore playback there
+            Toast.makeText(this, "Конец заставки отмечен ✓", Toast.LENGTH_SHORT).show()
+            return true
+        }
+        return false
+    }
+
     // True while shown as a Picture-in-Picture window (suppress all on-screen controls).
     private var inPip = false
 
@@ -775,7 +797,10 @@ class PlayerActivity : AppCompatActivity() {
                 // Scrubber owns ←/→ (always seek) and OK (play/pause).
                 return when (keyCode) {
                     KeyEvent.KEYCODE_DPAD_LEFT -> { doSeek(false, repeatCount = event.repeatCount); vm.showOsd(); true }
-                    KeyEvent.KEYCODE_DPAD_RIGHT -> { doSeek(true, repeatCount = event.repeatCount); vm.showOsd(); true }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        if (handleRightForIntroMark()) return true
+                        doSeek(true, repeatCount = event.repeatCount); vm.showOsd(); true
+                    }
                     KeyEvent.KEYCODE_DPAD_CENTER,
                     KeyEvent.KEYCODE_ENTER -> { vm.onKeyOk(); vm.showOsd(); true }
                     KeyEvent.KEYCODE_DPAD_DOWN -> {
@@ -812,6 +837,7 @@ class PlayerActivity : AppCompatActivity() {
                 seekBarOnly = true; scrubberFocused = true; vm.showOsd(); doSeek(false, repeatCount = event.repeatCount); true
             }
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                if (handleRightForIntroMark()) return true
                 seekBarOnly = true; scrubberFocused = true; vm.showOsd(); doSeek(true, repeatCount = event.repeatCount); true
             }
             KeyEvent.KEYCODE_PAGE_UP,
