@@ -1,0 +1,26 @@
+<resources>
+    <string name="app_name">Ассоциации</string>
+
+    <string name="menu_play">Играть</string>
+    <string name="menu_how_to">Как играть</string>
+    <string name="menu_settings">Настройки</string>
+    <string name="menu_continue">Продолжить</string>
+
+    <string name="game_moves">Ходы</string>
+    <string name="game_time">Время</string>
+    <string name="game_undo">Отменить</string>
+    <string name="game_new">Новая</string>
+    <string name="game_menu">Меню</string>
+    <string name="game_stock">Колода</string>
+    <string name="game_waste">Сброс</string>
+
+    <string name="win_title">Победа!</string>
+    <string name="win_again">Ещё раз</string>
+    <string name="win_to_menu">В меню</string>
+
+    <string name="settings_sound">Звук</string>
+    <string name="settings_dark">Тёмная тема</string>
+    <string name="settings_back">Назад</string>
+
+    <string name="how_to_back">Назад</string>
+</resources>
