@@ -36,7 +36,7 @@ fun SettingsScreen(
             "Настройки",
             fontSize = 26.sp,
             fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.primary
+            color = MaterialTheme.colorScheme.secondary
         )
         Spacer(Modifier.height(24.dp))
 

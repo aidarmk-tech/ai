@@ -37,7 +37,8 @@ object GameLogic {
     fun levelConfig(level: Int): LevelConfig {
         val l = level.coerceAtLeast(1)
         val groupCount = (3 + l).coerceIn(4, ALL_GROUPS.size) // 4,5,6,...,12
-        val columns = (groupCount + 3).coerceIn(6, 9)
+        // Немного колонок, но глубоких — поле заполняется веером вниз, как в пасьянсе.
+        val columns = groupCount.coerceIn(4, 6)
         return LevelConfig(l, ALL_GROUPS.take(groupCount), columns)
     }
 
@@ -48,8 +49,9 @@ object GameLogic {
 
         val total = deck.size
         val columns = config.columns
-        // В поле — примерно половина карт (колонки неглубокие), остальное в колоду.
-        val tableauTotal = (total + 1) / 2
+        // Большая часть карт — в поле (глубокие колонки, веер вниз), немного в колоду.
+        val stockCount = (total / 8).coerceIn(3, 8)
+        val tableauTotal = total - stockCount
         val sizes = IntArray(columns) { tableauTotal / columns }
         repeat(tableauTotal % columns) { sizes[it]++ }
 

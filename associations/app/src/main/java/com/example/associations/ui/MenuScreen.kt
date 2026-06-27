@@ -25,8 +25,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.associations.ui.theme.Gold
-import com.example.associations.ui.theme.Violet
-import com.example.associations.ui.theme.VioletDeep
 
 @Composable
 fun MenuScreen(
@@ -71,7 +69,7 @@ fun MenuScreen(
         }
         GradientButton(
             if (hasSavedGame) "Новая игра" else "Играть",
-            listOf(Violet, VioletDeep),
+            listOf(Gold, Color(0xFFCC8A1E)),
             onPlay
         )
         Spacer(Modifier.height(12.dp))
