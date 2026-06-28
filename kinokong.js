@@ -10,6 +10,10 @@
  * Сайт DLE-движковый, домены часто меняются — поэтому есть авто-подбор рабочего
  * зеркала и ручная настройка домена в:  Настройки → Киноконг → Домен.
  *
+ * ВАЖНО: kinokong.fm стоит за Cloudflare anti-bot. Прямой fetch получает
+ * страницу-заглушку «Just a moment...», а не контент. Для работы нужен прокси,
+ * проходящий Cloudflare — задаётся в Настройки → Киноконг → Прокси.
+ *
  * Работает в bylampa и других форках с отключённым CORS в WebView.
  */
 (function () {
@@ -18,7 +22,10 @@
   var PN = 'kinokong';
 
   // Кандидаты-зеркала. Пробуются по порядку, первое рабочее кэшируется.
+  // ВНИМАНИЕ: сайт за Cloudflare — без прокси (см. настройку «Прокси») прямой
+  // fetch вернёт страницу-заглушку «Just a moment...», а не контент.
   var MIRRORS = [
+    'https://kinokong.fm',
     'https://kinokong.pro',
     'https://kinokong.la',
     'https://kinokong.uno',
@@ -112,6 +119,10 @@
     if (!/^https?:\/\//.test(d)) d = 'https://' + d;
     return d;
   }
+  function getProxy() {
+    try { return (Lampa.Storage.get('kinokong_proxy', '') || '').trim(); }
+    catch (e) { return ''; }
+  }
   function injectSettings() {
     if (!window.Lampa || !Lampa.SettingsApi) return;
     try {
@@ -125,7 +136,7 @@
         param: { name: 'kinokong_domain', type: 'input', values: '', default: '' },
         field: {
           name: 'Домен',
-          description: 'Адрес зеркала Киноконга, напр. kinokong.pro. Пусто — авто-подбор.'
+          description: 'Адрес зеркала Киноконга, напр. kinokong.fm. Пусто — авто-подбор.'
         },
         onChange: function (value) {
           baseResolved = false;
@@ -134,12 +145,38 @@
           Lampa.Settings.update && Lampa.Settings.update();
         }
       });
+      Lampa.SettingsApi.addParam({
+        component: 'kinokong',
+        param: { name: 'kinokong_proxy', type: 'input', values: '', default: '' },
+        field: {
+          name: 'Прокси (обход Cloudflare)',
+          description: 'Сайт за Cloudflare — без прокси контент не загрузится. Укажите CORS/CF-прокси. Поддерживается шаблон {url}, напр. https://my-proxy/?url={url}. Пусто — прямой запрос.'
+        },
+        onChange: function () {
+          baseResolved = false;
+          try { Lampa.Storage.set('kinokong_base', ''); } catch (e) {}
+          Lampa.Settings.update && Lampa.Settings.update();
+        }
+      });
     } catch (e) {}
+  }
+
+  // ─── ДЕТЕКТ CLOUDFLARE / ЗАГЛУШКИ ─────────────────────────────────────────
+  function isChallenge(html) {
+    if (!html) return false;
+    return /__cf_chl|challenge-platform|cf-browser-verification|Just a moment|Enable JavaScript and cookies/i.test(html)
+        && !/short-story|shortstory|b-content__inline_item/i.test(html);
+  }
+  function cfMessage() {
+    return '<div class="kk-error">🛡️ Сайт защищён Cloudflare и блокирует прямые запросы.<br><br>' +
+      'Чтобы загрузить контент, укажите прокси в:<br>Настройки → Киноконг → «Прокси (обход Cloudflare)».<br><br>' +
+      'Без прокси этот источник работать не может.</div>';
   }
 
   // ─── ПОДБОР РАБОЧЕГО ЗЕРКАЛА ──────────────────────────────────────────────
   function looksLikeSite(html) {
     if (!html || html.length < 800) return false;
+    if (isChallenge(html)) return false;
     if (/kinokong/i.test(html)) return true;
     try { return parseCatalog(html).items.length > 0; } catch (e) { return false; }
   }
@@ -200,6 +237,13 @@
   function httpPost(url, body, callback, timeoutMs) {
     request(url, body, callback, timeoutMs);
   }
+  function applyProxy(url) {
+    var proxy = getProxy();
+    if (!proxy) return url;
+    if (proxy.indexOf('{url}') !== -1) return proxy.replace('{url}', encodeURIComponent(url));
+    // Прокси-префикс: если кончается на = — добавляем encoded, иначе сырой URL.
+    return /[=?]$/.test(proxy) ? proxy + encodeURIComponent(url) : proxy + url;
+  }
   function request(url, postBody, callback, timeoutMs) {
     var done = false;
     var tid  = setTimeout(function () {
@@ -218,7 +262,7 @@
       opts.body = postBody;
     }
 
-    fetch(url, opts)
+    fetch(applyProxy(url), opts)
       .then(function (r) { return r.text(); })
       .then(function (html) {
         if (done) return;
@@ -480,6 +524,7 @@
             $page.html('<div class="kk-error">Не удалось загрузить список.<br>Проверьте интернет или смените домен в настройках.</div>');
             return;
           }
+          if (isChallenge(html)) { $page.html(cfMessage()); return; }
           var result = parseCatalog(html);
           $page.empty();
           $page.append('<div class="kk-catalog-title">' + esc((object.icon ? object.icon + ' ' : '🦍 ') + (object.title || 'Киноконг')) + '</div>');
@@ -563,6 +608,7 @@
       doSearch(q, function (err, html) {
         if (!$results || !$results.length) return;
         if (err || !html) { $results.html('<div class="kk-error">Поиск не удался. Попробуйте позже или смените домен.</div>'); return; }
+        if (isChallenge(html)) { $results.html(cfMessage()); return; }
         var result = parseCatalog(html);
         $results.empty();
         var $grid = renderGrid($results, result, 'По запросу «' + q + '» ничего не найдено.');
@@ -603,6 +649,7 @@
           $page.html('<div class="kk-error">Не удалось загрузить страницу.<br>' + esc(object.url) + '</div>');
           return;
         }
+        if (isChallenge(html)) { $page.html(cfMessage()); return; }
 
         var playerUrl = parsePlayerUrl(html);
         var desc      = parseDescription(html);
