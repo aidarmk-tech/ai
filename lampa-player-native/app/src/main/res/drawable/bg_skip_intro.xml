@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Modern glassy "skip intro" pill: translucent dark at rest with a faint accent
+     hairline; solid accent fill when focused. Fully rounded (capsule). -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/accent_primary" />
+            <corners android:radius="100dp" />
+            <stroke android:width="1.5dp" android:color="#66FFFFFF" />
+        </shape>
+    </item>
+    <item android:state_pressed="true">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/accent_pressed" />
+            <corners android:radius="100dp" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#B3101216" />
+            <corners android:radius="100dp" />
+            <stroke android:width="1dp" android:color="#4D8FB4FF" />
+        </shape>
+    </item>
+</selector>

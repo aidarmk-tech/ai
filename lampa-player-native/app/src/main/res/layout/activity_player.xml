@@ -420,15 +420,19 @@
         android:paddingVertical="12dp"
         android:visibility="gone" />
 
-    <!-- Skip Intro -->
-    <Button android:id="@+id/btn_skip_intro"
+    <!-- Skip Intro: glassy pill, auto-fades to a hint while the intro plays -->
+    <TextView android:id="@+id/btn_skip_intro"
         android:layout_width="wrap_content" android:layout_height="wrap_content"
         android:layout_gravity="bottom|end"
         android:layout_marginBottom="100dp" android:layout_marginEnd="@dimen/safe_margin"
         android:text="@string/skip_intro"
-        android:background="@drawable/bg_button_accent"
-        android:textColor="@color/text_primary" android:textSize="18sp"
-        android:paddingHorizontal="24dp" android:paddingVertical="12dp"
+        android:background="@drawable/bg_skip_intro"
+        android:textColor="@color/text_primary" android:textSize="16sp"
+        android:textStyle="bold" android:letterSpacing="0.02"
+        android:gravity="center_vertical"
+        android:drawableEnd="@drawable/ic_skip_forward" android:drawablePadding="8dp"
+        android:paddingHorizontal="22dp" android:paddingVertical="13dp"
+        android:elevation="8dp"
         android:focusable="true" android:visibility="gone" />
 
     <!-- Auto-next overlay -->

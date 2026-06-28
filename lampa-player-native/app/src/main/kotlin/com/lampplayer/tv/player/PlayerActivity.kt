@@ -84,6 +84,11 @@ class PlayerActivity : AppCompatActivity() {
     // Long-press OK → mark "intro ends here" (no menu, no seek conflict).
     private var okLongFired = false
 
+    // Skip-intro pill: appears, then fades to an unobtrusive hint; OK skips it.
+    private var skipShown = false
+    private var skipFadeJob: Job? = null
+    private val skipHintAlpha = 0.32f
+
     // True while shown as a Picture-in-Picture window (suppress all on-screen controls).
     private var inPip = false
 
@@ -356,7 +361,7 @@ class PlayerActivity : AppCompatActivity() {
                 binding.tvReconnect.isVisible = s.reconnecting && !s.isPlaying
                 binding.errorContainer.isVisible = s.hasError
                 binding.tvErrorMessage.text = s.errorMessage
-                binding.btnSkipIntro.isVisible = s.showSkipIntro && !s.hasError
+                updateSkipIntro(s.showSkipIntro && !s.hasError && !inPip)
                 binding.diagText.isVisible = s.settings.diag && s.diagText.isNotEmpty()
                 binding.diagText.text = s.diagText
 
@@ -692,6 +697,9 @@ class PlayerActivity : AppCompatActivity() {
         val s = vm.uiState.value
         val osdVisible = s.osdVisible
 
+        // A faded skip pill brightens on any remote activity (it's "dismissable").
+        restoreSkipHint()
+
         // Resume card: ← restarts from the beginning while it's on screen.
         if (binding.resumeCard.isVisible) {
             hideResumeCard()
@@ -854,6 +862,47 @@ class PlayerActivity : AppCompatActivity() {
         return super.onKeyLongPress(keyCode, event)
     }
 
+    /**
+     * Skip-intro pill: slides/fades in at full strength, then settles to a faint
+     * hint so it doesn't block the picture for the whole intro. Any remote key
+     * (see restoreSkipHint) brings it back to full; OK skips.
+     */
+    private fun updateSkipIntro(show: Boolean) {
+        val v = binding.btnSkipIntro
+        if (show == skipShown) return
+        skipShown = show
+        skipFadeJob?.cancel()
+        if (show) {
+            v.alpha = 0f
+            v.translationX = dp(36f)
+            v.isVisible = true
+            v.animate().alpha(1f).translationX(0f).setDuration(260).start()
+            scheduleSkipFade()
+        } else {
+            v.animate().alpha(0f).translationX(dp(36f)).setDuration(200)
+                .withEndAction { v.isVisible = false }.start()
+        }
+    }
+
+    /** After a few seconds of no input, dim the pill to a hint. */
+    private fun scheduleSkipFade() {
+        skipFadeJob?.cancel()
+        skipFadeJob = lifecycleScope.launch {
+            delay(4500)
+            if (skipShown) binding.btnSkipIntro.animate().alpha(skipHintAlpha).setDuration(500).start()
+        }
+    }
+
+    /** Bring the dimmed pill back to full on any interaction while it's up. */
+    private fun restoreSkipHint() {
+        if (!skipShown) return
+        if (binding.btnSkipIntro.alpha < 0.99f)
+            binding.btnSkipIntro.animate().alpha(1f).setDuration(150).start()
+        scheduleSkipFade()
+    }
+
+    private fun dp(v: Float) = v * resources.displayMetrics.density
+
     private var centerToastJob: Job? = null
     /** Prominent centered confirmation that's hard to miss on a TV. */
     private fun showCenterToast(text: String) {
@@ -879,6 +928,8 @@ class PlayerActivity : AppCompatActivity() {
             val s = vm.uiState.value
             if (s.osdVisible && !scrubberFocused) return super.onKeyUp(keyCode, event)  // button row
             if (s.infoOverlayVisible || s.tracksOverlayVisible) return super.onKeyUp(keyCode, event)
+            // Pill is up and OSD hidden → OK is "skip intro", not "open scrubber".
+            if (!s.osdVisible && s.showSkipIntro) { vm.skipIntro(); return true }
             if (s.osdVisible) { vm.onKeyOk(); vm.showOsd() }
             else { seekBarOnly = false; scrubberFocused = true; vm.showOsd() }
             return true
