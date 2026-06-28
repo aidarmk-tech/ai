@@ -27,7 +27,9 @@
     bg:      'appletv_bg',
     radius:  'appletv_radius',
     blur:    'appletv_blur',
-    focus:   'appletv_focus'
+    focus:   'appletv_focus',
+    menudim: 'appletv_menudim',
+    head:    'appletv_head'
   };
 
   // Системные акценты Apple
@@ -128,19 +130,19 @@
       '.menu__split{opacity:0.3}'
     );
 
-    /* ── tvOS: затемнение/отдаление контента при открытом меню ─────────── */
-    css.push(
-      'body::after{content:"";position:fixed;inset:0;z-index:38;pointer-events:none;opacity:0;' +
-        'background:linear-gradient(90deg,transparent 14em,' + hexToRgba(bg.bg, 0.0) + ' 16em,' + hexToRgba(bg.bg, 0.55) + ' 60%);transition:opacity .35s ease}',
-      'body.atv-menu-active::after{opacity:1}',
-      'body.atv-menu-active .menu{position:relative;z-index:45}',
-      'body.atv-menu-active .activity--active .scroll,body.atv-menu-active .activity--active>div{transition:transform .35s cubic-bezier(.2,.7,.2,1),filter .35s ease;transform:scale(0.985);filter:saturate(0.92) brightness(0.82);transform-origin:right center}'
-    );
+    /* ── tvOS: затемнение контента при открытом меню (опционально) ──────
+       Только лёгкий скрим-градиент. НЕ трогаем transform/filter контейнеров
+       контента, чтобы не «контейнить» position:fixed всплывающие окна. */
+    if (get(SK.menudim, false)) {
+      css.push(
+        'body.atv-menu-active .scroll__body{transition:opacity .35s ease;opacity:0.55}'
+      );
+    }
 
     /* ── плавное появление экранов ─────────────────────────────────────── */
     css.push(
-      '.activity--active{animation:atvScreen .4s cubic-bezier(.2,.7,.2,1)}',
-      '@keyframes atvScreen{0%{opacity:0;transform:translateY(1.2em) scale(0.992)}100%{opacity:1;transform:none}}'
+      '.activity--active{animation:atvScreen .35s cubic-bezier(.2,.7,.2,1)}',
+      '@keyframes atvScreen{0%{opacity:0}100%{opacity:1}}'
     );
 
     /* ── верхняя панель ────────────────────────────────────────────────── */
@@ -211,12 +213,15 @@
       '.settings-param>div:last-child,.settings-param__value{color:' + A + '}'
     );
 
-    /* ── SELECTBOX / модалки / меню выбора ─────────────────────────────── */
+    /* ── SELECTBOX / модалки / меню выбора ─────────────────────────────────
+       ВАЖНО: НЕ переопределяем фон/позиционирование самих окон и не вешаем
+       backdrop-filter — чтобы гарантированно не сломать/не спрятать всплывашки.
+       Только мягкая подсветка пунктов и скругление содержимого. */
     css.push(
-      '.selectbox,.modal__content,.selectbox-icon,.broadcast__scan{background:' + bg.bg2 + ' !important;border-radius:' + rad.lg + ' !important;-webkit-backdrop-filter:' + blurPanel + ';backdrop-filter:' + blurPanel + ';box-shadow:0 1.5em 4em rgba(0,0,0,0.6) !important;border:1px solid ' + bg.line + '}',
+      '.selectbox__content,.modal__content{border-radius:' + rad.lg + ' !important}',
       '.selectbox-item,.selectbox__content .selector{border-radius:' + rad.sm + ' !important;transition:background .15s,box-shadow .15s}',
       '.selectbox-item.focus,.selectbox__content .selector.focus{background:' + bg.surf2 + ' !important;box-shadow:0 0 0 0.12em ' + Aln + ' !important}',
-      '.selectbox-item.selectbox-item--checkbox .selectbox-item__checkbox.active{background:' + A + ' !important;border-color:' + A + ' !important}'
+      '.selectbox-item__checkbox.active{background:' + A + ' !important;border-color:' + A + ' !important}'
     );
 
     /* ── ПОИСК / клавиатура ────────────────────────────────────────────── */
@@ -242,6 +247,16 @@
       '.navigation-tabs__item.focus,.navigation-tabs__item.active{color:' + A + ' !important}'
     );
 
+    /* ── сборка верхних иконок ─────────────────────────────────────────── */
+    if (get(SK.head, true)) {
+      css.push(
+        '.head .atv-head-collapsible{display:none !important}',
+        'body.atv-head-open .head .atv-head-collapsible{display:flex !important}',
+        '.atv-head-toggle{display:flex !important;align-items:center;justify-content:center}',
+        'body.atv-head-open .atv-head-toggle{background:' + bg.surf2 + ' !important;color:' + A + ' !important;box-shadow:0 0 0 0.12em ' + Aln + '}'
+      );
+    }
+
     /* ── скроллбары ────────────────────────────────────────────────────── */
     css.push(
       '::-webkit-scrollbar{width:0.5em;height:0.5em}',
@@ -257,7 +272,7 @@
     var enabled = get(SK.enabled, true);
     var el = document.getElementById(STYLE_ID);
 
-    if (!enabled) { if (el) el.remove(); return; }
+    if (!enabled) { if (el) el.remove(); unsetupHead(); return; }
 
     if (!el) {
       el = document.createElement('style');
@@ -265,6 +280,7 @@
       document.head.appendChild(el);
     }
     el.textContent = buildCSS();
+    setupHead();
   }
 
   // ─── Настройки ──────────────────────────────────────────────────────────────
@@ -321,7 +337,21 @@
       Lampa.SettingsApi.addParam({
         component: 'appletv_theme',
         param: { name: SK.blur, type: 'trigger', default: true },
-        field: { name: 'Размытие панелей', description: 'Матовое стекло на меню, модалках и клавиатуре. Отключите, если интерфейс подтормаживает на ТВ-боксе.' },
+        field: { name: 'Размытие панелей', description: 'Матовое стекло на меню и клавиатуре. Отключите, если интерфейс подтормаживает на ТВ-боксе.' },
+        onChange: function () { setTimeout(apply, 30); }
+      });
+
+      Lampa.SettingsApi.addParam({
+        component: 'appletv_theme',
+        param: { name: SK.head, type: 'trigger', default: true },
+        field: { name: 'Сборка иконок сверху', description: 'Прячет лишние иконки в верхней панели и добавляет кнопку-переключатель «•••» — по нажатию они разворачиваются.' },
+        onChange: function () { setTimeout(function () { apply(); setupHead(); }, 30); }
+      });
+
+      Lampa.SettingsApi.addParam({
+        component: 'appletv_theme',
+        param: { name: SK.menudim, type: 'trigger', default: false },
+        field: { name: 'Затемнять контент при открытом меню', description: 'Эффект как в tvOS. По умолчанию выключено для совместимости.' },
         onChange: function () { setTimeout(apply, 30); }
       });
     } catch (e) {}
@@ -352,6 +382,81 @@
     update();
   }
 
+  // ─── СБОРКА ВЕРХНИХ ИКОНОК ──────────────────────────────────────────────────
+  var headApplying = false;
+  function setupHead() {
+    if (headApplying) return;
+    try {
+      if (!get(SK.enabled, true) || !get(SK.head, true)) { unsetupHead(); return; }
+      var head = document.querySelector('.head');
+      if (!head) return;
+      if (head.querySelector('.atv-head-toggle')) return; // уже собрано
+
+      var actions = Array.prototype.slice.call(head.querySelectorAll('.head__action'))
+        .filter(function (a) { return !a.classList.contains('atv-head-toggle'); });
+      if (actions.length < 2) return; // нечего сворачивать
+
+      headApplying = true;
+      var container = actions[0].parentNode;
+
+      // прячем существующие иконки
+      actions.forEach(function (a) { a.classList.add('atv-head-collapsible'); });
+
+      // кнопка-переключатель «•••»
+      var toggle = document.createElement('div');
+      toggle.className = 'head__action selector atv-head-toggle';
+      toggle.title = 'Показать иконки';
+      toggle.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">' +
+        '<circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>';
+      container.insertBefore(toggle, container.firstChild);
+
+      function toggleOpen() { document.body.classList.toggle('atv-head-open'); }
+      if (window.$) {
+        try { $(toggle).on('hover:enter', toggleOpen); } catch (e) {}
+      }
+      toggle.addEventListener('click', toggleOpen);
+
+      headApplying = false;
+    } catch (e) { headApplying = false; }
+  }
+
+  function unsetupHead() {
+    try {
+      document.body.classList.remove('atv-head-open');
+      var head = document.querySelector('.head');
+      if (!head) return;
+      Array.prototype.forEach.call(head.querySelectorAll('.atv-head-collapsible'),
+        function (a) { a.classList.remove('atv-head-collapsible'); });
+      var t = head.querySelector('.atv-head-toggle');
+      if (t) t.remove();
+    } catch (e) {}
+  }
+
+  // переустанавливаем сборку, если Lampa перерисовала шапку
+  var headWatchStarted = false;
+  function watchHead() {
+    if (headWatchStarted) return;
+    var head = document.querySelector('.head');
+    if (!head) return setTimeout(watchHead, 600);
+    headWatchStarted = true;
+    try {
+      var mo = new MutationObserver(function () {
+        if (!headApplying) setTimeout(setupHead, 50);
+      });
+      mo.observe(head, { childList: true, subtree: true });
+    } catch (e) {}
+  }
+
+  // закрывать выпавшие иконки при смене экрана
+  function bindHeadAutoClose() {
+    if (!window.Lampa || !Lampa.Listener) return;
+    try {
+      Lampa.Listener.follow('activity', function () {
+        document.body.classList.remove('atv-head-open');
+      });
+    } catch (e) {}
+  }
+
   // ─── init ───────────────────────────────────────────────────────────────────
   function init() {
     if (!window.Lampa || !Lampa.Storage) return setTimeout(init, 400);
@@ -359,6 +464,9 @@
     if (Lampa.SettingsApi) injectSettings();
     else setTimeout(injectSettings, 800);
     watchMenu();
+    setTimeout(setupHead, 800);
+    watchHead();
+    bindHeadAutoClose();
   }
 
   if (window.appready) init();
