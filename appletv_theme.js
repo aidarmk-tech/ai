@@ -111,14 +111,36 @@
     /* ── боковое меню ──────────────────────────────────────────────────── */
     css.push(
       '.menu{background:transparent !important}',
-      '.menu__list{padding:0.4em 0.6em}',
-      '.menu__item{border-radius:' + rad.md + ' !important;padding:0.6em 1em !important;margin:0.12em 0 !important;transition:background .2s,transform .2s,box-shadow .2s;color:' + bg.txt + '}',
-      '.menu__item .menu__text{font-weight:600;letter-spacing:0.01em}',
-      '.menu__item.focus,.menu__item:hover{background:' + bg.surf2 + ' !important;-webkit-backdrop-filter:' + blurSoft + ';backdrop-filter:' + blurSoft + ';box-shadow:0 0 0 0.12em ' + Aln + ',0 0.5em 1.2em rgba(0,0,0,0.35) !important;transform:translateX(0.15em)}',
+      '.menu__list{padding:0.5em 0.6em}',
+      '.menu__item{position:relative;border-radius:' + rad.md + ' !important;padding:0.62em 1em 0.62em 1.15em !important;margin:0.14em 0 !important;' +
+        'transition:background .25s cubic-bezier(.2,.7,.2,1),transform .25s cubic-bezier(.2,.7,.2,1),box-shadow .25s;color:' + bg.txt + '}',
+      '.menu__item .menu__text{font-weight:600;letter-spacing:0.01em;transition:transform .25s}',
+      /* вертикальный индикатор активного/выбранного раздела */
+      '.menu__item::before{content:"";position:absolute;left:0.05em;top:50%;width:0.26em;height:0;border-radius:1em;background:' + A + ';' +
+        'box-shadow:0 0 0.8em ' + Ag + ';transform:translateY(-50%);transition:height .25s cubic-bezier(.2,.7,.2,1);opacity:0}',
+      '.menu__item.focus::before,.menu__item.active::before{height:1.25em;opacity:1}',
+      '.menu__item.focus,.menu__item:hover{background:' + bg.surf2 + ' !important;-webkit-backdrop-filter:' + blurSoft + ';backdrop-filter:' + blurSoft + ';' +
+        'box-shadow:0 0 0 0.1em ' + Aln + ',0 0.6em 1.4em rgba(0,0,0,0.4) !important;transform:translateX(0.18em)}',
+      '.menu__item.focus .menu__text{transform:translateX(0.12em)}',
       '.menu__item.active{background:' + bg.surf + ' !important}',
-      '.menu__item.active .menu__ico,.menu__item.focus .menu__ico{color:' + A + '}',
-      '.menu__ico svg,.menu__ico{transition:color .2s}',
-      '.menu__split{opacity:0.35}'
+      '.menu__item.active .menu__ico,.menu__item.focus .menu__ico{color:' + A + ';transform:scale(1.12)}',
+      '.menu__ico svg,.menu__ico{transition:color .2s,transform .25s cubic-bezier(.2,.7,.2,1)}',
+      '.menu__split{opacity:0.3}'
+    );
+
+    /* ── tvOS: затемнение/отдаление контента при открытом меню ─────────── */
+    css.push(
+      'body::after{content:"";position:fixed;inset:0;z-index:38;pointer-events:none;opacity:0;' +
+        'background:linear-gradient(90deg,transparent 14em,' + hexToRgba(bg.bg, 0.0) + ' 16em,' + hexToRgba(bg.bg, 0.55) + ' 60%);transition:opacity .35s ease}',
+      'body.atv-menu-active::after{opacity:1}',
+      'body.atv-menu-active .menu{position:relative;z-index:45}',
+      'body.atv-menu-active .activity--active .scroll,body.atv-menu-active .activity--active>div{transition:transform .35s cubic-bezier(.2,.7,.2,1),filter .35s ease;transform:scale(0.985);filter:saturate(0.92) brightness(0.82);transform-origin:right center}'
+    );
+
+    /* ── плавное появление экранов ─────────────────────────────────────── */
+    css.push(
+      '.activity--active{animation:atvScreen .4s cubic-bezier(.2,.7,.2,1)}',
+      '@keyframes atvScreen{0%{opacity:0;transform:translateY(1.2em) scale(0.992)}100%{opacity:1;transform:none}}'
     );
 
     /* ── верхняя панель ────────────────────────────────────────────────── */
@@ -305,12 +327,38 @@
     } catch (e) {}
   }
 
+  // ─── слежение за фокусом меню (для затемнения контента) ─────────────────────
+  var menuWatchStarted = false;
+  function watchMenu() {
+    if (menuWatchStarted) return;
+    var menu = document.querySelector('.menu');
+    if (!menu) return setTimeout(watchMenu, 600);
+    menuWatchStarted = true;
+
+    var raf = window.requestAnimationFrame || function (cb) { setTimeout(cb, 32); };
+    var scheduled = false;
+    function update() {
+      scheduled = false;
+      // меню «активно», когда внутри него есть элемент в фокусе
+      var active = !!menu.querySelector('.menu__item.focus') || menu.classList.contains('focus');
+      document.body.classList.toggle('atv-menu-active', active);
+    }
+    function schedule() { if (!scheduled) { scheduled = true; raf(update); } }
+
+    try {
+      var mo = new MutationObserver(schedule);
+      mo.observe(menu, { subtree: true, attributes: true, attributeFilter: ['class'] });
+    } catch (e) {}
+    update();
+  }
+
   // ─── init ───────────────────────────────────────────────────────────────────
   function init() {
     if (!window.Lampa || !Lampa.Storage) return setTimeout(init, 400);
     apply();
     if (Lampa.SettingsApi) injectSettings();
     else setTimeout(injectSettings, 800);
+    watchMenu();
   }
 
   if (window.appready) init();
