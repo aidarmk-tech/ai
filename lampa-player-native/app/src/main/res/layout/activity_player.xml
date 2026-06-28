@@ -29,6 +29,21 @@
         android:indeterminateTint="@color/accent_primary"
         android:visibility="gone" />
 
+    <!-- Transient centered confirmation (e.g. intro marked) -->
+    <TextView
+        android:id="@+id/tv_center_toast"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:textColor="@color/text_primary"
+        android:textSize="20sp"
+        android:fontFamily="sans-serif-medium"
+        android:background="@drawable/bg_channel_card"
+        android:paddingHorizontal="28dp"
+        android:paddingVertical="16dp"
+        android:elevation="12dp"
+        android:visibility="gone" />
+
     <!-- Reconnecting after a network drop -->
     <TextView
         android:id="@+id/tv_reconnect"

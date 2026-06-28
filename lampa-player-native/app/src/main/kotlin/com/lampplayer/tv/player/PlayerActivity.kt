@@ -844,12 +844,28 @@ class PlayerActivity : AppCompatActivity() {
         if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
             okLongFired = true
             if (vm.uiState.value.card?.iptv != true) {
-                vm.markIntroAt(vm.positionMs())
-                Toast.makeText(this, "Конец заставки отмечен ✓", Toast.LENGTH_SHORT).show()
+                val pos = vm.positionMs()
+                vm.markIntroAt(pos)
+                showCenterToast("✓ Конец заставки отмечен · ${formatTime(pos)}")
             }
             return true
         }
         return super.onKeyLongPress(keyCode, event)
+    }
+
+    private var centerToastJob: Job? = null
+    /** Prominent centered confirmation that's hard to miss on a TV. */
+    private fun showCenterToast(text: String) {
+        binding.tvCenterToast.text = text
+        binding.tvCenterToast.alpha = 0f
+        binding.tvCenterToast.isVisible = true
+        binding.tvCenterToast.animate().alpha(1f).setDuration(150).start()
+        centerToastJob?.cancel()
+        centerToastJob = lifecycleScope.launch {
+            delay(2200)
+            binding.tvCenterToast.animate().alpha(0f).setDuration(200)
+                .withEndAction { binding.tvCenterToast.isVisible = false }.start()
+        }
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
