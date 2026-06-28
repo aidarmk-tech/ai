@@ -361,7 +361,18 @@ class PlayerViewModel @Inject constructor(
         loadEpisodes(card)
         loadEpg(card)
         updateMediaSession()
+        fetchIntroFromDb(card)
         detectIntroFromSubs(card)
+    }
+
+    /** Fetch a crowdsourced intro timecode (Firebase) for this episode, if any. */
+    private fun fetchIntroFromDb(card: CardMeta) {
+        val tmdb = card.tmdbId ?: return
+        if (card.iptv || !IntroDb.enabled) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val ms = runCatching { IntroDb.fetchIntroEndMs(tmdb, card.seasonNumber, card.episodeNumber) }.getOrDefault(0L)
+            if (ms > 0 && _uiState.value.introEnd <= 0.0) _uiState.update { it.copy(introEnd = ms / 1000.0) }
+        }
     }
 
     /** Auto-detect the intro from an external subtitle (Phase 1: subs we already have). */
@@ -1204,11 +1215,16 @@ class PlayerViewModel @Inject constructor(
 
     fun markIntro() = markIntroAt(engPositionMs())
 
-    /** Mark "intro ends at [ms]" (triple-RIGHT gesture); persists per show. */
+    /** Mark "intro ends at [ms]" (long-press OK); persists per show + shares to the DB. */
     fun markIntroAt(ms: Long) {
         val card = currentCard ?: return
         introSkipManager.markIntro(card, ms / 1000.0, viewModelScope) { saved ->
             _uiState.update { it.copy(introEnd = saved) }
+        }
+        card.tmdbId?.let { tmdb ->
+            if (!card.iptv && IntroDb.enabled) viewModelScope.launch(Dispatchers.IO) {
+                runCatching { IntroDb.submitIntroEndMs(tmdb, card.seasonNumber, card.episodeNumber, ms) }
+            }
         }
     }
 

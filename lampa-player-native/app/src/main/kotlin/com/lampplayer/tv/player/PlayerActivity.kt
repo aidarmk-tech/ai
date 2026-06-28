@@ -81,27 +81,8 @@ class PlayerActivity : AppCompatActivity() {
     private var zapBuffer = ""
     private var zapJob: Job? = null
 
-    // Triple-RIGHT gesture → mark "intro ends here" (no menu). Burst within 1.5s.
-    private var rightBurstCount = 0
-    private var rightBurstTime = 0L
-    private var rightBurstPosMs = 0L
-
-    /** Returns true if this RIGHT press completed the triple-tap intro mark. */
-    private fun handleRightForIntroMark(): Boolean {
-        if (vm.uiState.value.card?.iptv == true) return false
-        val now = android.os.SystemClock.elapsedRealtime()
-        if (now - rightBurstTime > 1500) { rightBurstCount = 0; rightBurstPosMs = vm.positionMs() }
-        rightBurstTime = now
-        rightBurstCount++
-        if (rightBurstCount >= 3) {
-            rightBurstCount = 0
-            vm.markIntroAt(rightBurstPosMs)          // mark where the burst started…
-            vm.seekToMs(rightBurstPosMs)             // …and restore playback there
-            Toast.makeText(this, "Конец заставки отмечен ✓", Toast.LENGTH_SHORT).show()
-            return true
-        }
-        return false
-    }
+    // Long-press OK → mark "intro ends here" (no menu, no seek conflict).
+    private var okLongFired = false
 
     // True while shown as a Picture-in-Picture window (suppress all on-screen controls).
     private var inPip = false
@@ -791,16 +772,21 @@ class PlayerActivity : AppCompatActivity() {
             KeyEvent.KEYCODE_MEDIA_PREVIOUS -> { vm.onPrevEpisode(); return true }
         }
 
+        // ── OK: short = play/pause/open OSD; LONG = mark intro end ──
+        // (Skip the button row — there OK must activate the focused button.)
+        if ((keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) &&
+            !(osdVisible && !scrubberFocused)) {
+            if (event.repeatCount == 0) { okLongFired = false; event.startTracking() }
+            return true   // short action runs on key-up; long-press handled in onKeyLongPress
+        }
+
         // ── OSD visible ───────────────────────────────────────────
         if (osdVisible) {
             if (scrubberFocused) {
                 // Scrubber owns ←/→ (always seek) and OK (play/pause).
                 return when (keyCode) {
                     KeyEvent.KEYCODE_DPAD_LEFT -> { doSeek(false, repeatCount = event.repeatCount); vm.showOsd(); true }
-                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                        if (handleRightForIntroMark()) return true
-                        doSeek(true, repeatCount = event.repeatCount); vm.showOsd(); true
-                    }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> { doSeek(true, repeatCount = event.repeatCount); vm.showOsd(); true }
                     KeyEvent.KEYCODE_DPAD_CENTER,
                     KeyEvent.KEYCODE_ENTER -> { vm.onKeyOk(); vm.showOsd(); true }
                     KeyEvent.KEYCODE_DPAD_DOWN -> {
@@ -837,7 +823,6 @@ class PlayerActivity : AppCompatActivity() {
                 seekBarOnly = true; scrubberFocused = true; vm.showOsd(); doSeek(false, repeatCount = event.repeatCount); true
             }
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                if (handleRightForIntroMark()) return true
                 seekBarOnly = true; scrubberFocused = true; vm.showOsd(); doSeek(true, repeatCount = event.repeatCount); true
             }
             KeyEvent.KEYCODE_PAGE_UP,
@@ -855,9 +840,31 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
+    override fun onKeyLongPress(keyCode: Int, event: KeyEvent): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
+            okLongFired = true
+            if (vm.uiState.value.card?.iptv != true) {
+                vm.markIntroAt(vm.positionMs())
+                Toast.makeText(this, "Конец заставки отмечен ✓", Toast.LENGTH_SHORT).show()
+            }
+            return true
+        }
+        return super.onKeyLongPress(keyCode, event)
+    }
+
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
         if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) {
             turboJob?.cancel(); turboSpeed = 1
+        }
+        // OK released: if it wasn't a long-press (intro mark), do the short action now.
+        if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
+            if (okLongFired) { okLongFired = false; return true }
+            val s = vm.uiState.value
+            if (s.osdVisible && !scrubberFocused) return super.onKeyUp(keyCode, event)  // button row
+            if (s.infoOverlayVisible || s.tracksOverlayVisible) return super.onKeyUp(keyCode, event)
+            if (s.osdVisible) { vm.onKeyOk(); vm.showOsd() }
+            else { seekBarOnly = false; scrubberFocused = true; vm.showOsd() }
+            return true
         }
         return super.onKeyUp(keyCode, event)
     }
