@@ -53,6 +53,7 @@ data class PlayerUiState(
     val osdVisible: Boolean = true,
     val showSkipIntro: Boolean = false,
     val introEnd: Double = 0.0,
+    val creditsStart: Double = 0.0,
     val autoNextCountdown: Int = -1,
     val diagText: String = "",
     val currentTracks: Tracks = Tracks.EMPTY,
@@ -365,13 +366,20 @@ class PlayerViewModel @Inject constructor(
         detectIntroFromSubs(card)
     }
 
-    /** Fetch a crowdsourced intro timecode (Firebase) for this episode, if any. */
+    /** Fetch crowdsourced intro + credits timecodes (Firebase) for this episode, if any. */
     private fun fetchIntroFromDb(card: CardMeta) {
         val tmdb = card.tmdbId ?: return
         if (card.iptv || !IntroDb.enabled) return
         viewModelScope.launch(Dispatchers.IO) {
-            val ms = runCatching { IntroDb.fetchIntroEndMs(tmdb, card.seasonNumber, card.episodeNumber) }.getOrDefault(0L)
-            if (ms > 0 && _uiState.value.introEnd <= 0.0) _uiState.update { it.copy(introEnd = ms / 1000.0) }
+            val (introMs, creditsMs) = runCatching {
+                IntroDb.fetchMarks(tmdb, card.seasonNumber, card.episodeNumber)
+            }.getOrDefault(0L to 0L)
+            _uiState.update { s ->
+                s.copy(
+                    introEnd = if (introMs > 0 && s.introEnd <= 0.0) introMs / 1000.0 else s.introEnd,
+                    creditsStart = if (creditsMs > 0 && s.creditsStart <= 0.0) creditsMs / 1000.0 else s.creditsStart,
+                )
+            }
         }
     }
 
@@ -746,7 +754,8 @@ class PlayerViewModel @Inject constructor(
             if (showData != null && settings.rememberTracks) {
                 trackMemoryManager.applyTracks(player, card, showData, viewModelScope, isHls = isHls(url))
             }
-            showData?.introEnd?.let { _uiState.update { s -> s.copy(introEnd = it) } }
+            showData?.introEnd?.let { v -> _uiState.update { s -> s.copy(introEnd = v) } }
+            showData?.creditsStart?.let { v -> _uiState.update { s -> s.copy(creditsStart = v) } }
         }
     }
 
@@ -1170,7 +1179,13 @@ class PlayerViewModel @Inject constructor(
         // (balancer stream URLs aren't delivered, so the in-player playlist is empty
         // for externally-launched series — don't promise an auto-start we can't keep).
         if (settings.autonext && hasInPlayerNext() && !_uiState.value.infoOverlayVisible) {
-            autoNextManager.checkAndStart(dur, cur, settings.autonextDelay, viewModelScope,
+            // When the community has flagged where credits start, treat that as the
+            // effective end: the countdown runs through the first `delay` s of the
+            // credits and advances early instead of sitting through them.
+            val credits = _uiState.value.creditsStart
+            val effDur = if (settings.skipIntro && credits > 0 && credits + settings.autonextDelay < dur)
+                credits + settings.autonextDelay else dur
+            autoNextManager.checkAndStart(effDur, cur, settings.autonextDelay, viewModelScope,
                 onTick = { t -> _uiState.update { it.copy(autoNextCountdown = t) } },
                 onNext = { viewModelScope.launch { navigateNext() } })
         }
@@ -1215,6 +1230,19 @@ class PlayerViewModel @Inject constructor(
 
     fun markIntro() = markIntroAt(engPositionMs())
 
+    /**
+     * One long-press-OK gesture marks either the intro end or the credits start —
+     * decided by where we are: a mark in the last quarter of the runtime is "credits
+     * begin here", anything earlier is "intro ends here". Returns true when it logged
+     * credits (so the UI can show the right confirmation).
+     */
+    fun markByLongPress(ms: Long): Boolean {
+        val dur = engDurationMs()
+        val isCredits = dur > 0 && ms >= dur * 3 / 4
+        if (isCredits) markCreditsAt(ms) else markIntroAt(ms)
+        return isCredits
+    }
+
     /** Mark "intro ends at [ms]" (long-press OK); persists per show + shares to the DB. */
     fun markIntroAt(ms: Long) {
         val card = currentCard ?: return
@@ -1223,7 +1251,20 @@ class PlayerViewModel @Inject constructor(
         }
         card.tmdbId?.let { tmdb ->
             if (!card.iptv && IntroDb.enabled) viewModelScope.launch(Dispatchers.IO) {
-                runCatching { IntroDb.submitIntroEndMs(tmdb, card.seasonNumber, card.episodeNumber, ms) }
+                runCatching { IntroDb.submitMark(tmdb, card.seasonNumber, card.episodeNumber, "e", ms) }
+            }
+        }
+    }
+
+    /** Mark "credits start at [ms]" (long-press OK near the end); persists + shares. */
+    fun markCreditsAt(ms: Long) {
+        val card = currentCard ?: return
+        introSkipManager.markCredits(card, ms / 1000.0, viewModelScope) { saved ->
+            _uiState.update { it.copy(creditsStart = saved) }
+        }
+        card.tmdbId?.let { tmdb ->
+            if (!card.iptv && IntroDb.enabled) viewModelScope.launch(Dispatchers.IO) {
+                runCatching { IntroDb.submitMark(tmdb, card.seasonNumber, card.episodeNumber, "c", ms) }
             }
         }
     }

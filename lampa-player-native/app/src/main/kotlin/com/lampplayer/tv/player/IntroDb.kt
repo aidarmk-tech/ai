@@ -5,13 +5,12 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * Crowdsourced intro-timecode store on Firebase Realtime Database (plain REST,
- * no SDK). Key = "<tmdbId>_<season>_<episode>"; each user appends their mark,
- * and we read back the MEDIAN so a single bad mark can't poison the result.
- * Disabled until DB_URL is set (then it's a one-line activation).
+ * Crowdsourced intro/credits-timecode store on Firebase Realtime Database (plain
+ * REST, no SDK). Key = "<tmdbId>_<season>_<episode>"; each user appends a mark
+ * carrying "e" (intro END, ms) and/or "c" (credits START, ms). We read back the
+ * MEDIAN of each so a single bad mark can't poison the result.
  */
 object IntroDb {
-    // Crowdsourced intro DB (Firebase Realtime Database, europe-west1).
     private const val DB_URL = "https://introskip-cd974-default-rtdb.europe-west1.firebasedatabase.app"
 
     val enabled: Boolean get() = DB_URL.isNotBlank()
@@ -19,27 +18,29 @@ object IntroDb {
     private fun key(tmdbId: Int, season: Int?, episode: Int?) =
         "${tmdbId}_${season ?: 0}_${episode ?: 0}"
 
-    /** Median intro-end (ms) others reported for this episode, or 0 if none/disabled. */
-    fun fetchIntroEndMs(tmdbId: Int, season: Int?, episode: Int?): Long {
-        if (!enabled) return 0L
+    /** (introEndMs, creditsStartMs) — medians of community marks, 0 where none. */
+    fun fetchMarks(tmdbId: Int, season: Int?, episode: Int?): Pair<Long, Long> {
+        if (!enabled) return 0L to 0L
         return runCatching {
-            val body = httpGet("$DB_URL/intros/${key(tmdbId, season, episode)}.json") ?: return 0L
-            val obj = JsonParser.parseString(body).takeIf { it.isJsonObject }?.asJsonObject ?: return 0L
-            val vals = obj.entrySet().mapNotNull {
-                it.value?.takeIf { v -> v.isJsonObject }?.asJsonObject
-                    ?.get("e")?.takeIf { e -> !e.isJsonNull }?.asLong
-            }.filter { it in 1_000L..600_000L }.sorted()
-            if (vals.isEmpty()) 0L else vals[vals.size / 2]   // median
-        }.getOrDefault(0L)
+            val body = httpGet("$DB_URL/intros/${key(tmdbId, season, episode)}.json") ?: return 0L to 0L
+            val obj = JsonParser.parseString(body).takeIf { it.isJsonObject }?.asJsonObject ?: return 0L to 0L
+            val intro = ArrayList<Long>(); val credits = ArrayList<Long>()
+            obj.entrySet().forEach { e ->
+                val o = e.value?.takeIf { it.isJsonObject }?.asJsonObject ?: return@forEach
+                o.get("e")?.takeIf { !it.isJsonNull }?.asLong?.let { if (it in 1_000L..600_000L) intro.add(it) }
+                o.get("c")?.takeIf { !it.isJsonNull }?.asLong?.let { if (it in 1_000L..21_600_000L) credits.add(it) }
+            }
+            median(intro) to median(credits)
+        }.getOrDefault(0L to 0L)
     }
 
-    /** Append this user's mark for the episode. */
-    fun submitIntroEndMs(tmdbId: Int, season: Int?, episode: Int?, introEndMs: Long) {
-        if (!enabled || introEndMs !in 1_000L..600_000L) return
-        runCatching {
-            httpPost("$DB_URL/intros/${key(tmdbId, season, episode)}.json", """{"e":$introEndMs}""")
-        }
+    /** Append a mark. [field] is "e" (intro end) or "c" (credits start). */
+    fun submitMark(tmdbId: Int, season: Int?, episode: Int?, field: String, ms: Long) {
+        if (!enabled || ms < 1_000L) return
+        runCatching { httpPost("$DB_URL/intros/${key(tmdbId, season, episode)}.json", """{"$field":$ms}""") }
     }
+
+    private fun median(xs: List<Long>): Long = if (xs.isEmpty()) 0L else xs.sorted()[xs.size / 2]
 
     private fun httpGet(url: String): String? {
         val c = (URL(url).openConnection() as HttpURLConnection).apply {

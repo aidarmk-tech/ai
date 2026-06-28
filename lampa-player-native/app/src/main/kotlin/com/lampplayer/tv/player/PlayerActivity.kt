@@ -845,8 +845,9 @@ class PlayerActivity : AppCompatActivity() {
             okLongFired = true
             if (vm.uiState.value.card?.iptv != true) {
                 val pos = vm.positionMs()
-                vm.markIntroAt(pos)
-                showCenterToast("✓ Конец заставки отмечен · ${formatTime(pos)}")
+                val credits = vm.markByLongPress(pos)
+                val what = if (credits) "Начало титров отмечено" else "Конец заставки отмечен"
+                showCenterToast("✓ $what · ${formatTime(pos)}")
             }
             return true
         }

@@ -63,6 +63,7 @@ class PositionDataStore @Inject constructor(
                 audio = showData.audio ?: existing.audio,
                 subtitle = showData.subtitle ?: existing.subtitle,
                 introEnd = showData.introEnd ?: existing.introEnd,
+                creditsStart = showData.creditsStart ?: existing.creditsStart,
             )
             prefs[key] = gson.toJson(merged)
         }

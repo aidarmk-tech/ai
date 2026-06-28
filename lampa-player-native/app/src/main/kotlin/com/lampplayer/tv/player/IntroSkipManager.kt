@@ -22,6 +22,18 @@ class IntroSkipManager @Inject constructor(
         }
     }
 
+    fun markCredits(
+        card: CardMeta,
+        currentTimeSec: Double,
+        scope: CoroutineScope,
+        onSaved: (Double) -> Unit,
+    ) {
+        scope.launch {
+            positionDataStore.saveShowData(card, ShowData(creditsStart = currentTimeSec))
+            onSaved(currentTimeSec)
+        }
+    }
+
     fun shouldShowSkipButton(currentTimeSec: Double, introEnd: Double?): Boolean {
         if (introEnd == null || introEnd <= 0.0) return false
         return currentTimeSec < introEnd
