@@ -11,8 +11,8 @@ import java.net.URL
  * Disabled until DB_URL is set (then it's a one-line activation).
  */
 object IntroDb {
-    // Crowdsourced intro DB (Firebase Realtime Database, default instance).
-    private const val DB_URL = "https://introskip-cd974-default-rtdb.firebaseio.com"
+    // Crowdsourced intro DB (Firebase Realtime Database, europe-west1).
+    private const val DB_URL = "https://introskip-cd974-default-rtdb.europe-west1.firebasedatabase.app"
 
     val enabled: Boolean get() = DB_URL.isNotBlank()
 
