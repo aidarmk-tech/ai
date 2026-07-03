@@ -434,6 +434,12 @@
                     var d = now.row.querySelector && now.row.querySelector('.js-epgDesc');
                     if (d) { var dt = clean(d); if (dt) s += '\n' + dt.slice(0, 200); }
                     if (nxt) s += '\n\nДалее' + (nxt.tm ? '  ' + nxt.tm : '') + '  ' + nxt.t;
+                    // …и ещё несколько следующих передач — расписание на панель плеера.
+                    for (var q = nowIdx + 2; q <= nowIdx + 6; q++) {
+                        var e2 = entry(q);
+                        if (!e2) break;
+                        s += '\n' + (e2.tm ? e2.tm + '  ' : '') + e2.t.slice(0, 80);
+                    }
                     return s;
                 }
             }
@@ -521,6 +527,13 @@
                         var tm1 = timeOf(groups[j][1]);
                         s += '\nДалее' + (tm1 ? '  ' + tm1 : '') + '  ' + t1.slice(0, 80);
                     }
+                }
+                // ещё до 3 следующих передач — расписание для панели плеера
+                for (var w2 = 2; w2 <= 4 && groups[j][w2]; w2++) {
+                    var tw = clean(groups[j][w2]);
+                    if (!tw) break;
+                    var tmw = timeOf(groups[j][w2]);
+                    s += '\n' + (tmw ? tmw + '  ' : '') + tw.slice(0, 80);
                 }
                 ch[key] = s;
                 count++;

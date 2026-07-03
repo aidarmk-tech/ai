@@ -860,8 +860,11 @@ class PlayerActivity : AppCompatActivity() {
             val inArchive = s.archiveText.isNotEmpty()
             when {
                 keyCode == KeyEvent.KEYCODE_DPAD_LEFT ->
-                    if (!vm.stepProgramme(-1)) showCenterToast(
-                        if (inArchive) "Дальше в архив некуда" else "Программа передач не загружена")
+                    if (!vm.stepProgramme(-1)) {
+                        // Нет XMLTV-гида (или дальше некуда) — покажем расписание панелью.
+                        if (inArchive) showCenterToast("Дальше в архив некуда")
+                        else vm.toggleInfoOverlay()
+                    }
                 inArchive -> if (!vm.stepProgramme(1)) vm.returnToLive()
                 else -> vm.toggleInfoOverlay()
             }
