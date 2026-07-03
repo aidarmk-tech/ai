@@ -41,6 +41,7 @@
   .lb-row .sc { font-weight:800; color:#8a5a1a; }
   .lb-row .tr { font-size:.8rem; opacity:.6; }
   .lb-empty { text-align:center; opacity:.5; font-size:.9rem; padding:8px; }
+  .fb-status { font-size:.8rem; opacity:.75; margin-top:8px; min-height:1.1em; }
 </style>
 </head>
 <body>
@@ -63,6 +64,7 @@
     <div class="myscore">🪙 <span id="myCoins">0</span></div>
     <div id="lbTitle" class="lb-title">🏆 Таблица лидеров</div>
     <div id="lbTable" class="lb"></div>
+    <div id="fbStatus" class="fb-status"></div>
     <button id="againBtn" class="btn">ЗАНОВО</button>
     <button id="nameBtn" class="btn ghost">Сменить имя</button>
   </div>
@@ -1267,20 +1269,22 @@ async function fbLoad() {
   try {
     let r = await fetch(FB + '?orderBy=%22c%22&limitToLast=100');
     if (!r.ok) r = await fetch(FB);           // если индекс не настроен
-    if (!r.ok) return null;
+    if (!r.ok) { console.warn('TastyMerge firebase read:', r.status, await r.text()); return null; }
     const data = await r.json();
     if (!data) return [];
     const arr = Object.values(data).filter(e => e && typeof e.c === 'number' && typeof e.n === 'string');
     arr.sort((a, b) => b.c - a.c);
     return arr.slice(0, 10);
-  } catch (e) { return null; }
+  } catch (e) { console.warn('TastyMerge firebase read:', e); return null; }
 }
 async function fbSubmit(entry) {
-  if (!FB) return;
+  if (!FB) return false;
   try {
-    await fetch(FB, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(entry) });
-  } catch (e) {}
+    // без Content-Type: «простой» запрос, не требует CORS-preflight
+    const r = await fetch(FB, { method: 'POST', body: JSON.stringify(entry) });
+    if (!r.ok) console.warn('TastyMerge firebase write:', r.status, await r.text());
+    return r.ok;
+  } catch (e) { console.warn('TastyMerge firebase write:', e); return false; }
 }
 function showMenu() {
   state = 'menu';
@@ -1308,13 +1312,20 @@ function showGameOver() {
   $('lbTable').innerHTML = lbRows(loadLB(), lastEntryTs);
   $('overOvl').style.display = 'flex';
   if (FB) {
+    $('fbStatus').textContent = 'Отправка в мировой топ…';
     const entry = { n: playerName, c: Math.round(coins), t: maxTierMade, d: lastEntryTs };
-    fbSubmit(entry).then(fbLoad).then(list => {
-      if (list && list.length && state === 'over') {
+    fbSubmit(entry).then(async ok => {
+      const list = await fbLoad();
+      if (state !== 'over') return;
+      $('fbStatus').textContent = ok ? '✅ Результат отправлен в мировой топ'
+        : '⚠️ Не удалось отправить — проверь правила базы (детали в консоли)';
+      if (list && list.length) {
         $('lbTitle').textContent = '🌍 Мировой топ';
         $('lbTable').innerHTML = lbRows(list, lastEntryTs);
       }
     });
+  } else {
+    $('fbStatus').textContent = '';
   }
 }
 $('playBtn').addEventListener('click', startGame);
