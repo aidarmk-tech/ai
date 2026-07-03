@@ -6,13 +6,68 @@
 <title>Tasty Merge — псевдо-3D мердж напитков</title>
 <style>
   html, body { margin:0; padding:0; height:100%; background:#2e2418; overflow:hidden;
-    touch-action:none; -webkit-user-select:none; user-select:none; }
+    touch-action:none; -webkit-user-select:none; user-select:none;
+    font-family:"Arial Rounded MT Bold","Trebuchet MS",system-ui,sans-serif; }
   #wrap { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
   canvas { display:block; touch-action:none; }
+  .ovl { position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+    background:rgba(40,25,10,.55); z-index:10; touch-action:auto; }
+  .panel { background:#fdf3e3; border:4px solid #caa36b; border-radius:26px;
+    padding:26px 24px; width:min(86vw,400px); max-height:86vh; overflow-y:auto;
+    text-align:center; color:#6b4b1c; box-shadow:0 14px 40px rgba(40,20,0,.45); }
+  .panel h1 { margin:0 0 8px; font-size:1.9rem; color:#e08a1a;
+    text-shadow:0 2px 0 rgba(255,255,255,.8); }
+  .panel h1.red { color:#c0392b; }
+  .panel p { margin:0 0 16px; font-size:.95rem; opacity:.8; line-height:1.45; }
+  .panel input { width:100%; box-sizing:border-box; padding:13px 16px; font-size:1.1rem;
+    font-family:inherit; text-align:center; color:#6b4b1c;
+    border:3px solid #d9b98a; border-radius:16px; background:#fff; outline:none; }
+  .panel input:focus { border-color:#e08a1a; }
+  .btn { display:block; width:100%; box-sizing:border-box; margin-top:14px; padding:15px;
+    font-size:1.25rem; font-weight:800; font-family:inherit; color:#fff; cursor:pointer;
+    background:linear-gradient(#7ed045,#4fae2f); border:3px solid #2f7a1a; border-radius:18px;
+    text-shadow:0 2px 0 rgba(0,0,0,.25); }
+  .btn:active { transform:scale(.97); }
+  .btn.ghost { background:none; border:none; color:#8a5a1a; font-size:.95rem;
+    text-shadow:none; padding:8px; margin-top:6px; text-decoration:underline; }
+  .myscore { font-size:1.7rem; font-weight:800; color:#8a5a1a; margin:6px 0 14px; }
+  .lb { margin:10px 0 4px; text-align:left; }
+  .lb-title { font-weight:800; color:#8a5a1a; text-align:center; margin:12px 0 8px; }
+  .lb-row { display:flex; gap:8px; align-items:baseline; padding:6px 10px; border-radius:10px;
+    font-size:.95rem; }
+  .lb-row.me { background:#ffe9b8; outline:2px solid #e6b95e; }
+  .lb-row .pos { width:1.6em; font-weight:800; color:#b8862e; }
+  .lb-row .nm { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .lb-row .sc { font-weight:800; color:#8a5a1a; }
+  .lb-row .tr { font-size:.8rem; opacity:.6; }
+  .lb-empty { text-align:center; opacity:.5; font-size:.9rem; padding:8px; }
 </style>
 </head>
 <body>
 <div id="wrap"><canvas id="cv"></canvas></div>
+
+<div id="menuOvl" class="ovl">
+  <div class="panel">
+    <h1>🍹 Tasty Merge</h1>
+    <p>Кидай напитки на стол и сливай одинаковые — от маленькой стопки до огромной банки «Фиеста».
+       Заказы дают монеты, но стакан остаётся на столе: не дай ему переполниться!</p>
+    <input id="nameInp" maxlength="16" placeholder="Твоё имя" autocomplete="off">
+    <button id="playBtn" class="btn">ИГРАТЬ</button>
+    <div id="lbMenu" class="lb"></div>
+  </div>
+</div>
+
+<div id="overOvl" class="ovl" style="display:none">
+  <div class="panel">
+    <h1 class="red">Стол переполнен!</h1>
+    <div class="myscore">🪙 <span id="myCoins">0</span></div>
+    <div class="lb-title">🏆 Таблица лидеров</div>
+    <div id="lbTable" class="lb"></div>
+    <button id="againBtn" class="btn">ЗАНОВО</button>
+    <button id="nameBtn" class="btn ghost">Сменить имя</button>
+  </div>
+</div>
+
 <script>
 'use strict';
 /* ============================================================
@@ -42,9 +97,23 @@ const THROW_V = 1330;      // скорость броска
 const FRICTION = 1.72;     // экспоненциальное трение
 const RESTITUTION = 0.45;
 
-const TIER_R = [0, 40, 46, 53, 60, 68, 76, 85, 95];  // радиусы по уровням
-const MAX_TIER = 8;
-const ORDER_REWARD = { 4:500, 5:700, 6:900, 7:1200 };
+const TIER_R = [0, 26, 34, 42, 50, 58, 66, 74, 82, 90, 100];  // радиусы по уровням
+const MAX_TIER = 10;
+// монеты за создание напитка уровня t
+const MERGE_REWARD = [0, 0, 10, 20, 40, 80, 150, 250, 400, 650, 1000];
+// бонус за выполнение заказа (вывески: уровни 2..9)
+const ORDER_REWARD = { 2:20, 3:50, 4:100, 5:180, 6:300, 7:500, 8:750, 9:1200 };
+const NAMES = [null,
+  'Стопка «Лагуна» · Исландия',
+  'Кола со льдом · США',
+  'Лимонад · Италия',
+  'Ягодный фраппе · Франция',
+  'Манго ласси · Индия',
+  'Мохито · Куба',
+  'Блю Гавайи · Багамы',
+  'Сакура-сода · Япония',
+  'Сангрия · Испания',
+  'Банка «Фиеста» · Мексика'];
 
 // ------------------------------------------------------------
 // Canvas / масштабирование
@@ -339,7 +408,17 @@ function renderTier(tier) {
   const c = cnv.getContext('2d');
   const cx = 128, base = 306;
   switch (tier) {
-    case 1: { // кола со льдом
+    case 1: { // стопка «Лагуна» — маленькая голубая
+      const topY = 168, botY = base - 12, topR = 68, botR = 50;
+      cupBowl(c, { cx, topY, botY, topR, botR, liq: ['#7fd8f7', '#1e88d4'], level: 0.72,
+                   opt: { bubbles: 'rgba(255,255,255,0.85)' } });
+      // толстое дно стопки
+      ell(c, cx, botY - 14, botR * 0.66, 10);
+      c.fillStyle = 'rgba(255,255,255,0.55)'; c.fill();
+      citrusSlice(c, cx + topR - 8, topY - 4, 24, '#9cd438', '#e2f7b0', 0.3);
+      break;
+    }
+    case 2: { // кола со льдом
       const topY = 128, botY = base - 8, topR = 72, botR = 56;
       cupBowl(c, { cx, topY, botY, topR, botR, liq: ['#a35c26', '#571f08'], level: 0.84,
                    opt: { bubbles: 'rgba(255,220,170,0.8)' } });
@@ -347,14 +426,14 @@ function renderTier(tier) {
       iceCube(c, cx + 24, topY + 10, 34, 0.35);
       break;
     }
-    case 2: { // лимонад
+    case 3: { // лимонад
       const topY = 104, botY = base - 8, topR = 70, botR = 50;
       cupBowl(c, { cx, topY, botY, topR, botR, liq: ['#ffdf5e', '#f29a16'], level: 0.85,
                    opt: { bubbles: 'rgba(255,255,255,0.85)', ice: true } });
       citrusSlice(c, cx + topR - 6, topY - 6, 34, '#ffd23e', '#fff3b8', 0.3);
       break;
     }
-    case 3: { // ягодный десерт в креманке
+    case 4: { // ягодный фраппе в креманке
       const topY = 118, botY = 232, topR = 82, botR = 34;
       stemFoot(c, cx, botY - 6, base, 58);
       cupBowl(c, { cx, topY, botY, topR, botR, curve: 6, liq: ['#ff9dc2', '#e14a86'], level: 0.8,
@@ -369,7 +448,7 @@ function renderTier(tier) {
       citrusSlice(c, cx + topR - 10, topY - 14, 32, '#ffd23e', '#fff3b8', 0.4);
       break;
     }
-    case 4: { // тропический смузи
+    case 5: { // манго ласси
       const topY = 108, botY = 236, topR = 78, botR = 40;
       stemFoot(c, cx, botY - 6, base, 60);
       cupBowl(c, { cx, topY, botY, topR, botR, curve: 8, liq: ['#ffb347', '#ef6c1a'], level: 0.84,
@@ -380,7 +459,7 @@ function renderTier(tier) {
       citrusSlice(c, cx - topR + 8, topY - 8, 30, '#ff9c2e', '#ffd9a1', -0.35);
       break;
     }
-    case 5: { // мохито (тот, что бросается на скрине)
+    case 6: { // мохито
       const topY = 96, botY = 244, topR = 74, botR = 34;
       stemFoot(c, cx, botY - 6, base, 58);
       strawDraw(c, cx - 26, topY + 26, 96, -0.45, '#3f8fe0', '#7cc4ff');
@@ -391,7 +470,7 @@ function renderTier(tier) {
       cherry(c, cx + 30, topY + 6, 15);
       break;
     }
-    case 6: { // блю-лагун
+    case 7: { // блю гавайи
       const topY = 92, botY = 240, topR = 78, botR = 36;
       stemFoot(c, cx, botY - 6, base, 62);
       strawDraw(c, cx + 20, topY + 24, 92, 0.4, '#3f8fe0', '#ffffff');
@@ -403,7 +482,7 @@ function renderTier(tier) {
       citrusSlice(c, cx + topR - 12, topY - 12, 30, '#ff9c2e', '#ffd9a1', 0.35);
       break;
     }
-    case 7: { // розовая шипучка в кружке
+    case 8: { // сакура-сода в кружке
       const topY = 92, botY = base - 8, topR = 76, botR = 66;
       // ручка
       c.strokeStyle = OUTLINE; c.lineWidth = 20; c.lineCap = 'round';
@@ -416,7 +495,7 @@ function renderTier(tier) {
       citrusSlice(c, cx + topR - 8, topY - 8, 32, '#9cd438', '#e2f7b0', 0.3);
       break;
     }
-    case 8: { // праздничный кувшин
+    case 9: { // кувшин сангрии
       const topY = 92, botY = base - 6, topR = 66, botR = 54;
       c.strokeStyle = OUTLINE; c.lineWidth = 22; c.lineCap = 'round';
       c.beginPath(); c.arc(cx + 86, (topY + botY) / 2 + 6, 46, -1.15, 1.15); c.stroke();
@@ -432,6 +511,37 @@ function renderTier(tier) {
       c.strokeStyle = OUTLINE; c.lineWidth = 4; c.stroke();
       strawberry(c, cx + 34, topY - 14, 30);
       citrusSlice(c, cx - 30, topY - 10, 28, '#ffd23e', '#fff3b8', -0.3);
+      break;
+    }
+    case 10: { // банка «Фиеста» — самая большая
+      const topY = 104, botY = base - 4, topR = 80, botR = 74;
+      // ручка
+      c.strokeStyle = OUTLINE; c.lineWidth = 22; c.lineCap = 'round';
+      c.beginPath(); c.arc(cx + botR + 14, (topY + botY) / 2, 44, -1.15, 1.15); c.stroke();
+      c.strokeStyle = glassGrad(c, topY, botY); c.lineWidth = 14;
+      c.beginPath(); c.arc(cx + botR + 14, (topY + botY) / 2, 44, -1.15, 1.15); c.stroke();
+      strawDraw(c, cx + 24, topY + 20, 88, 0.35, '#e5533f', '#ffffff');
+      // зонтик
+      c.save(); c.translate(cx - 34, topY - 30); c.rotate(-0.4);
+      c.strokeStyle = '#8a5a1a'; c.lineWidth = 5;
+      c.beginPath(); c.moveTo(0, 34); c.lineTo(0, -6); c.stroke();
+      for (let i = 0; i < 5; i++) {
+        c.fillStyle = i % 2 ? '#ffd94e' : '#ff7ab5';
+        c.beginPath(); c.moveTo(0, -6);
+        const a0 = -Math.PI + i * Math.PI / 5, a1 = a0 + Math.PI / 5;
+        c.arc(0, -6, 46, a0, a1); c.closePath(); c.fill();
+        c.strokeStyle = OUTLINE; c.lineWidth = 2.5; c.stroke();
+      }
+      c.restore();
+      cupBowl(c, { cx, topY, botY, topR, botR, curve: 8, liq: ['#ffb14e', '#e0491f'], level: 0.88,
+                   opt: { bubbles: 'rgba(255,255,255,0.8)', sparkle: true, ice: true } });
+      // резьба банки (кольца у горлышка)
+      c.strokeStyle = 'rgba(120,140,180,0.55)'; c.lineWidth = 5;
+      for (const dy of [14, 30]) {
+        ell(c, cx, topY + dy, topR - 3, (topR - 3) * 0.2); c.stroke();
+      }
+      strawberry(c, cx + 44, topY - 8, 26);
+      citrusSlice(c, cx + 66, topY + 4, 24, '#9cd438', '#e2f7b0', 0.4);
       break;
     }
   }
@@ -590,29 +700,31 @@ let cups = [];          // стаканы на столе (физика)
 let particles = [];     // брызги/звёзды
 let rings = [];         // кольца при слиянии
 let coinFx = [];        // летящие монетки
-let flyers = [];        // стаканы, улетающие в заказ
+let floats = [];        // всплывающие надписи (+монеты, новые напитки)
 let orders = [];
 let coins = 0, shownCoins = 0;
 let bestCoins = +(localStorage.getItem('tm_best') || 0);
 let maxTierMade = 1;
 let current = null;     // бросаемый стакан {tier,x}
 let nextTier_ = 1;
-let state = 'aim';      // aim | wait | over
+let state = 'menu';     // menu | aim | wait | over
+let playerName = localStorage.getItem('tm_name') || '';
 let waitT = 0, shakeT = 0, overAlpha = 0, timeSec = 0;
 let aiming = false;
 let hintT = 6;          // подсказка в начале
 
 function weightedTier() {
-  const w = [34, 27, 19, 12, 8];  // уровни 1..5
+  const w = [32, 27, 20, 13, 8];  // спавн: уровни 1..5
   let r = Math.random() * 100, acc = 0;
   for (let i = 0; i < w.length; i++) { acc += w[i]; if (r < acc) return i + 1; }
   return 1;
 }
 function newOrderTier() {
-  const w = [45, 30, 17, 8];      // уровни 4..7
+  // вывески: от маленьких до больших (уровни 2..9), первая стопка не участвует
+  const w = [20, 18, 16, 14, 12, 9, 7, 4];
   let r = Math.random() * 100, acc = 0;
-  for (let i = 0; i < w.length; i++) { acc += w[i]; if (r < acc) return i + 4; }
-  return 4;
+  for (let i = 0; i < w.length; i++) { acc += w[i]; if (r < acc) return i + 2; }
+  return 2;
 }
 function makeOrder(forceTier) {
   let t = forceTier;
@@ -625,11 +737,11 @@ function makeOrder(forceTier) {
 }
 
 function resetGame() {
-  cups = []; particles = []; rings = []; coinFx = []; flyers = [];
+  cups = []; particles = []; rings = []; coinFx = []; floats = [];
   coins = 0; shownCoins = 0; maxTierMade = 1; timeSec = 0;
   orders = [];
+  orders.push(makeOrder(2));
   orders.push(makeOrder(4));
-  orders.push(makeOrder(5));
   orders.push(makeOrder());
   nextTier_ = weightedTier();
   spawnCurrent();
@@ -652,34 +764,38 @@ function mergeCups(a, b) {
   a.dead = b.dead = true;
   const nx = (a.x + b.x) / 2, nz = (a.z + b.z) / 2;
   const p = proj(nx, nz);
-  if (a.tier >= MAX_TIER) {  // слияние максимума — салют и куча монет
-    addCoins(1000, p.x, p.y);
-    for (let i = 0; i < 26; i++)
-      particles.push({ x: p.x, y: p.y - 60 * p.s, vx: rand(-360, 360), vy: rand(-520, -60),
-                       life: rand(0.5, 1), t: 0, size: rand(5, 12) * p.s, col: ['#ffd94e', '#ff7ab5', '#7cc4ff'][i % 3], star: true });
-    rings.push({ x: p.x, y: p.y - 40 * p.s, r: 20, max: 220 * p.s, t: 0 });
-    sMerge(8);
-    return;
-  }
   const t = a.tier + 1;
   const nc = { tier: t, r: TIER_R[t], x: nx, z: nz,
                vx: (a.vx + b.vx) * 0.25, vz: (a.vz + b.vz) * 0.25,
                age: 0, pop: 1, hop: 0, dT: 0, dead: false };
+  nc.x = clamp(nc.x, -WORLD.halfW + nc.r, WORLD.halfW - nc.r);
+  nc.z = clamp(nc.z, nc.r * 0.55, WORLD.depth - nc.r);
   cups.push(nc);
-  maxTierMade = Math.max(maxTierMade, t);
-  addCoins(t * 10, p.x, p.y);
+  if (t > maxTierMade) {
+    maxTierMade = t;
+    floats.push({ x: W2, y: 730, txt: NAMES[t], t: 0, life: 1.8, size: 32, col: '#ffffff' });
+  }
+  addCoins(MERGE_REWARD[t], p.x, p.y);
+  floats.push({ x: p.x, y: p.y - 90 * p.s, txt: '+' + MERGE_REWARD[t], t: 0, life: 0.9,
+                size: 22 + 18 * p.s, col: '#ffd94e' });
   sMerge(t);
   // брызги цвета напитка
-  const liqCols = ['', '#8a4a20', '#ffd94e', '#ff8fb7', '#ff9a2e', '#7ed045', '#4f8fe8', '#ff7ab5', '#ff9a2e'];
+  const liqCols = ['', '#4fc3f7', '#8a4a20', '#ffd94e', '#ff8fb7', '#ff9a2e', '#7ed045', '#4f8fe8', '#ff7ab5', '#e0641f', '#ffb14e'];
   for (let i = 0; i < 14; i++)
     particles.push({ x: p.x, y: p.y - 50 * p.s, vx: rand(-300, 300), vy: rand(-460, -80),
                      life: rand(0.35, 0.7), t: 0, size: rand(4, 9) * p.s, col: liqCols[t] });
   rings.push({ x: p.x, y: p.y - 40 * p.s, r: 12, max: 150 * p.s, t: 0 });
-  // проверка заказов
+  // самый большой напиток собран — он покидает стол с салютом
+  if (t === MAX_TIER) nc.vanishT = 1.1;
+  // заказ выполнен: монеты капают, но напиток ОСТАЁТСЯ на столе
   const oi = orders.findIndex(o => o.state === 'active' && o.tier === t);
   if (oi >= 0) {
-    orders[oi].state = 'pending';       // ждёт прилёта стакана
-    nc.orderIdx = oi; nc.orderDelay = 0.5;
+    const o = orders[oi];
+    o.state = 'done'; o.doneT = 0;
+    addCoins(o.reward, p.x, p.y - 40 * p.s);
+    floats.push({ x: ORDER_POS[oi].x, y: ORDER_Y + ORDER_H + 30, txt: '+' + o.reward, t: 0,
+                  life: 1.2, size: 34, col: '#ffd94e' });
+    sOrder();
   }
 }
 function addCoins(n, fx, fy) {
@@ -709,13 +825,18 @@ function stepPhysics(dt) {
     if (c.x >  lim) { c.x =  lim; if (c.vx > 0) { c.vx *= -RESTITUTION; if (Math.abs(c.vx) > 60) sBounce(); } }
     if (c.z > WORLD.depth - c.r) { c.z = WORLD.depth - c.r; if (c.vz > 0) { c.vz *= -RESTITUTION; if (Math.abs(c.vz) > 60) sBounce(); } }
     if (c.z < c.r * 0.55) { c.z = c.r * 0.55; if (c.vz < 0) c.vz *= -RESTITUTION; }
-    // отложенная отправка в заказ
-    if (c.orderIdx !== undefined) {
-      c.orderDelay -= dt;
-      if (c.orderDelay <= 0) {
+    // финальный напиток исчезает с салютом
+    if (c.vanishT !== undefined) {
+      c.vanishT -= dt;
+      if (c.vanishT <= 0) {
         c.dead = true;
         const p = proj(c.x, c.z);
-        flyers.push({ tier: c.tier, x: p.x, y: p.y, s: p.s, t: 0, orderIdx: c.orderIdx });
+        for (let i = 0; i < 26; i++)
+          particles.push({ x: p.x, y: p.y - 60 * p.s, vx: rand(-380, 380), vy: rand(-560, -60),
+                           life: rand(0.5, 1.1), t: 0, size: rand(5, 13) * p.s,
+                           col: ['#ffd94e', '#ff7ab5', '#7cc4ff'][i % 3], star: true });
+        rings.push({ x: p.x, y: p.y - 40 * p.s, r: 20, max: 240 * p.s, t: 0 });
+        sMerge(10);
       }
     }
   }
@@ -728,8 +849,8 @@ function stepPhysics(dt) {
       const rs = a.r + b.r, d2 = dx * dx + dz * dz;
       if (d2 >= rs * rs || d2 === 0) continue;
       // одинаковые -> слияние
-      if (a.tier === b.tier && a.age > 0.08 && b.age > 0.08 &&
-          a.orderIdx === undefined && b.orderIdx === undefined) {
+      if (a.tier === b.tier && a.tier < MAX_TIER && a.age > 0.08 && b.age > 0.08 &&
+          a.vanishT === undefined && b.vanishT === undefined) {
         mergeCups(a, b); continue;
       }
       const d = Math.sqrt(d2), nx = dx / d, nz = dz / d;
@@ -763,10 +884,12 @@ function stepPhysics(dt) {
 }
 let dangerActive = false;
 function gameOver() {
+  if (state === 'over') return;
   state = 'over';
-  bestCoins = Math.max(bestCoins, coins);
+  bestCoins = Math.max(bestCoins, Math.round(coins));
   localStorage.setItem('tm_best', bestCoins);
   sOver(); shakeT = 0.5;
+  showGameOver();
 }
 
 // ------------------------------------------------------------
@@ -790,17 +913,9 @@ function stepFx(dt) {
     return true;
   });
   shownCoins = Math.min(coins, shownCoins + Math.max(2, (coins - shownCoins)) * dt * 4);
-  // улетающие в заказ стаканы
-  for (const fl of flyers) {
-    fl.t += dt / 0.7;
-    if (fl.t >= 1) {
-      const o = orders[fl.orderIdx];
-      o.state = 'done'; o.doneT = 0;
-      addCoins(o.reward, ORDER_POS[fl.orderIdx].x, ORDER_Y + ORDER_H - 30);
-      sOrder();
-    }
-  }
-  flyers = flyers.filter(fl => fl.t < 1);
+  // всплывающие надписи
+  for (const f of floats) f.t += dt;
+  floats = floats.filter(f => f.t < f.life);
   // заказы
   for (let i = 0; i < orders.length; i++) {
     const o = orders[i];
@@ -879,7 +994,7 @@ function drawAimLine() {
 }
 
 function drawOrders() {
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < orders.length; i++) {
     const o = orders[i], cx = ORDER_POS[i].x;
     const ap = easeOut(o.anim);
     const y = ORDER_Y - (1 - ap) * 60;
@@ -903,11 +1018,13 @@ function drawOrders() {
     ctx.beginPath(); ctx.moveTo(cx - 74, y + 46); ctx.lineTo(cx + 74, y + 46); ctx.stroke();
     // стакан
     const spr = SPRITES[o.tier];
-    const sw = 126, sh = sw * SPR_H / SPR_W;
-    ctx.drawImage(spr, cx - sw / 2, y + 52, sw, sh);
+    const sw = 106, sh = sw * SPR_H / SPR_W;
+    ctx.drawImage(spr, cx - sw / 2, y + 50, sw, sh);
+    // название напитка
+    fancyText(ctx, NAMES[o.tier].split(' · ')[0], cx, y + 200, 17, '#8a6a3a', null, 0);
     // награда
-    coinIcon(cx - 52, y + ORDER_H - 30, 20);
-    fancyText(ctx, '+' + o.reward, cx + 16, y + ORDER_H - 30, 32, '#ffffff', '#8a5a1a', 7);
+    coinIcon(cx - 48, y + ORDER_H - 26, 17);
+    fancyText(ctx, '+' + o.reward, cx + 12, y + ORDER_H - 26, 28, '#ffffff', '#8a5a1a', 6);
     // выполнено
     if (o.state === 'done') {
       ctx.globalAlpha = ap * 0.45;
@@ -962,13 +1079,13 @@ function drawEvoBar() {
   ctx.arcTo(28, y + h, 28, y + h / 2, 16); ctx.arcTo(28, y, 44, y, 16);
   ctx.closePath(); ctx.fill();
   ctx.strokeStyle = '#e0c194'; ctx.lineWidth = 4; ctx.stroke();
-  for (let t = 1; t <= 8; t++) {
-    const cx = 66 + (t - 1) * 82, cy = y + h - 12;
-    const sw2 = 64, sh2 = sw2 * SPR_H / SPR_W;
+  for (let t = 1; t <= MAX_TIER; t++) {
+    const cx = 56 + (t - 1) * 63, cy = y + h - 14;
+    const sw2 = 56, sh2 = sw2 * SPR_H / SPR_W;
     if (t > maxTierMade + 1) ctx.globalAlpha = 0.3;
     if (t === maxTierMade && maxTierMade > 1) {
       ctx.fillStyle = 'rgba(255,214,90,0.55)';
-      ctx.beginPath(); ctx.arc(cx, cy - sh2 * 0.36, 40, 0, 7); ctx.fill();
+      ctx.beginPath(); ctx.arc(cx, cy - sh2 * 0.36, 34, 0, 7); ctx.fill();
     }
     ctx.drawImage(SPRITES[t], cx - sw2 / 2, cy - sh2, sw2, sh2);
     ctx.globalAlpha = 1;
@@ -1023,14 +1140,6 @@ function render() {
     else { ctx.fillStyle = pt.col; ctx.beginPath(); ctx.arc(pt.x, pt.y, pt.size * a + 1, 0, 7); ctx.fill(); }
   }
   ctx.globalAlpha = 1;
-  // стаканы, улетающие в заказ
-  for (const fl of flyers) {
-    const o = ORDER_POS[fl.orderIdx];
-    const t = easeOut(fl.t);
-    const tx = o.x, ty = ORDER_Y + 120;
-    const mx = lerp(fl.x, tx, t), my = lerp(fl.y, ty, t) - Math.sin(t * Math.PI) * 130;
-    drawCupSprite(mx, my, lerp(fl.s, 0.5, t), fl.tier, 1);
-  }
   // UI
   drawOrders();
   drawTopBar();
@@ -1043,6 +1152,13 @@ function render() {
     const x = lerp(cf.x0, COIN_PILL.x - 60, e), y = lerp(cf.y0, COIN_PILL.y, e) - Math.sin(t * Math.PI) * 90;
     coinIcon(x, y, 17);
   }
+  // всплывающие надписи
+  for (const f of floats) {
+    const k = f.t / f.life;
+    ctx.globalAlpha = k < 0.7 ? 1 : (1 - k) / 0.3;
+    fancyText(ctx, f.txt, f.x, f.y - easeOut(k) * 70, f.size, f.col, 'rgba(90,55,15,0.9)', f.size * 0.22);
+  }
+  ctx.globalAlpha = 1;
   // подсказка
   if (hintT > 0 && state !== 'over' && cups.length < 3) {
     ctx.globalAlpha = clamp(hintT, 0, 1) * (0.75 + 0.25 * Math.sin(timeSec * 4));
@@ -1050,31 +1166,11 @@ function render() {
     ctx.globalAlpha = 1;
   }
   ctx.restore();
-  // экран проигрыша
   if (state === 'over') {
-    ctx.fillStyle = `rgba(30,18,8,${0.55 * overAlpha})`;
+    ctx.fillStyle = `rgba(30,18,8,${0.4 * overAlpha})`;
     ctx.fillRect(0, 0, W, H);
-    const py = H / 2 - 240 + (1 - easeOut(overAlpha)) * 80;
-    ctx.globalAlpha = overAlpha;
-    ctx.fillStyle = '#fdf3e3';
-    rr(ctx, W2 - 250, py, 500, 430, 30); ctx.fill();
-    ctx.strokeStyle = '#caa36b'; ctx.lineWidth = 6; ctx.stroke();
-    fancyText(ctx, 'Стол переполнен!', W2, py + 70, 44, '#c0392b', null, 0);
-    coinIcon(W2 - 90, py + 160, 30);
-    fancyText(ctx, Math.round(coins) + '', W2 + 30, py + 160, 44, '#8a5a1a', null, 0, 'left');
-    fancyText(ctx, 'Рекорд: ' + bestCoins, W2, py + 235, 30, 'rgba(138,90,26,0.7)', null, 0);
-    // кнопка
-    const bw = 300, bh = 84, bx = W2 - bw / 2, by = py + 300;
-    const g = ctx.createLinearGradient(0, by, 0, by + bh);
-    g.addColorStop(0, '#7ed045'); g.addColorStop(1, '#4fae2f');
-    ctx.fillStyle = g; rr(ctx, bx, by, bw, bh, 24); ctx.fill();
-    ctx.strokeStyle = '#2f7a1a'; ctx.lineWidth = 5; ctx.stroke();
-    fancyText(ctx, 'ЗАНОВО', W2, by + bh / 2 + 2, 38, '#ffffff', '#2f7a1a', 8);
-    restartBtn = { x: bx, y: by, w: bw, h: bh };
-    ctx.globalAlpha = 1;
   }
 }
-let restartBtn = null;
 
 // ------------------------------------------------------------
 // ВВОД
@@ -1086,12 +1182,7 @@ function screenToWorldX(px) {
 cv.addEventListener('pointerdown', e => {
   audio();
   const p = ptFromEvent(e);
-  if (state === 'over') {
-    if (restartBtn && overAlpha > 0.9 &&
-        p.x > restartBtn.x && p.x < restartBtn.x + restartBtn.w &&
-        p.y > restartBtn.y && p.y < restartBtn.y + restartBtn.h) resetGame();
-    return;
-  }
+  if (state === 'over' || state === 'menu') return;
   if (state === 'aim' && current && p.y > 380) {
     aiming = true;
     current.x = screenToWorldX(p.x);
@@ -1109,10 +1200,10 @@ cv.addEventListener('pointercancel', () => { aiming = false; });
 // клавиатура (десктоп)
 const keys = {};
 window.addEventListener('keydown', e => {
+  if (e.target && e.target.tagName === 'INPUT') return;
   keys[e.code] = true;
   if (e.code === 'Space') {
-    if (state === 'over' && overAlpha > 0.9) resetGame();
-    else if (state === 'aim' && current) throwCup();
+    if (state === 'aim' && current) throwCup();
     e.preventDefault();
   }
 });
@@ -1121,11 +1212,67 @@ window.addEventListener('keyup', e => { keys[e.code] = false; });
 // ------------------------------------------------------------
 // ГЛАВНЫЙ ЦИКЛ
 // ------------------------------------------------------------
+// ------------------------------------------------------------
+// МЕНЮ, ИМЯ ИГРОКА, ТАБЛИЦА ЛИДЕРОВ (localStorage)
+// ------------------------------------------------------------
+const $ = id => document.getElementById(id);
+let lastEntryTs = 0;
+
+function loadLB() {
+  try { return JSON.parse(localStorage.getItem('tm_lb') || '[]'); } catch (e) { return []; }
+}
+function saveScore() {
+  const lb = loadLB();
+  const entry = { n: playerName, c: Math.round(coins), t: maxTierMade, d: Date.now() };
+  lastEntryTs = entry.d;
+  lb.push(entry);
+  lb.sort((a, b) => b.c - a.c);
+  localStorage.setItem('tm_lb', JSON.stringify(lb.slice(0, 10)));
+}
+function lbHTML(highlightTs) {
+  const lb = loadLB();
+  if (!lb.length) return '<div class="lb-empty">Пока никто не играл — будь первым!</div>';
+  return lb.map((e, i) =>
+    `<div class="lb-row${e.d === highlightTs ? ' me' : ''}">` +
+    `<span class="pos">${i + 1}.</span>` +
+    `<span class="nm">${String(e.n).replace(/[<>&]/g, s => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[s]))}</span>` +
+    `<span class="tr">ур.${e.t}</span>` +
+    `<span class="sc">🪙 ${e.c}</span></div>`).join('');
+}
+function showMenu() {
+  state = 'menu';
+  $('overOvl').style.display = 'none';
+  $('nameInp').value = playerName;
+  $('lbMenu').innerHTML = loadLB().length
+    ? '<div class="lb-title">🏆 Лучшие</div>' + lbHTML(0) : '';
+  $('menuOvl').style.display = 'flex';
+}
+function startGame() {
+  playerName = ($('nameInp').value.trim() || 'Игрок').slice(0, 16);
+  localStorage.setItem('tm_name', playerName);
+  $('menuOvl').style.display = 'none';
+  audio();
+  resetGame();
+}
+function showGameOver() {
+  saveScore();
+  $('myCoins').textContent = Math.round(coins);
+  $('lbTable').innerHTML = lbHTML(lastEntryTs);
+  $('overOvl').style.display = 'flex';
+}
+$('playBtn').addEventListener('click', startGame);
+$('nameInp').addEventListener('keydown', e => { if (e.key === 'Enter') startGame(); });
+$('againBtn').addEventListener('click', () => { $('overOvl').style.display = 'none'; resetGame(); });
+$('nameBtn').addEventListener('click', showMenu);
+
+// ------------------------------------------------------------
+// ГЛАВНЫЙ ЦИКЛ
+// ------------------------------------------------------------
 let lastT = performance.now();
 function frame(now) {
   let dt = Math.min(0.033, (now - lastT) / 1000);
   lastT = now;
-  if (state !== 'over') {
+  if (state === 'aim' || state === 'wait') {
     if (current && state === 'aim') {
       const spd = 640 * dt;
       if (keys['ArrowLeft'])  current.x -= spd;
@@ -1137,7 +1284,7 @@ function frame(now) {
   render();
   requestAnimationFrame(frame);
 }
-resetGame();
+showMenu();
 requestAnimationFrame(frame);
 </script>
 </body>
