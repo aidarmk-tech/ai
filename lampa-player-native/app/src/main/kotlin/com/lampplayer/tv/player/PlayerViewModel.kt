@@ -33,6 +33,16 @@ import javax.inject.Inject
 
 enum class InfoPanelTab { EPISODES, AUDIO, SUBTITLES, EPG }
 
+/** One row of the IPTV programme window: 2 past, the live one, 2 upcoming. */
+data class ScheduleRow(
+    val title: String,
+    val startMs: Long,
+    val stopMs: Long,
+    val isNow: Boolean,      // the programme on air right now
+    val isPast: Boolean,     // already ended → reachable via the archive
+    val playing: Boolean,    // what the player is showing (live or an archive entry)
+)
+
 /** Selectable playback speeds cycled by the OSD speed button. */
 private val SPEED_STEPS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
 
@@ -81,6 +91,10 @@ data class PlayerUiState(
     val videoFps: Float = 0f,
     // IPTV electronic programme guide for the current channel (formatted now/next).
     val epgText: String = "",
+    // IPTV schedule window around now (±2 programmes) for archive navigation.
+    val schedule: List<ScheduleRow> = emptyList(),
+    // Non-empty while watching the archive: "−1 ч 05 м от эфира · Передача".
+    val archiveText: String = "",
     // Rich episode list fetched from TMDB (series only).
     val episodeRows: List<EpisodeRow> = emptyList(),
 ) {
@@ -136,6 +150,10 @@ class PlayerViewModel @Inject constructor(
     private val _resumedFromMs = MutableSharedFlow<Long>(extraBufferCapacity = 1)
     val resumedFromMs: SharedFlow<Long> = _resumedFromMs.asSharedFlow()
 
+    /** Short user-facing notices (archive jumps etc.) — shown as the centered toast. */
+    private val _notice = MutableSharedFlow<String>(extraBufferCapacity = 2)
+    val notice: SharedFlow<String> = _notice.asSharedFlow()
+
     /** Emitted once per session when the stream keeps rebuffering — show a friendly hint. */
     private val _weakStreamHint = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val weakStreamHint: SharedFlow<Unit> = _weakStreamHint.asSharedFlow()
@@ -179,6 +197,11 @@ class PlayerViewModel @Inject constructor(
     private var metaJob: Job? = null
     private var episodesJob: Job? = null
     private var epgJob: Job? = null
+    private var schedJob: Job? = null
+    // IPTV archive (catch-up): the live stream URL to come back to, and — while
+    // watching the archive — the programme currently playing.
+    private var liveUrl: String? = null
+    private var archiveProg: EpgProgramme? = null
     private val epgRepository = EpgRepository()
     private var settings = AppSettings()
     private val errorRecovery = ErrorRecoveryManager()
@@ -203,7 +226,7 @@ class PlayerViewModel @Inject constructor(
                 positionDataStore.savePosition(url, PlaybackPosition(time = p, duration = d, percent = pct, watched = pct >= 90))
             }
         }
-        saveJob?.cancel(); diagJob?.cancel(); vlcPollJob?.cancel(); osdHideJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel(); epgJob?.cancel(); retryJob?.cancel()
+        saveJob?.cancel(); diagJob?.cancel(); vlcPollJob?.cancel(); osdHideJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel(); epgJob?.cancel(); schedJob?.cancel(); retryJob?.cancel()
         releaseLoudness()
         runCatching { nightModeCtl.release() }
         if (::player.isInitialized) runCatching { player.release() }
@@ -333,6 +356,7 @@ class PlayerViewModel @Inject constructor(
     fun initPlayer(context: Context, url: String, card: CardMeta) {
         currentUrl = url
         currentCard = card
+        if (card.iptv) { liveUrl = url; archiveProg = null }
         startNetworkMonitor()
         setupMediaSession()
         _uiState.update {
@@ -442,7 +466,10 @@ class PlayerViewModel @Inject constructor(
 
     /** IPTV EPG: load the playlist's XMLTV (once) and format now/next for the current channel. */
     private fun loadEpg(card: CardMeta) {
-        if (!card.iptv) { _uiState.update { it.copy(epgText = "") }; return }
+        if (!card.iptv) { _uiState.update { it.copy(epgText = "", schedule = emptyList()) }; return }
+        // Schedule/archive always want the XMLTV (it has the timestamps) — load in
+        // the background regardless of which text source wins below.
+        kickScheduleLoad(card)
         // Prefer the programme Lampa already rendered (scraped by the plugin) — instant, no XMLTV.
         card.iptvEpg?.takeIf { it.isNotBlank() }?.let {
             _uiState.update { s -> s.copy(epgText = it) }
@@ -464,6 +491,134 @@ class PlayerViewModel @Inject constructor(
             epgRepository.ensureLoaded(appContext, src)
             refreshEpgText()   // upgrades to the guide if it loaded; stays "Нет программы" otherwise
         }
+    }
+
+    /** Load the XMLTV in the background and (re)build the ±2-programme window. */
+    private fun kickScheduleLoad(card: CardMeta) {
+        val src = card.iptvSource?.takeIf { it.isNotBlank() }
+        schedJob?.cancel()
+        if (src == null || epgRepository.isDead(src)) { rebuildSchedule(); return }
+        schedJob = viewModelScope.launch {
+            withContext(Dispatchers.IO) { epgRepository.ensureLoaded(appContext, src) }
+            rebuildSchedule()
+        }
+    }
+
+    /** The channel's programmes sorted by start; the live one's index; or null. */
+    private fun channelProgrammes(): Pair<List<EpgProgramme>, Int>? {
+        val card = currentCard ?: return null
+        if (!card.iptv) return null
+        val progs = epgRepository.programmes(card.title, liveUrl ?: currentUrl).sortedBy { it.start }
+        if (progs.isEmpty()) return null
+        val now = System.currentTimeMillis()
+        val nowIdx = progs.indexOfFirst { now in it.start until it.stop }.takeIf { it >= 0 }
+            ?: progs.indexOfLast { it.start <= now }.takeIf { it >= 0 } ?: 0
+        return progs to nowIdx
+    }
+
+    private fun rebuildSchedule() {
+        val (progs, nowIdx) = channelProgrammes()
+            ?: run { _uiState.update { it.copy(schedule = emptyList()) }; return }
+        val cur = archiveProg
+        val rows = ((nowIdx - 2).coerceAtLeast(0)..(nowIdx + 2).coerceAtMost(progs.lastIndex)).map { i ->
+            val p = progs[i]
+            ScheduleRow(
+                title = p.title, startMs = p.start, stopMs = p.stop,
+                isNow = i == nowIdx, isPast = i < nowIdx,
+                playing = if (cur != null) p.start == cur.start else i == nowIdx,
+            )
+        }
+        _uiState.update { it.copy(schedule = rows) }
+    }
+
+    // ─── IPTV archive (catch-up) ───────────────────────────────────
+
+    /**
+     * Step through the programme guide: dir=-1 → one programme back (into the
+     * archive), dir=+1 → one forward (towards, and finally back to, the live
+     * stream). Returns false when there's nowhere to go / no guide.
+     */
+    fun stepProgramme(dir: Int): Boolean {
+        val (progs, nowIdx) = channelProgrammes() ?: return false
+        val curIdx = archiveProg?.let { a -> progs.indexOfFirst { it.start == a.start }.takeIf { it >= 0 } }
+            ?: nowIdx
+        val target = curIdx + dir
+        if (target !in progs.indices) return false
+        if (target >= nowIdx) {
+            if (archiveProg == null) return false       // уже эфир — вперёд некуда
+            returnToLive()
+            return true
+        }
+        playProgramme(progs[target])
+        return true
+    }
+
+    /** Play a schedule row: a past programme starts archive playback; the live row returns to air. */
+    fun playScheduleRow(row: ScheduleRow) {
+        if (!row.isPast) { if (archiveProg != null) returnToLive(); return }
+        val (progs, _) = channelProgrammes() ?: return
+        progs.firstOrNull { it.start == row.startMs }?.let { playProgramme(it) }
+    }
+
+    private fun playProgramme(p: EpgProgramme) {
+        val card = currentCard ?: return
+        val live = liveUrl ?: currentUrl.ifEmpty { return }
+        _uiState.update { it.copy(isLoading = true) }
+        viewModelScope.launch {
+            val url = withContext(Dispatchers.IO) {
+                val info = epgRepository.catchup(card.title, live)
+                CatchupUrlBuilder.firstWorking(
+                    CatchupUrlBuilder.candidates(live, info, p.start / 1000, ((p.stop - p.start) / 1000).coerceAtLeast(60)),
+                    card.headers,
+                )
+            }
+            if (url == null) {
+                _uiState.update { it.copy(isLoading = false) }
+                _notice.tryEmit("Архив недоступен для этого канала")
+                return@launch
+            }
+            archiveProg = p
+            _notice.tryEmit("◄ Архив · ${p.title} · ${formatHm(p.start)}")
+            switchStream(url)
+            updateArchiveText(0L)
+            rebuildSchedule()
+        }
+    }
+
+    fun returnToLive() {
+        val live = liveUrl ?: return
+        archiveProg = null
+        _uiState.update { it.copy(archiveText = "") }
+        _notice.tryEmit("● Эфир")
+        switchStream(live)
+        rebuildSchedule()
+    }
+
+    /** Swap the playing stream in place (same card/channel — archive jumps). */
+    private fun switchStream(url: String) {
+        currentUrl = url
+        val card = currentCard ?: return
+        if (usingVlc) {
+            vlc?.setMedia(appContext, url, card.headers, 0L, emptyList(), hardwareDecode = true, nightMode = settings.nightMode)
+            reapplyRate()
+        } else {
+            player.stop()
+            loadUrl(url, card)
+        }
+    }
+
+    private fun formatHm(ms: Long): String {
+        val c = java.util.Calendar.getInstance().apply { timeInMillis = ms }
+        return "%d:%02d".format(c.get(java.util.Calendar.HOUR_OF_DAY), c.get(java.util.Calendar.MINUTE))
+    }
+
+    /** "−1 ч 05 м от эфира · Передача" while in the archive. */
+    private fun updateArchiveText(posMs: Long) {
+        val p = archiveProg ?: return
+        val behindMin = ((System.currentTimeMillis() - (p.start + posMs)) / 60_000L).coerceAtLeast(0)
+        val t = (if (behindMin >= 60) "−${behindMin / 60} ч %02d м".format(behindMin % 60) else "−$behindMin м") +
+            " от эфира · ${p.title}"
+        if (t != _uiState.value.archiveText) _uiState.update { it.copy(archiveText = t) }
     }
 
     private fun refreshEpgText() {
@@ -1001,6 +1156,12 @@ class PlayerViewModel @Inject constructor(
             // Remember the channel we're leaving so "previous channel" can flip back.
             if (currentCard?.iptv == true && episode.index != _uiState.value.currentEpisodeIndex)
                 prevChannelIndex = _uiState.value.currentEpisodeIndex
+            // Switching channels always lands on the new channel's live stream.
+            if (currentCard?.iptv == true) {
+                liveUrl = episode.url
+                archiveProg = null
+                _uiState.update { it.copy(archiveText = "") }
+            }
             currentUrl = episode.url
             // Update the card's season/episode so the title + badge reflect the new episode.
             val wasIptv = currentCard?.iptv == true
@@ -1173,6 +1334,7 @@ class PlayerViewModel @Inject constructor(
     // ─── Playback controls ─────────────────────────────────────────
     fun onProgress(currentMs: Long, durationMs: Long) {
         val cur = currentMs / 1000.0; val dur = durationMs / 1000.0
+        if (archiveProg != null) updateArchiveText(currentMs)
         val showSkip = settings.skipIntro && introSkipManager.shouldShowSkipButton(cur, _uiState.value.introEnd.takeIf { it > 0 })
         _uiState.update { it.copy(showSkipIntro = showSkip) }
         // Only offer auto-next when the player actually has a playable next episode
@@ -1524,7 +1686,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     override fun onCleared() {
-        saveJob?.cancel(); diagJob?.cancel(); osdHideJob?.cancel(); vlcPollJob?.cancel(); sleepJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel(); epgJob?.cancel(); retryJob?.cancel()
+        saveJob?.cancel(); diagJob?.cancel(); osdHideJob?.cancel(); vlcPollJob?.cancel(); sleepJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel(); epgJob?.cancel(); schedJob?.cancel(); retryJob?.cancel()
         releaseLoudness()
         runCatching { nightModeCtl.release() }
         stopNetworkMonitor()

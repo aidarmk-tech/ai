@@ -356,6 +356,23 @@
         return !!(list && list[0] && (list[0].tv || list[0].iptv));
     }
 
+    // TMDB-карточка ИМЕННО открытой активности (не из стека — там мог остаться
+    // старый фильм). Есть карточка → пользователь запускает кино, а не ТВ-канал.
+    function activeFilmCard() {
+        try {
+            var act = Lampa.Activity.active && Lampa.Activity.active();
+            if (!act) return null;
+            var slots = [act.movie, act.card,
+                         act.object && act.object.movie, act.object && act.object.card,
+                         act.params && act.params.movie, act.params && act.params.card];
+            for (var i = 0; i < slots.length; i++) {
+                var m = slots[i];
+                if (m && (m.id || m.tmdb_id) && isTmdbCard(m)) return m;
+            }
+        } catch (_) {}
+        return null;
+    }
+
     // m3u-источник IPTV (в нём url-tvg для XMLTV и tvg-id каналов) — для EPG.
     function iptvSource() {
         try {
@@ -521,15 +538,22 @@
         if (!list || list.length < 2) return null;
         var CAP = 600;
         var n = Math.min(list.length, CAP);
-        var items = [];
+        var items = [], seen = {}, pi = 0;
         for (var i = 0; i < n; i++) {
             var it = list[i] || {};
             var url = (typeof it.url === 'string') ? it.url
                     : (typeof it.file === 'string') ? it.file : '';
+            // Дубли (один поток дважды — варианты качества и т.п.) не плодим.
+            if (url && seen[url] !== undefined) {
+                if (i === pos) pi = seen[url];
+                continue;
+            }
             // Логотип канала (tvg-logo) — разные балансеры кладут его по-разному.
             var logo = it.logo || it.tvg_logo || it.img || it.icon ||
                        (it.tvg && it.tvg.logo) || '';
             logo = (typeof logo === 'string' && /^https?:\/\//.test(logo)) ? logo : '';
+            if (url) seen[url] = items.length;
+            if (i === pos) pi = items.length;
             items.push({
                 u: url || '',
                 e: it.episode || (i + 1),
@@ -538,7 +562,8 @@
                 l: logo || null,
             });
         }
-        return { items: items, pi: Math.min(Math.max(0, pos || 0), items.length - 1) };
+        if (items.length < 2) return null;
+        return { items: items, pi: Math.min(Math.max(0, pi), items.length - 1) };
     }
 
     // ── EPG ───────────────────────────────────────────────────────────────
@@ -927,8 +952,18 @@
                     var list = null, pos = 0;
                     if (g.list && g.list.length > 1)                      { list = g.list; pos = g.pos || 0; }
                     else if (video.playlist && video.playlist.length > 1) { list = video.playlist; pos = 0; }
-                    var iptv = isIptvList(list) || !!video.iptv ||
-                               !!(list && list[pos] && (list[pos].tv || list[pos].iptv));
+                    var iptvish = isIptvList(list) || !!video.iptv ||
+                                  !!(list && list[pos] && (list[pos].tv || list[pos].iptv));
+
+                    // Открытая карточка решает: запуск из TMDB-карточки — это кино,
+                    // что бы ни лежало в плейлисте (балансеры вроде E Online оформляют
+                    // потоки как ТВ, а в Lampa.PlayerPlaylist может остаться список
+                    // каналов от прошлого IPTV-сеанса). Смотрим ТОЛЬКО активную
+                    // активность — стек может хранить карточку старого фильма.
+                    var isFilmCard = !!activeFilmCard();
+                    var iptv = iptvish && !isFilmCard;
+                    // Фильм + чужой список каналов → список не его, выбрасываем.
+                    if (!iptv && list && isIptvList(list)) { list = null; pos = 0; }
 
                     // Для IPTV берём имя канала (а НЕ старую TMDB-карточку сериала).
                     var cardData = iptv ? null : buildCard(findCard(video, video), video, video, null, 0);

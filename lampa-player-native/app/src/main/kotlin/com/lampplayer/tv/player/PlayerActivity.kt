@@ -303,13 +303,17 @@ class PlayerActivity : AppCompatActivity() {
                 if (s.settings.afr && s.videoFps > 0f) applyAfr(s.videoFps)
 
                 // IPTV vs VOD bottom bar: live channels have no timeline to scrub.
+                // Archive playback is a bounded stream — show the scrubber too.
                 val isIptv = s.card?.iptv == true
-                binding.vodProgressGroup.isVisible = !isIptv
+                val inArchive = isIptv && s.archiveText.isNotEmpty()
+                binding.vodProgressGroup.isVisible = !isIptv || inArchive
                 binding.liveGroup.isVisible = isIptv
                 if (isIptv) {
                     binding.tvClock.text = formatClock()
-                    binding.tvLiveNow.text = s.epgText.lineSequence().firstOrNull()
-                        ?.removePrefix("Сейчас")?.trim().orEmpty()
+                    binding.tvLivePill.text = if (inArchive) "◄ АРХИВ" else "● LIVE"
+                    binding.tvLiveNow.text = if (inArchive) s.archiveText
+                        else s.epgText.lineSequence().firstOrNull()
+                            ?.removePrefix("Сейчас")?.trim().orEmpty()
                     // Channel switched (or just opened) → slide the channel card up.
                     val key = s.title + "|" + s.epgText.take(40)
                     if (key != lastChannelKey) { lastChannelKey = key; showChannelCard(s) }
@@ -395,6 +399,7 @@ class PlayerActivity : AppCompatActivity() {
         lifecycleScope.launch { vm.navigateToNext.collect { finishWithResult(completed = true) } }
         lifecycleScope.launch { vm.showExitDialog.collect { promptExit() } }
         lifecycleScope.launch { vm.resumedFromMs.collect { showResumeCard(it) } }
+        lifecycleScope.launch { vm.notice.collect { showCenterToast(it) } }
         lifecycleScope.launch {
             vm.weakStreamHint.collect {
                 Toast.makeText(
@@ -557,9 +562,14 @@ class PlayerActivity : AppCompatActivity() {
         // For IPTV always show the live channel name (metadata can lag a channel switch).
         binding.tvOverlayMetaTitle.text = if (isIptv) s.title else (meta?.title ?: s.title)
         binding.tvOverlayMetaInfo.text = meta?.info ?: ""
-        // EPG (IPTV) or overview (films/series) — whichever is present.
-        binding.tvOverlayMetaOverview.text =
-            if (s.epgText.isNotEmpty()) s.epgText else (meta?.overview ?: "")
+        // IPTV: programme window (±2, archive-navigable) beats the plain now/next
+        // text; films/series get the overview.
+        val scheduleText = if (isIptv && s.schedule.isNotEmpty()) formatScheduleText(s) else ""
+        binding.tvOverlayMetaOverview.text = when {
+            scheduleText.isNotEmpty() -> scheduleText
+            s.epgText.isNotEmpty() -> s.epgText
+            else -> meta?.overview ?: ""
+        }
         binding.ivOverlayPoster.isVisible = !isIptv
         if (!isIptv && !meta?.posterUrl.isNullOrEmpty()) {
             Glide.with(this).load(meta!!.posterUrl)
@@ -614,6 +624,27 @@ class PlayerActivity : AppCompatActivity() {
             }
             hasEpg -> binding.tvEpgContent.text = epgText
         }
+    }
+
+    /** IPTV panel: the ±2-programme window with markers + archive hints. */
+    private fun formatScheduleText(s: PlayerUiState): String = buildString {
+        s.schedule.forEach { r ->
+            append(if (r.playing) "▶ " else "    ")
+            append(formatHm(r.startMs)).append("  ").append(r.title)
+            when {
+                r.isNow -> append("  · эфир")
+                r.isPast -> append("  · архив")
+            }
+            append('\n')
+        }
+        append('\n')
+        append(if (s.archiveText.isNotEmpty()) "◄ назад по программе · ► вперёд / к эфиру"
+               else "◄ смотреть предыдущую передачу (архив)")
+    }
+
+    private fun formatHm(ms: Long): String {
+        val c = java.util.Calendar.getInstance().apply { timeInMillis = ms }
+        return "%d:%02d".format(c.get(java.util.Calendar.HOUR_OF_DAY), c.get(java.util.Calendar.MINUTE))
     }
 
     private fun applyTracksOverlay(s: PlayerUiState) {
@@ -822,9 +853,19 @@ class PlayerActivity : AppCompatActivity() {
         }
 
         // ── OSD скрыт: любое действие открывает OSD на полосе ──────
-        // IPTV: перемотка живого эфира бессмысленна — ВПРАВО открывает программу.
-        if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && s.card?.iptv == true) {
-            vm.toggleInfoOverlay(); return true
+        // IPTV: перемотка эфира бессмысленна — ←/→ ходят по программе (архив),
+        // ВПРАВО в эфире открывает программу.
+        if (s.card?.iptv == true && !s.osdVisible &&
+            (keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT)) {
+            val inArchive = s.archiveText.isNotEmpty()
+            when {
+                keyCode == KeyEvent.KEYCODE_DPAD_LEFT ->
+                    if (!vm.stepProgramme(-1)) showCenterToast(
+                        if (inArchive) "Дальше в архив некуда" else "Программа передач не загружена")
+                inArchive -> if (!vm.stepProgramme(1)) vm.returnToLive()
+                else -> vm.toggleInfoOverlay()
+            }
+            return true
         }
         return when (keyCode) {
             KeyEvent.KEYCODE_DPAD_LEFT -> {

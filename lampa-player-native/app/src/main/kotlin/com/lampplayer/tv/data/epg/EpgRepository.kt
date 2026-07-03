@@ -14,11 +14,16 @@ import java.util.zip.GZIPInputStream
 
 data class EpgProgramme(val start: Long, val stop: Long, val title: String, val desc: String)
 
+/** Archive (catch-up) declaration from the m3u: type + optional URL template + depth. */
+data class CatchupInfo(val type: String, val source: String, val days: Int)
+
 private data class EpgCache(
     val ts: Long,
     val programmes: Map<String, List<EpgProgramme>>,
     val names: Map<String, String>,
     val urls: Map<String, String>,
+    val catchupNames: Map<String, CatchupInfo>? = null,
+    val catchupUrls: Map<String, CatchupInfo>? = null,
 )
 
 /**
@@ -33,6 +38,8 @@ class EpgRepository {
     private var programmesById: Map<String, List<EpgProgramme>> = emptyMap()
     private var nameToId: MutableMap<String, String> = mutableMapOf()   // m3u + xmltv display-names
     private var urlToId: MutableMap<String, String> = mutableMapOf()    // m3u stream url → tvg-id
+    private var nameToCatchup: MutableMap<String, CatchupInfo> = mutableMapOf()
+    private var urlToCatchup: MutableMap<String, CatchupInfo> = mutableMapOf()
 
     val isLoaded: Boolean get() = programmesById.isNotEmpty()
     var lastStatus: String = "не загружено"
@@ -52,7 +59,7 @@ class EpgRepository {
         if (srcUrl == loadedSrc && programmesById.isNotEmpty()) return@withContext true
         if (deadSrcs.contains(srcUrl)) { lastStatus = "XMLTV слишком большой (пропущен)"; return@withContext false }
         // 1) disk cache
-        val cacheFile = File(File(context.cacheDir, "epg").apply { mkdirs() }, "${srcUrl.hashCode()}.json")
+        val cacheFile = File(File(context.cacheDir, "epg").apply { mkdirs() }, "${srcUrl.hashCode()}-v2.json")
         if (cacheFile.exists() && System.currentTimeMillis() - cacheFile.lastModified() < cacheTtlMs) {
             runCatching {
                 val c = gson.fromJson(cacheFile.readText(), EpgCache::class.java)
@@ -60,6 +67,8 @@ class EpgRepository {
                     programmesById = c.programmes
                     nameToId = c.names.toMutableMap()
                     urlToId = c.urls.toMutableMap()
+                    nameToCatchup = (c.catchupNames ?: emptyMap()).toMutableMap()
+                    urlToCatchup = (c.catchupUrls ?: emptyMap()).toMutableMap()
                     loadedSrc = srcUrl
                     lastStatus = "из кэша: каналов-прог=${programmesById.size}"
                 }
@@ -69,6 +78,7 @@ class EpgRepository {
         // 2) network
         runCatching {
             nameToId = mutableMapOf(); urlToId = mutableMapOf()
+            nameToCatchup = mutableMapOf(); urlToCatchup = mutableMapOf()
             lastStatus = "качаю m3u…"
             val m3u = httpText(srcUrl)
             if (m3u == null) { lastStatus = "m3u не загрузился"; return@runCatching false }
@@ -84,7 +94,9 @@ class EpgRepository {
                 "каналов-прог=${programmesById.size}, m3u-имён=${nameToId.size}"
             if (programmesById.isNotEmpty() && !timedOut) {   // cache only a complete parse
                 runCatching {
-                    cacheFile.writeText(gson.toJson(EpgCache(System.currentTimeMillis(), programmesById, nameToId, urlToId)))
+                    cacheFile.writeText(gson.toJson(EpgCache(
+                        System.currentTimeMillis(), programmesById, nameToId, urlToId,
+                        nameToCatchup, urlToCatchup)))
                 }
             }
             // Too big to finish in time → blacklist so we don't re-download it on every channel switch.
@@ -124,6 +136,16 @@ class EpgRepository {
         xmltv = headerTvg?.substringBefore(',')?.trim()   // url-tvg may be comma-separated; take first
 
         val extinf = Regex("""tvg-id\s*=\s*"([^"]*)"""", RegexOption.IGNORE_CASE)
+        val catchupRe = Regex("""catchup(?:-type)?\s*=\s*"([^"]*)"""", RegexOption.IGNORE_CASE)
+        val catchupSrcRe = Regex("""catchup-source\s*=\s*"([^"]*)"""", RegexOption.IGNORE_CASE)
+        val catchupDaysRe = Regex("""catchup-days\s*=\s*"(\d+)"""", RegexOption.IGNORE_CASE)
+        // A playlist-wide default in the #EXTM3U header applies to channels without their own.
+        val head = text.substringBefore('\n')
+        val headerCatchup = catchupRe.find(head)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }?.let {
+            CatchupInfo(it.lowercase(),
+                catchupSrcRe.find(head)?.groupValues?.get(1).orEmpty(),
+                catchupDaysRe.find(head)?.groupValues?.get(1)?.toIntOrNull() ?: 1)
+        }
         val lines = text.lines()
         var i = 0
         while (i < lines.size) {
@@ -131,13 +153,23 @@ class EpgRepository {
             if (line.startsWith("#EXTINF", true)) {
                 val tvgId = extinf.find(line)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
                 val name = line.substringAfterLast(',').trim()
-                // next non-comment line is the stream url
+                // Archive declaration: on the EXTINF itself or in a following #EXTGRP-style tag block.
+                var attrs = line
                 var j = i + 1
-                while (j < lines.size && lines[j].trimStart().startsWith("#")) j++
+                while (j < lines.size && lines[j].trimStart().startsWith("#")) { attrs += "\n" + lines[j]; j++ }
                 val url = lines.getOrNull(j)?.trim()
+                val cu = catchupRe.find(attrs)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }?.let {
+                    CatchupInfo(it.lowercase(),
+                        catchupSrcRe.find(attrs)?.groupValues?.get(1).orEmpty(),
+                        catchupDaysRe.find(attrs)?.groupValues?.get(1)?.toIntOrNull() ?: 1)
+                } ?: headerCatchup
                 if (tvgId != null) {
                     if (name.isNotBlank()) nameToId[normalize(name)] = tvgId
                     if (!url.isNullOrBlank()) urlToId[url] = tvgId
+                }
+                if (cu != null) {
+                    if (name.isNotBlank()) nameToCatchup[normalize(name)] = cu
+                    if (!url.isNullOrBlank()) urlToCatchup[url] = cu
                 }
                 i = j
             } else i++
@@ -145,11 +177,16 @@ class EpgRepository {
         return xmltv
     }
 
+    /** The channel's archive declaration from the m3u, or null when none. */
+    fun catchup(title: String?, streamUrl: String?): CatchupInfo? =
+        streamUrl?.let { urlToCatchup[it] }
+            ?: title?.let { nameToCatchup[normalize(it)] }
+
     // ─── XMLTV ─────────────────────────────────────────────────────
     // deadline bounds total download+parse time (it pulls from the stream), so a
     // huge guide can't hang forever — we keep whatever we parsed before the cutoff.
     private fun parseXmltv(input: InputStream, deadlineMs: Long): Map<String, List<EpgProgramme>> {
-        val keepAfter = System.currentTimeMillis() - 2 * 3600_000L   // drop deep past
+        val keepAfter = System.currentTimeMillis() - 9 * 3600_000L   // keep hours of past: archive navigation
         val result = HashMap<String, MutableList<EpgProgramme>>()
         val parser = Xml.newPullParser()
         parser.setInput(input, null)
