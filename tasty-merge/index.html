@@ -61,7 +61,7 @@
   <div class="panel">
     <h1 class="red">Стол переполнен!</h1>
     <div class="myscore">🪙 <span id="myCoins">0</span></div>
-    <div class="lb-title">🏆 Таблица лидеров</div>
+    <div id="lbTitle" class="lb-title">🏆 Таблица лидеров</div>
     <div id="lbTable" class="lb"></div>
     <button id="againBtn" class="btn">ЗАНОВО</button>
     <button id="nameBtn" class="btn ghost">Сменить имя</button>
@@ -74,6 +74,28 @@
    TASTY MERGE — псевдо-3D игра «брось и слей стаканы»
    Вся графика рисуется процедурно на canvas, без ассетов.
    ============================================================ */
+
+/* === ГЛОБАЛЬНАЯ ТАБЛИЦА ЛИДЕРОВ (Firebase Realtime Database) ===
+   1. https://console.firebase.google.com → Создать проект (Analytics не нужен)
+   2. Build → Realtime Database → Create database → любой регион → locked mode
+   3. Вкладка «Правила» (Rules) — вставить и опубликовать:
+      {
+        "rules": {
+          "tastymerge": {
+            ".read": true,
+            ".indexOn": ["c"],
+            "$id": {
+              ".write": "!data.exists()",
+              ".validate": "newData.hasChildren(['n','c','t','d']) && newData.child('n').isString() && newData.child('n').val().length <= 16 && newData.child('c').isNumber() && newData.child('c').val() >= 0 && newData.child('c').val() < 10000000 && newData.child('t').isNumber() && newData.child('d').isNumber()"
+            }
+          }
+        }
+      }
+   4. Скопировать URL базы (наверху страницы Data, вида
+      https://ИМЯ-default-rtdb.europe-west1.firebasedatabase.app)
+      и вставить его в константу ниже.
+   Пока константа пустая — работает локальная таблица на устройстве. */
+const FIREBASE_DB_URL = window.TM_FB_URL || 'https://tasty-b5250-default-rtdb.europe-west1.firebasedatabase.app';
 
 const W = 720, H = 1560;            // дизайн-разрешение (портрет)
 const W2 = W / 2;
@@ -1229,23 +1251,48 @@ function saveScore() {
   lb.sort((a, b) => b.c - a.c);
   localStorage.setItem('tm_lb', JSON.stringify(lb.slice(0, 10)));
 }
-function lbHTML(highlightTs) {
-  const lb = loadLB();
-  if (!lb.length) return '<div class="lb-empty">Пока никто не играл — будь первым!</div>';
-  return lb.map((e, i) =>
+function lbRows(list, highlightTs) {
+  if (!list || !list.length) return '<div class="lb-empty">Пока никто не играл — будь первым!</div>';
+  return list.map((e, i) =>
     `<div class="lb-row${e.d === highlightTs ? ' me' : ''}">` +
     `<span class="pos">${i + 1}.</span>` +
-    `<span class="nm">${String(e.n).replace(/[<>&]/g, s => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[s]))}</span>` +
+    `<span class="nm">${String(e.n).slice(0, 16).replace(/[<>&]/g, s => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[s]))}</span>` +
     `<span class="tr">ур.${e.t}</span>` +
     `<span class="sc">🪙 ${e.c}</span></div>`).join('');
+}
+// --- мировая таблица через Firebase RTDB (REST, без SDK) ---
+const FB = FIREBASE_DB_URL ? FIREBASE_DB_URL.replace(/\/+$/, '') + '/tastymerge.json' : '';
+async function fbLoad() {
+  if (!FB) return null;
+  try {
+    let r = await fetch(FB + '?orderBy=%22c%22&limitToLast=100');
+    if (!r.ok) r = await fetch(FB);           // если индекс не настроен
+    if (!r.ok) return null;
+    const data = await r.json();
+    if (!data) return [];
+    const arr = Object.values(data).filter(e => e && typeof e.c === 'number' && typeof e.n === 'string');
+    arr.sort((a, b) => b.c - a.c);
+    return arr.slice(0, 10);
+  } catch (e) { return null; }
+}
+async function fbSubmit(entry) {
+  if (!FB) return;
+  try {
+    await fetch(FB, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(entry) });
+  } catch (e) {}
 }
 function showMenu() {
   state = 'menu';
   $('overOvl').style.display = 'none';
   $('nameInp').value = playerName;
   $('lbMenu').innerHTML = loadLB().length
-    ? '<div class="lb-title">🏆 Лучшие</div>' + lbHTML(0) : '';
+    ? '<div class="lb-title">🏆 Лучшие</div>' + lbRows(loadLB(), 0) : '';
   $('menuOvl').style.display = 'flex';
+  if (FB) fbLoad().then(list => {
+    if (list && list.length && state === 'menu')
+      $('lbMenu').innerHTML = '<div class="lb-title">🌍 Мировой топ</div>' + lbRows(list, 0);
+  });
 }
 function startGame() {
   playerName = ($('nameInp').value.trim() || 'Игрок').slice(0, 16);
@@ -1257,8 +1304,18 @@ function startGame() {
 function showGameOver() {
   saveScore();
   $('myCoins').textContent = Math.round(coins);
-  $('lbTable').innerHTML = lbHTML(lastEntryTs);
+  $('lbTitle').textContent = '🏆 Таблица лидеров';
+  $('lbTable').innerHTML = lbRows(loadLB(), lastEntryTs);
   $('overOvl').style.display = 'flex';
+  if (FB) {
+    const entry = { n: playerName, c: Math.round(coins), t: maxTierMade, d: lastEntryTs };
+    fbSubmit(entry).then(fbLoad).then(list => {
+      if (list && list.length && state === 'over') {
+        $('lbTitle').textContent = '🌍 Мировой топ';
+        $('lbTable').innerHTML = lbRows(list, lastEntryTs);
+      }
+    });
+  }
 }
 $('playBtn').addEventListener('click', startGame);
 $('nameInp').addEventListener('keydown', e => { if (e.key === 'Enter') startGame(); });
