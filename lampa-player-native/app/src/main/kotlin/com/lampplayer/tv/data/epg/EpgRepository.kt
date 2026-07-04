@@ -128,12 +128,17 @@ class EpgRepository {
     }
 
     /**
-     * Cloud fast path: resolve the channel's tvg-id from the m3u and fetch its
-     * pre-sliced guide JSON. Succeeds without ever touching the giant XMLTV.
+     * Cloud fast path: figure out the channel's tvg-id and fetch its pre-sliced
+     * guide JSON. Id resolution works even without the m3u (Lampa's IPTV plugin
+     * doesn't always expose it): stream-URL path → cloud names.json → m3u maps.
      */
-    suspend fun ensureChannelRemote(srcUrl: String, title: String?, streamUrl: String?): Boolean = withContext(Dispatchers.IO) {
-        if (!ensureM3u(srcUrl)) return@withContext false
-        val id = resolveId(title, streamUrl) ?: return@withContext false
+    suspend fun ensureChannelRemote(srcUrl: String?, title: String?, streamUrl: String?): Boolean = withContext(Dispatchers.IO) {
+        val id = idFromStreamUrl(streamUrl)
+            ?: idFromCloudNames(title)
+            ?: run {
+                if (!srcUrl.isNullOrBlank() && ensureM3u(srcUrl)) resolveId(title, streamUrl) else null
+            }
+            ?: return@withContext run { lastStatus = "tvg-id не определён (канал '${title ?: "—"}')"; false }
         val now = System.currentTimeMillis()
         if (now - (remoteAt[id] ?: 0L) < 3 * 3600_000L && !programmesById[id].isNullOrEmpty())
             return@withContext true
@@ -156,12 +161,46 @@ class EpgRepository {
         true
     }
 
-    /** tvg-id for a channel: exact url → exact name → fuzzy name containment. */
+    /** Providers often keep the tvg-id right in the stream path: /ch511/mono.m3u8. */
+    private fun idFromStreamUrl(streamUrl: String?): String? {
+        val u = streamUrl?.substringBefore('?') ?: return null
+        return Regex("""/(ch\d+)/[^/]+$""").find(u)?.groupValues?.get(1)
+    }
+
+    private var cloudNames: Map<String, String>? = null
+    private var cloudNamesAt = 0L
+
+    /** Cloud names.json: normalized display-name → tvg-id (built by the EPG slicer). */
+    private fun idFromCloudNames(title: String?): String? {
+        val key = title?.let { normalize(it) }?.takeIf { it.isNotBlank() } ?: return null
+        val now = System.currentTimeMillis()
+        if (cloudNames == null || now - cloudNamesAt > 6 * 3600_000L) {
+            cloudNames = runCatching {
+                val body = httpText("$REMOTE_EPG/names.json") ?: return@runCatching null
+                com.google.gson.JsonParser.parseString(body).asJsonObject.entrySet()
+                    .associate { it.key to it.value.asString }
+            }.getOrNull() ?: cloudNames
+            cloudNamesAt = now
+        }
+        val names = cloudNames ?: return null
+        names[key]?.let { return it }
+        return names.entries
+            .filter { it.key.contains(key) || key.contains(it.key) }
+            .minByOrNull { kotlin.math.abs(it.key.length - key.length) }?.value
+    }
+
+    /** tvg-id for a channel: stream-URL path → m3u maps → cloud names (already cached). */
     private fun resolveId(title: String?, streamUrl: String?): String? {
+        idFromStreamUrl(streamUrl)?.let { return it }
         streamUrl?.let { urlToId[it] }?.let { return it }
         val key = title?.let { normalize(it) }?.takeIf { it.isNotBlank() } ?: return null
         nameToId[key]?.let { return it }
-        return nameToId.entries
+        nameToId.entries
+            .filter { it.key.contains(key) || key.contains(it.key) }
+            .minByOrNull { kotlin.math.abs(it.key.length - key.length) }?.value?.let { return it }
+        val names = cloudNames ?: return null
+        names[key]?.let { return it }
+        return names.entries
             .filter { it.key.contains(key) || key.contains(it.key) }
             .minByOrNull { kotlin.math.abs(it.key.length - key.length) }?.value
     }

@@ -105,6 +105,17 @@ for cid, ch in channels.items():
         json.dump(ch, f, ensure_ascii=False, separators=(",", ":"))
     written += 1
 
+# Name → id map so the player can resolve a channel without the m3u at all.
+names = {}
+for cid, ch in channels.items():
+    if not ch["p"] or not ch["n"]:
+        continue
+    key = re.sub(r"[^a-zа-я0-9]", "", ch["n"].lower())
+    if key and key not in names:
+        names[key] = cid
+with open(os.path.join(out_dir, "names.json"), "w", encoding="utf-8") as f:
+    json.dump(names, f, ensure_ascii=False, separators=(",", ":"))
+
 with open(os.path.join(out_dir, "_meta.json"), "w", encoding="utf-8") as f:
     json.dump({"ts": int(now), "channels": written, "wanted": len(wanted)}, f)
 
