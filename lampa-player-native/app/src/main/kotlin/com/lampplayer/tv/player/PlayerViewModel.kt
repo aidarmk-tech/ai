@@ -534,7 +534,8 @@ class PlayerViewModel @Inject constructor(
         val (progs, nowIdx) = channelProgrammes()
             ?: run { _uiState.update { it.copy(schedule = emptyList()) }; return }
         val cur = archiveProg
-        val rows = ((nowIdx - 2).coerceAtLeast(0)..(nowIdx + 2).coerceAtMost(progs.lastIndex)).map { i ->
+        // Всё окно гида (прошлое = архив, будущее = анонс) — список листается в окне программы.
+        val rows = progs.indices.map { i ->
             val p = progs[i]
             ScheduleRow(
                 title = p.title, startMs = p.start, stopMs = p.stop,
@@ -1504,6 +1505,8 @@ class PlayerViewModel @Inject constructor(
         _uiState.update { it.copy(osdVisible = true) }
         scheduleOsdHide()
     }
+
+    fun hideOsd() = _uiState.update { it.copy(osdVisible = false) }
 
     private fun scheduleOsdHide() {
         osdHideJob?.cancel()

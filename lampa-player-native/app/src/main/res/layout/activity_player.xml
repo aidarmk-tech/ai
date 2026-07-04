@@ -717,6 +717,42 @@
         </LinearLayout>
     </LinearLayout>
 
+    <!-- ═══ IPTV: окно программы (OK на лайв-строке): ↑ прошлые (архив), ↓ будущие ═══ -->
+    <LinearLayout
+        android:id="@+id/schedule_overlay"
+        android:layout_width="560dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="end"
+        android:orientation="vertical"
+        android:background="@color/bg_elevated"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/tv_schedule_header"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:text="Программа передач"
+            android:gravity="center_vertical"
+            android:paddingHorizontal="@dimen/space_md"
+            android:textColor="@color/accent_primary"
+            android:textSize="15sp"
+            android:fontFamily="sans-serif-medium"
+            android:background="@color/bg_surface" />
+
+        <ScrollView
+            android:id="@+id/sv_schedule"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fillViewport="true">
+            <LinearLayout
+                android:id="@+id/schedule_rows"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingVertical="8dp" />
+        </ScrollView>
+    </LinearLayout>
+
     <!-- ═══ TMDB Metadata overlay ═══ -->
     <LinearLayout
         android:id="@+id/metadata_overlay"
