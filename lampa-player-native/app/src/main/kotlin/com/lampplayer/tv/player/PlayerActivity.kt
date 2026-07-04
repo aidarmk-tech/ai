@@ -425,7 +425,10 @@ class PlayerActivity : AppCompatActivity() {
         lifecycleScope.launch {
             while (isActive) {
                 delay(500)
-                if (vm.uiState.value.card?.iptv == true) {
+                val st = vm.uiState.value
+                // Live IPTV has no scrubbable timeline — but archive playback does,
+                // so keep updating progress (and the "−N мин от эфира" text) there.
+                if (st.card?.iptv == true && st.archiveText.isEmpty()) {
                     binding.tvClock.text = formatClock()
                     continue
                 }
