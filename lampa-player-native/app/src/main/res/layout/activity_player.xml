@@ -725,6 +725,8 @@
         android:layout_gravity="end"
         android:orientation="vertical"
         android:background="@color/bg_elevated"
+        android:focusable="false"
+        android:descendantFocusability="blocksDescendants"
         android:visibility="gone">
 
         <TextView
@@ -743,6 +745,7 @@
             android:id="@+id/sv_schedule"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
+            android:focusable="false"
             android:fillViewport="true">
             <LinearLayout
                 android:id="@+id/schedule_rows"

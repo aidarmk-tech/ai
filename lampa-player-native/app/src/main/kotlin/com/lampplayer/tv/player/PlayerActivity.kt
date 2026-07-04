@@ -226,9 +226,9 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun setupOsdClicks() {
         binding.scrubber.setOnClickListener {
-            // IPTV: OK на лайв-строке = окно программы (архив/анонс), не пауза.
+            // IPTV: OK на лайв/архив-строке = окно программы (архив/анонс), не пауза.
             val st = vm.uiState.value
-            if (st.card?.iptv == true && st.archiveText.isEmpty()) openScheduleOverlay()
+            if (st.card?.iptv == true) openScheduleOverlay()
             else { vm.onKeyOk(); vm.showOsd() }
         }
         binding.btnPlayPause.setOnClickListener { vm.onKeyOk(); vm.showOsd() }
@@ -646,6 +646,10 @@ class PlayerActivity : AppCompatActivity() {
         scheduleVisible = true
         binding.tvScheduleHeader.text = "Программа · ${st.title}"
         renderScheduleRows()
+        // Прячем OSD сразу и снимаем фокус: иначе стрелки уходят в навигацию по
+        // OSD (фокус прыгает по блокам), пока state-коллектор догоняет.
+        currentFocus?.clearFocus()
+        binding.osdContainer.isVisible = false
         vm.hideOsd()
         setOverlayVisible(binding.scheduleOverlay, true, slideX = 90f)
     }
@@ -1057,8 +1061,8 @@ class PlayerActivity : AppCompatActivity() {
             val s = vm.uiState.value
             if (s.osdVisible && !scrubberFocused) return super.onKeyUp(keyCode, event)  // button row
             if (s.infoOverlayVisible || s.tracksOverlayVisible) return super.onKeyUp(keyCode, event)
-            // IPTV: OK на лайв-строке открывает окно программы (архив + анонс).
-            if (s.osdVisible && s.card?.iptv == true && scrubberFocused && s.archiveText.isEmpty()) {
+            // IPTV: OK на лайв/архив-строке открывает окно программы (архив + анонс).
+            if (s.osdVisible && s.card?.iptv == true && scrubberFocused) {
                 openScheduleOverlay(); return true
             }
             // Pill is up and OSD hidden → OK is "skip intro", not "open scrubber".
