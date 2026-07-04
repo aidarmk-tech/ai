@@ -225,7 +225,12 @@ class PlayerActivity : AppCompatActivity() {
     // ─── OSD button clicks ─────────────────────────────────────────
 
     private fun setupOsdClicks() {
-        binding.scrubber.setOnClickListener { vm.onKeyOk(); vm.showOsd() }
+        binding.scrubber.setOnClickListener {
+            // IPTV: OK на лайв-строке = окно программы (архив/анонс), не пауза.
+            val st = vm.uiState.value
+            if (st.card?.iptv == true && st.archiveText.isEmpty()) openScheduleOverlay()
+            else { vm.onKeyOk(); vm.showOsd() }
+        }
         binding.btnPlayPause.setOnClickListener { vm.onKeyOk(); vm.showOsd() }
         binding.btnRewind.setOnClickListener { doSeek(false, fast = false); vm.showOsd() }
         binding.btnForward.setOnClickListener { doSeek(true, fast = false); vm.showOsd() }
