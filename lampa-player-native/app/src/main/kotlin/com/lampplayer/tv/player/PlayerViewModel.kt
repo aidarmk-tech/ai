@@ -198,10 +198,14 @@ class PlayerViewModel @Inject constructor(
     private var episodesJob: Job? = null
     private var epgJob: Job? = null
     private var schedJob: Job? = null
+    private var programmeJob: Job? = null   // archive catch-up URL probe + switch
+    private var loadJob: Job? = null        // engine media load (Exo/VLC), tracked for cancel
+    // Survives viewModelScope cancellation (onCleared) so the exit-time save runs.
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     // IPTV archive (catch-up): the live stream URL to come back to, and — while
     // watching the archive — the programme currently playing.
     private var liveUrl: String? = null
-    private var archiveProg: EpgProgramme? = null
+    @Volatile private var archiveProg: EpgProgramme? = null
     private val epgRepository = EpgRepository()
     private var settings = AppSettings()
     private val errorRecovery = ErrorRecoveryManager()
@@ -219,14 +223,19 @@ class PlayerViewModel @Inject constructor(
         val url = currentUrl
         val pos = engPositionMs()
         val dur = engDurationMs()
-        if (url.isNotEmpty() && dur > 0) {
+        // Don't persist IPTV/archive URLs — live has no meaningful resume point and
+        // one-shot catchup URLs would flood the store with never-read entries.
+        if (url.isNotEmpty() && dur > 0 && currentCard?.iptv != true && archiveProg == null) {
             val p = pos / 1000.0; val d = dur / 1000.0
             val pct = ((p / d) * 100).toInt()
-            viewModelScope.launch {
+            appScope.launch {   // survives viewModelScope cancellation on teardown
                 positionDataStore.savePosition(url, PlaybackPosition(time = p, duration = d, percent = pct, watched = pct >= 90))
             }
         }
+        autoNextManager.cancel(); sleepJob?.cancel()
+        programmeJob?.cancel(); loadJob?.cancel()
         saveJob?.cancel(); diagJob?.cancel(); vlcPollJob?.cancel(); osdHideJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel(); epgJob?.cancel(); schedJob?.cancel(); retryJob?.cancel()
+        archiveProg = null; liveUrl = null
         releaseLoudness()
         runCatching { nightModeCtl.release() }
         if (::player.isInitialized) runCatching { player.release() }
@@ -282,12 +291,15 @@ class PlayerViewModel @Inject constructor(
     }
 
     private var lastNightMode: Boolean? = null
+    private var lastSleepMin: Int? = null
 
     init {
         viewModelScope.launch {
             settingsDataStore.settings.collect { s ->
                 settings = s; _uiState.update { it.copy(settings = s) }
-                restartSleepTimer(s.sleepTimerMin)
+                // Restart the sleep timer only when its value actually changes — every
+                // settings emission (volume, scale, night mode) otherwise reset it to full.
+                if (lastSleepMin != s.sleepTimerMin) { restartSleepTimer(s.sleepTimerMin); lastSleepMin = s.sleepTimerMin }
                 // Apply night mode live when the user toggles it.
                 if (lastNightMode != null && lastNightMode != s.nightMode) applyNightMode(s.nightMode)
                 lastNightMode = s.nightMode
@@ -579,7 +591,10 @@ class PlayerViewModel @Inject constructor(
         val card = currentCard ?: return
         val live = liveUrl ?: currentUrl.ifEmpty { return }
         _uiState.update { it.copy(isLoading = true) }
-        viewModelScope.launch {
+        // The probe can take tens of seconds; cancel any prior one and re-validate the
+        // channel afterwards so a late result can't hijack a channel the user switched to.
+        programmeJob?.cancel()
+        programmeJob = viewModelScope.launch {
             val url = withContext(Dispatchers.IO) {
                 val info = epgRepository.catchup(card.title, live)
                 CatchupUrlBuilder.firstWorking(
@@ -587,6 +602,7 @@ class PlayerViewModel @Inject constructor(
                     card.headers,
                 )
             }
+            if (!isActive || liveUrl != live || currentCard !== card) return@launch   // channel changed while probing
             if (url == null) {
                 _uiState.update { it.copy(isLoading = false) }
                 _notice.tryEmit("Архив недоступен для этого канала")
@@ -602,6 +618,7 @@ class PlayerViewModel @Inject constructor(
 
     fun returnToLive() {
         val live = liveUrl ?: return
+        programmeJob?.cancel()
         archiveProg = null
         _uiState.update { it.copy(archiveText = "") }
         _notice.tryEmit("● Эфир")
@@ -612,6 +629,7 @@ class PlayerViewModel @Inject constructor(
     /** Swap the playing stream in place (same card/channel — archive jumps). */
     private fun switchStream(url: String) {
         currentUrl = url
+        lastVlcPositionMs = 0L
         val card = currentCard ?: return
         if (usingVlc) {
             vlc?.setMedia(appContext, url, card.headers, 0L, emptyList(), hardwareDecode = true, nightMode = settings.nightMode)
@@ -709,11 +727,14 @@ class PlayerViewModel @Inject constructor(
 
     private fun initExo(context: Context, url: String, card: CardMeta) {
         usingVlc = false
+        // Use the application context, never the Activity: the player is owned by the
+        // ViewModel which outlives the Activity (config changes) → would leak it.
+        val ctx = appContext
         val profile = BufferProfile.fromType(settings.buffer)
-        val renderersFactory = DefaultRenderersFactory(context)
+        val renderersFactory = DefaultRenderersFactory(ctx)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
 
-        val trackSelector = DefaultTrackSelector(context).apply {
+        val trackSelector = DefaultTrackSelector(ctx).apply {
             setParameters(
                 parameters.buildUpon()
                     .setPreferredAudioLanguage("ru")
@@ -743,7 +764,7 @@ class PlayerViewModel @Inject constructor(
             .setBackBuffer(profile.backBufferLengthMs.toInt(), true)
             .build()
 
-        player = ExoPlayer.Builder(context)
+        player = ExoPlayer.Builder(ctx)
             .setRenderersFactory(renderersFactory)
             .setLoadControl(loadControl)
             .setTrackSelector(trackSelector)
@@ -827,12 +848,14 @@ class PlayerViewModel @Inject constructor(
     private fun startVlcPoll() {
         vlcPollJob?.cancel()
         vlcPollJob = viewModelScope.launch {
+            var sinceSave = 0
             while (isActive) {
                 delay(1000)
                 val v = vlc ?: break
                 if (v.isPlaying && v.positionMs > 0 && v.durationMs > 0) {
-                    saveCurrentPosition()
                     lastVlcPositionMs = v.positionMs           // for reconnect after a drop
+                    // Persist only every 5s (like Exo) — 1s DataStore writes churn TV-box flash.
+                    if (++sinceSave >= 5) { sinceSave = 0; saveCurrentPosition() }
                     if (vlcRetries != 0) vlcRetries = 0        // healthy → reset retry counter
                     if (_uiState.value.reconnecting) _uiState.update { it.copy(reconnecting = false) }
                 }
@@ -905,8 +928,10 @@ class PlayerViewModel @Inject constructor(
     // explicit `position`/`from_start` extras. Episode switches resume from
     // their own saved position instead.
     private fun loadUrl(url: String, card: CardMeta, useIntentStart: Boolean = false) {
-        viewModelScope.launch {
-            val savedPos = positionDataStore.getPosition(url)
+        loadJob?.cancel()
+        loadJob = viewModelScope.launch {
+            // IPTV/archive streams have no meaningful saved position — skip the lookup.
+            val savedPos = if (card.iptv) null else positionDataStore.getPosition(url)
             val startMs = when {
                 useIntentStart && card.fromStart -> 0L
                 useIntentStart && card.startPositionMs != null -> card.startPositionMs
@@ -1165,6 +1190,8 @@ class PlayerViewModel @Inject constructor(
 
     fun selectEpisode(episode: EpisodeItem) {
         autoNextManager.cancel()
+        programmeJob?.cancel()
+        lastVlcPositionMs = 0L   // don't reopen the new media at the old stream's offset
         _uiState.update { it.copy(autoNextCountdown = -1) }
         viewModelScope.launch {
             saveCurrentPosition()
@@ -1176,6 +1203,9 @@ class PlayerViewModel @Inject constructor(
                 liveUrl = episode.url
                 archiveProg = null
                 _uiState.update { it.copy(archiveText = "") }
+            } else {
+                // New episode → the previous one's intro/credits marks no longer apply.
+                _uiState.update { it.copy(introEnd = 0.0, creditsStart = 0.0, showSkipIntro = false) }
             }
             currentUrl = episode.url
             // Update the card's season/episode so the title + badge reflect the new episode.
@@ -1199,6 +1229,7 @@ class PlayerViewModel @Inject constructor(
                 )
             }
             if (wasIptv && updated != null) { populateMetadataFromCard(updated); loadEpg(updated) }   // refresh title + EPG for new channel
+            else if (updated != null) { fetchIntroFromDb(updated); detectIntroFromSubs(updated) }   // per-episode intro/credits marks
             if (usingVlc) {
                 val card = currentCard ?: return@launch
                 vlc?.setMedia(appContext, episode.url, card.headers, 0L, emptyList(), hardwareDecode = true, nightMode = settings.nightMode)
@@ -1362,9 +1393,15 @@ class PlayerViewModel @Inject constructor(
             val credits = _uiState.value.creditsStart
             val effDur = if (settings.skipIntro && credits > 0 && credits + settings.autonextDelay < dur)
                 credits + settings.autonextDelay else dur
-            autoNextManager.checkAndStart(effDur, cur, settings.autonextDelay, viewModelScope,
-                onTick = { t -> _uiState.update { it.copy(autoNextCountdown = t) } },
-                onNext = { viewModelScope.launch { navigateNext() } })
+            // Seeking back out of the end zone (or pausing) must abort a running countdown —
+            // otherwise it advances anyway N s later even though the user left the credits.
+            if (autoNextManager.isActive() && (effDur - cur > settings.autonextDelay || !engIsPlaying())) {
+                autoNextManager.cancel(); _uiState.update { it.copy(autoNextCountdown = -1) }
+            } else if (engIsPlaying()) {
+                autoNextManager.checkAndStart(effDur, cur, settings.autonextDelay, viewModelScope,
+                    onTick = { t -> _uiState.update { it.copy(autoNextCountdown = t) } },
+                    onNext = { viewModelScope.launch { navigateNext() } })
+            }
         }
     }
 
@@ -1694,6 +1731,8 @@ class PlayerViewModel @Inject constructor(
     }
 
     private suspend fun saveCurrentPosition(ended: Boolean = false) {
+        // Live channels and one-shot archive URLs have no resume point worth storing.
+        if (currentCard?.iptv == true || archiveProg != null) return
         val url = currentUrl.ifEmpty { return }
         val durMs = engDurationMs().takeIf { it > 0 } ?: return
         val posMs = if (ended) durMs else engPositionMs()
@@ -1703,12 +1742,22 @@ class PlayerViewModel @Inject constructor(
     }
 
     override fun onCleared() {
-        saveJob?.cancel(); diagJob?.cancel(); osdHideJob?.cancel(); vlcPollJob?.cancel(); sleepJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel(); epgJob?.cancel(); schedJob?.cancel(); retryJob?.cancel()
+        // Capture the outgoing position and save it on a scope that outlives this VM —
+        // viewModelScope is already cancelled here, so a launch on it would be a no-op.
+        val url = currentUrl
+        val pos = engPositionMs(); val dur = engDurationMs()
+        if (url.isNotEmpty() && dur > 0 && currentCard?.iptv != true && archiveProg == null) {
+            val p = pos / 1000.0; val d = dur / 1000.0; val pct = ((p / d) * 100).toInt()
+            appScope.launch {
+                positionDataStore.savePosition(url, PlaybackPosition(time = p, duration = d, percent = pct, watched = pct >= 90))
+            }
+        }
+        saveJob?.cancel(); diagJob?.cancel(); osdHideJob?.cancel(); vlcPollJob?.cancel(); sleepJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel(); epgJob?.cancel(); schedJob?.cancel(); programmeJob?.cancel(); loadJob?.cancel(); retryJob?.cancel()
+        autoNextManager.cancel()
         releaseLoudness()
         runCatching { nightModeCtl.release() }
         stopNetworkMonitor()
         releaseMediaSession()
-        viewModelScope.launch { saveCurrentPosition() }
         if (::player.isInitialized) player.release()
         vlc?.release(); vlc = null
         super.onCleared()

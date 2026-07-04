@@ -497,17 +497,13 @@
                 }
             }
 
-            // Диагностика: EPG-блок не найден — покажем, что есть в DOM.
-            var els = document.querySelectorAll('[class*="epg" i]');
-            var seen = [];
-            for (var j = 0; j < els.length && seen.length < 6; j++) {
-                var c2 = ('' + (els[j].className || '')).slice(0, 40);
-                var tx = (els[j].textContent || '').replace(/\s+/g, ' ').trim().slice(0, 24);
-                if (c2) seen.push(c2 + (tx ? ' = ' + tx : ''));
-            }
-            return 'EPG-скрейп пуст (v19); js-epgTitle=' + titles.length + ', epg-эл=' + els.length +
-                (seen.length ? '\n' + seen.join('\n') : '');
-        } catch (e) { return 'EPG-скрейп ошибка: ' + e; }
+            // Скрейп пуст — вернём null (иначе диагностика уедет в плеер как «программа»).
+            // Плеер и так тянет полноценный гид из облака по tvg-id.
+            try {
+                if (window.console) console.log('[lmnp] scrapeEpg: js-epgTitle=' + (titles ? titles.length : 0));
+            } catch (_) {}
+            return null;
+        } catch (e) { try { if (window.console) console.log('[lmnp] scrapeEpg err', e); } catch (_) {} return null; }
     }
 
     // Карта «канал → текущая программа» по отрисованным карточкам Lampa.
@@ -602,10 +598,18 @@
     // подсветятся, остальные затемнятся в плеере.
     function buildFullPlaylist(list, pos) {
         if (!list || list.length < 2) return null;
-        var CAP = 600;
-        var n = Math.min(list.length, CAP);
+        var CAP = 500;   // окно вокруг pos; ограничивает размер intent-заголовка (binder ~500КБ)
+        // Окно ВОКРУГ текущего элемента, а не первые N — иначе при pos>=CAP
+        // играющий канал вообще не попадёт в список (и подсветится первый).
+        var p0 = pos || 0;
+        var start = 0, end = list.length;
+        if (list.length > CAP) {
+            start = Math.max(0, p0 - Math.floor(CAP / 2));
+            end = Math.min(list.length, start + CAP);
+            start = Math.max(0, end - CAP);
+        }
         var items = [], seen = {}, pi = 0;
-        for (var i = 0; i < n; i++) {
+        for (var i = start; i < end; i++) {
             var it = list[i] || {};
             var url = (typeof it.url === 'string') ? it.url
                     : (typeof it.file === 'string') ? it.file : '';
@@ -845,6 +849,7 @@
 
     // ── Хук на плеер ─────────────────────────────────────────────────────
     var _lastLaunch  = 0;
+    var _playGen     = 0;   // счётчик поколений play() — против гонки отложенного запуска
     var _pendingUrl  = '';
     var _pendingData = null;
 
@@ -992,6 +997,9 @@
         var _origPlay = Lampa.Player.play;
         Lampa.Player.play = function (video) {
             var self = this, args = arguments;
+            // Каждый вызов play() поднимает поколение: отложенный (resolveWindow)
+            // запуск прошлого видео не должен стрелять, если начали новое.
+            var myGen = (++_playGen);
             try {
                 var alreadyPacked = video && typeof video.title === 'string' &&
                                     /^lmpmeta:\/\//.test(video.title);
@@ -1066,15 +1074,22 @@
                                     var src = iptvSource();
                                     if (src) hdr['X-Lmnp-Src'] = b64utf8(src);
                                 }
-                                if (Object.keys(hdr).length)
-                                    video.headers = Object.assign({}, video.headers || {}, hdr);
+                                if (hdr && Object.keys(hdr).length) {
+                                    var merged = {}, k;
+                                    if (video.headers) for (k in video.headers) if (video.headers.hasOwnProperty(k)) merged[k] = video.headers[k];
+                                    for (k in hdr) if (hdr.hasOwnProperty(k)) merged[k] = hdr[k];
+                                    video.headers = merged;
+                                }
                             } catch (e) {}
                             _origPlay.apply(self, args);
                         };
 
                         if (list) {
                             try { Lampa.Noty.show(iptv ? 'Готовлю каналы…' : 'Готовлю серии…'); } catch (_) {}
-                            resolveWindow(list, pos, finishPack);
+                            resolveWindow(list, pos, function () {
+                                if (myGen !== _playGen) return;   // пользователь начал другое видео
+                                finishPack();
+                            });
                             return;   // запуск отложен до резолва ссылок
                         }
 
@@ -1146,7 +1161,9 @@
                          || (Lampa.Plugin || {}).list
                          || (Lampa.Plugin || {}).all;
                 if (!store) return;
-                var arr = Array.isArray(store) ? store : Object.values(store);
+                var arr;
+                if (Array.isArray(store)) arr = store;
+                else { arr = []; for (var k in store) if (store.hasOwnProperty(k)) arr.push(store[k]); }
                 arr.forEach(function(p) { try { wrapComponent(p); } catch(_) {} });
             } catch(_) {}
         }

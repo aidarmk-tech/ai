@@ -4,12 +4,15 @@ import android.content.Context
 import android.util.Xml
 import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.GZIPInputStream
 
 data class EpgProgramme(val start: Long, val stop: Long, val title: String, val desc: String)
@@ -40,24 +43,29 @@ class EpgRepository {
         private const val REMOTE_EPG = "https://raw.githubusercontent.com/aidarmk-tech/ai/epg-data/epg"
     }
 
-    private var loadedSrc: String? = null
-    private var m3uSrc: String? = null
-    private val remoteAt = HashMap<String, Long>()   // tvg-id → last cloud fetch
-    private var programmesById: Map<String, List<EpgProgramme>> = emptyMap()
-    private var nameToId: MutableMap<String, String> = mutableMapOf()   // m3u + xmltv display-names
-    private var urlToId: MutableMap<String, String> = mutableMapOf()    // m3u stream url → tvg-id
-    private var nameToCatchup: MutableMap<String, CatchupInfo> = mutableMapOf()
-    private var urlToCatchup: MutableMap<String, CatchupInfo> = mutableMapOf()
+    // Loads run on IO from several coroutines at once (loadEpg fires epgJob+schedJob
+    // per channel switch); a Mutex serializes the writers and every map is @Volatile
+    // and replaced whole, so main-thread readers only ever see a complete snapshot.
+    private val loadMutex = Mutex()
+
+    @Volatile private var loadedSrc: String? = null
+    @Volatile private var m3uSrc: String? = null
+    private val remoteAt = ConcurrentHashMap<String, Long>()   // tvg-id → last cloud fetch
+    @Volatile private var programmesById: Map<String, List<EpgProgramme>> = emptyMap()
+    @Volatile private var nameToId: Map<String, String> = emptyMap()   // m3u + xmltv display-names
+    @Volatile private var urlToId: Map<String, String> = emptyMap()    // m3u stream url → tvg-id
+    @Volatile private var nameToCatchup: Map<String, CatchupInfo> = emptyMap()
+    @Volatile private var urlToCatchup: Map<String, CatchupInfo> = emptyMap()
 
     val isLoaded: Boolean get() = programmesById.isNotEmpty()
-    var lastStatus: String = "не загружено"
+    @Volatile var lastStatus: String = "не загружено"
         private set
 
     private val gson = Gson()
     private val cacheTtlMs = 12 * 3600_000L
-    private var timedOut = false
+    @Volatile private var timedOut = false
     // Sources whose XMLTV is too big to parse in time — never retry (would hang every switch).
-    private val deadSrcs = HashSet<String>()
+    private val deadSrcs = java.util.Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
 
     /** True once a source has been ruled out as too big — callers can skip it instantly. */
     fun isDead(srcUrl: String?): Boolean = srcUrl != null && deadSrcs.contains(srcUrl)
@@ -66,65 +74,75 @@ class EpgRepository {
     suspend fun ensureLoaded(context: Context, srcUrl: String): Boolean = withContext(Dispatchers.IO) {
         if (srcUrl == loadedSrc && programmesById.isNotEmpty()) return@withContext true
         if (deadSrcs.contains(srcUrl)) { lastStatus = "XMLTV слишком большой (пропущен)"; return@withContext false }
-        // 1) disk cache
-        val cacheFile = File(File(context.cacheDir, "epg").apply { mkdirs() }, "${srcUrl.hashCode()}-v2.json")
-        if (cacheFile.exists() && System.currentTimeMillis() - cacheFile.lastModified() < cacheTtlMs) {
+        loadMutex.withLock {
+            // Re-check inside the lock: another coroutine may have just finished this src.
+            if (srcUrl == loadedSrc && programmesById.isNotEmpty()) return@withContext true
+            // 1) disk cache
+            val cacheFile = File(File(context.cacheDir, "epg").apply { mkdirs() }, "${srcUrl.hashCode()}-v2.json")
+            if (cacheFile.exists() && System.currentTimeMillis() - cacheFile.lastModified() < cacheTtlMs) {
+                val cached = runCatching { gson.fromJson(cacheFile.readText(), EpgCache::class.java) }.getOrNull()
+                if (cached != null && cached.programmes.isNotEmpty()) {
+                    publishM3u(cached.names, cached.urls, cached.catchupNames ?: emptyMap(), cached.catchupUrls ?: emptyMap())
+                    programmesById = cached.programmes
+                    loadedSrc = srcUrl; m3uSrc = srcUrl
+                    lastStatus = "из кэша: каналов-прог=${cached.programmes.size}"
+                    return@withContext true
+                }
+            }
+            // 2) network — build into locals, publish atomically at the end.
             runCatching {
-                val c = gson.fromJson(cacheFile.readText(), EpgCache::class.java)
-                if (c != null && c.programmes.isNotEmpty()) {
-                    programmesById = c.programmes
-                    nameToId = c.names.toMutableMap()
-                    urlToId = c.urls.toMutableMap()
-                    nameToCatchup = (c.catchupNames ?: emptyMap()).toMutableMap()
-                    urlToCatchup = (c.catchupUrls ?: emptyMap()).toMutableMap()
-                    loadedSrc = srcUrl
-                    lastStatus = "из кэша: каналов-прог=${programmesById.size}"
+                lastStatus = "качаю m3u…"
+                val m3u = httpText(srcUrl) ?: run { lastStatus = "m3u не загрузился"; return@runCatching false }
+                val parsed = parseM3u(m3u)
+                publishM3u(parsed.nameToId, parsed.urlToId, parsed.nameToCatchup, parsed.urlToCatchup)
+                m3uSrc = srcUrl
+                val xmltvUrl = parsed.xmltvUrl
+                if (xmltvUrl.isNullOrBlank()) { lastStatus = "в m3u нет url-tvg (каналов: ${parsed.nameToId.size})"; return@runCatching false }
+                lastStatus = "качаю XMLTV…"
+                val ins = httpStream(absolute(xmltvUrl, srcUrl))
+                    ?: run { lastStatus = "XMLTV не скачался: ${xmltvUrl.take(70)}"; return@runCatching false }
+                val deadline = System.currentTimeMillis() + 40_000L      // hard cap: never hang
+                val progs = ins.use { parseXmltv(it, deadline, parsed.nameToId) }
+                programmesById = progs.byId
+                if (progs.extraNames.isNotEmpty()) nameToId = nameToId + progs.extraNames
+                loadedSrc = srcUrl
+                lastStatus = (if (timedOut) "XMLTV таймаут (слишком большой), частично: " else "XMLTV: ") +
+                    "каналов-прог=${progs.byId.size}, m3u-имён=${parsed.nameToId.size}"
+                if (progs.byId.isNotEmpty() && !timedOut) {   // cache only a complete parse
+                    runCatching {
+                        cacheFile.writeText(gson.toJson(EpgCache(
+                            System.currentTimeMillis(), programmesById, nameToId, urlToId,
+                            nameToCatchup, urlToCatchup)))
+                    }
                 }
-            }
-            if (programmesById.isNotEmpty()) return@withContext true
+                if (timedOut) deadSrcs.add(srcUrl)
+                progs.byId.isNotEmpty()
+            }.getOrElse { lastStatus = "ошибка: ${it.message}"; false }
         }
-        // 2) network
-        runCatching {
-            nameToId = mutableMapOf(); urlToId = mutableMapOf()
-            nameToCatchup = mutableMapOf(); urlToCatchup = mutableMapOf()
-            lastStatus = "качаю m3u…"
-            val m3u = httpText(srcUrl)
-            if (m3u == null) { lastStatus = "m3u не загрузился"; return@runCatching false }
-            val xmltvUrl = parseM3u(m3u)
-            if (xmltvUrl.isNullOrBlank()) { lastStatus = "в m3u нет url-tvg (каналов: ${nameToId.size})"; return@runCatching false }
-            lastStatus = "качаю XMLTV…"
-            val ins = httpStream(absolute(xmltvUrl, srcUrl))
-            if (ins == null) { lastStatus = "XMLTV не скачался: ${xmltvUrl.take(70)}"; return@runCatching false }
-            val deadline = System.currentTimeMillis() + 40_000L      // hard cap: never hang
-            ins.use { programmesById = parseXmltv(it, deadline) }
-            loadedSrc = srcUrl
-            lastStatus = (if (timedOut) "XMLTV таймаут (слишком большой), частично: " else "XMLTV: ") +
-                "каналов-прог=${programmesById.size}, m3u-имён=${nameToId.size}"
-            if (programmesById.isNotEmpty() && !timedOut) {   // cache only a complete parse
-                runCatching {
-                    cacheFile.writeText(gson.toJson(EpgCache(
-                        System.currentTimeMillis(), programmesById, nameToId, urlToId,
-                        nameToCatchup, urlToCatchup)))
-                }
-            }
-            // Too big to finish in time → blacklist so we don't re-download it on every channel switch.
-            if (timedOut) deadSrcs.add(srcUrl)
-            programmesById.isNotEmpty()
-        }.getOrElse { lastStatus = "ошибка: ${it.message}"; false }
     }
 
     /** Fetch+parse just the m3u (cheap, ~1 МБ): fills id/name/url/catchup maps. */
     private suspend fun ensureM3u(srcUrl: String): Boolean = withContext(Dispatchers.IO) {
         if ((srcUrl == m3uSrc || srcUrl == loadedSrc) && (nameToId.isNotEmpty() || urlToId.isNotEmpty()))
             return@withContext true
-        runCatching {
-            val m3u = httpText(srcUrl) ?: return@runCatching false
-            nameToId = mutableMapOf(); urlToId = mutableMapOf()
-            nameToCatchup = mutableMapOf(); urlToCatchup = mutableMapOf()
-            parseM3u(m3u)
-            m3uSrc = srcUrl
-            true
-        }.getOrDefault(false)
+        loadMutex.withLock {
+            if ((srcUrl == m3uSrc || srcUrl == loadedSrc) && (nameToId.isNotEmpty() || urlToId.isNotEmpty()))
+                return@withContext true
+            runCatching {
+                val m3u = httpText(srcUrl) ?: return@runCatching false
+                val parsed = parseM3u(m3u)
+                publishM3u(parsed.nameToId, parsed.urlToId, parsed.nameToCatchup, parsed.urlToCatchup)
+                m3uSrc = srcUrl
+                true
+            }.getOrDefault(false)
+        }
+    }
+
+    private fun publishM3u(
+        names: Map<String, String>, urls: Map<String, String>,
+        catchupNames: Map<String, CatchupInfo>, catchupUrls: Map<String, CatchupInfo>,
+    ) {
+        nameToId = names; urlToId = urls; nameToCatchup = catchupNames; urlToCatchup = catchupUrls
     }
 
     /**
@@ -155,7 +173,7 @@ class EpgRepository {
             }
         }.getOrNull().orEmpty()
         if (list.isEmpty()) return@withContext false
-        programmesById = programmesById + (id to list)
+        loadMutex.withLock { programmesById = programmesById + (id to list) }
         remoteAt[id] = now
         lastStatus = "EPG-облако: $id (${list.size} прог)"
         true
@@ -167,8 +185,8 @@ class EpgRepository {
         return Regex("""/(ch\d+)/[^/]+$""").find(u)?.groupValues?.get(1)
     }
 
-    private var cloudNames: Map<String, String>? = null
-    private var cloudNamesAt = 0L
+    @Volatile private var cloudNames: Map<String, String>? = null
+    @Volatile private var cloudNamesAt = 0L
 
     /** Cloud names.json: normalized display-name → tvg-id (built by the EPG slicer). */
     private fun idFromCloudNames(title: String?): String? {
@@ -224,14 +242,25 @@ class EpgRepository {
     }
 
     // ─── m3u ───────────────────────────────────────────────────────
-    // Reads `url-tvg`/`x-tvg-url` and per-channel `tvg-id` + name; fills name/url maps.
-    private fun parseM3u(text: String): String? {
-        var xmltv: String? = null
+    private class M3uData(
+        val xmltvUrl: String?,
+        val nameToId: Map<String, String>,
+        val urlToId: Map<String, String>,
+        val nameToCatchup: Map<String, CatchupInfo>,
+        val urlToCatchup: Map<String, CatchupInfo>,
+    )
+
+    // Reads `url-tvg`/`x-tvg-url` and per-channel `tvg-id` + name; builds name/url maps.
+    private fun parseM3u(text: String): M3uData {
+        val nameToId = HashMap<String, String>()
+        val urlToId = HashMap<String, String>()
+        val nameToCatchup = HashMap<String, CatchupInfo>()
+        val urlToCatchup = HashMap<String, CatchupInfo>()
         val headerTvg = Regex("""(?:url-tvg|x-tvg-url)\s*=\s*"([^"]+)"""", RegexOption.IGNORE_CASE)
             .find(text.substringBefore('\n'))?.groupValues?.get(1)
             ?: Regex("""(?:url-tvg|x-tvg-url)\s*=\s*"([^"]+)"""", RegexOption.IGNORE_CASE)
                 .find(text)?.groupValues?.get(1)
-        xmltv = headerTvg?.substringBefore(',')?.trim()   // url-tvg may be comma-separated; take first
+        val xmltv = headerTvg?.substringBefore(',')?.trim()   // url-tvg may be comma-separated; take first
 
         val extinf = Regex("""tvg-id\s*=\s*"([^"]*)"""", RegexOption.IGNORE_CASE)
         val catchupRe = Regex("""catchup(?:-type)?\s*=\s*"([^"]*)"""", RegexOption.IGNORE_CASE)
@@ -277,7 +306,7 @@ class EpgRepository {
                 i = j
             } else i++
         }
-        return xmltv
+        return M3uData(xmltv, nameToId, urlToId, nameToCatchup, urlToCatchup)
     }
 
     /** The channel's archive declaration from the m3u, or null when none. */
@@ -293,9 +322,12 @@ class EpgRepository {
     // ─── XMLTV ─────────────────────────────────────────────────────
     // deadline bounds total download+parse time (it pulls from the stream), so a
     // huge guide can't hang forever — we keep whatever we parsed before the cutoff.
-    private fun parseXmltv(input: InputStream, deadlineMs: Long): Map<String, List<EpgProgramme>> {
+    private class XmltvData(val byId: Map<String, List<EpgProgramme>>, val extraNames: Map<String, String>)
+
+    private fun parseXmltv(input: InputStream, deadlineMs: Long, existingNames: Map<String, String>): XmltvData {
         val keepAfter = System.currentTimeMillis() - 9 * 3600_000L   // keep hours of past: archive navigation
         val result = HashMap<String, MutableList<EpgProgramme>>()
+        val extraNames = HashMap<String, String>()   // display-names discovered in the guide
         val parser = Xml.newPullParser()
         parser.setInput(input, null)
         var event = parser.eventType
@@ -324,7 +356,8 @@ class EpgRepository {
                     "display-name" -> {
                         val id = curId
                         val key = if (id != null && text.isNotBlank()) normalize(text) else null
-                        if (id != null && key != null && !nameToId.containsKey(key)) nameToId[key] = id
+                        if (id != null && key != null && !existingNames.containsKey(key) && !extraNames.containsKey(key))
+                            extraNames[key] = id
                     }
                     "channel" -> curId = null
                     "title" -> title = text.trim()
@@ -340,7 +373,7 @@ class EpgRepository {
             event = parser.next()
         }
         result.values.forEach { it.sortBy { p -> p.start } }
-        return result
+        return XmltvData(result, extraNames)
     }
 
     /** XMLTV time: "yyyyMMddHHmmss" optionally " +HHMM". */
