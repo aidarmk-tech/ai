@@ -499,12 +499,12 @@ class PlayerViewModel @Inject constructor(
     private fun kickScheduleLoad(card: CardMeta) {
         val src = card.iptvSource?.takeIf { it.isNotBlank() }
         schedJob?.cancel()
-        if (src == null) { rebuildSchedule(); return }
         schedJob = viewModelScope.launch {
             val ok = withContext(Dispatchers.IO) {
                 runCatching {
+                    // Облачный путь работает и без m3u (id из URL потока / names.json).
                     epgRepository.ensureChannelRemote(src, card.title, liveUrl ?: currentUrl) ||
-                        (!epgRepository.isDead(src) && epgRepository.ensureLoaded(appContext, src))
+                        (src != null && !epgRepository.isDead(src) && epgRepository.ensureLoaded(appContext, src))
                 }.getOrDefault(false)
             }
             rebuildSchedule()
@@ -512,6 +512,8 @@ class PlayerViewModel @Inject constructor(
             if (ok) {
                 val text = formatEpg(epgRepository.programmes(card.title, liveUrl ?: currentUrl))
                 if (text.isNotEmpty()) _uiState.update { it.copy(epgText = text) }
+            } else if (settings.diag) {
+                _uiState.update { it.copy(epgText = it.epgText + "\n[EPG: ${epgRepository.lastStatus} · src=${src?.take(48) ?: "—"}]") }
             }
         }
     }
