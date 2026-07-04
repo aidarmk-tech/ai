@@ -84,6 +84,10 @@ class PlayerActivity : AppCompatActivity() {
     // Long-press OK → mark "intro ends here" (no menu, no seek conflict).
     private var okLongFired = false
 
+    // Окно программы (IPTV): OK на лайв-строке; ↑ прошлые (архив), ↓ будущие.
+    private var scheduleVisible = false
+    private var scheduleSel = 0
+
     // Skip-intro pill: appears, then fades to an unobtrusive hint; OK skips it.
     private var skipShown = false
     private var skipFadeJob: Job? = null
@@ -626,9 +630,67 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
-    /** IPTV panel: the ±2-programme window with markers + archive hints. */
+    // ─── Окно программы (IPTV) ─────────────────────────────────────
+
+    private fun openScheduleOverlay() {
+        val st = vm.uiState.value
+        val rows = st.schedule
+        if (rows.isEmpty()) { showCenterToast("Программа передач не загружена"); return }
+        scheduleSel = rows.indexOfFirst { it.playing }.takeIf { it >= 0 }
+            ?: rows.indexOfFirst { it.isNow }.takeIf { it >= 0 } ?: 0
+        scheduleVisible = true
+        binding.tvScheduleHeader.text = "Программа · ${st.title}"
+        renderScheduleRows()
+        vm.hideOsd()
+        setOverlayVisible(binding.scheduleOverlay, true, slideX = 90f)
+    }
+
+    private fun closeScheduleOverlay() {
+        scheduleVisible = false
+        setOverlayVisible(binding.scheduleOverlay, false, slideX = 90f)
+    }
+
+    private fun renderScheduleRows() {
+        val rows = vm.uiState.value.schedule
+        val c = binding.scheduleRows
+        c.removeAllViews()
+        val padH = dp(16f).toInt(); val padV = dp(10f).toInt()
+        rows.forEachIndexed { i, r ->
+            val tv = android.widget.TextView(this)
+            tv.text = buildString {
+                append(formatHm(r.startMs)).append("  ").append(r.title)
+                when {
+                    r.isNow -> append("  · эфир")
+                    r.isPast -> append("  · архив")
+                }
+                if (r.playing && !r.isNow) append("  ◄")
+            }
+            tv.textSize = 15f
+            tv.maxLines = 2
+            tv.setPadding(padH, padV, padH, padV)
+            tv.setTextColor(getColor(when {
+                i == scheduleSel -> R.color.text_primary
+                r.isNow -> R.color.accent_primary
+                r.isPast -> R.color.text_primary
+                else -> R.color.text_secondary
+            }))
+            if (i == scheduleSel) tv.setBackgroundColor(0x553D7EFF)
+            c.addView(tv)
+        }
+        binding.svSchedule.post {
+            val v = c.getChildAt(scheduleSel) ?: return@post
+            binding.svSchedule.smoothScrollTo(0, (v.top - binding.svSchedule.height / 2 + v.height / 2).coerceAtLeast(0))
+        }
+    }
+
+    /** IPTV panel: a compact window around now (the full list lives in the OK-window). */
     private fun formatScheduleText(s: PlayerUiState): String = buildString {
-        s.schedule.forEach { r ->
+        val nowIdx = s.schedule.indexOfFirst { it.isNow }.coerceAtLeast(0)
+        val win = s.schedule.subList(
+            (nowIdx - 2).coerceAtLeast(0),
+            (nowIdx + 5).coerceAtMost(s.schedule.size),
+        )
+        win.forEach { r ->
             append(if (r.playing) "▶ " else "    ")
             append(formatHm(r.startMs)).append("  ").append(r.title)
             when {
@@ -638,8 +700,7 @@ class PlayerActivity : AppCompatActivity() {
             append('\n')
         }
         append('\n')
-        append(if (s.archiveText.isNotEmpty()) "◄ назад по программе · ► вперёд / к эфиру"
-               else "◄ смотреть предыдущую передачу (архив)")
+        append("OK на строке эфира — программа и архив")
     }
 
     private fun formatHm(ms: Long): String {
@@ -746,6 +807,24 @@ class PlayerActivity : AppCompatActivity() {
             binding.intentDebug.isVisible = false
             debugVisible = false
             if (keyCode == KeyEvent.KEYCODE_BACK) return true
+        }
+
+        // ── Окно программы (IPTV): ↑/↓ выбор передачи, OK — включить, BACK — закрыть ──
+        if (scheduleVisible) {
+            val rows = s.schedule
+            return when (keyCode) {
+                KeyEvent.KEYCODE_DPAD_UP -> { if (scheduleSel > 0) { scheduleSel--; renderScheduleRows() }; true }
+                KeyEvent.KEYCODE_DPAD_DOWN -> { if (scheduleSel < rows.size - 1) { scheduleSel++; renderScheduleRows() }; true }
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                    rows.getOrNull(scheduleSel)?.let { r ->
+                        if (r.isPast || r.isNow) { vm.playScheduleRow(r); closeScheduleOverlay() }
+                        else showCenterToast("Эта передача ещё не вышла")
+                    }
+                    true
+                }
+                KeyEvent.KEYCODE_BACK -> { closeScheduleOverlay(); true }
+                else -> true
+            }
         }
 
         // ── Tracks overlay (↑): фокус заперт внутри окна, BACK закрывает ──
@@ -969,9 +1048,14 @@ class PlayerActivity : AppCompatActivity() {
         // OK released: if it wasn't a long-press (intro mark), do the short action now.
         if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER) {
             if (okLongFired) { okLongFired = false; return true }
+            if (scheduleVisible) return true   // действие уже выполнено на key-down
             val s = vm.uiState.value
             if (s.osdVisible && !scrubberFocused) return super.onKeyUp(keyCode, event)  // button row
             if (s.infoOverlayVisible || s.tracksOverlayVisible) return super.onKeyUp(keyCode, event)
+            // IPTV: OK на лайв-строке открывает окно программы (архив + анонс).
+            if (s.osdVisible && s.card?.iptv == true && scrubberFocused && s.archiveText.isEmpty()) {
+                openScheduleOverlay(); return true
+            }
             // Pill is up and OSD hidden → OK is "skip intro", not "open scrubber".
             if (!s.osdVisible && s.showSkipIntro) { vm.skipIntro(); return true }
             if (s.osdVisible) { vm.onKeyOk(); vm.showOsd() }
