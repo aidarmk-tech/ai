@@ -56,7 +56,7 @@ object CatchupUrlBuilder {
             "{lutc}" to "$now", "\${timestamp}" to "$now", "{now}" to "$now", "{current_utc}" to "$now",
             "{utcend}" to "$end", "\${end}" to "$end", "{end}" to "$end",
             "{duration}" to "$dur", "\${duration}" to "$dur",
-            "{offset}" to "${now - start}",
+            "\${offset}" to "${now - start}", "{offset}" to "${now - start}",
         ).forEach { (k, v) -> t = t.replace(k, v, ignoreCase = true) }
         return t.takeIf { !it.contains('{') }       // unsupported tokens → a broken URL, skip
     }
