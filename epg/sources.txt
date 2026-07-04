@@ -1,0 +1,2 @@
+https://raw.githubusercontent.com/evgeshkawww/iptv/main/IPTV/epg.xml.gz
+https://raw.githubusercontent.com/evgeshkawww/iptv/main/IPTV/epg7.xml.gz

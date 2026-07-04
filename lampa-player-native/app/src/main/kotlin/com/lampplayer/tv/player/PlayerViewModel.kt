@@ -493,14 +493,26 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    /** Load the XMLTV in the background and (re)build the ±2-programme window. */
+    /** Load the guide in the background and (re)build the ±2-programme window.
+     *  Cloud-sliced per-channel JSON first (works for giant guides); the full
+     *  XMLTV parse only as a fallback for small guides. */
     private fun kickScheduleLoad(card: CardMeta) {
         val src = card.iptvSource?.takeIf { it.isNotBlank() }
         schedJob?.cancel()
-        if (src == null || epgRepository.isDead(src)) { rebuildSchedule(); return }
+        if (src == null) { rebuildSchedule(); return }
         schedJob = viewModelScope.launch {
-            withContext(Dispatchers.IO) { epgRepository.ensureLoaded(appContext, src) }
+            val ok = withContext(Dispatchers.IO) {
+                runCatching {
+                    epgRepository.ensureChannelRemote(src, card.title, liveUrl ?: currentUrl) ||
+                        (!epgRepository.isDead(src) && epgRepository.ensureLoaded(appContext, src))
+                }.getOrDefault(false)
+            }
             rebuildSchedule()
+            // Настоящий гид точнее скрейпа с экрана Lampa — поднимаем текст программы.
+            if (ok) {
+                val text = formatEpg(epgRepository.programmes(card.title, liveUrl ?: currentUrl))
+                if (text.isNotEmpty()) _uiState.update { it.copy(epgText = text) }
+            }
         }
     }
 

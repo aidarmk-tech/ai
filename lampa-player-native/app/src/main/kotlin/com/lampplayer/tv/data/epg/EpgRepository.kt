@@ -34,7 +34,15 @@ private data class EpgCache(
  */
 class EpgRepository {
 
+    companion object {
+        // Cloud-sliced per-channel guide: CI (build-epg.yml) slices the provider's
+        // giant XMLTV into tiny JSONs a TV box can actually afford to fetch.
+        private const val REMOTE_EPG = "https://raw.githubusercontent.com/aidarmk-tech/ai/epg-data/epg"
+    }
+
     private var loadedSrc: String? = null
+    private var m3uSrc: String? = null
+    private val remoteAt = HashMap<String, Long>()   // tvg-id → last cloud fetch
     private var programmesById: Map<String, List<EpgProgramme>> = emptyMap()
     private var nameToId: MutableMap<String, String> = mutableMapOf()   // m3u + xmltv display-names
     private var urlToId: MutableMap<String, String> = mutableMapOf()    // m3u stream url → tvg-id
@@ -105,6 +113,59 @@ class EpgRepository {
         }.getOrElse { lastStatus = "ошибка: ${it.message}"; false }
     }
 
+    /** Fetch+parse just the m3u (cheap, ~1 МБ): fills id/name/url/catchup maps. */
+    private suspend fun ensureM3u(srcUrl: String): Boolean = withContext(Dispatchers.IO) {
+        if ((srcUrl == m3uSrc || srcUrl == loadedSrc) && (nameToId.isNotEmpty() || urlToId.isNotEmpty()))
+            return@withContext true
+        runCatching {
+            val m3u = httpText(srcUrl) ?: return@runCatching false
+            nameToId = mutableMapOf(); urlToId = mutableMapOf()
+            nameToCatchup = mutableMapOf(); urlToCatchup = mutableMapOf()
+            parseM3u(m3u)
+            m3uSrc = srcUrl
+            true
+        }.getOrDefault(false)
+    }
+
+    /**
+     * Cloud fast path: resolve the channel's tvg-id from the m3u and fetch its
+     * pre-sliced guide JSON. Succeeds without ever touching the giant XMLTV.
+     */
+    suspend fun ensureChannelRemote(srcUrl: String, title: String?, streamUrl: String?): Boolean = withContext(Dispatchers.IO) {
+        if (!ensureM3u(srcUrl)) return@withContext false
+        val id = resolveId(title, streamUrl) ?: return@withContext false
+        val now = System.currentTimeMillis()
+        if (now - (remoteAt[id] ?: 0L) < 3 * 3600_000L && !programmesById[id].isNullOrEmpty())
+            return@withContext true
+        val safe = id.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        val body = runCatching { httpText("$REMOTE_EPG/$safe.json") }.getOrNull() ?: return@withContext false
+        val list = runCatching {
+            com.google.gson.JsonParser.parseString(body).asJsonObject.getAsJsonArray("p").map { e ->
+                val o = e.asJsonObject
+                EpgProgramme(
+                    o.get("s").asLong * 1000, o.get("e").asLong * 1000,
+                    o.get("t")?.takeIf { !it.isJsonNull }?.asString ?: "",
+                    o.get("d")?.takeIf { !it.isJsonNull }?.asString ?: "",
+                )
+            }
+        }.getOrNull().orEmpty()
+        if (list.isEmpty()) return@withContext false
+        programmesById = programmesById + (id to list)
+        remoteAt[id] = now
+        lastStatus = "EPG-облако: $id (${list.size} прог)"
+        true
+    }
+
+    /** tvg-id for a channel: exact url → exact name → fuzzy name containment. */
+    private fun resolveId(title: String?, streamUrl: String?): String? {
+        streamUrl?.let { urlToId[it] }?.let { return it }
+        val key = title?.let { normalize(it) }?.takeIf { it.isNotBlank() } ?: return null
+        nameToId[key]?.let { return it }
+        return nameToId.entries
+            .filter { it.key.contains(key) || key.contains(it.key) }
+            .minByOrNull { kotlin.math.abs(it.key.length - key.length) }?.value
+    }
+
     /** Diagnostic: how the current channel maps to the guide. */
     fun matchDebug(title: String?, streamUrl: String?): String {
         val key = title?.let { normalize(it) } ?: ""
@@ -114,9 +175,7 @@ class EpgRepository {
 
     /** Programmes for a channel, newest-relevant first. Empty if unmatched. */
     fun programmes(title: String?, streamUrl: String?): List<EpgProgramme> {
-        val id = streamUrl?.let { urlToId[it] }
-            ?: title?.let { nameToId[normalize(it)] }
-            ?: return emptyList()
+        val id = resolveId(title, streamUrl) ?: return emptyList()
         return programmesById[id].orEmpty()
     }
 
@@ -139,6 +198,9 @@ class EpgRepository {
         val catchupRe = Regex("""catchup(?:-type)?\s*=\s*"([^"]*)"""", RegexOption.IGNORE_CASE)
         val catchupSrcRe = Regex("""catchup-source\s*=\s*"([^"]*)"""", RegexOption.IGNORE_CASE)
         val catchupDaysRe = Regex("""catchup-days\s*=\s*"(\d+)"""", RegexOption.IGNORE_CASE)
+        // tvg-rec / timeshift = N дней архива — де-факто объявление catch-up без
+        // catchup="...": сервер почти всегда flussonic-совместимый, схему найдёт проба.
+        val recRe = Regex("""(?:tvg-rec|timeshift)\s*=\s*"(\d+)"""", RegexOption.IGNORE_CASE)
         // A playlist-wide default in the #EXTM3U header applies to channels without their own.
         val head = text.substringBefore('\n')
         val headerCatchup = catchupRe.find(head)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }?.let {
@@ -163,6 +225,8 @@ class EpgRepository {
                         catchupSrcRe.find(attrs)?.groupValues?.get(1).orEmpty(),
                         catchupDaysRe.find(attrs)?.groupValues?.get(1)?.toIntOrNull() ?: 1)
                 } ?: headerCatchup
+                    ?: recRe.find(attrs)?.groupValues?.get(1)?.toIntOrNull()?.takeIf { it > 0 }
+                        ?.let { CatchupInfo("auto", "", it) }
                 if (tvgId != null) {
                     if (name.isNotBlank()) nameToId[normalize(name)] = tvgId
                     if (!url.isNullOrBlank()) urlToId[url] = tvgId
@@ -178,9 +242,14 @@ class EpgRepository {
     }
 
     /** The channel's archive declaration from the m3u, or null when none. */
-    fun catchup(title: String?, streamUrl: String?): CatchupInfo? =
-        streamUrl?.let { urlToCatchup[it] }
-            ?: title?.let { nameToCatchup[normalize(it)] }
+    fun catchup(title: String?, streamUrl: String?): CatchupInfo? {
+        streamUrl?.let { urlToCatchup[it] }?.let { return it }
+        val key = title?.let { normalize(it) }?.takeIf { it.isNotBlank() } ?: return null
+        nameToCatchup[key]?.let { return it }
+        return nameToCatchup.entries
+            .filter { it.key.contains(key) || key.contains(it.key) }
+            .minByOrNull { kotlin.math.abs(it.key.length - key.length) }?.value
+    }
 
     // ─── XMLTV ─────────────────────────────────────────────────────
     // deadline bounds total download+parse time (it pulls from the stream), so a

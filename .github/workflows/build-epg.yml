@@ -1,0 +1,29 @@
+name: Build EPG slices
+
+on:
+  schedule:
+    - cron: "20 2,10,18 * * *"   # 3× в день — окно гида -12ч..+36ч
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Slice XMLTV guides into per-channel JSON
+        run: python3 epg/build_epg.py
+
+      - name: Publish to epg-data branch
+        run: |
+          cd epg/out
+          git init -q -b epg-data
+          git config user.name "epg-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -q -m "EPG slices $(date -u '+%Y-%m-%d %H:%M UTC')"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" epg-data

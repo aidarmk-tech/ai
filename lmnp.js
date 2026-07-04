@@ -382,6 +382,38 @@
         return '';
     }
 
+    // Группировка EPG-заголовков по каналам (по имени карточки-предка) — на
+    // странице категории в DOM отрисованы блоки многих каналов сразу.
+    function groupEpgByCard(titles) {
+        function clean(e) { return e ? (e.textContent || '').replace(/\s+/g, ' ').trim() : ''; }
+        function norm(s) { return ('' + (s || '')).toLowerCase().replace(/[^a-zа-я0-9]/g, ''); }
+        function cardOf(el) {
+            var best = el.parentElement || el, n = best;
+            for (var k = 0; n && k < 10; k++, n = n.parentElement) {
+                if (n.querySelectorAll && n.querySelectorAll('.js-epgTitle').length === 1) best = n;
+                else break;
+            }
+            return best;
+        }
+        function nameOf(cardEl) {
+            try {
+                var cl = cardEl.cloneNode(true);
+                var eps = cl.querySelectorAll('[class*="epg" i], .js-epgTitle, .js-epgTime, .js-epgDesc, .js-epgProgress');
+                for (var i = eps.length - 1; i >= 0; i--) if (eps[i].parentNode) eps[i].parentNode.removeChild(eps[i]);
+                return clean(cl).replace(/\b\d{1,2}:\d{2}\b/g, '').replace(/\s+/g, ' ').trim().slice(0, 60);
+            } catch (_) { return ''; }
+        }
+        var groups = [], byName = {};
+        for (var i2 = 0; i2 < titles.length; i2++) {
+            var nm = norm(nameOf(cardOf(titles[i2])));
+            if (!nm) continue;
+            var g = byName[nm];
+            if (!g) { g = { name: nm, titles: [] }; byName[nm] = g; groups.push(g); }
+            g.titles.push(titles[i2]);
+        }
+        return groups;
+    }
+
     // Считываем программу прямо из отрисованного Lampa EPG-блока запускаемого
     // канала: расписание — это список строк `.js-epgTitle` со временем. Берём
     // «Сейчас» (строка с активным прогрессом, иначе первая) и «Далее» — следующую,
@@ -415,6 +447,27 @@
             }
 
             var titles = Array.prototype.slice.call(document.querySelectorAll('.js-epgTitle'));
+            // На странице категории в DOM блоки ВСЕХ каналов — не берём чужое
+            // расписание: группируем заголовки по карточкам и выбираем карточку
+            // запускаемого канала по имени. Иначе у любого канала оказывалась
+            // программа первого канала категории.
+            if (titles.length && channelName) {
+                var grouped = groupEpgByCard(titles);
+                if (grouped.length > 1) {
+                    var normQ = ('' + channelName).toLowerCase().replace(/[^a-zа-я0-9]/g, '');
+                    var best = null, bestDiff = 1e9;
+                    for (var gi = 0; gi < grouped.length; gi++) {
+                        var gn = grouped[gi].name;
+                        if (!gn || !normQ) continue;
+                        if (gn === normQ || gn.indexOf(normQ) >= 0 || normQ.indexOf(gn) >= 0) {
+                            var diff = Math.abs(gn.length - normQ.length);
+                            if (diff < bestDiff) { bestDiff = diff; best = grouped[gi]; }
+                        }
+                    }
+                    if (best) titles = best.titles;
+                    else return null;   // канал не нашли — лучше ничего, чем чужая программа
+                }
+            }
             if (titles.length) {
                 var nowIdx = -1;
                 for (var i = 0; i < titles.length; i++) {
