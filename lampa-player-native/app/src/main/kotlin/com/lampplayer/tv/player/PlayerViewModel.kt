@@ -202,6 +202,11 @@ class PlayerViewModel @Inject constructor(
     private var loadJob: Job? = null        // engine media load (Exo/VLC), tracked for cancel
     // Survives viewModelScope cancellation (onCleared) so the exit-time save runs.
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // The item Lampa actually launched: its result must be attributed to THIS url.
+    // When the user advances to another episode in-player, we remember where they
+    // left the launched one so the exit result reports it accurately.
+    private var launchUrl: String = ""
+    private var launchLeftAt: Pair<Long, Long>? = null   // (posMs, durMs)
     // IPTV archive (catch-up): the live stream URL to come back to, and — while
     // watching the archive — the programme currently playing.
     private var liveUrl: String? = null
@@ -226,10 +231,11 @@ class PlayerViewModel @Inject constructor(
         // Don't persist IPTV/archive URLs — live has no meaningful resume point and
         // one-shot catchup URLs would flood the store with never-read entries.
         if (url.isNotEmpty() && dur > 0 && currentCard?.iptv != true && archiveProg == null) {
+            val card = currentCard
             val p = pos / 1000.0; val d = dur / 1000.0
             val pct = ((p / d) * 100).toInt()
             appScope.launch {   // survives viewModelScope cancellation on teardown
-                positionDataStore.savePosition(url, PlaybackPosition(time = p, duration = d, percent = pct, watched = pct >= 90))
+                positionDataStore.savePosition(url, card, PlaybackPosition(time = p, duration = d, percent = pct, watched = pct >= 90))
             }
         }
         autoNextManager.cancel(); sleepJob?.cancel()
@@ -368,6 +374,7 @@ class PlayerViewModel @Inject constructor(
     fun initPlayer(context: Context, url: String, card: CardMeta) {
         currentUrl = url
         currentCard = card
+        launchUrl = url; launchLeftAt = null
         if (card.iptv) { liveUrl = url; archiveProg = null }
         startNetworkMonitor()
         setupMediaSession()
@@ -798,7 +805,7 @@ class PlayerViewModel @Inject constructor(
         )
         vlc = controller
         viewModelScope.launch {
-            val savedPos = positionDataStore.getPosition(url)
+            val savedPos = if (card.iptv) null else positionDataStore.getPosition(url, card)
             val startMs = when {
                 useIntentStart && card.fromStart -> 0L
                 useIntentStart && card.startPositionMs != null -> card.startPositionMs
@@ -931,7 +938,7 @@ class PlayerViewModel @Inject constructor(
         loadJob?.cancel()
         loadJob = viewModelScope.launch {
             // IPTV/archive streams have no meaningful saved position — skip the lookup.
-            val savedPos = if (card.iptv) null else positionDataStore.getPosition(url)
+            val savedPos = if (card.iptv) null else positionDataStore.getPosition(url, card)
             val startMs = when {
                 useIntentStart && card.fromStart -> 0L
                 useIntentStart && card.startPositionMs != null -> card.startPositionMs
@@ -1204,6 +1211,9 @@ class PlayerViewModel @Inject constructor(
                 archiveProg = null
                 _uiState.update { it.copy(archiveText = "") }
             } else {
+                // Leaving the item Lampa launched → remember its final position for the result.
+                if (currentUrl == launchUrl && launchLeftAt == null)
+                    launchLeftAt = engPositionMs() to engDurationMs()
                 // New episode → the previous one's intro/credits marks no longer apply.
                 _uiState.update { it.copy(introEnd = 0.0, creditsStart = 0.0, showSkipIntro = false) }
             }
@@ -1561,11 +1571,22 @@ class PlayerViewModel @Inject constructor(
         if (usingVlc) vlc?.play() else { player.prepare(); player.play() }
     }
 
-    fun buildResultExtras(): Triple<Long, Long, Int> {
+    data class LampaResult(val posMs: Long, val durMs: Long, val percent: Int, val url: String)
+
+    /**
+     * Result for Lampa's wrapper — it attributes position to the item it LAUNCHED.
+     * If the user advanced to another episode in-player, report where they left the
+     * launched one (its own progress lives in our store and resumes on next start).
+     */
+    fun buildResultExtras(): LampaResult {
+        if (currentCard?.iptv != true && launchUrl.isNotEmpty() && currentUrl != launchUrl) {
+            val (p, d) = launchLeftAt ?: (0L to 0L)
+            val pct = if (d > 0) ((p * 100) / d).toInt() else 100
+            return LampaResult(p, d, pct, launchUrl)
+        }
         val pos = engPositionMs()
         val dur = engDurationMs()
-        val pct = if (dur > 0) ((pos.toFloat() / dur) * 100).toInt() else 0
-        return Triple(pos, dur, pct)
+        return LampaResult(pos, dur, if (dur > 0) ((pos.toFloat() / dur) * 100).toInt() else 0, currentUrl)
     }
 
     // ─── Internal ──────────────────────────────────────────────────
@@ -1738,7 +1759,7 @@ class PlayerViewModel @Inject constructor(
         val posMs = if (ended) durMs else engPositionMs()
         val dur = durMs / 1000.0; val pos = posMs / 1000.0
         val pct = if (dur > 0) ((pos / dur) * 100).toInt() else 0
-        positionDataStore.savePosition(url, PlaybackPosition(time = pos, duration = dur, percent = pct, watched = ended || pct >= 90))
+        positionDataStore.savePosition(url, currentCard, PlaybackPosition(time = pos, duration = dur, percent = pct, watched = ended || pct >= 90))
     }
 
     override fun onCleared() {
@@ -1747,9 +1768,10 @@ class PlayerViewModel @Inject constructor(
         val url = currentUrl
         val pos = engPositionMs(); val dur = engDurationMs()
         if (url.isNotEmpty() && dur > 0 && currentCard?.iptv != true && archiveProg == null) {
+            val card = currentCard
             val p = pos / 1000.0; val d = dur / 1000.0; val pct = ((p / d) * 100).toInt()
             appScope.launch {
-                positionDataStore.savePosition(url, PlaybackPosition(time = p, duration = d, percent = pct, watched = pct >= 90))
+                positionDataStore.savePosition(url, card, PlaybackPosition(time = p, duration = d, percent = pct, watched = pct >= 90))
             }
         }
         saveJob?.cancel(); diagJob?.cancel(); osdHideJob?.cancel(); vlcPollJob?.cancel(); sleepJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel(); epgJob?.cancel(); schedJob?.cancel(); programmeJob?.cancel(); loadJob?.cancel(); retryJob?.cancel()

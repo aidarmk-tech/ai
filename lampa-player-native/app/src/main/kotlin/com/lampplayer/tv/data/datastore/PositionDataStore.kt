@@ -37,11 +37,34 @@ class PositionDataStore @Inject constructor(
         return id.let { "s${it.replace(Regex("\\W"), "")}" }
     }
 
-    suspend fun savePosition(url: String, position: PlaybackPosition) {
-        val key = stringPreferencesKey(keyOf(url))
+    /** Per-episode key that survives balancer URL rotation (tokens change every launch). */
+    fun episodeKey(card: CardMeta?): String? {
+        if (card == null || card.iptv) return null
+        val id = card.tmdbId?.toString() ?: card.imdbId ?: return null
+        return "e${id}_${card.seasonNumber ?: 0}_${card.episodeNumber ?: 0}"
+    }
+
+    suspend fun savePosition(url: String, position: PlaybackPosition) = savePosition(url, null, position)
+
+    /** Writes under the URL key and — when the card identifies the episode — a stable key too. */
+    suspend fun savePosition(url: String, card: CardMeta?, position: PlaybackPosition) {
+        val urlKey = stringPreferencesKey(keyOf(url))
+        val epKey = episodeKey(card)?.let { stringPreferencesKey(it) }
         context.positionDataStore.edit { prefs ->
-            prefs[key] = gson.toJson(position)
+            val json = gson.toJson(position)
+            prefs[urlKey] = json
+            if (epKey != null) prefs[epKey] = json
         }
+    }
+
+    /** URL key first (exact stream), then the stable episode key (URL rotated). */
+    suspend fun getPosition(url: String, card: CardMeta?): PlaybackPosition? {
+        getPosition(url)?.let { return it }
+        val k = episodeKey(card) ?: return null
+        val json = context.positionDataStore.data
+            .map { it[stringPreferencesKey(k)] }
+            .firstOrNull() ?: return null
+        return runCatching { gson.fromJson(json, PlaybackPosition::class.java) }.getOrNull()
     }
 
     suspend fun getPosition(url: String): PlaybackPosition? {
