@@ -823,6 +823,7 @@ class PlayerViewModel @Inject constructor(
                 nightMode = settings.nightMode,
             )
             reapplyRate()
+            restoreShowMarks(card)   // intro/credits marks (Exo does this in loadUrl)
             startVlcPoll()
             if (!card.iptv && startMs > 60_000) _resumedFromMs.tryEmit(startMs)   // "Продолжаем с …"
         }
@@ -958,6 +959,17 @@ class PlayerViewModel @Inject constructor(
             }
             showData?.introEnd?.let { v -> _uiState.update { s -> s.copy(introEnd = v) } }
             showData?.creditsStart?.let { v -> _uiState.update { s -> s.copy(creditsStart = v) } }
+        }
+    }
+
+    /** Re-apply the show's saved intro/credits marks (kept per show, not per URL). */
+    private fun restoreShowMarks(card: CardMeta) {
+        if (card.iptv) return
+        viewModelScope.launch {
+            positionDataStore.getShowData(card)?.let { sd ->
+                sd.introEnd?.let { v -> _uiState.update { s -> s.copy(introEnd = v) } }
+                sd.creditsStart?.let { v -> _uiState.update { s -> s.copy(creditsStart = v) } }
+            }
         }
     }
 
@@ -1244,6 +1256,7 @@ class PlayerViewModel @Inject constructor(
                 val card = currentCard ?: return@launch
                 vlc?.setMedia(appContext, episode.url, card.headers, 0L, emptyList(), hardwareDecode = true, nightMode = settings.nightMode)
                 reapplyRate()
+                restoreShowMarks(card)
             } else {
                 player.stop()
                 loadUrl(episode.url, currentCard!!)
