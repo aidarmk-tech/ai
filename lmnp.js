@@ -764,6 +764,10 @@
             tmdb_id:        cardData.tmdb_id || null,
             season:         cardData.season_number || null,
             episode:        cardData.episode_number || null,
+            // Таймлайн Lampa — запасная точка «продолжить», когда URL балансера
+            // сменился между сеансами и наша сохранёнка по URL не нашлась.
+            timeline_time:     cardData.timeline_time || null,
+            timeline_duration: cardData.timeline_duration || null,
         };
     }
     function cleanMeta(meta) {

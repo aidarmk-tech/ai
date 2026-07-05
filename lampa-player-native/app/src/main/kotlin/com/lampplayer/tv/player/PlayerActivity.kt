@@ -1130,20 +1130,23 @@ class PlayerActivity : AppCompatActivity() {
      * the default = lost position). VLC-style mirrors stay Long per VLC's contract.
      */
     private fun finishWithResult(completed: Boolean = false) {
-        val (posMs, durMs, percent) = vm.buildResultExtras()
-        val done = completed || percent >= 90
+        val r = vm.buildResultExtras()
+        val done = completed || r.percent >= 90
         setResult(RESULT_OK, Intent().apply {
+            // The item this result belongs to (MX convention: data = last played file).
+            if (r.url.isNotBlank()) runCatching { data = android.net.Uri.parse(r.url) }
             // MX / Just Player convention (lampa wrappers parse these as Int ms)
-            putExtra("position", posMs.toInt())
-            putExtra("duration", durMs.toInt())
+            putExtra("position", r.posMs.toInt())
+            putExtra("duration", r.durMs.toInt())
             putExtra("end_by", if (done) "playback_completion" else "user")
             // VLC convention (Long ms)
-            putExtra("extra_position", posMs)
-            putExtra("extra_duration", durMs)
+            putExtra("extra_position", r.posMs)
+            putExtra("extra_duration", r.durMs)
             // Generic flags some forks look at
-            putExtra("watched_percent", percent)
+            putExtra("watched_percent", r.percent)
             putExtra("completed", done)
             putExtra("ended", done)
+            putExtra("url", r.url)
         })
         finish()
     }
