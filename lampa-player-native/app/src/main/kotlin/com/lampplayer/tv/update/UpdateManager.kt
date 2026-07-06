@@ -2,6 +2,8 @@ package com.lampplayer.tv.update
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.Signature
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -9,6 +11,7 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 
 data class UpdateInfo(
     val versionCode: Int,
@@ -74,29 +77,73 @@ object UpdateManager {
         return md.digest().joinToString("") { "%02x".format(it) }
     }
 
-    fun install(context: Context, file: File) {
+    /**
+     * Hand the APK to the system installer — but only after verifying it is signed
+     * with THIS app's own certificate. A tampered version.json pointing at a foreign
+     * APK (or any substituted download) is refused here even though the OS installer
+     * would also block a signature-mismatched update: this fails fast and safely and
+     * never launches an installer for an untrusted package. Returns false if refused.
+     */
+    fun install(context: Context, file: File): Boolean {
+        if (!signedLikeSelf(context, file)) return false
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, "application/vnd.android.package-archive")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(intent)
+        return true
+    }
+
+    /** True when [apk]'s signing certificate set matches the running app's. */
+    private fun signedLikeSelf(context: Context, apk: File): Boolean = runCatching {
+        val pm = context.packageManager
+        val mine = certDigests(installedSignatures(pm, context.packageName))
+        val theirs = certDigests(archiveSignatures(pm, apk.absolutePath))
+        mine.isNotEmpty() && mine == theirs
+    }.getOrDefault(false)
+
+    @Suppress("DEPRECATION")
+    private fun installedSignatures(pm: PackageManager, pkg: String): Array<Signature> =
+        if (android.os.Build.VERSION.SDK_INT >= 28) {
+            val info = pm.getPackageInfo(pkg, PackageManager.GET_SIGNING_CERTIFICATES)
+            info.signingInfo?.apkContentsSigners ?: emptyArray()
+        } else {
+            pm.getPackageInfo(pkg, PackageManager.GET_SIGNATURES).signatures ?: emptyArray()
+        }
+
+    @Suppress("DEPRECATION")
+    private fun archiveSignatures(pm: PackageManager, path: String): Array<Signature> =
+        if (android.os.Build.VERSION.SDK_INT >= 28) {
+            val info = pm.getPackageArchiveInfo(path, PackageManager.GET_SIGNING_CERTIFICATES)
+            info?.signingInfo?.apkContentsSigners ?: emptyArray()
+        } else {
+            pm.getPackageArchiveInfo(path, PackageManager.GET_SIGNATURES)?.signatures ?: emptyArray()
+        }
+
+    private fun certDigests(sigs: Array<Signature>): Set<String> {
+        val md = MessageDigest.getInstance("SHA-256")
+        return sigs.map { md.digest(it.toByteArray()).joinToString("") { b -> "%02x".format(b) } }.toSet()
     }
 
     private fun httpGet(url: String): String? =
         runCatching { openStream(url).use { it.readBytes().toString(Charsets.UTF_8) } }.getOrNull()
 
+    /** HTTPS-only, with a bounded redirect chain that must also stay HTTPS. */
     private fun openStream(url: String): java.io.InputStream {
+        require(url.startsWith("https://", true)) { "refusing non-HTTPS update URL" }
         var u = URL(url); var hops = 0
         while (true) {
             val c = (u.openConnection() as HttpURLConnection).apply {
                 connectTimeout = 15000; readTimeout = 30000
-                instanceFollowRedirects = true
+                instanceFollowRedirects = false   // inspect each hop ourselves
                 setRequestProperty("User-Agent", "LampPlayer")
             }
             val code = c.responseCode
             if (code in 300..399 && hops++ < 5) {
-                u = URL(u, c.getHeaderField("Location")); c.disconnect(); continue
+                val next = URL(u, c.getHeaderField("Location")); c.disconnect()
+                require(next.protocol.equals("https", true)) { "refusing HTTPS→HTTP downgrade in update redirect" }
+                u = next; continue
             }
             return c.inputStream
         }
