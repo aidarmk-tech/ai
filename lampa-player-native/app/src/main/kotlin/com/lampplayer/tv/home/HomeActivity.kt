@@ -49,7 +49,8 @@ class HomeActivity : AppCompatActivity() {
                 return@launch
             }
             binding.tvStatus.text = "Установка ${info.versionName}…"
-            UpdateManager.install(this@HomeActivity, file)
+            if (!UpdateManager.install(this@HomeActivity, file))
+                binding.tvStatus.text = "Обновление отклонено: подпись APK не совпадает"
         }
     }
 }

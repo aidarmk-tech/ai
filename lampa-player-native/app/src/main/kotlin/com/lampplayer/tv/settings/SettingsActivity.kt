@@ -87,7 +87,8 @@ class SettingsActivity : AppCompatActivity() {
             }
             binding.tvUpdateStatus.text = "Установка ${info.versionName}…"
             binding.btnUpdate.isEnabled = true
-            com.lampplayer.tv.update.UpdateManager.install(this@SettingsActivity, file)
+            if (!com.lampplayer.tv.update.UpdateManager.install(this@SettingsActivity, file))
+                binding.tvUpdateStatus.text = "Обновление отклонено: подпись APK не совпадает"
         }
     }
 
