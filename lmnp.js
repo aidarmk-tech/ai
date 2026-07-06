@@ -403,8 +403,13 @@
                 return clean(cl).replace(/\b\d{1,2}:\d{2}\b/g, '').replace(/\s+/g, ' ').trim().slice(0, 60);
             } catch (_) { return ''; }
         }
+        // Ограничиваем объём: cloneNode+querySelectorAll на КАЖДЫЙ заголовок на
+        // странице с сотнями каналов — секундный фриз на слабом ТВ. Гид всё равно
+        // приезжает из облака, скрейп лишь запасной.
+        var CAP = 220;
+        var n = Math.min(titles.length, CAP);
         var groups = [], byName = {};
-        for (var i2 = 0; i2 < titles.length; i2++) {
+        for (var i2 = 0; i2 < n; i2++) {
             var nm = norm(nameOf(cardOf(titles[i2])));
             if (!nm) continue;
             var g = byName[nm];
@@ -550,9 +555,12 @@
                 return '';
             }
 
-            // группируем заголовки по карточкам (по ссылке на DOM-узел)
+            // группируем заголовки по карточкам (по ссылке на DOM-узел).
+            // Лимит как в groupEpgByCard: без него — секундный фриз на больших списках.
+            var CAP = 220;
+            var lim = Math.min(titles.length, CAP);
             var cards = [], groups = [];
-            for (var i = 0; i < titles.length; i++) {
+            for (var i = 0; i < lim; i++) {
                 var c = cardOf(titles[i]);
                 var idx = -1;
                 for (var q = 0; q < cards.length; q++) if (cards[q] === c) { idx = q; break; }

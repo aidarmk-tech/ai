@@ -15,6 +15,10 @@ object IntroDb {
 
     val enabled: Boolean get() = DB_URL.isNotBlank()
 
+    // Marks barely change within a session; cache per key so re-entering an episode
+    // (or every episode of a season hitting the same season key) skips the network.
+    private val cache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, Long>>()
+
     private fun key(tmdbId: Int, season: Int?, episode: Int?) =
         "${tmdbId}_${season ?: 0}_${episode ?: 0}"
 
@@ -31,9 +35,18 @@ object IntroDb {
         return (if (e1 > 0) e1 else e2) to (if (c1 > 0) c1 else c2)
     }
 
-    private fun fetchKey(k: String): Pair<Long, Long> = runCatching {
-        val body = httpGet("$DB_URL/intros/$k.json") ?: return 0L to 0L
-        val obj = JsonParser.parseString(body).takeIf { it.isJsonObject }?.asJsonObject ?: return 0L to 0L
+    private fun fetchKey(k: String): Pair<Long, Long> {
+        cache[k]?.let { return it }
+        // null = network/parse failure (don't cache — retry later); Pair = real answer.
+        val res = fetchKeyNet(k) ?: return 0L to 0L
+        cache[k] = res
+        return res
+    }
+
+    private fun fetchKeyNet(k: String): Pair<Long, Long>? = runCatching {
+        val body = httpGet("$DB_URL/intros/$k.json") ?: return null
+        val obj = JsonParser.parseString(body).takeIf { it.isJsonObject }?.asJsonObject
+            ?: return 0L to 0L   // valid "no marks" (null/empty node) → cacheable
         val intro = ArrayList<Long>(); val credits = ArrayList<Long>()
         obj.entrySet().forEach { e ->
             val o = e.value?.takeIf { it.isJsonObject }?.asJsonObject ?: return@forEach
@@ -41,15 +54,19 @@ object IntroDb {
             o.get("c")?.takeIf { !it.isJsonNull }?.asLong?.let { if (it in 1_000L..21_600_000L) credits.add(it) }
         }
         median(intro) to median(credits)
-    }.getOrDefault(0L to 0L)
+    }.getOrNull()
 
     /** Append a mark. [field] is "e" (intro end) or "c" (credits start).
      *  Serial episodes also feed the season-wide key so the rest of the season benefits. */
     fun submitMark(tmdbId: Int, season: Int?, episode: Int?, field: String, ms: Long) {
         if (!enabled || ms < 1_000L) return
-        runCatching { httpPost("$DB_URL/intros/${key(tmdbId, season, episode)}.json", """{"$field":$ms}""") }
+        val epKey = key(tmdbId, season, episode)
+        runCatching { httpPost("$DB_URL/intros/$epKey.json", """{"$field":$ms}""") }
+        cache.remove(epKey)   // our own mark should be visible on the next fetch
         if (season != null && (episode ?: 0) != 0) {
-            runCatching { httpPost("$DB_URL/intros/${key(tmdbId, season, 0)}.json", """{"$field":$ms}""") }
+            val seasonKey = key(tmdbId, season, 0)
+            runCatching { httpPost("$DB_URL/intros/$seasonKey.json", """{"$field":$ms}""") }
+            cache.remove(seasonKey)
         }
     }
 
