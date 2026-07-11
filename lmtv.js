@@ -185,6 +185,14 @@
         scroll.append(body);
         html.append(info);
         html.append(scroll.render());
+        // Слой Lampa: скролл получает высоту окна минус шапка — иначе контент
+        // просто обрезается и фокус уезжает за экран без прокрутки.
+        scroll.render().addClass('layer--wheight').data('mheight', info);
+        scroll.minus(info);
+
+        function layerUpdate() {
+            try { if (Lampa.Layer && Lampa.Layer.update) Lampa.Layer.update(html); } catch (e) {}
+        }
 
         this.create = function () { return this.render(); };
         this.render = function () { return html; };
@@ -202,6 +210,7 @@
                 else if (mode === 'groups') buildGroups();
                 else buildChannels();
             } catch (e) { noty('lmtv: ' + (e && e.message ? e.message : e)); }
+            layerUpdate();
         };
 
         // — экран «Дом»: избранное, недавние, поиск, плейлисты, управление —
@@ -239,6 +248,7 @@
                         open({ mode: 'channels', plid: pl.id, group: g.name, title: g.name, url: pl.url });
                     }));
                 });
+                layerUpdate();
                 if (activeNow()) refocus();
             });
         }
@@ -282,6 +292,7 @@
             body.empty();
             if (!list.length) { body.append($('<div class="lmtv__empty">Пусто</div>')); return; }
             list.forEach(function (ch) { body.append(card(ch, list)); });
+            layerUpdate();
             if (activeNow()) refocus();
         }
 
