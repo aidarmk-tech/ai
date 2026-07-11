@@ -1037,7 +1037,16 @@
                     var g = getPlaylist();
                     var list = null, pos = 0;
                     if (g.list && g.list.length > 1)                      { list = g.list; pos = g.pos || 0; }
-                    else if (video.playlist && video.playlist.length > 1) { list = video.playlist; pos = 0; }
+                    else if (video.playlist && video.playlist.length > 1) {
+                        list = video.playlist;
+                        // Позиция запущенного канала — по URL, а не всегда 0: иначе
+                        // плеер получает имя/подсветку первого канала категории.
+                        pos = 0;
+                        for (var vp = 0; vp < list.length; vp++) {
+                            var vu = list[vp] && (list[vp].url || list[vp].file);
+                            if (vu && vu === video.url) { pos = vp; break; }
+                        }
+                    }
                     var iptvish = isIptvList(list) || !!video.iptv ||
                                   !!(list && list[pos] && (list[pos].tv || list[pos].iptv));
 
