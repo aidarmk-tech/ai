@@ -168,13 +168,6 @@
             tvg_id: ch.tvgId, catchup: ch.catchup, catchup_source: ch.catchupSource,
             playlist: list
         };
-        try {
-            if (Lampa.PlayerPlaylist && Lampa.PlayerPlaylist.set) {
-                var pos = 0;
-                for (var i = 0; i < list.length; i++) if (list[i].url === ch.url) { pos = i; break; }
-                Lampa.PlayerPlaylist.set(list); Lampa.PlayerPlaylist.position(pos);
-            }
-        } catch (e) {}
         Lampa.Player.play(video);
         try { Lampa.Player.playlist(list); } catch (e) {}
     }
@@ -189,7 +182,6 @@
         var last = false;
         var mode = object.mode || 'home';
 
-        scroll.render().find('.scroll__body').addClass('lmtv__grid');
         scroll.append(body);
         html.append(info);
         html.append(scroll.render());
@@ -215,7 +207,7 @@
             var pls = playlists();
             pls.forEach(function (pl) {
                 items.push(row('📺 ' + pl.name, pl.url.replace(/^https?:\/\//, '').slice(0, 46), function () {
-                    open({ mode: 'groups', plid: pl.id, title: pl.name });
+                    open({ mode: 'groups', plid: pl.id, title: pl.name, url: pl.url });
                 }, function () { confirmDelete(pl); }));
             });
             items.push(row('＋ Добавить плейлист', 'вставить ссылку на m3u', function () { addPrompt(); }));
@@ -235,9 +227,9 @@
                 info.find('.lmtv__sub').text(data.channels.length + ' каналов · ' + gs.length + ' групп');
                 body.empty();
                 gs.forEach(function (g) {
-                    body.append(row('▸ ' + g.name, g.list.length + ' каналов', (function (list, name) {
-                        return function () { open({ mode: 'channels', plid: pl.id, group: name, title: name, _list: list }); };
-                    })(g.list, g.name)));
+                    body.append(row('▸ ' + g.name, g.list.length + ' каналов', (function (name) {
+                        return function () { open({ mode: 'channels', plid: pl.id, group: name, title: name, url: pl.url }); };
+                    })(g.name)));
                 });
                 if (self.activity.active()) refocus();
             });
@@ -245,13 +237,11 @@
 
         function buildChannels() {
             html.addClass('lmtv--grid');
-            var list = object._list || null;
             var title = object.title || 'Каналы';
             if (object.src === 'fav') { collectFav(function (l) { renderChannels(l, title); }); return; }
             if (object.src === 'recent') { renderChannels(recent(), title); return; }
             if (object.src === 'search') { searchAll(object.query, function (l) { renderChannels(l, title + ' · «' + object.query + '»'); }); return; }
-            if (list) { renderChannels(list, title); return; }
-            // group by id+name
+            // группа: берём из кэша плейлиста (loadPlaylist кэширует на 6 часов)
             var pl = find(playlists(), object.plid);
             if (!pl) { renderChannels([], title); return; }
             self.activity.loader(true);
@@ -318,12 +308,15 @@
             });
             el.on('hover:focus', function () {
                 last = el[0]; scroll.update(el, true);
-                epgFor(ch, function (r) {
+                // Дебаунс: при быстрой прокрутке не дёргаем EPG на каждый фокус.
+                if (self._epgT) clearTimeout(self._epgT);
+                self._epgT = setTimeout(function () { if (last === el[0]) epgLoad(); }, 350);
+                function epgLoad() { epgFor(ch, function (r) {
                     var t = '';
                     if (r && r.now) t = 'Сейчас ' + hm(r.now.s) + ' · ' + r.now.t + (r.next ? '  →  ' + hm(r.next.s) + ' ' + r.next.t : '');
                     el.find('.lmtv__epg').text(t);
                     info.find('.lmtv__sub').text(t || (ch.group || ''));
-                });
+                }); }
             });
             return el;
         }
@@ -358,21 +351,13 @@
             });
         }
         function keyboard(placeholder, value, cb) {
+            // Штатный ввод Lampa (тот же, что в поиске/настройках).
             try {
-                var inp = new Lampa.Input(placeholder, value || '');
-                inp.create(); inp.value(value || '');
-                inp.onEnter = function (v) { cb((v || '').trim()); };
-                inp.show ? inp.show() : 0;
-            } catch (e) {
-                // запасной путь: старый Keyboard API
-                try {
-                    var k = Lampa.Keyboard ? new Lampa.Keyboard({ layout: 'full' }) : null;
-                    if (!k) { noty('Клавиатура недоступна'); return; }
-                    k.create(); k.set(value || '');
-                    k.listener.follow('enter', function () { cb((k.value() || '').trim()); k.destroy(); });
-                    k.show();
-                } catch (e2) { noty('Ввод недоступен на этом устройстве'); }
-            }
+                Lampa.Input.edit({ title: placeholder, value: value || '', free: true, nosave: true }, function (v) {
+                    cb((v || '').trim());
+                    Lampa.Controller.toggle('content');
+                });
+            } catch (e) { noty('Ввод недоступен на этом устройстве'); }
         }
         function confirmDelete(pl) {
             try {
@@ -424,12 +409,20 @@
         } catch (e) {}
     }
 
+    var booted = false;
     function boot() {
+        if (booted) return;
         if (!window.Lampa || !Lampa.Component) { setTimeout(boot, 300); return; }
+        booted = true;
         Lampa.Component.add(PLUGIN, component);
         addSettings();
-        addMenu();
         addStyle();
+        // пункт меню — с ретраем: список мог ещё не отрисоваться
+        var tries = 0;
+        (function tryMenu() {
+            if ($('.menu .menu__list').length) { addMenu(); return; }
+            if (++tries < 30) setTimeout(tryMenu, 500);
+        })();
     }
 
     function addStyle() {
@@ -438,10 +431,10 @@
         '.lmtv__info{padding:0 1.5em 1em}' +
         '.lmtv__title{font-size:1.7em;font-weight:600}' +
         '.lmtv__sub{color:rgba(255,255,255,.6);margin-top:.2em;font-size:.95em;min-height:1.2em}' +
-        '.lmtv__grid{display:flex;flex-wrap:wrap;gap:.8em;padding:0 1.5em}' +
+        '.lmtv__body{display:flex;flex-wrap:wrap;gap:.8em;padding:0 1.5em}' +
         '.lmtv__row{width:100%;padding:1em 1.2em;border-radius:.7em;background:rgba(255,255,255,.05);display:flex;justify-content:space-between;align-items:center}' +
         '.lmtv__row-t{font-size:1.15em}.lmtv__row-s{color:rgba(255,255,255,.5);font-size:.9em;margin-left:1em;text-align:right}' +
-        '.lmtv--grid .lmtv__grid{gap:1em}' +
+        '.lmtv--grid .lmtv__body{gap:1em}' +
         '.lmtv__card{width:13.5em;border-radius:.8em;background:rgba(255,255,255,.05);overflow:hidden;display:flex;flex-direction:column}' +
         '.lmtv__logo{height:6.4em;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.35)}' +
         '.lmtv__logo img{max-width:80%;max-height:80%;object-fit:contain}' +
