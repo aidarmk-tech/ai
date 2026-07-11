@@ -235,9 +235,9 @@
                 info.find('.lmtv__sub').text(data.channels.length + ' каналов · ' + gs.length + ' групп');
                 body.empty();
                 gs.forEach(function (g) {
-                    body.append(row('▸ ' + g.name, g.list.length + ' каналов', (function (name) {
-                        return function () { open({ mode: 'channels', plid: pl.id, group: name, title: name, url: pl.url }); };
-                    })(g.name)));
+                    body.append(groupCard(g, function () {
+                        open({ mode: 'channels', plid: pl.id, group: g.name, title: g.name, url: pl.url });
+                    }));
                 });
                 if (activeNow()) refocus();
             });
@@ -283,6 +283,25 @@
             if (!list.length) { body.append($('<div class="lmtv__empty">Пусто</div>')); return; }
             list.forEach(function (ch) { body.append(card(ch, list)); });
             if (activeNow()) refocus();
+        }
+
+        // — карточка группы (плитка) —
+        function groupCard(g, onEnter) {
+            var logos = '';
+            for (var i = 0, n = 0; i < g.list.length && n < 4; i++) {
+                if (g.list[i].logo) { logos += '<img loading="lazy" src="' + esc(g.list[i].logo) + '"/>'; n++; }
+            }
+            var el = $(
+                '<div class="lmtv__gcard selector">' +
+                    '<div class="lmtv__gname">' + esc(g.name) + '</div>' +
+                    '<div class="lmtv__gcount">' + g.list.length + ' каналов</div>' +
+                    '<div class="lmtv__glogos">' + logos + '</div>' +
+                '</div>'
+            );
+            el.find('img').each(function () { this.onerror = function () { $(this).remove(); }; });
+            el.on('hover:enter', onEnter);
+            el.on('hover:focus', function () { last = el[0]; scroll.update(el, true); });
+            return el;
         }
 
         // — строка списка —
@@ -451,6 +470,12 @@
         '.lmtv__num{font-size:.95em;color:#F6B44C;font-weight:600;min-height:1em}' +
         '.lmtv__name{font-size:1.2em;margin-top:.1em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
         '.lmtv__epg{font-size:.95em;color:rgba(255,255,255,.55);margin-top:.25em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:1em}' +
+        '.lmtv__gcard{width:17em;min-height:8.6em;padding:1.1em 1.2em;border-radius:.9em;background:rgba(255,255,255,.06);display:flex;flex-direction:column}' +
+        '.lmtv__gname{font-size:1.3em;font-weight:600;line-height:1.2;max-height:2.4em;overflow:hidden}' +
+        '.lmtv__gcount{color:rgba(255,255,255,.55);font-size:1em;margin-top:.3em}' +
+        '.lmtv__glogos{display:flex;gap:.5em;margin-top:auto;padding-top:.7em;align-items:center}' +
+        '.lmtv__glogos img{width:2.2em;height:2.2em;object-fit:contain;background:rgba(0,0,0,.35);border-radius:.4em;padding:.15em}' +
+        '.lmtv__gcard.selector.focus{transform:scale(1.04)}' +
         '.lmtv__empty{padding:2em;color:rgba(255,255,255,.5)}' +
         '.lmtv .selector.focus,.lmtv .selector:focus{background:rgba(255,255,255,.16);box-shadow:0 0 0 .18em #F6B44C}' +
         '.lmtv__card.selector.focus{transform:scale(1.04)}';
