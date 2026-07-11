@@ -189,11 +189,19 @@
         this.create = function () { return this.render(); };
         this.render = function () { return html; };
 
+        // У объекта активности НЕТ метода active() — только у глобального Lampa.Activity.
+        function activeNow() {
+            try { return Lampa.Activity.active().activity === self.activity; } catch (e) { return true; }
+        }
+        function loader(on) { try { if (self.activity && self.activity.loader) self.activity.loader(on); } catch (e) {} }
+
         this.build = function () {
             body.empty();
-            if (mode === 'home') buildHome();
-            else if (mode === 'groups') buildGroups();
-            else buildChannels();
+            try {
+                if (mode === 'home') buildHome();
+                else if (mode === 'groups') buildGroups();
+                else buildChannels();
+            } catch (e) { noty('lmtv: ' + (e && e.message ? e.message : e)); }
         };
 
         // — экран «Дом»: избранное, недавние, поиск, плейлисты, управление —
@@ -219,9 +227,9 @@
             var pl = find(playlists(), object.plid);
             info.html('<div class="lmtv__title">' + esc(object.title || 'Плейлист') + '</div><div class="lmtv__sub">Загрузка…</div>');
             if (!pl) { info.find('.lmtv__sub').text('Плейлист не найден'); return; }
-            self.activity.loader(true);
+            loader(true);
             loadPlaylist(pl, function (data) {
-                self.activity.loader(false);
+                loader(false);
                 if (!data) { info.find('.lmtv__sub').text('Не удалось загрузить m3u'); return; }
                 var gs = groupsOf(data.channels);
                 info.find('.lmtv__sub').text(data.channels.length + ' каналов · ' + gs.length + ' групп');
@@ -231,7 +239,7 @@
                         return function () { open({ mode: 'channels', plid: pl.id, group: name, title: name, url: pl.url }); };
                     })(g.name)));
                 });
-                if (self.activity.active()) refocus();
+                if (activeNow()) refocus();
             });
         }
 
@@ -244,9 +252,9 @@
             // группа: берём из кэша плейлиста (loadPlaylist кэширует на 6 часов)
             var pl = find(playlists(), object.plid);
             if (!pl) { renderChannels([], title); return; }
-            self.activity.loader(true);
+            loader(true);
             loadPlaylist(pl, function (data) {
-                self.activity.loader(false);
+                loader(false);
                 var l = (data ? data.channels : []).filter(function (c) { return c.group === object.group; });
                 renderChannels(l, title);
             });
@@ -274,7 +282,7 @@
             body.empty();
             if (!list.length) { body.append($('<div class="lmtv__empty">Пусто</div>')); return; }
             list.forEach(function (ch) { body.append(card(ch, list)); });
-            if (self.activity.active()) refocus();
+            if (activeNow()) refocus();
         }
 
         // — строка списка —
@@ -429,22 +437,22 @@
         var css =
         '.lmtv{padding:1.5em 0 3em}' +
         '.lmtv__info{padding:0 1.5em 1em}' +
-        '.lmtv__title{font-size:1.7em;font-weight:600}' +
-        '.lmtv__sub{color:rgba(255,255,255,.6);margin-top:.2em;font-size:.95em;min-height:1.2em}' +
+        '.lmtv__title{font-size:2em;font-weight:600}' +
+        '.lmtv__sub{color:rgba(255,255,255,.65);margin-top:.25em;font-size:1.15em;min-height:1.3em}' +
         '.lmtv__body{display:flex;flex-wrap:wrap;gap:.8em;padding:0 1.5em}' +
-        '.lmtv__row{width:100%;padding:1em 1.2em;border-radius:.7em;background:rgba(255,255,255,.05);display:flex;justify-content:space-between;align-items:center}' +
-        '.lmtv__row-t{font-size:1.15em}.lmtv__row-s{color:rgba(255,255,255,.5);font-size:.9em;margin-left:1em;text-align:right}' +
+        '.lmtv__row{width:100%;padding:1.2em 1.4em;border-radius:.8em;background:rgba(255,255,255,.05);display:flex;justify-content:space-between;align-items:center}' +
+        '.lmtv__row-t{font-size:1.35em}.lmtv__row-s{color:rgba(255,255,255,.5);font-size:1.05em;margin-left:1em;text-align:right}' +
         '.lmtv--grid .lmtv__body{gap:1em}' +
-        '.lmtv__card{width:13.5em;border-radius:.8em;background:rgba(255,255,255,.05);overflow:hidden;display:flex;flex-direction:column}' +
-        '.lmtv__logo{height:6.4em;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.35)}' +
+        '.lmtv__card{width:15.5em;border-radius:.8em;background:rgba(255,255,255,.05);overflow:hidden;display:flex;flex-direction:column}' +
+        '.lmtv__logo{height:7.2em;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.35)}' +
         '.lmtv__logo img{max-width:80%;max-height:80%;object-fit:contain}' +
         '.lmtv__logo span{font-size:2em;font-weight:700;color:rgba(255,255,255,.7)}' +
         '.lmtv__meta{padding:.6em .7em}' +
-        '.lmtv__num{font-size:.8em;color:#F6B44C;font-weight:600;min-height:1em}' +
-        '.lmtv__name{font-size:1.02em;margin-top:.1em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
-        '.lmtv__epg{font-size:.8em;color:rgba(255,255,255,.55);margin-top:.25em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:1em}' +
+        '.lmtv__num{font-size:.95em;color:#F6B44C;font-weight:600;min-height:1em}' +
+        '.lmtv__name{font-size:1.2em;margin-top:.1em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+        '.lmtv__epg{font-size:.95em;color:rgba(255,255,255,.55);margin-top:.25em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:1em}' +
         '.lmtv__empty{padding:2em;color:rgba(255,255,255,.5)}' +
-        '.lmtv .selector.focus,.lmtv .selector:focus{background:rgba(255,255,255,.16);box-shadow:0 0 0 .12em #F6B44C}' +
+        '.lmtv .selector.focus,.lmtv .selector:focus{background:rgba(255,255,255,.16);box-shadow:0 0 0 .18em #F6B44C}' +
         '.lmtv__card.selector.focus{transform:scale(1.04)}';
         try { $('<style>' + css + '</style>').appendTo('head'); } catch (e) {}
     }
