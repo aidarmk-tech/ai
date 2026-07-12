@@ -85,6 +85,9 @@ object IntentParser {
             epgStart = str("epg_start"),
             epgEnd = str("epg_end"),
             iptv = obj.get("iptv")?.takeIf { !it.isJsonNull }?.asBoolean ?: false,
+            archiveStartSec = long("as")?.takeIf { it > 0 },
+            archiveEndSec = long("ae")?.takeIf { it > 0 },
+            archiveTitle = str("at"),
         )
     }
 

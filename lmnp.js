@@ -63,6 +63,18 @@
     // base64(UTF-8) — безопасно для кириллицы.
     function b64utf8(str) { return btoa(unescape(encodeURIComponent(str))); }
 
+    // Каталог lmtv может попросить открыть канал сразу в архиве конкретной
+    // передачи — пробрасываем её границы в конверт (as/ae сек, at название).
+    function addArchive(meta, video) {
+        try {
+            if (video && video.archive_start > 0) {
+                meta.as = Math.floor(video.archive_start);
+                meta.ae = Math.floor(video.archive_end || (video.archive_start + 3600));
+                if (video.archive_title) meta.at = ('' + video.archive_title).slice(0, 80);
+            }
+        } catch (e) {}
+    }
+
     // ── Формирование Chrome-совместимого intent URI ───────────────────────
     // intent://HOST/PATH#Intent;scheme=SCHEME;package=...;S.lampa_data=JSON;end
     // (raw-формат intent:https://... вызывает ERR_UNKNOWN_URL_SCHEME в браузере)
@@ -1071,6 +1083,7 @@
                                 if (iptv) {
                                     var ch0 = (list && list[pos]) || {};
                                     meta = { title: (ch0.title || ch0.name || origTitle || 'IPTV'), iptv: true };
+                                    addArchive(meta, video);
                                 } else {
                                     meta = compactMeta(cardData);
                                     var cpl = buildCompactPlaylist(list, pos);   // title fallback (окно)
@@ -1116,6 +1129,7 @@
 
                         // Плейлиста нет (фильм/одиночная серия) — пакуем сразу.
                         var meta = iptv ? { title: origTitle || 'IPTV', iptv: true } : compactMeta(cardData);
+                        if (iptv) addArchive(meta, video);
                         cleanMeta(meta);
                         if (meta.title || meta.tmdb_id || meta.iptv)
                             video.title = 'lmpmeta://' + b64utf8(JSON.stringify(meta));

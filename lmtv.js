@@ -121,14 +121,27 @@
             done(obj);
         });
     }
-    function groupsOf(channels) {
-        var order = [], map = {}, adult = S('adult', false);
+    function groupsOf(channels, plid) {
+        var order = [], map = {}, adultCnt = 0;
+        var showAdult = S('adult', false) || sessionAdult;
+        var hidden = S('hidden_' + (plid || ''), []);
+        var pinned = S('pinned_' + (plid || ''), []);
         channels.forEach(function (c) {
-            if (!adult && ADULT_RE.test(c.group)) return;
+            if (ADULT_RE.test(c.group)) { if (!showAdult) { adultCnt++; return; } }
             if (!map[c.group]) { map[c.group] = []; order.push(c.group); }
             map[c.group].push(c);
         });
-        return order.map(function (g) { return { name: g, list: map[g] }; });
+        var visible = [], hid = 0;
+        order.forEach(function (g) { if (hidden.indexOf(g) >= 0) hid++; else visible.push(g); });
+        // закреплённые — в начало, сохраняя их взаимный порядок
+        visible.sort(function (a, b) {
+            var pa = pinned.indexOf(a), pb = pinned.indexOf(b);
+            if (pa >= 0 && pb >= 0) return pa - pb;
+            if (pa >= 0) return -1;
+            if (pb >= 0) return 1;
+            return 0;
+        });
+        return { list: visible.map(function (g) { return { name: g, list: map[g] }; }), hidden: hid, adult: adultCnt };
     }
 
     // ── облачный EPG (Сейчас/Далее) ────────────────────────────────────────
@@ -156,8 +169,26 @@
     }
     function hm(sec) { var d = new Date(sec * 1000); return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2); }
 
-    // ── передача канала плееру ─────────────────────────────────────────────
-    function playChannel(ch, siblings) {
+    // Полное расписание канала (для «Программа и архив»).
+    var EPGF = {};
+    function epgFull(ch, cb) {
+        var id = ch.tvgId || idFromUrl(ch.url);
+        if (!id) { cb(null); return; }
+        var c = EPGF[id];
+        if (c && Date.now() - c.ts < 30 * 60e3) { cb(c.p); return; }
+        var safe = id.replace(/[^A-Za-z0-9._-]/g, '_');
+        httpText(REMOTE_EPG + '/' + safe + '.json', function (body) {
+            if (!body) { cb(null); return; }
+            try { var p = JSON.parse(body).p || []; EPGF[id] = { ts: Date.now(), p: p }; cb(p); }
+            catch (e) { cb(null); }
+        });
+    }
+
+    var sessionAdult = false;         // 18+ разблокирован PIN-ом до перезапуска
+    var plHealth = {};                // plid → true (ок) / false (не отвечает)
+
+    // ── передача канала плееру (archive = {s,e,t} — сразу открыть запись) ──
+    function playChannel(ch, siblings, archive) {
         pushRecent(ch);
         var list = (siblings || [ch]).map(function (c) {
             return { title: c.title, url: c.url, tv: true, iptv: true, logo: c.logo,
@@ -168,6 +199,11 @@
             tvg_id: ch.tvgId, catchup: ch.catchup, catchup_source: ch.catchupSource,
             playlist: list
         };
+        if (archive && archive.s) {
+            video.archive_start = archive.s;
+            video.archive_end = archive.e || (archive.s + 3600);
+            video.archive_title = archive.t || '';
+        }
         Lampa.Player.play(video);
         try { Lampa.Player.playlist(list); } catch (e) {}
     }
@@ -213,23 +249,110 @@
             layerUpdate();
         };
 
-        // — экран «Дом»: избранное, недавние, поиск, плейлисты, управление —
+        // — экран «Дом»: продолжить, эфир, избранное, плейлисты, управление —
         function buildHome() {
             html.removeClass('lmtv--grid');
             info.html('<div class="lmtv__title">' + esc(TITLE) + '</div><div class="lmtv__sub">Выбери источник или добавь плейлист</div>');
             var items = [];
+            var lastCh = recent()[0];
+            if (lastCh) items.push(row('▶ Продолжить · ' + lastCh.title, 'последний канал, одно нажатие', function () {
+                playChannel(lastCh, recent());
+            }));
+            items.push(row('📡 Сейчас в эфире', 'что идёт на любимых каналах', function () { open({ mode: 'channels', src: 'now', title: 'Сейчас в эфире' }); }));
             items.push(row('★ Избранное', favs().length + ' каналов', function () { open({ mode: 'channels', src: 'fav', title: 'Избранное' }); }));
             items.push(row('🕓 Недавние', recent().length + ' каналов', function () { open({ mode: 'channels', src: 'recent', title: 'Недавние' }); }));
             items.push(row('🔍 Поиск канала', 'по всем плейлистам', function () { searchPrompt(); }));
             var pls = playlists();
+            var plRows = {};
             pls.forEach(function (pl) {
-                items.push(row('📺 ' + pl.name, pl.url.replace(/^https?:\/\//, '').slice(0, 46), function () {
+                var sub = pl.url.replace(/^https?:\/\//, '').slice(0, 46);
+                if (plHealth[pl.id] === false) sub = '⚠ не отвечает · ' + sub;
+                var el = row('📺 ' + pl.name, sub, function () {
                     open({ mode: 'groups', plid: pl.id, title: pl.name, url: pl.url });
-                }, function () { confirmDelete(pl); }));
+                }, function () { plMenu(pl); });
+                plRows[pl.id] = el;
+                items.push(el);
             });
-            items.push(row('＋ Добавить плейлист', 'вставить ссылку на m3u', function () { addPrompt(); }));
-            if (pls.length) items.push(row('⚙ Настройки', 'EPG, родительский фильтр', function () { try { Lampa.Settings.create('main'); } catch (e) {} }));
+            items.push(row('＋ Добавить плейлист', 'ссылка m3u или портал Xtream', function () { addPrompt(); }));
+            items.push(row('⇄ Экспорт / импорт', 'перенос плейлистов и избранного', function () { exportImport(); }));
+            items.push(row('⚙ Настройки', 'EPG, сортировка, PIN 18+, автозапуск', function () { try { Lampa.Settings.create(PLUGIN); } catch (e) { try { Lampa.Settings.create('main'); } catch (e2) {} } }));
             items.forEach(function (el) { body.append(el); });
+            // фоновая проверка здоровья плейлистов (через кэш — дёшево)
+            pls.forEach(function (pl) {
+                loadPlaylist(pl, function (data) {
+                    plHealth[pl.id] = !!data;
+                    var el = plRows[pl.id];
+                    if (el && !data) el.find('.lmtv__row-s').text('⚠ не отвечает');
+                });
+            });
+        }
+
+        // — меню плейлиста (долгое нажатие) —
+        function plMenu(pl) {
+            try {
+                Lampa.Select.show({
+                    title: pl.name,
+                    items: [
+                        { title: '↻ Обновить сейчас', act: 'refresh' },
+                        { title: '✎ Переименовать', act: 'rename' },
+                        { title: '🗑 Удалить', act: 'del' },
+                        { title: 'Отмена', act: '' }
+                    ],
+                    onSelect: function (a) {
+                        Lampa.Controller.toggle('content');
+                        if (a.act === 'refresh') {
+                            try { delete PARSED[pl.id]; } catch (e) {}
+                            loader(true);
+                            loadPlaylist(pl, function (data) {
+                                loader(false);
+                                plHealth[pl.id] = !!data;
+                                noty(data ? 'Обновлён: ' + data.channels.length + ' каналов' : '⚠ Плейлист не отвечает');
+                                self.build(); refocus();
+                            });
+                        }
+                        if (a.act === 'rename') keyboard('Название плейлиста', pl.name, function (v) {
+                            if (!v) return;
+                            var a2 = playlists();
+                            for (var i = 0; i < a2.length; i++) if (a2[i].id === pl.id) a2[i].name = v.slice(0, 40);
+                            savePlaylists(a2); self.build(); refocus();
+                        });
+                        if (a.act === 'del') confirmDelete(pl);
+                    },
+                    onBack: function () { Lampa.Controller.toggle('content'); }
+                });
+            } catch (e) { confirmDelete(pl); }
+        }
+
+        // — экспорт / импорт (плейлисты + избранное) строкой —
+        function exportImport() {
+            try {
+                Lampa.Select.show({
+                    title: 'Перенос настроек',
+                    items: [{ title: '⬆ Экспорт (показать строку)', act: 'ex' }, { title: '⬇ Импорт (вставить строку)', act: 'im' }, { title: 'Отмена', act: '' }],
+                    onSelect: function (a) {
+                        Lampa.Controller.toggle('content');
+                        if (a.act === 'ex') {
+                            var data = JSON.stringify({ p: playlists(), f: favs() });
+                            keyboard('Скопируй эту строку', data, function () {});
+                        }
+                        if (a.act === 'im') keyboard('Вставь строку экспорта', '', function (v) {
+                            try {
+                                var d = JSON.parse(v);
+                                var cur = playlists(), urls = {};
+                                cur.forEach(function (x) { urls[x.url] = 1; });
+                                (d.p || []).forEach(function (x) { if (x && x.url && !urls[x.url]) { x.id = uid() + cur.length; cur.push(x); } });
+                                savePlaylists(cur);
+                                var fv = favs();
+                                (d.f || []).forEach(function (k) { if (fv.indexOf(k) < 0) fv.push(k); });
+                                Sset('fav', fv);
+                                noty('Импортировано: плейлистов ' + cur.length + ', избранных ' + fv.length);
+                                self.build(); refocus();
+                            } catch (e) { noty('Не удалось разобрать строку'); }
+                        });
+                    },
+                    onBack: function () { Lampa.Controller.toggle('content'); }
+                });
+            } catch (e) {}
         }
 
         function buildGroups() {
@@ -240,14 +363,23 @@
             loadPlaylist(pl, function (data) {
                 loader(false);
                 if (!data) { info.find('.lmtv__sub').text('Не удалось загрузить m3u'); return; }
-                var gs = groupsOf(data.channels);
-                info.find('.lmtv__sub').text(data.channels.length + ' каналов · ' + gs.length + ' групп');
+                var gs = groupsOf(data.channels, pl.id);
+                info.find('.lmtv__sub').text(data.channels.length + ' каналов · ' + gs.list.length + ' групп · долгое OK на группе — скрыть/закрепить');
                 body.empty();
-                gs.forEach(function (g) {
-                    body.append(groupCard(g, function () {
+                // виртуальная группа: каналы с архивом
+                var withArc = data.channels.filter(function (c) { return !!c.catchup && (S('adult', false) || sessionAdult || !ADULT_RE.test(c.group)); });
+                if (withArc.length) body.append(groupCard({ name: '⏪ С архивом', list: withArc }, function () {
+                    open({ mode: 'channels', plid: pl.id, src: 'arc', title: '⏪ С архивом', url: pl.url });
+                }));
+                gs.list.forEach(function (g) {
+                    var el = groupCard(g, function () {
                         open({ mode: 'channels', plid: pl.id, group: g.name, title: g.name, url: pl.url });
-                    }));
+                    });
+                    el.on('hover:long', function () { groupMenu(pl, g.name); });
+                    body.append(el);
                 });
+                if (gs.hidden) body.append(groupCard({ name: '🚫 Скрытые (' + gs.hidden + ')', list: [] }, function () { unhideMenu(pl); }));
+                if (gs.adult) body.append(groupCard({ name: '🔒 Взрослые (' + gs.adult + ')', list: [] }, function () { pinPrompt(pl); }));
                 layerUpdate();
                 if (activeNow()) refocus();
             });
@@ -258,15 +390,81 @@
             var title = object.title || 'Каналы';
             if (object.src === 'fav') { collectFav(function (l) { renderChannels(l, title); }); return; }
             if (object.src === 'recent') { renderChannels(recent(), title); return; }
+            if (object.src === 'now') {
+                collectFav(function (l) {
+                    if (!l.length) l = recent();
+                    renderChannels(l, title, true);
+                });
+                return;
+            }
             if (object.src === 'search') { searchAll(object.query, function (l) { renderChannels(l, title + ' · «' + object.query + '»'); }); return; }
-            // группа: берём из кэша плейлиста (loadPlaylist кэширует на 6 часов)
+            // группа/архив: берём из кэша плейлиста (loadPlaylist кэширует на 6 часов)
             var pl = find(playlists(), object.plid);
             if (!pl) { renderChannels([], title); return; }
             loader(true);
             loadPlaylist(pl, function (data) {
                 loader(false);
-                var l = (data ? data.channels : []).filter(function (c) { return c.group === object.group; });
+                var all = data ? data.channels : [];
+                var l = object.src === 'arc'
+                    ? all.filter(function (c) { return !!c.catchup && (S('adult', false) || sessionAdult || !ADULT_RE.test(c.group)); })
+                    : all.filter(function (c) { return c.group === object.group; });
                 renderChannels(l, title);
+            });
+        }
+
+        function sorted(list) {
+            var m = S('sort', 'default');
+            if (m === 'abc') return list.slice().sort(function (a, b) { return ('' + a.title).localeCompare('' + b.title, 'ru'); });
+            if (m === 'num') return list.slice().sort(function (a, b) { return (a.chno || 9e9) - (b.chno || 9e9); });
+            return list;
+        }
+
+        // — меню группы: скрыть / закрепить —
+        function groupMenu(pl, name) {
+            try {
+                var pinned = S('pinned_' + pl.id, []);
+                var isPin = pinned.indexOf(name) >= 0;
+                Lampa.Select.show({
+                    title: name,
+                    items: [
+                        { title: isPin ? '📌 Открепить' : '📌 Закрепить в начало', act: 'pin' },
+                        { title: '🚫 Скрыть группу', act: 'hide' },
+                        { title: 'Отмена', act: '' }
+                    ],
+                    onSelect: function (a) {
+                        Lampa.Controller.toggle('content');
+                        if (a.act === 'pin') {
+                            if (isPin) pinned.splice(pinned.indexOf(name), 1); else pinned.unshift(name);
+                            Sset('pinned_' + pl.id, pinned); self.build(); refocus();
+                        }
+                        if (a.act === 'hide') {
+                            var h = S('hidden_' + pl.id, []); h.push(name);
+                            Sset('hidden_' + pl.id, h); self.build(); refocus();
+                        }
+                    },
+                    onBack: function () { Lampa.Controller.toggle('content'); }
+                });
+            } catch (e) {}
+        }
+        function unhideMenu(pl) {
+            var h = S('hidden_' + pl.id, []);
+            try {
+                Lampa.Select.show({
+                    title: 'Показать группу',
+                    items: h.map(function (n) { return { title: n, name: n }; }).concat([{ title: '↩ Показать все', all: true }]),
+                    onSelect: function (a) {
+                        Lampa.Controller.toggle('content');
+                        Sset('hidden_' + pl.id, a.all ? [] : h.filter(function (n) { return n !== a.name; }));
+                        self.build(); refocus();
+                    },
+                    onBack: function () { Lampa.Controller.toggle('content'); }
+                });
+            } catch (e) {}
+        }
+        function pinPrompt(pl) {
+            keyboard('PIN (по умолчанию 0000)', '', function (v) {
+                if (v === ('' + S('pin', '0000'))) { sessionAdult = true; noty('18+ разблокировано до перезапуска'); self.build(); refocus(); }
+                else noty('Неверный PIN');
             });
         }
 
@@ -287,14 +485,57 @@
             });
         }
 
-        function renderChannels(list, title) {
-            info.html('<div class="lmtv__title">' + esc(title) + '</div><div class="lmtv__sub">' + list.length + ' каналов · OK — смотреть, «меню» — в избранное</div>');
+        function renderChannels(list, title, eagerEpg) {
+            list = sorted(list);
+            info.html('<div class="lmtv__title">' + esc(title) + '</div><div class="lmtv__sub">' + list.length + ' каналов · OK — смотреть · долгое OK — меню · цифры — номер</div>');
             body.empty();
+            numMap = {};
             if (!list.length) { body.append($('<div class="lmtv__empty">Пусто</div>')); return; }
-            list.forEach(function (ch) { body.append(card(ch, list)); });
+            list.forEach(function (ch) {
+                var el = card(ch, list);
+                if (ch.chno) numMap[ch.chno] = el;
+                body.append(el);
+            });
+            // «Сейчас в эфире»: программа сразу на всех карточках (до 30)
+            if (eagerEpg) list.slice(0, 30).forEach(function (ch, i) {
+                setTimeout(function () {
+                    epgFor(ch, function (r) {
+                        if (r && r.now) {
+                            var el = body.children().eq(i);
+                            el.find('.lmtv__epg').text(hm(r.now.s) + '–' + hm(r.now.e) + ' · ' + r.now.t);
+                        }
+                    });
+                }, i * 120);
+            });
             layerUpdate();
             if (activeNow()) refocus();
         }
+
+        // — переход по номеру канала с цифровых кнопок —
+        var numMap = {}, zapBuf = '', zapT = null;
+        function onDigit(d) {
+            zapBuf += d;
+            info.find('.lmtv__sub').text('Канал № ' + zapBuf + '…');
+            if (zapT) clearTimeout(zapT);
+            zapT = setTimeout(function () {
+                var el = numMap[parseInt(zapBuf, 10)];
+                zapBuf = '';
+                if (el) {
+                    last = el[0];
+                    Lampa.Controller.collectionFocus(el[0], scroll.render());
+                    scroll.update(el, true);
+                } else info.find('.lmtv__sub').text('Нет канала с таким номером');
+            }, 900);
+        }
+        this._digits = function (e) {
+            if (mode !== 'channels') return;
+            if (!activeNow()) return;
+            var k = e.keyCode;
+            var d = -1;
+            if (k >= 48 && k <= 57) d = k - 48;
+            if (k >= 96 && k <= 105) d = k - 96;
+            if (d >= 0) onDigit('' + d);
+        };
 
         // — карточка группы (плитка) —
         function groupCard(g, onEnter) {
@@ -339,24 +580,80 @@
             var img = el.find('img')[0];
             if (img) img.onerror = function () { $(img).replaceWith('<span>' + esc((ch.title || '?').slice(0, 2).toUpperCase()) + '</span>'); };
             el.on('hover:enter', function () { playChannel(ch, siblings); });
-            el.on('hover:long', function () {
-                var on = toggleFav(ch);
-                el.find('.lmtv__num').html((ch.chno || '') + (on ? ' ★' : '') + (ch.catchup ? ' ⏪' : ''));
-                noty(on ? '★ В избранном' : 'Убрано из избранного');
-            });
+            el.on('hover:long', function () { cardMenu(ch, el, siblings); });
             el.on('hover:focus', function () {
                 last = el[0]; scroll.update(el, true);
                 // Дебаунс: при быстрой прокрутке не дёргаем EPG на каждый фокус.
                 if (self._epgT) clearTimeout(self._epgT);
                 self._epgT = setTimeout(function () { if (last === el[0]) epgLoad(); }, 350);
-                function epgLoad() { epgFor(ch, function (r) {
-                    var t = '';
-                    if (r && r.now) t = 'Сейчас ' + hm(r.now.s) + ' · ' + r.now.t + (r.next ? '  →  ' + hm(r.next.s) + ' ' + r.next.t : '');
-                    el.find('.lmtv__epg').text(t);
-                    info.find('.lmtv__sub').text(t || (ch.group || ''));
-                }); }
+                function epgLoad() {
+                    // постер-фон, как в остальной Lampa
+                    try {
+                        if (ch.logo) { if (Lampa.Background.change) Lampa.Background.change(ch.logo); else if (Lampa.Background.immediately) Lampa.Background.immediately(ch.logo); }
+                    } catch (e) {}
+                    epgFor(ch, function (r) {
+                        var t = '';
+                        if (r && r.now) t = 'Сейчас ' + hm(r.now.s) + ' · ' + r.now.t + (r.next ? '  →  ' + hm(r.next.s) + ' ' + r.next.t : '');
+                        el.find('.lmtv__epg').text(t);
+                        info.find('.lmtv__sub').text(t || (ch.group || ''));
+                    });
+                }
             });
             return el;
+        }
+
+        // — меню канала: избранное + программа с архивом —
+        function cardMenu(ch, el, siblings) {
+            try {
+                Lampa.Select.show({
+                    title: ch.title,
+                    items: [
+                        { title: isFav(ch) ? '★ Убрать из избранного' : '☆ В избранное', act: 'fav' },
+                        { title: '📅 Программа и архив', act: 'epg' },
+                        { title: 'Отмена', act: '' }
+                    ],
+                    onSelect: function (a) {
+                        Lampa.Controller.toggle('content');
+                        if (a.act === 'fav') {
+                            var on = toggleFav(ch);
+                            el.find('.lmtv__num').html((ch.chno || '') + (on ? ' ★' : '') + (ch.catchup ? ' ⏪' : ''));
+                            noty(on ? '★ В избранном' : 'Убрано из избранного');
+                        }
+                        if (a.act === 'epg') programmeMenu(ch, siblings);
+                    },
+                    onBack: function () { Lampa.Controller.toggle('content'); }
+                });
+            } catch (e) {}
+        }
+
+        // — расписание канала: прошлое кликабельно (архив), будущее — просмотр —
+        function programmeMenu(ch, siblings) {
+            loader(true);
+            epgFull(ch, function (p) {
+                loader(false);
+                if (!p || !p.length) { noty('Программа для канала не найдена'); return; }
+                var now = Date.now() / 1000, items = [];
+                p.forEach(function (x) {
+                    if (x.e <= now) items.push({ title: '⏪ ' + hm(x.s) + '  ' + x.t, prog: x });
+                    else if (x.s <= now) items.push({ title: '● СЕЙЧАС  ' + hm(x.s) + '  ' + x.t, live: true });
+                    else items.push({ title: '· ' + hm(x.s) + '  ' + x.t, future: true });
+                });
+                // прошлое ближе к «сейчас» — сверху видимой зоны: показываем хвостом
+                if (items.length > 40) items = items.slice(items.length - 40);
+                try {
+                    Lampa.Select.show({
+                        title: ch.title + ' · ⏪ архив',
+                        items: items,
+                        onSelect: function (a) {
+                            Lampa.Controller.toggle('content');
+                            if (a.prog) playChannel(ch, siblings, { s: a.prog.s, e: a.prog.e, t: a.prog.t });
+                            else if (a.live) playChannel(ch, siblings);
+                            else noty('Эта передача ещё не вышла');
+                        },
+                        onBack: function () { Lampa.Controller.toggle('content'); }
+                    });
+                } catch (e) {}
+            });
         }
 
         function find(arr, id) { for (var i = 0; i < arr.length; i++) if (arr[i].id === id) return arr[i]; return null; }
@@ -368,12 +665,42 @@
 
         // — добавление плейлиста / поиск через клавиатуру Lampa —
         function addPrompt() {
+            try {
+                Lampa.Select.show({
+                    title: 'Добавить источник',
+                    items: [{ title: '🔗 Ссылка на m3u', act: 'm3u' }, { title: '🌐 Портал Xtream Codes', act: 'xc' }, { title: 'Отмена', act: '' }],
+                    onSelect: function (a) {
+                        Lampa.Controller.toggle('content');
+                        if (a.act === 'm3u') addM3u();
+                        if (a.act === 'xc') addXtream();
+                    },
+                    onBack: function () { Lampa.Controller.toggle('content'); }
+                });
+            } catch (e) { addM3u(); }
+        }
+        function addM3u() {
             keyboard('Ссылка на m3u (можно «Название|ссылка»)', '', function (val) {
                 if (!val) return;
                 var name = '', url = val;
                 var bar = val.indexOf('|');
                 if (bar > 0) { name = val.slice(0, bar).trim(); url = val.slice(bar + 1).trim(); }
                 if (addPlaylist(name, url)) { noty('Плейлист добавлен'); self.build(); refocus(); }
+            });
+        }
+        // Xtream Codes: сервер + логин + пароль → стандартный get.php m3u
+        function addXtream() {
+            keyboard('Сервер (например http://host:8080)', '', function (host) {
+                if (!host) return;
+                if (!/^https?:\/\//i.test(host)) host = 'http://' + host;
+                host = host.replace(/\/+$/, '');
+                keyboard('Логин', '', function (user) {
+                    if (!user) return;
+                    keyboard('Пароль', '', function (pass) {
+                        if (!pass) return;
+                        var url = host + '/get.php?username=' + encodeURIComponent(user) + '&password=' + encodeURIComponent(pass) + '&type=m3u_plus&output=ts';
+                        if (addPlaylist('Xtream · ' + host.replace(/^https?:\/\//, ''), url)) { noty('Портал добавлен'); self.build(); refocus(); }
+                    });
+                });
             });
         }
         function searchPrompt() { keyboard('Поиск канала', '', function (val) { if (val) open({ mode: 'channels', src: 'search', query: val, title: 'Поиск' }); }); }
@@ -412,6 +739,13 @@
         this.start = function () {
             if (Lampa.Activity.active().activity !== this.activity) return;
             Lampa.Background.immediately && Lampa.Background.immediately('');
+            // автозапуск последнего канала (настройка), один раз за сессию
+            if (mode === 'home' && S('autoplay', false) && !window.__lmtvAutoplayed && recent().length) {
+                window.__lmtvAutoplayed = true;
+                var lc = recent()[0];
+                setTimeout(function () { playChannel(lc, recent()); }, 400);
+            }
+            $(document).on('keydown.lmtv', this._digits);
             this.build();
             Lampa.Controller.add('content', {
                 toggle: function () { refocus(); },
@@ -426,7 +760,7 @@
         this.pause = function () {};
         this.stop = function () {};
         this.back = function () { Lampa.Activity.backward(); };
-        this.destroy = function () { scroll.destroy(); html.remove(); body = html = scroll = null; };
+        this.destroy = function () { $(document).off('keydown.lmtv', this._digits); scroll.destroy(); html.remove(); body = html = scroll = null; };
     }
 
     // ── меню + настройки + загрузка ────────────────────────────────────────
@@ -434,7 +768,10 @@
         try {
             Lampa.SettingsApi.addComponent({ component: PLUGIN, name: TITLE, icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M21 3H3a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h5l-1 3h10l-1-3h5a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 13H3V5h18z"/></svg>' });
             Lampa.SettingsApi.addParam({ component: PLUGIN, param: { name: PLUGIN + '_epg', type: 'trigger', 'default': true }, field: { name: 'Программа на карточках', description: 'Показывать «Сейчас/Далее» при выборе канала' } });
-            Lampa.SettingsApi.addParam({ component: PLUGIN, param: { name: PLUGIN + '_adult', type: 'trigger', 'default': false }, field: { name: 'Показывать 18+', description: 'Группы для взрослых скрыты по умолчанию' } });
+            Lampa.SettingsApi.addParam({ component: PLUGIN, param: { name: PLUGIN + '_adult', type: 'trigger', 'default': false }, field: { name: 'Показывать 18+ без PIN', description: 'Иначе группы 18+ открываются по PIN с плитки «Взрослые»' } });
+            Lampa.SettingsApi.addParam({ component: PLUGIN, param: { name: PLUGIN + '_pin', type: 'input', 'default': '0000', values: '' }, field: { name: 'PIN для 18+', description: 'Код для разблокировки взрослых групп' } });
+            Lampa.SettingsApi.addParam({ component: PLUGIN, param: { name: PLUGIN + '_autoplay', type: 'trigger', 'default': false }, field: { name: 'Автозапуск последнего канала', description: 'Открыл раздел — сразу играет то, что смотрел' } });
+            Lampa.SettingsApi.addParam({ component: PLUGIN, param: { name: PLUGIN + '_sort', type: 'select', values: { 'default': 'Как в плейлисте', 'abc': 'По алфавиту', 'num': 'По номеру' }, 'default': 'default' }, field: { name: 'Сортировка каналов', description: 'Порядок каналов внутри группы' } });
         } catch (e) {}
     }
 

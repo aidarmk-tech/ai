@@ -407,6 +407,11 @@ class PlayerViewModel @Inject constructor(
         updateMediaSession()
         fetchIntroFromDb(card)
         detectIntroFromSubs(card)
+        // Каталог попросил открыть канал сразу на записи конкретной передачи.
+        if (card.iptv) card.archiveStartSec?.takeIf { it > 0 }?.let { st ->
+            val en = (card.archiveEndSec ?: (st + 3600)).coerceAtLeast(st + 60)
+            playProgramme(EpgProgramme(st * 1000, en * 1000, card.archiveTitle ?: "Архив", ""))
+        }
     }
 
     /** Fetch crowdsourced intro + credits timecodes (Firebase) for this episode, if any. */
