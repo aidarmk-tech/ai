@@ -34,6 +34,10 @@ data class CardMeta(
     val epgEnd: String? = null,
     // IPTV channel list (vs series episodes) + diagnostic dump for EPG bring-up.
     val iptv: Boolean = false,
+    // Запуск сразу в архив конкретной передачи (из каталога lmtv): границы в секундах.
+    val archiveStartSec: Long? = null,
+    val archiveEndSec: Long? = null,
+    val archiveTitle: String? = null,
     val debugInfo: String? = null,
     // IPTV m3u source URL (carries url-tvg/XMLTV + tvg-id) for EPG.
     val iptvSource: String? = null,
