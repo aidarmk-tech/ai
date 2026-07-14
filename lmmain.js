@@ -150,8 +150,10 @@
         rs.forEach(function (r, i) {
             fetchList(r, function (list) {
                 if (list && list.length) {
+                    // nomore: прячем кнопку «Ещё» — её пагинация не совпадает с нашим
+                    // путём к TMDB и открывала пустой экран. В ряду и так 30 карточек.
                     out[i] = { title: r.title, results: list.slice(0, 30), source: 'tmdb',
-                               url: r.tmdb ? r.path : '', page: 1, cardClass: false };
+                               nomore: true, cardClass: false };
                 }
                 if (--pend === 0 && !finished) { finished = true; clearTimeout(timer); done(pack(out)); }
             });
