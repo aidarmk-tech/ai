@@ -34,9 +34,46 @@
         } catch (e) { done(null); }
     }
 
+    // Язык интерфейса для TMDB-запросов.
+    function lang() { try { return Lampa.Storage.get('language', 'ru') || 'ru'; } catch (e) { return 'ru'; } }
+
+    // Готовые подборки из TMDB (ключ/прокси уже настроены в Lampa) — работают
+    // без сервера. Сервер Lampac подключается сам при открытии карточки фильма.
+    function defaults() {
+        var L = lang();
+        return [
+            { id: 'd1', title: '🔥 В тренде за неделю', tmdb: true, path: 'trending/all/week?language=' + L },
+            { id: 'd2', title: '🎬 Новинки кино', tmdb: true, path: 'discover/movie?sort_by=primary_release_date.desc&vote_count.gte=30&language=' + L },
+            { id: 'd3', title: '🇷🇺 Русские фильмы', tmdb: true, path: 'discover/movie?with_original_language=ru&sort_by=popularity.desc&language=' + L },
+            { id: 'd4', title: '🇷🇺 Русские сериалы', tmdb: true, path: 'discover/tv?with_original_language=ru&sort_by=popularity.desc&language=' + L },
+            { id: 'd5', title: '🌍 Зарубежные новинки', tmdb: true, path: 'discover/movie?with_original_language=en&sort_by=primary_release_date.desc&vote_count.gte=50&language=' + L },
+            { id: 'd6', title: '⭐ Популярные сериалы', tmdb: true, path: 'tv/popular?language=' + L },
+            { id: 'd7', title: '👁 Самые просматриваемые', tmdb: true, path: 'movie/popular?language=' + L }
+        ];
+    }
+
     // ── ряды (Storage) ──────────────────────────────────────────────────────
-    function rows() { var a = S('rows', []); return a && a.length ? a : []; }
+    function rows() {
+        if (!S('seeded', false)) { Sset('rows', defaults()); Sset('seeded', true); }
+        var a = S('rows', []); return a && a.length ? a : defaults();
+    }
     function saveRows(a) { Sset('rows', a); }
+
+    // Загрузка списка ряда: TMDB — через сеть Lampa (ключ+прокси), иначе прямой JSON.
+    function fetchList(r, cb) {
+        if (r.tmdb) {
+            var url = '';
+            try { url = Lampa.TMDB.api(r.path); } catch (e) {}
+            if (!url) { cb([]); return; }
+            try {
+                var net = new Lampa.Reguest();
+                if (net.timeout) net.timeout(15000);
+                net.silent(url, function (j) { cb(extractList(j)); }, function () { httpJson(url, function (j) { cb(extractList(j)); }); });
+                return;
+            } catch (e) { httpJson(url, function (j) { cb(extractList(j)); }); return; }
+        }
+        httpJson(r.url, function (j) { cb(extractList(j)); });
+    }
 
     // TMDB-совместимый разбор: {results:[...]} | {items:[...]} | [...]
     function extractList(data) {
@@ -96,12 +133,7 @@
             body.empty();
             var rs = rows();
             info.html('<div class="lmmain__title">' + esc(TITLE) + '</div><div class="lmmain__sub">' +
-                (rs.length ? 'Долгое OK — управление рядами' : 'Пусто — добавь ряд снизу') + '</div>');
-
-            if (!rs.length) {
-                body.append(rowManage());
-                layerUpdate(); return;
-            }
+                'Долгое OK на заголовке — управление · снизу можно добавить свой ряд' + '</div>');
             // секции: заголовок + сетка постеров; данные догружаются по очереди
             rs.forEach(function (r, idx) {
                 var sec = $('<div class="lmmain__sec" data-idx="' + idx + '">' +
@@ -118,8 +150,8 @@
         };
 
         function fillSection(sec, r) {
-            httpJson(r.url, function (data) {
-                var list = extractList(data).slice(0, 30);
+            fetchList(r, function (all) {
+                var list = (all || []).slice(0, 30);
                 var wrap = sec.find('.lmmain__cards').empty();
                 if (!list.length) { wrap.append('<div class="lmmain__load">Пусто или сервер не ответил</div>'); layerUpdate(); return; }
                 list.forEach(function (c) { wrap.append(cardEl(c)); });
@@ -163,7 +195,7 @@
                 if (!title) return;
                 keyboard('URL списка (TMDB-совместимый JSON)', S('lastbase', ''), function (url) {
                     if (!/^https?:\/\//i.test(url)) { noty('Нужна ссылка http(s)'); return; }
-                    var a = rows(); a.push({ id: uid(), title: title.slice(0, 40), url: url });
+                    var a = rows(); a.push({ id: uid(), title: title.slice(0, 40), url: url, tmdb: false });
                     saveRows(a);
                     try { Sset('lastbase', url.replace(/[^/]*$/, '')); } catch (e) {}
                     noty('Ряд добавлен'); self.build(); refocus();
