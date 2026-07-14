@@ -37,24 +37,45 @@
     // Язык интерфейса для TMDB-запросов.
     function lang() { try { return Lampa.Storage.get('language', 'ru') || 'ru'; } catch (e) { return 'ru'; } }
 
+    function today() { try { return new Date().toISOString().slice(0, 10); } catch (e) { return '2030-01-01'; } }
+
     // Готовые подборки из TMDB (ключ/прокси уже настроены в Lampa) — работают
     // без сервера. Сервер Lampac подключается сам при открытии карточки фильма.
+    // «Новинки» = сортировка по дате выхода + отсечка будущих релизов и мусора.
     function defaults() {
-        var L = lang();
+        var L = lang(), T = today();
+        function movie(q) { return 'discover/movie?language=' + L + '&' + q; }
+        function tv(q) { return 'discover/tv?language=' + L + '&' + q; }
+        var newM = 'sort_by=primary_release_date.desc&primary_release_date.lte=' + T + '&vote_count.gte=20';
+        var newT = 'sort_by=first_air_date.desc&first_air_date.lte=' + T + '&vote_count.gte=5';
         return [
-            { id: 'd1', title: '🔥 В тренде за неделю', tmdb: true, path: 'trending/all/week?language=' + L },
-            { id: 'd2', title: '🎬 Новинки кино', tmdb: true, path: 'discover/movie?sort_by=primary_release_date.desc&vote_count.gte=30&language=' + L },
-            { id: 'd3', title: '🇷🇺 Русские фильмы', tmdb: true, path: 'discover/movie?with_original_language=ru&sort_by=popularity.desc&language=' + L },
-            { id: 'd4', title: '🇷🇺 Русские сериалы', tmdb: true, path: 'discover/tv?with_original_language=ru&sort_by=popularity.desc&language=' + L },
-            { id: 'd5', title: '🌍 Зарубежные новинки', tmdb: true, path: 'discover/movie?with_original_language=en&sort_by=primary_release_date.desc&vote_count.gte=50&language=' + L },
-            { id: 'd6', title: '⭐ Популярные сериалы', tmdb: true, path: 'tv/popular?language=' + L },
-            { id: 'd7', title: '👁 Самые просматриваемые', tmdb: true, path: 'movie/popular?language=' + L }
+            { id: 'd_trend', title: '🔥 В тренде за неделю', tmdb: true, path: 'trending/all/week?language=' + L },
+            { id: 'd_newm',  title: '🎬 Новинки кино',       tmdb: true, path: movie(newM) },
+            { id: 'd_newt',  title: '📺 Новинки сериалов',   tmdb: true, path: tv(newT) },
+            { id: 'd_rut',   title: '🇷🇺 Русские сериалы — новинки', tmdb: true, path: tv('with_original_language=ru&' + newT.replace('vote_count.gte=5', 'vote_count.gte=1')) },
+            { id: 'd_rum',   title: '🇷🇺 Русские фильмы — новинки', tmdb: true, path: movie('with_original_language=ru&' + newM.replace('vote_count.gte=20', 'vote_count.gte=3')) },
+            { id: 'd_forn',  title: '🌍 Зарубежные новинки', tmdb: true, path: movie('with_original_language=en&' + newM.replace('vote_count.gte=20', 'vote_count.gte=50')) },
+            { id: 'd_g_com', title: '😂 Комедии',            tmdb: true, path: movie('with_genres=35&sort_by=popularity.desc&vote_count.gte=100') },
+            { id: 'd_g_act', title: '💥 Боевики',            tmdb: true, path: movie('with_genres=28&sort_by=popularity.desc&vote_count.gte=100') },
+            { id: 'd_g_sci', title: '🚀 Фантастика',         tmdb: true, path: movie('with_genres=878&sort_by=popularity.desc&vote_count.gte=100') },
+            { id: 'd_g_hor', title: '👻 Ужасы',              tmdb: true, path: movie('with_genres=27&sort_by=popularity.desc&vote_count.gte=80') },
+            { id: 'd_g_rom', title: '❤️ Мелодрамы',          tmdb: true, path: movie('with_genres=10749&sort_by=popularity.desc&vote_count.gte=80') },
+            { id: 'd_g_det', title: '🕵️ Детективы',          tmdb: true, path: movie('with_genres=9648&sort_by=popularity.desc&vote_count.gte=80') },
+            { id: 'd_g_cart',title: '🧸 Мультфильмы',        tmdb: true, path: movie('with_genres=16&sort_by=popularity.desc&vote_count.gte=100') },
+            { id: 'd_anime', title: '🌸 Аниме',              tmdb: true, path: tv('with_genres=16&with_original_language=ja&sort_by=popularity.desc') },
+            { id: 'd_toptv', title: '⭐ Популярные сериалы',  tmdb: true, path: 'tv/popular?language=' + L }
         ];
     }
 
     // ── ряды (Storage) ──────────────────────────────────────────────────────
+    var SEEDVER = 2;   // бампни, чтобы обновить набор дефолтных рядов у всех
     function rows() {
-        if (!S('seeded', false)) { Sset('rows', defaults()); Sset('seeded', true); }
+        if (S('seedver', 0) !== SEEDVER) {
+            // сохраняем свои (серверные) ряды пользователя, дефолты обновляем
+            var custom = (S('rows', []) || []).filter(function (r) { return r && !r.tmdb; });
+            Sset('rows', defaults().concat(custom));
+            Sset('seedver', SEEDVER);
+        }
         var a = S('rows', []); return a && a.length ? a : defaults();
     }
     function saveRows(a) { Sset('rows', a); }
