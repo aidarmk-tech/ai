@@ -150,10 +150,10 @@
         rs.forEach(function (r, i) {
             fetchList(r, function (list) {
                 if (list && list.length) {
-                    // nomore: прячем кнопку «Ещё» — её пагинация не совпадает с нашим
-                    // путём к TMDB и открывала пустой экран. В ряду и так 30 карточек.
-                    out[i] = { title: r.title, results: list.slice(0, 30), source: 'tmdb',
-                               nomore: true, cardClass: false };
+                    // «Ещё» открывает полную категорию через наш source.list (TMDB+page).
+                    out[i] = { title: r.title, results: list.slice(0, 30),
+                               source: PLUGIN, url: r.tmdb ? r.path : r.url,
+                               page: 1, total_pages: 20, more: true, cardClass: false };
                 }
                 if (--pend === 0 && !finished) { finished = true; clearTimeout(timer); done(pack(out)); }
             });
@@ -385,15 +385,21 @@
                 params = params || {};
                 var path = params.url || 'movie/popular?language=' + lang();
                 var page = params.page || 1;
-                var sep = path.indexOf('?') >= 0 ? '&' : '?';
-                tmdbGet(path + sep + 'page=' + page, function (results) {
+                var ok = oncomplete || function () {};
+                function done(results) {
                     results = results || [];
-                    (oncomplete || function () {})({
-                        results: results, page: page,
-                        total_pages: results.length >= 20 ? page + 1 : page,
-                        total_results: results.length, source: PLUGIN
-                    });
-                });
+                    ok({ results: results, page: page,
+                         total_pages: results.length >= 20 ? page + 20 : page,
+                         total_results: results.length * 20, source: PLUGIN });
+                }
+                if (/^https?:\/\//i.test(path)) {
+                    // кастомный (серверный) ряд — прямой JSON, пагинация &page=
+                    var sep0 = path.indexOf('?') >= 0 ? '&' : '?';
+                    httpJson(path + sep0 + 'page=' + page, function (j) { done(extractList(j)); });
+                } else {
+                    var sep = path.indexOf('?') >= 0 ? '&' : '?';
+                    tmdbGet(path + sep + 'page=' + page, done);
+                }
             };
             Lampa.Api.sources[PLUGIN] = src;
 
