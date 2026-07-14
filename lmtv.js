@@ -790,6 +790,7 @@
         if (!window.Lampa || !Lampa.Component) { setTimeout(boot, 300); return; }
         booted = true;
         Lampa.Component.add(PLUGIN, component);
+        registerSource();
         addSettings();
         addStyle();
         // пункт меню — с ретраем: список мог ещё не отрисоваться
@@ -798,6 +799,53 @@
             if ($('.menu .menu__list').length) { addMenu(); return; }
             if (++tries < 30) setTimeout(tryMenu, 500);
         })();
+    }
+
+    // Регистрация IPTV как источника главного экрана: при выборе в «Выбрать»
+    // сразу открывается наш каталог каналов (по образцу nmprs — main редиректит).
+    function registerSource() {
+        try {
+            if (!(window.Lampa && Lampa.Api && Lampa.Api.sources)) return;
+            if (Lampa.Api.sources[PLUGIN]) return;
+            var base = Lampa.Api.sources.tmdb || Lampa.Api.sources['tmdb'] || {};
+            var src = {};
+            for (var k in base) { try { src[k] = base[k]; } catch (e) {} }
+            // main обязан вернуть массив; затем, если выбран именно IPTV — уходим в каталог.
+            src.main = function (params, oncomplete) {
+                if (typeof oncomplete === 'function') oncomplete([]);
+                try { if (Lampa.Storage.get('source', 'tmdb') !== PLUGIN) return; } catch (e) { return; }
+                setTimeout(function () {
+                    try { Lampa.Activity.replace({ url: '', title: TITLE, component: PLUGIN, mode: 'home', page: 1 }); } catch (e) {}
+                }, 0);
+            };
+            Lampa.Api.sources[PLUGIN] = src;
+            // добавить в список выбора источника (дефолт не меняем)
+            try {
+                var opts = {}, cur = (Lampa.Params.values && Lampa.Params.values.source) ? Lampa.Params.values.source : {};
+                for (var o in cur) opts[o] = cur[o];
+                opts[PLUGIN] = TITLE;
+                Lampa.Params.select('source', opts, 'tmdb');
+            } catch (e) {}
+            try { if (Lampa.Params.values && Lampa.Params.values.start_page) Lampa.Params.values.start_page[PLUGIN] = TITLE; } catch (e) {}
+            // при переключении источника на/с IPTV — пересобрать главную
+            if (!window.__lmtv_source_watch) {
+                window.__lmtv_source_watch = true;
+                var origSet = Lampa.Storage.set;
+                Lampa.Storage.set = function (key, value) {
+                    var r = origSet.apply(this, arguments);
+                    try {
+                        if (key === 'source') {
+                            var act = Lampa.Activity.active && Lampa.Activity.active();
+                            if (act && act.component === 'main') {
+                                if (value === PLUGIN) Lampa.Activity.replace({ url: '', title: TITLE, component: PLUGIN, mode: 'home', page: 1 });
+                                else Lampa.Activity.replace({ component: 'main' });
+                            }
+                        }
+                    } catch (e) {}
+                    return r;
+                };
+            }
+        } catch (e) {}
     }
 
     function addStyle() {
