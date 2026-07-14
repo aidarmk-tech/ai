@@ -61,18 +61,36 @@
 
     // Загрузка списка ряда: TMDB — через сеть Lampa (ключ+прокси), иначе прямой JSON.
     function fetchList(r, cb) {
-        if (r.tmdb) {
-            var url = '';
-            try { url = Lampa.TMDB.api(r.path); } catch (e) {}
-            if (!url) { cb([]); return; }
-            try {
-                var net = new Lampa.Reguest();
-                if (net.timeout) net.timeout(15000);
-                net.silent(url, function (j) { cb(extractList(j)); }, function () { httpJson(url, function (j) { cb(extractList(j)); }); });
-                return;
-            } catch (e) { httpJson(url, function (j) { cb(extractList(j)); }); return; }
-        }
+        if (r.tmdb) { tmdbGet(r.path, cb); return; }
         httpJson(r.url, function (j) { cb(extractList(j)); });
+    }
+    // Несколько путей к TMDB — в разных сборках Lampa доступны разные.
+    function tmdbGet(path, cb) {
+        // 1) Lampa.TMDB.get(url, params, ok, err) — сам добавляет ключ и прокси
+        try {
+            if (Lampa.TMDB && Lampa.TMDB.get) {
+                var parts = path.split('?'), params = {};
+                (parts[1] || '').split('&').forEach(function (kv) { if (kv) { var q = kv.split('='); params[q[0]] = decodeURIComponent(q[1] || ''); } });
+                Lampa.TMDB.get(parts[0], params, function (j) { cb(extractList(j)); }, function () { tmdbReguest(path, cb); });
+                return;
+            }
+        } catch (e) {}
+        tmdbReguest(path, cb);
+    }
+    function tmdbReguest(path, cb) {
+        var url = '';
+        try { url = Lampa.TMDB.api(path); } catch (e) {}
+        // ключ, если сборка не подставляет его сама
+        try { if (url && url.indexOf('api_key=') < 0 && Lampa.TMDB.key) url += (url.indexOf('?') < 0 ? '?' : '&') + 'api_key=' + Lampa.TMDB.key(); } catch (e) {}
+        if (!url) { cb(null); return; }
+        try {
+            var net = new Lampa.Reguest();
+            net.silent(url, function (j) { cb(extractList(j)); }, function () { httpJson(url, function (j) { cb(extractList(j)); }); });
+        } catch (e) { httpJson(url, function (j) { cb(extractList(j)); }); }
+    }
+    function tmdbDiag() {
+        var t = window.Lampa && Lampa.TMDB;
+        return 'TMDB.get=' + (t && Lampa.TMDB.get ? '1' : '0') + ' api=' + (t && Lampa.TMDB.api ? '1' : '0') + ' key=' + (t && Lampa.TMDB.key ? '1' : '0') + ' Req=' + (window.Lampa && Lampa.Reguest ? '1' : '0');
     }
 
     // TMDB-совместимый разбор: {results:[...]} | {items:[...]} | [...]
@@ -153,7 +171,7 @@
             fetchList(r, function (all) {
                 var list = (all || []).slice(0, 30);
                 var wrap = sec.find('.lmmain__cards').empty();
-                if (!list.length) { wrap.append('<div class="lmmain__load">Пусто или сервер не ответил</div>'); layerUpdate(); return; }
+                if (!list.length) { wrap.append('<div class="lmmain__load">Пусто · ' + (r.tmdb ? tmdbDiag() : 'сервер не ответил') + '</div>'); layerUpdate(); return; }
                 list.forEach(function (c) { wrap.append(cardEl(c)); });
                 layerUpdate();
                 if (activeNow()) refocus();
