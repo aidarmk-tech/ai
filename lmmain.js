@@ -358,12 +358,43 @@
         try { $('<style>' + css + '</style>').appendTo('head'); } catch (e) {}
     }
 
+    // Регистрация источника главного экрана (появляется в списке «Выбрать»).
+    // Наследуем всё от штатного TMDB-источника, переопределяем только main —
+    // так menu/full/категории/поиск работают штатно, а на главной наши ряды.
+    function registerSource() {
+        try {
+            if (!(window.Lampa && Lampa.Api && Lampa.Api.sources)) return false;
+            if (Lampa.Api.sources[PLUGIN]) return true;
+            var base = Lampa.Api.sources.tmdb || Lampa.Api.sources['tmdb'];
+            if (!base) return false;
+            var src = {};
+            for (var k in base) { try { src[k] = base[k]; } catch (e) {} }
+            src.main = function (params, oncomplete, onerror) {
+                buildData(function (data) {
+                    try { oncomplete({ results: data, collection: true, source: PLUGIN }); }
+                    catch (e) { if (onerror) onerror(e); }
+                });
+            };
+            // Заголовок в переключателе (в разных сборках берётся по-разному).
+            src.title = TITLE;
+            Lampa.Api.sources[PLUGIN] = src;
+            // Попытка добавить в список выбора источника, если механизм доступен.
+            try {
+                if (Lampa.Params && Lampa.Params.select && typeof Lampa.Storage.get('source') !== 'undefined') {
+                    // не трогаем текущий выбор — просто регистрируем возможность
+                }
+            } catch (e) {}
+            return true;
+        } catch (e) { return false; }
+    }
+
     var booted = false;
     function boot() {
         if (booted) return;
         if (!window.Lampa || !Lampa.Component) { setTimeout(boot, 300); return; }
         booted = true;
         Lampa.Component.add(PLUGIN, component);
+        registerSource();
         addStyle();
         var tries = 0;
         (function tryMenu() { if ($('.menu .menu__list').length) { addMenu(); return; } if (++tries < 30) setTimeout(tryMenu, 500); })();
