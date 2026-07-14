@@ -38,6 +38,7 @@
     function lang() { try { return Lampa.Storage.get('language', 'ru') || 'ru'; } catch (e) { return 'ru'; } }
 
     function today() { try { return new Date().toISOString().slice(0, 10); } catch (e) { return '2030-01-01'; } }
+    function daysAgo(n) { try { return new Date(Date.now() - n * 864e5).toISOString().slice(0, 10); } catch (e) { return '2020-01-01'; } }
 
     // Готовые подборки из TMDB (ключ/прокси уже настроены в Lampa) — работают
     // без сервера. Сервер Lampac подключается сам при открытии карточки фильма.
@@ -53,6 +54,7 @@
             { id: 'd_newm',  title: '🎬 Новинки кино',       tmdb: true, path: movie(newM) },
             { id: 'd_newt',  title: '📺 Новинки сериалов',   tmdb: true, path: tv(newT) },
             { id: 'd_rut',   title: '🇷🇺 Русские сериалы — новинки', tmdb: true, path: tv('with_original_language=ru&' + newT.replace('vote_count.gte=5', 'vote_count.gte=1')) },
+            { id: 'd_rush',  title: '🇷🇺 Российские шоу — свежие серии', tmdb: true, path: tv('with_original_language=ru&air_date.gte=' + daysAgo(45) + '&air_date.lte=' + T + '&sort_by=popularity.desc&vote_count.gte=1') },
             { id: 'd_rum',   title: '🇷🇺 Русские фильмы — новинки', tmdb: true, path: movie('with_original_language=ru&' + newM.replace('vote_count.gte=20', 'vote_count.gte=3')) },
             { id: 'd_forn',  title: '🌍 Зарубежные новинки', tmdb: true, path: movie('with_original_language=en&' + newM.replace('vote_count.gte=20', 'vote_count.gte=50')) },
             { id: 'd_g_com', title: '😂 Комедии',            tmdb: true, path: movie('with_genres=35&sort_by=popularity.desc&vote_count.gte=100') },
@@ -68,7 +70,7 @@
     }
 
     // ── ряды (Storage) ──────────────────────────────────────────────────────
-    var SEEDVER = 2;   // бампни, чтобы обновить набор дефолтных рядов у всех
+    var SEEDVER = 3;   // бампни, чтобы обновить набор дефолтных рядов у всех
     function rows() {
         if (S('seedver', 0) !== SEEDVER) {
             // сохраняем свои (серверные) ряды пользователя, дефолты обновляем
@@ -112,6 +114,38 @@
     function tmdbDiag() {
         var t = window.Lampa && Lampa.TMDB;
         return 'TMDB.get=' + (t && Lampa.TMDB.get ? '1' : '0') + ' api=' + (t && Lampa.TMDB.api ? '1' : '0') + ' key=' + (t && Lampa.TMDB.key ? '1' : '0') + ' Req=' + (window.Lampa && Lampa.Reguest ? '1' : '0');
+    }
+
+    // История просмотра Lampa → карточки для рекомендаций.
+    function watchedCards() {
+        try {
+            var fav = Lampa.Storage.get('favorite', {});
+            if (typeof fav === 'string') fav = JSON.parse(fav || '{}');
+            if (!fav || typeof fav !== 'object') return [];
+            var hist = fav.history || [], cards = fav.card || [], byId = {};
+            if (Array.isArray(cards)) cards.forEach(function (c) { if (c && c.id) byId[c.id] = c; });
+            var out = [];
+            for (var i = 0; i < hist.length; i++) {
+                var h = hist[i];
+                var c = (h && typeof h === 'object') ? h : byId[h];
+                if (c && c.id) out.push(c);
+            }
+            return out;
+        } catch (e) { return []; }
+    }
+    // Ряды «Похоже на …» по последним просмотренным (TMDB recommendations).
+    function personalRows() {
+        var w = watchedCards(), seen = {}, out = [];
+        for (var i = 0; i < w.length && out.length < 4; i++) {
+            var c = w[i], id = c.id;
+            if (!id || seen[id]) continue; seen[id] = 1;
+            var method = (c.name || c.first_air_date || c.media_type === 'tv') ? 'tv' : 'movie';
+            var title = c.title || c.name || c.original_title || c.original_name || '';
+            if (!title) continue;
+            out.push({ id: 'rec_' + method + '_' + id, title: '✨ Похоже на «' + title + '»', tmdb: true,
+                       personal: true, path: method + '/' + id + '/recommendations?language=' + lang() });
+        }
+        return out;
     }
 
     // TMDB-совместимый разбор: {results:[...]} | {items:[...]} | [...]
@@ -210,15 +244,15 @@
 
         this.build = function () {
             body.empty();
-            var rs = rows();
+            var rs = personalRows().concat(rows());
             info.html('<div class="lmmain__title">' + esc(TITLE) + '</div><div class="lmmain__sub">' +
                 'Долгое OK на заголовке — управление · снизу можно добавить свой ряд' + '</div>');
             // секции: заголовок + сетка постеров; данные догружаются по очереди
             rs.forEach(function (r, idx) {
                 var sec = $('<div class="lmmain__sec" data-idx="' + idx + '">' +
-                    '<div class="lmmain__sechead selector"><span>' + esc(r.title) + '</span><i>обновить</i></div>' +
+                    '<div class="lmmain__sechead selector"><span>' + esc(r.title) + '</span><i>' + (r.personal ? '' : 'обновить') + '</i></div>' +
                     '<div class="lmmain__cards"><div class="lmmain__load">Загрузка…</div></div></div>');
-                sec.find('.lmmain__sechead').on('hover:enter', function () { openRowMenu(r); })
+                sec.find('.lmmain__sechead').on('hover:enter', function () { if (r.personal) { self.build(); refocus(); } else openRowMenu(r); })
                     .on('hover:focus', function () { last = this; scroll.update($(this), true); });
                 body.append(sec);
                 fillSection(sec, r);
@@ -232,7 +266,10 @@
             fetchList(r, function (all) {
                 var list = (all || []).slice(0, 30);
                 var wrap = sec.find('.lmmain__cards').empty();
-                if (!list.length) { wrap.append('<div class="lmmain__load">Пусто · ' + (r.tmdb ? tmdbDiag() : 'сервер не ответил') + '</div>'); layerUpdate(); return; }
+                if (!list.length) {
+                    if (r.personal) { sec.remove(); layerUpdate(); return; }   // нет рекомендаций — не показываем пустой ряд
+                    wrap.append('<div class="lmmain__load">Пусто · ' + (r.tmdb ? tmdbDiag() : 'сервер не ответил') + '</div>'); layerUpdate(); return;
+                }
                 list.forEach(function (c) { wrap.append(cardEl(c)); });
                 layerUpdate();
                 if (activeNow()) refocus();
