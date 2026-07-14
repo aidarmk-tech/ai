@@ -142,8 +142,46 @@
         } catch (e) { noty('Не удалось открыть карточку'); }
     }
 
-    // ── компонент раздела ───────────────────────────────────────────────────
+    // Собрать данные всех рядов (параллельно) → массив {title, results}.
+    function buildData(done) {
+        var rs = rows(), out = new Array(rs.length), pend = rs.length, finished = false;
+        if (!pend) { done([]); return; }
+        var timer = setTimeout(function () { if (!finished) { finished = true; done(pack(out)); } }, 12000);
+        rs.forEach(function (r, i) {
+            fetchList(r, function (list) {
+                if (list && list.length) {
+                    out[i] = { title: r.title, results: list.slice(0, 30), source: 'tmdb',
+                               url: r.tmdb ? r.path : '', page: 1, cardClass: false };
+                }
+                if (--pend === 0 && !finished) { finished = true; clearTimeout(timer); done(pack(out)); }
+            });
+        });
+        function pack(a) { var o = []; for (var k = 0; k < a.length; k++) if (a[k]) o.push(a[k]); return o; }
+    }
+
+    // ── нативный компонент: горизонтальные ленты (как на главной Lampa) ─────
     function component(object) {
+        // Нет нативного класса лент → откат на свой рендер.
+        if (!(window.Lampa && Lampa.InteractionMain)) return legacyComponent(object);
+        var comp;
+        try { comp = new Lampa.InteractionMain(object); } catch (e) { return legacyComponent(object); }
+        comp.create = function () {
+            var self = this;
+            try { this.activity.loader(true); } catch (e) {}
+            buildData(function (data) {
+                try {
+                    if (!data.length) { self.empty(); }
+                    else { self.build(data); }
+                } catch (e) { try { self.empty(); } catch (e2) {} }
+                try { self.activity.loader(false); } catch (e) {}
+            });
+            return this.render();
+        };
+        return comp;
+    }
+
+    // ── запасной компонент (если нет Lampa.InteractionMain) ─────────────────
+    function legacyComponent(object) {
         var self = this;
         var scroll = new Lampa.Scroll({ mask: true, over: true, step: 300 });
         var html = $('<div class="lmmain"></div>');
