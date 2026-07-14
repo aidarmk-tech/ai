@@ -496,16 +496,16 @@
                 if (ch.chno) numMap[ch.chno] = el;
                 body.append(el);
             });
-            // «Сейчас в эфире»: программа сразу на всех карточках (до 30)
-            if (eagerEpg) list.slice(0, 30).forEach(function (ch, i) {
+            // Программа «Сейчас» на карточках — порциями со сдвигом (плавно, без
+            // фриза): сразу грузим верх списка, остальное подтянется по фокусу.
+            var eagerN = eagerEpg ? 30 : 24;
+            list.slice(0, eagerN).forEach(function (ch, i) {
                 setTimeout(function () {
                     epgFor(ch, function (r) {
-                        if (r && r.now) {
-                            var el = body.children().eq(i);
-                            el.find('.lmtv__epg').text(hm(r.now.s) + '–' + hm(r.now.e) + ' · ' + r.now.t);
-                        }
+                        var el = body.children().eq(i);
+                        el.find('.lmtv__epg').text(r && r.now ? ('● ' + r.now.t) : '');
                     });
-                }, i * 120);
+                }, i * 80);
             });
             layerUpdate();
             if (activeNow()) refocus();
@@ -858,14 +858,14 @@
         '.lmtv__row{width:100%;padding:1.2em 1.4em;border-radius:.8em;background:rgba(255,255,255,.05);display:flex;justify-content:space-between;align-items:center}' +
         '.lmtv__row-t{font-size:1.35em}.lmtv__row-s{color:rgba(255,255,255,.5);font-size:1.05em;margin-left:1em;text-align:right}' +
         '.lmtv--grid .lmtv__body{gap:1em}' +
-        '.lmtv__card{width:15.5em;border-radius:.8em;background:rgba(255,255,255,.05);overflow:hidden;display:flex;flex-direction:column}' +
-        '.lmtv__logo{height:7.2em;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.35)}' +
+        '.lmtv__card{width:17em;border-radius:.9em;background:rgba(255,255,255,.05);overflow:hidden;display:flex;flex-direction:column}' +
+        '.lmtv__logo{height:8.4em;display:flex;align-items:center;justify-content:center;background:linear-gradient(160deg,#1b2330,#0d1117)}' +
         '.lmtv__logo img{max-width:80%;max-height:80%;object-fit:contain}' +
         '.lmtv__logo span{font-size:2em;font-weight:700;color:rgba(255,255,255,.7)}' +
         '.lmtv__meta{padding:.6em .7em}' +
         '.lmtv__num{font-size:.95em;color:#F6B44C;font-weight:600;min-height:1em}' +
         '.lmtv__name{font-size:1.2em;margin-top:.1em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
-        '.lmtv__epg{font-size:.95em;color:rgba(255,255,255,.55);margin-top:.25em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:1em}' +
+        '.lmtv__epg{font-size:.95em;color:#7fd6a0;margin-top:.3em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:1.2em}' +
         '.lmtv__gcard{width:17em;min-height:8.6em;padding:1.1em 1.2em;border-radius:.9em;background:rgba(255,255,255,.06);display:flex;flex-direction:column}' +
         '.lmtv__gname{font-size:1.3em;font-weight:600;line-height:1.2;max-height:2.4em;overflow:hidden}' +
         '.lmtv__gcount{color:rgba(255,255,255,.55);font-size:1em;margin-top:.3em}' +
