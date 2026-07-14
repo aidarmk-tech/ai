@@ -369,23 +369,43 @@
             if (Lampa.Api.sources[PLUGIN]) return true;
             var base = Lampa.Api.sources.tmdb || Lampa.Api.sources['tmdb'];
             if (!base) return false;
+            // Наследуем всё от TMDB-источника (full/category/поиск работают штатно).
             var src = {};
             for (var k in base) { try { src[k] = base[k]; } catch (e) {} }
+
+            // main() ОБЯЗАН отдавать МАССИВ рядов (Lampa делает data.forEach).
             src.main = function (params, oncomplete, onerror) {
                 buildData(function (data) {
-                    try { oncomplete({ results: data, collection: true, source: PLUGIN }); }
+                    try { oncomplete(data); }
                     catch (e) { if (onerror) onerror(e); }
                 });
             };
-            // Заголовок в переключателе (в разных сборках берётся по-разному).
-            src.title = TITLE;
+            // list() — пагинация ряда (кнопка «Ещё»): наш путь TMDB + &page=N.
+            src.list = function (params, oncomplete, onerror) {
+                params = params || {};
+                var path = params.url || 'movie/popular?language=' + lang();
+                var page = params.page || 1;
+                var sep = path.indexOf('?') >= 0 ? '&' : '?';
+                tmdbGet(path + sep + 'page=' + page, function (results) {
+                    results = results || [];
+                    (oncomplete || function () {})({
+                        results: results, page: page,
+                        total_pages: results.length >= 20 ? page + 1 : page,
+                        total_results: results.length, source: PLUGIN
+                    });
+                });
+            };
             Lampa.Api.sources[PLUGIN] = src;
-            // Попытка добавить в список выбора источника, если механизм доступен.
+
+            // Регистрация в списке «Выбрать» + как возможная стартовая страница.
             try {
-                if (Lampa.Params && Lampa.Params.select && typeof Lampa.Storage.get('source') !== 'undefined') {
-                    // не трогаем текущий выбор — просто регистрируем возможность
-                }
+                var opts = {};
+                var cur = (Lampa.Params.values && Lampa.Params.values.source) ? Lampa.Params.values.source : {};
+                for (var o in cur) opts[o] = cur[o];
+                opts[PLUGIN] = TITLE;                       // ключ 'lmmain' → подпись
+                Lampa.Params.select('source', opts, 'tmdb'); // дефолт оставляем tmdb
             } catch (e) {}
+            try { if (Lampa.Params.values && Lampa.Params.values.start_page) Lampa.Params.values.start_page[PLUGIN] = TITLE; } catch (e) {}
             return true;
         } catch (e) { return false; }
     }
