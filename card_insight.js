@@ -842,7 +842,7 @@
     // Рассуждение
     'deepseek/deepseek-r1':                   'DeepSeek R1 (думает)',
     // Премиум
-    'openai/gpt-4o':                          'GPT-4o',
+    'qwen/qwen3.7-plus':                          'qwen 37o',
     'google/gemini-2.5-pro':                  'Gemini 2.5 Pro',
     'anthropic/claude-sonnet-4':              'Claude Sonnet 4'
   };
