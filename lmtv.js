@@ -244,6 +244,7 @@
             try {
                 if (mode === 'home') buildHome();
                 else if (mode === 'groups') buildGroups();
+                else if (mode === 'sport') buildSport();
                 else buildChannels();
             } catch (e) { noty('lmtv: ' + (e && e.message ? e.message : e)); }
             layerUpdate();
@@ -259,6 +260,7 @@
                 playChannel(lastCh, recent());
             }));
             items.push(row('📡 Сейчас в эфире', 'что идёт на любимых каналах', function () { open({ mode: 'channels', src: 'now', title: 'Сейчас в эфире' }); }));
+            items.push(row('🏆 Спорт', 'ближайшие трансляции со спорт-каналов', function () { open({ mode: 'sport', title: '🏆 Спорт' }); }));
             items.push(row('★ Избранное', favs().length + ' каналов', function () { open({ mode: 'channels', src: 'fav', title: 'Избранное' }); }));
             items.push(row('🕓 Недавние', recent().length + ' каналов', function () { open({ mode: 'channels', src: 'recent', title: 'Недавние' }); }));
             items.push(row('🔍 Поиск канала', 'по всем плейлистам', function () { searchPrompt(); }));
@@ -410,6 +412,85 @@
                     : all.filter(function (c) { return c.group === object.group; });
                 renderChannels(l, title);
             });
+        }
+
+        var SPORT_RE = /спорт|sport|футбол|матч|match|eurosport|setanta|окко\s*спорт|виасат\s*спорт|нтв.?плюс|киберспорт|бокс|ufc|формула|f1/i;
+        function buildSport() {
+            html.addClass('lmtv--grid');
+            info.html('<div class="lmtv__title">🏆 Спорт</div><div class="lmtv__sub">Собираю трансляции со спорт-каналов…</div>');
+            body.empty();
+            // все спорт-каналы из всех плейлистов
+            var pls = playlists(), chans = [], pend = 0;
+            if (!pls.length) { info.find('.lmtv__sub').text('Нет плейлистов'); return; }
+            loader(true);
+            pls.forEach(function (pl) {
+                pend++;
+                loadPlaylist(pl, function (data) {
+                    (data ? data.channels : []).forEach(function (c) {
+                        if (SPORT_RE.test(c.group) || SPORT_RE.test(c.title)) { c.plid = pl.id; chans.push(c); }
+                    });
+                    if (--pend === 0) gatherSport(chans);
+                });
+            });
+        }
+        function gatherSport(chans) {
+            var now = Date.now() / 1000, events = [], pend = 0;
+            if (!chans.length) { loader(false); info.find('.lmtv__sub').text('Спорт-каналы не найдены'); return; }
+            // ограничим, чтобы не долбить EPG: до 40 каналов
+            chans = chans.slice(0, 40);
+            chans.forEach(function (ch) {
+                pend++;
+                epgFull(ch, function (progs) {
+                    (progs || []).forEach(function (p) {
+                        if (p.e > now - 3600 && p.s < now + 36 * 3600) {   // сейчас + ближайшие сутки-полтора
+                            events.push({ ch: ch, t: p.t, s: p.s, e: p.e, live: p.s <= now && p.e > now, past: p.e <= now });
+                        }
+                    });
+                    if (--pend === 0) showSport(events, chans);
+                });
+            });
+        }
+        function showSport(events, chans) {
+            loader(false);
+            events.sort(function (a, b) { return a.s - b.s; });
+            // сначала идущие сейчас, потом будущие по времени
+            events.sort(function (a, b) { return (b.live ? 1 : 0) - (a.live ? 1 : 0); });
+            events = events.slice(0, 60);
+            info.find('.lmtv__sub').text(events.length ? (events.length + ' трансляций · OK — смотреть') : 'Сейчас и в ближайшее время трансляций нет');
+            body.empty();
+            if (!events.length) { body.append($('<div class="lmtv__empty">Нет данных программы по спорт-каналам</div>')); return; }
+            events.forEach(function (ev) { body.append(sportCard(ev, chans)); });
+            layerUpdate();
+            if (activeNow()) refocus();
+        }
+        function when(ev) {
+            if (ev.live) return '● В ЭФИРЕ';
+            var d = new Date(ev.s * 1000), now = new Date();
+            var t = ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+            if (d.toDateString() === now.toDateString()) return 'Сегодня ' + t;
+            var mon = ['янв','фев','мар','апр','мая','июн','июл','авг','сен','окт','ноя','дек'];
+            return d.getDate() + ' ' + mon[d.getMonth()] + ' ' + t;
+        }
+        function sportCard(ev, chans) {
+            var ch = ev.ch;
+            var el = $(
+                '<div class="lmtv__card lmtv__sport selector' + (ev.live ? ' lmtv__sport--live' : '') + '">' +
+                    '<div class="lmtv__logo">' + (ch.logo ? '<img loading="lazy" src="' + esc(ch.logo) + '"/>' : '<span>' + esc((ch.title || '?').slice(0, 2).toUpperCase()) + '</span>') + '</div>' +
+                    '<div class="lmtv__meta">' +
+                        '<div class="lmtv__num">' + esc(ch.title) + '</div>' +
+                        '<div class="lmtv__name">' + esc(ev.t) + '</div>' +
+                        '<div class="lmtv__epg lmtv__when">' + when(ev) + '</div>' +
+                    '</div>' +
+                '</div>'
+            );
+            var img = el.find('img')[0];
+            if (img) img.onerror = function () { $(img).replaceWith('<span>' + esc((ch.title || '?').slice(0, 2).toUpperCase()) + '</span>'); };
+            el.on('hover:enter', function () {
+                if (ev.past && ch.catchup) playChannel(ch, chans, { s: ev.s, e: ev.e, t: ev.t });
+                else playChannel(ch, chans);
+            });
+            el.on('hover:focus', function () { last = el[0]; scroll.update(el, true); });
+            return el;
         }
 
         function sorted(list) {
@@ -872,6 +953,10 @@
         '.lmtv__glogos{display:flex;gap:.5em;margin-top:auto;padding-top:.7em;align-items:center}' +
         '.lmtv__glogos img{width:2.2em;height:2.2em;object-fit:contain;background:rgba(0,0,0,.35);border-radius:.4em;padding:.15em}' +
         '.lmtv__gcard.selector.focus{transform:scale(1.04)}' +
+        '.lmtv__when{color:#f6b44c;font-weight:600}' +
+        '.lmtv__sport--live .lmtv__when{color:#ff5468}' +
+        '.lmtv__sport--live{box-shadow:inset 0 0 0 .12em rgba(255,84,104,.6)}' +
+        '.lmtv__sport .lmtv__name{white-space:normal;max-height:2.6em;overflow:hidden;line-height:1.25}' +
         '.lmtv__empty{padding:2em;color:rgba(255,255,255,.5)}' +
         '.lmtv .selector.focus,.lmtv .selector:focus{background:rgba(255,255,255,.16);box-shadow:0 0 0 .18em #F6B44C}' +
         '.lmtv__card.selector.focus{transform:scale(1.04)}';
