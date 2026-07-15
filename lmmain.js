@@ -148,6 +148,65 @@
         return out;
     }
 
+    // Сырой TMDB (возвращает объект целиком — для деталей сериала tv/{id}).
+    function tmdbRaw(path, cb) {
+        try {
+            if (Lampa.TMDB && Lampa.TMDB.get) {
+                var parts = path.split('?'), params = {};
+                (parts[1] || '').split('&').forEach(function (kv) { if (kv) { var q = kv.split('='); params[q[0]] = decodeURIComponent(q[1] || ''); } });
+                Lampa.TMDB.get(parts[0], params, function (j) { cb(j); }, function () { tmdbRawReq(path, cb); });
+                return;
+            }
+        } catch (e) {}
+        tmdbRawReq(path, cb);
+    }
+    function tmdbRawReq(path, cb) {
+        var url = '';
+        try { url = Lampa.TMDB.api(path); } catch (e) {}
+        try { if (url && url.indexOf('api_key=') < 0 && Lampa.TMDB.key) url += (url.indexOf('?') < 0 ? '?' : '&') + 'api_key=' + Lampa.TMDB.key(); } catch (e) {}
+        if (!url) { cb(null); return; }
+        try { var net = new Lampa.Reguest(); net.silent(url, function (j) { cb(j); }, function () { httpJson(url, cb); }); }
+        catch (e) { httpJson(url, cb); }
+    }
+
+    // Статус сериала: последний вышедший сезон×эпизод + идёт/завершён.
+    function isSerial(c) {
+        return !!(c && (c.media_type === 'tv' || c.type === 'tv' || c.number_of_seasons || c.first_air_date || (c.name && !c.title)));
+    }
+    function pad2(n) { n = '' + n; return n.length < 2 ? '0' + n : n; }
+    function statusOf(det) {
+        if (!det) return null;
+        var last = det.last_episode_to_air, seas = det.number_of_seasons || (last ? last.season_number : 0) || 0;
+        var text = (last && last.season_number) ? (last.season_number + '×' + pad2(last.episode_number || 0)) : (seas ? seas + ' сез' : '');
+        if (!text) return null;
+        var ongoing = !!det.next_episode_to_air || /return|air|production/i.test(det.status || '');
+        return { text: text, cls: ongoing ? 'go' : 'end' };
+    }
+    // Очередь с ограничением параллелизма — чтобы сетка не долбила TMDB.
+    var stCache = {}, stQ = [], stActive = 0, ST_MAX = 3;
+    function loadSerialStatus(id, cb) {
+        if (!id) { cb(null); return; }
+        var c = stCache[id];
+        if (c !== undefined) { cb(c === 'none' ? null : c); return; }
+        stQ.push({ id: id, cb: cb }); pumpStatus();
+    }
+    function pumpStatus() {
+        while (stActive < ST_MAX && stQ.length) {
+            var t = stQ.shift();
+            if (stCache[t.id] !== undefined) { t.cb(stCache[t.id] === 'none' ? null : stCache[t.id]); continue; }
+            stActive++;
+            (function (t) {
+                tmdbRaw('tv/' + t.id + '?language=' + lang(), function (det) {
+                    var r = statusOf(det);
+                    stCache[t.id] = r || 'none';
+                    stActive--;
+                    t.cb(r);
+                    setTimeout(pumpStatus, 30);
+                });
+            })(t);
+        }
+    }
+
     // TMDB-совместимый разбор: {results:[...]} | {items:[...]} | [...]
     function extractList(data) {
         if (!data) return [];
@@ -286,6 +345,12 @@
                     (y ? '<div class="lmmain__cyear">' + y + '</div>' : '') +
                 '</div>'
             );
+            if (isSerial(c) && (c.id || c.tmdb_id)) {
+                loadSerialStatus(c.id || c.tmdb_id, function (st) {
+                    if (!st) return;
+                    el.find('.lmmain__poster').append('<div class="lmmain__status lmmain__status--' + st.cls + '">' + st.text + '</div>');
+                });
+            }
             var img = el.find('img')[0];
             if (img) img.onerror = function () { $(img).replaceWith('<span>' + esc(cardTitle(c).slice(0, 2)) + '</span>'); };
             el.on('hover:enter', function () { openCard(c); });
@@ -388,6 +453,9 @@
         '.lmmain__poster img{width:100%;height:100%;object-fit:cover}' +
         '.lmmain__poster span{font-size:2.4em;font-weight:700;color:rgba(255,255,255,.6)}' +
         '.lmmain__rate{position:absolute;top:.5em;left:.5em;background:rgba(0,0,0,.7);color:#F6B44C;font-weight:700;font-size:.85em;padding:.15em .5em;border-radius:.4em}' +
+        '.lmmain__status{position:absolute;top:.5em;right:.5em;z-index:5;font-weight:700;font-size:.85em;line-height:1;padding:.25em .45em;border-radius:.4em;color:#fff;font-variant-numeric:tabular-nums;box-shadow:0 .1em .4em rgba(0,0,0,.5)}' +
+        '.lmmain__status--go{background:#2fbf6c}' +
+        '.lmmain__status--end{background:#ff9f1a;color:#141414}' +
         '.lmmain__cname{font-size:1.02em;margin-top:.4em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
         '.lmmain__cyear{font-size:.85em;color:rgba(255,255,255,.5)}' +
         '.lmmain__manage{padding:1em 1.2em;border-radius:.7em;background:rgba(255,255,255,.05);font-size:1.15em;margin-top:.5em}' +
