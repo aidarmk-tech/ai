@@ -1667,6 +1667,13 @@ class PlayerViewModel @Inject constructor(
                 updateMediaSession()
             }
             override fun onPlayerError(error: PlaybackException) {
+                // Diagnostics: surface the real cause (code + HTTP status + URL tail) so a
+                // stuck torrent switch can be read off-screen instead of guessed at.
+                if (settings.diag) {
+                    val http = (error.cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.responseCode
+                    val tail = currentUrl.takeLast(70)
+                    _uiState.update { it.copy(diagText = "ERR ${error.errorCodeName}${http?.let { c -> " http=$c" } ?: ""}\n$tail") }
+                }
                 // Live edge fell behind (common after a stall on HLS/IPTV) → jump to live.
                 if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
                     runCatching { p.seekToDefaultPosition(); p.prepare() }
