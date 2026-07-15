@@ -1284,13 +1284,20 @@ class PlayerViewModel @Inject constructor(
             }
             if (wasIptv && updated != null) { populateMetadataFromCard(updated); loadEpg(updated) }   // refresh title + EPG for new channel
             else if (updated != null) { fetchIntroFromDb(updated); detectIntroFromSubs(updated) }   // per-episode intro/credits marks
+            // TorrServe serves one file per torrent at a time. Tearing down the old
+            // stream and opening the new index in the same instant makes TorrServe
+            // see two overlapping streams and stall, so close the old one first and
+            // give it a beat to free the file before requesting the next.
+            val torrentSwitch = isTorrentStream(episode.url) || isTorrentStream(currentUrl)
             if (usingVlc) {
                 val card = currentCard ?: return@launch
+                if (torrentSwitch) { runCatching { vlc?.stop() }; delay(600) }
                 vlc?.setMedia(appContext, episode.url, card.headers, 0L, emptyList(), hardwareDecode = true, nightMode = settings.nightMode)
                 reapplyRate()
                 restoreShowMarks(card)
             } else {
                 player.stop()
+                if (torrentSwitch) delay(600)
                 loadUrl(episode.url, currentCard!!)
             }
             updateMediaSession()
