@@ -982,6 +982,12 @@ class PlayerViewModel @Inject constructor(
 
     private fun buildMediaSource(url: String, card: CardMeta?): MediaSource {
         val factory = dataSourceFactory!!
+        // TorrServe holds the HTTP request open while it gathers peers and buffers
+        // the file header — that can take far longer than a normal server's first
+        // byte. Give torrent streams a long read timeout so ExoPlayer keeps ONE
+        // connection open and lets it buffer, instead of timing out and reopening
+        // (each reopen restarts TorrServe's preload → it never fills → "не грузит").
+        factory.setReadTimeoutMs(if (isTorrentStream(url)) 60_000 else 10_000)
         val subtitleConfigs = card?.subtitles.orEmpty().mapNotNull { sub ->
             val uri = runCatching { Uri.parse(sub.uri) }.getOrNull() ?: return@mapNotNull null
             MediaItem.SubtitleConfiguration.Builder(uri)
@@ -1029,7 +1035,9 @@ class PlayerViewModel @Inject constructor(
             "/stream/" in u || "/play/" in u ||
             ("link=" in u && "index=" in u)
     }
-    private val torrentRetryMs = 1200L
+    // Patient, not aggressive: hammering TorrServe's /stream endpoint restarts its
+    // preload, so wait a few seconds between reopens to let it accumulate buffer.
+    private val torrentRetryMs = 3000L
 
     // ─── Engine-agnostic accessors (route to ExoPlayer or libVLC) ──
     private fun engPositionMs(): Long = when {
