@@ -174,10 +174,21 @@
         return !!(c && (c.media_type === 'tv' || c.type === 'tv' || c.number_of_seasons || c.first_air_date || (c.name && !c.title)));
     }
     function pad2(n) { n = '' + n; return n.length < 2 ? '0' + n : n; }
+    function seasonEpCount(det, sn) {
+        var arr = det && det.seasons;
+        if (arr && arr.length) for (var i = 0; i < arr.length; i++) if (arr[i].season_number === sn) return arr[i].episode_count || 0;
+        return 0;
+    }
     function statusOf(det) {
         if (!det) return null;
         var last = det.last_episode_to_air, seas = det.number_of_seasons || (last ? last.season_number : 0) || 0;
-        var text = (last && last.season_number) ? (last.season_number + '×' + pad2(last.episode_number || 0)) : (seas ? seas + ' сез' : '');
+        var text;
+        if (last && last.season_number) {
+            // «1S 2E из 8» — сезон, вышедшая серия и сколько всего серий в сезоне
+            var total = seasonEpCount(det, last.season_number);
+            text = last.season_number + 'S ' + (last.episode_number || 0) + 'E';
+            if (total) text += ' из ' + total;
+        } else text = seas ? seas + ' сез' : '';
         if (!text) return null;
         var ongoing = !!det.next_episode_to_air || /return|air|production/i.test(det.status || '');
         return { text: text, cls: ongoing ? 'go' : 'end' };
@@ -453,7 +464,7 @@
         '.lmmain__poster img{width:100%;height:100%;object-fit:cover}' +
         '.lmmain__poster span{font-size:2.4em;font-weight:700;color:rgba(255,255,255,.6)}' +
         '.lmmain__rate{position:absolute;top:.5em;left:.5em;background:rgba(0,0,0,.7);color:#F6B44C;font-weight:700;font-size:.85em;padding:.15em .5em;border-radius:.4em}' +
-        '.lmmain__status{position:absolute;top:.5em;right:.5em;z-index:5;font-weight:700;font-size:.85em;line-height:1;padding:.25em .45em;border-radius:.4em;color:#fff;font-variant-numeric:tabular-nums;box-shadow:0 .1em .4em rgba(0,0,0,.5)}' +
+        '.lmmain__status{position:absolute;top:.5em;right:.5em;z-index:5;font-weight:700;font-size:.85em;line-height:1;white-space:nowrap;padding:.25em .45em;border-radius:.4em;color:#fff;font-variant-numeric:tabular-nums;box-shadow:0 .1em .4em rgba(0,0,0,.5)}' +
         '.lmmain__status--go{background:#2fbf6c}' +
         '.lmmain__status--end{background:#ff9f1a;color:#141414}' +
         '.lmmain__cname{font-size:1.02em;margin-top:.4em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
