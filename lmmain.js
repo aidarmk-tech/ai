@@ -522,6 +522,40 @@
     }
 
     var booted = false;
+    // ── бейдж статуса на РОДНЫЕ карточки Lampa (главная-источник, поиск и т.д.) ──
+    function domOf(x) { if (!x) return null; if (x.nodeType) return x; if (x.jquery || (x[0] && x[0].nodeType)) return x[0]; return null; }
+    function badgeNativeCard(inst) {
+        try {
+            var data = inst.data || inst.card_data;
+            if (!isSerial(data)) return;
+            var id = data.id || data.tmdb_id;
+            if (!id) return;
+            var root = domOf(inst.card || (inst.render && inst.render(true)));
+            if (!root || root.querySelector('.lmmain__status')) return;
+            var view = root.querySelector('.card__view') || root;
+            loadSerialStatus(id, function (st) {
+                if (!st || root.querySelector('.lmmain__status')) return;
+                var b = document.createElement('div');
+                b.className = 'lmmain__status lmmain__status--' + st.cls;
+                b.textContent = st.text;
+                view.appendChild(b);
+            });
+        } catch (e) {}
+    }
+    function hookNativeCards() {
+        // не дублируем, если уже кто-то (или lmstatus) повесил бейдж
+        if (window.__lm_cardbadge) return true;
+        if (!(window.Lampa && Lampa.Card && Lampa.Card.prototype)) return false;
+        window.__lm_cardbadge = true;
+        ['build', 'create'].forEach(function (name) {
+            var proto = Lampa.Card.prototype;
+            if (typeof proto[name] !== 'function') return;
+            var orig = proto[name];
+            proto[name] = function () { var r = orig.apply(this, arguments); try { badgeNativeCard(this); } catch (e) {} return r; };
+        });
+        return true;
+    }
+
     function boot() {
         if (booted) return;
         if (!window.Lampa || !Lampa.Component) { setTimeout(boot, 300); return; }
@@ -529,6 +563,7 @@
         Lampa.Component.add(PLUGIN, component);
         registerSource();
         addStyle();
+        if (!hookNativeCards()) { var ht = 0; var hi = setInterval(function () { if (hookNativeCards() || ++ht > 40) clearInterval(hi); }, 400); }
         var tries = 0;
         (function tryMenu() { if ($('.menu .menu__list').length) { addMenu(); return; } if (++tries < 30) setTimeout(tryMenu, 500); })();
     }
