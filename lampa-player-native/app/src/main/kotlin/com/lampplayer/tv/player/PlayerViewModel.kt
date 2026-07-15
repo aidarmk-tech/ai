@@ -884,10 +884,12 @@ class PlayerViewModel @Inject constructor(
     private var lastVlcPositionMs = 0L
     private var vlcRetries = 0
     private val maxVlcRetries = 6
+    private val maxTorrentRetries = 40   // torrent needs time to gather peers/buffer the header
 
     private fun scheduleVlcRetry() {
         if (!usingVlc) return
-        if (vlcRetries >= maxVlcRetries) {
+        val torrent = isTorrentStream(currentUrl)
+        if (vlcRetries >= (if (torrent) maxTorrentRetries else maxVlcRetries)) {
             _uiState.update { it.copy(hasError = true, reconnecting = false, errorMessage = "Не удалось восстановить поток") }
             return
         }
@@ -895,7 +897,7 @@ class PlayerViewModel @Inject constructor(
         _uiState.update { it.copy(isLoading = true, reconnecting = true, hasError = false) }
         retryJob?.cancel()
         retryJob = viewModelScope.launch {
-            delay((1000L shl vlcRetries.coerceIn(1, 4)))      // 2,4,8,16s
+            delay(if (torrent) torrentRetryMs else (1000L shl vlcRetries.coerceIn(1, 4)))   // torrent: 1.2s; else 2,4,8,16s
             retryVlc()
         }
     }
@@ -1012,6 +1014,22 @@ class PlayerViewModel @Inject constructor(
     }
 
     private fun isHls(url: String) = url.contains(".m3u8", ignoreCase = true)
+
+    /**
+     * TorrServe/local torrent stream. When you switch episode inside a torrent
+     * playlist the engine only starts preloading that file on the first request,
+     * so it's briefly unavailable and the player hits an IO error. For these we
+     * retry on a short fixed cadence instead of the 2→16s network backoff — the
+     * file usually appears within a couple of seconds once pieces buffer.
+     */
+    private fun isTorrentStream(url: String?): Boolean {
+        if (url.isNullOrEmpty()) return false
+        val u = url.lowercase()
+        return "127.0.0.1" in u || "localhost" in u ||
+            "/stream/" in u || "/play/" in u ||
+            ("link=" in u && "index=" in u)
+    }
+    private val torrentRetryMs = 1200L
 
     // ─── Engine-agnostic accessors (route to ExoPlayer or libVLC) ──
     private fun engPositionMs(): Long = when {
@@ -1215,6 +1233,7 @@ class PlayerViewModel @Inject constructor(
     fun selectEpisode(episode: EpisodeItem) {
         autoNextManager.cancel()
         programmeJob?.cancel()
+        errorRecovery.reset(); vlcRetries = 0   // new media → fresh retry budget
         lastVlcPositionMs = 0L   // don't reopen the new media at the old stream's offset
         _uiState.update { it.copy(autoNextCountdown = -1) }
         viewModelScope.launch {
@@ -1650,9 +1669,10 @@ class PlayerViewModel @Inject constructor(
                     // Retry with backoff. Network errors retry indefinitely (reconnecting),
                     // so a dropped mobile connection recovers on its own.
                     _uiState.update { it.copy(isLoading = true, reconnecting = errorRecovery.lastWasNetwork, hasError = false) }
+                    val fastTorrent = errorRecovery.lastWasNetwork && isTorrentStream(currentUrl)
                     retryJob?.cancel()
                     retryJob = viewModelScope.launch {
-                        delay(errorRecovery.retryDelayMs)
+                        delay(if (fastTorrent) torrentRetryMs else errorRecovery.retryDelayMs)
                         if (!usingVlc) runCatching { p.prepare() }
                     }
                 }
