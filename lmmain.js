@@ -523,18 +523,23 @@
 
     var booted = false;
     // ── бейдж статуса на РОДНЫЕ карточки Lampa (главная-источник, поиск и т.д.) ──
-    function domOf(x) { if (!x) return null; if (x.nodeType) return x; if (x.jquery || (x[0] && x[0].nodeType)) return x[0]; return null; }
-    function badgeNativeCard(inst) {
+    // Способ как в рабочих плагинах (maxsm_ratings): следим за DOM через
+    // MutationObserver, ловим каждый добавленный .card и читаем card.card_data —
+    // это свойство Lampa вешает на сам DOM-элемент карточки. Надёжнее, чем
+    // патчить Lampa.Card.prototype (методы могут не вызываться на этой сборке).
+    function badgeCardEl(card) {
         try {
-            var data = inst.data || inst.card_data;
-            if (!isSerial(data)) return;
+            if (!card || card.getAttribute('data-lmstatus-added')) return;
+            var data = card.card_data;
+            if (!data) return;
+            if (!isSerial(data)) { card.setAttribute('data-lmstatus-added', '1'); return; }
             var id = data.id || data.tmdb_id;
             if (!id) return;
-            var root = domOf(inst.card || (inst.render && inst.render(true)));
-            if (!root || root.querySelector('.lmmain__status')) return;
-            var view = root.querySelector('.card__view') || root;
+            var view = card.querySelector('.card__view');
+            if (!view || view.querySelector('.lmmain__status')) return;
+            card.setAttribute('data-lmstatus-added', '1');
             loadSerialStatus(id, function (st) {
-                if (!st || root.querySelector('.lmmain__status')) return;
+                if (!st || !document.body.contains(card) || view.querySelector('.lmmain__status')) return;
                 var b = document.createElement('div');
                 b.className = 'lmmain__status lmmain__status--' + st.cls;
                 b.textContent = st.text;
@@ -542,17 +547,27 @@
             });
         } catch (e) {}
     }
+    function scanCards(list) { for (var i = 0; i < list.length; i++) badgeCardEl(list[i]); }
     function hookNativeCards() {
-        // не дублируем, если уже кто-то (или lmstatus) повесил бейдж
         if (window.__lm_cardbadge) return true;
-        if (!(window.Lampa && Lampa.Card && Lampa.Card.prototype)) return false;
+        if (!(window.MutationObserver && document.body)) return false;
         window.__lm_cardbadge = true;
-        ['build', 'create'].forEach(function (name) {
-            var proto = Lampa.Card.prototype;
-            if (typeof proto[name] !== 'function') return;
-            var orig = proto[name];
-            proto[name] = function () { var r = orig.apply(this, arguments); try { badgeNativeCard(this); } catch (e) {} return r; };
-        });
+        try {
+            var obs = new MutationObserver(function (muts) {
+                for (var m = 0; m < muts.length; m++) {
+                    var added = muts[m].addedNodes;
+                    for (var j = 0; j < added.length; j++) {
+                        var node = added[j];
+                        if (node.nodeType !== 1) continue;
+                        if (node.classList && node.classList.contains('card')) badgeCardEl(node);
+                        if (node.querySelectorAll) scanCards(node.querySelectorAll('.card'));
+                    }
+                }
+            });
+            obs.observe(document.body, { childList: true, subtree: true });
+            // уже отрисованные карточки
+            scanCards(document.querySelectorAll('.card'));
+        } catch (e) { return false; }
         return true;
     }
 
