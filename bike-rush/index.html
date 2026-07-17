@@ -277,6 +277,7 @@ const mat = {
   gray:  new THREE.MeshLambertMaterial({ color: 0x8a8a8a }),
   white: new THREE.MeshLambertMaterial({ color: 0xf2f2f2 }),
   pants: new THREE.MeshLambertMaterial({ color: 0x23262b }),
+  frame: new THREE.MeshLambertMaterial({ color: 0xd8dde2 }),
   skin:  new THREE.MeshLambertMaterial({ color: 0xe6c19c }),
   hair:  new THREE.MeshLambertMaterial({ color: 0xcfa23f }),
 };
@@ -305,49 +306,92 @@ function buildRider(){
   g.add(flip);
   const b = new THREE.Group();          // сам байк+райдер
   flip.add(b);
-  b.position.y = -0.75; flip.position.y = 0.75; // центр вращения флипа
+  b.position.y = -0.8; flip.position.y = 0.8; // центр вращения флипа
+  b.scale.setScalar(1.12);
 
-  const wheelGeo = new THREE.TorusGeometry(0.34, 0.075, 8, 20);
-  const discGeo = new THREE.CircleGeometry(0.27, 12);
+  const V = (x,y,z) => new THREE.Vector3(x,y,z);
+  const tube = (a,c,r,m) => {           // цилиндр между двумя точками
+    const d = V(0,0,0).subVectors(c,a), len = d.length();
+    const t = new THREE.Mesh(new THREE.CylinderGeometry(r,r,len,10), m);
+    t.position.copy(a).addScaledVector(d,0.5);
+    t.quaternion.setFromUnitVectors(V(0,1,0), d.normalize());
+    b.add(t); return t;
+  };
+  const ball = (p,r,m) => {
+    const s = new THREE.Mesh(new THREE.SphereGeometry(r,12,10), m);
+    s.position.copy(p); b.add(s); return s;
+  };
+  const box = (p, sx,sy,sz, m) => {
+    const q = new THREE.Mesh(geo.box, m); q.scale.set(sx,sy,sz);
+    q.position.copy(p); b.add(q); return q;
+  };
+
+  /* колёса — в плоскости YZ, ось вращения X */
+  const tireGeo = new THREE.TorusGeometry(0.36, 0.06, 10, 24);
+  const spokeGeo = new THREE.CylinderGeometry(0.013, 0.013, 0.66, 6);
   const mkWheel = z => {
-    const w = new THREE.Group();
-    w.add(new THREE.Mesh(wheelGeo, mat.black));
-    const d = new THREE.Mesh(discGeo, mat.gray); d.material.side = THREE.DoubleSide; w.add(d);
-    w.position.set(0, 0.35, z); b.add(w); return w;
+    const w = new THREE.Group(); w.position.set(0, 0.36, z);
+    const tire = new THREE.Mesh(tireGeo, mat.black); tire.rotation.y = Math.PI/2; w.add(tire);
+    for(let i=0;i<3;i++){
+      const sp = new THREE.Mesh(spokeGeo, mat.gray);
+      sp.rotation.x = i*Math.PI/3; w.add(sp);
+    }
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.035,0.035,0.09,8), mat.gray);
+    hub.rotation.z = Math.PI/2; w.add(hub);
+    b.add(w); return w;
   };
-  const wF = mkWheel(0.62), wB = mkWheel(-0.62);
+  const wB = mkWheel(-0.56), wF = mkWheel(0.56);
 
-  const frame1 = new THREE.Mesh(geo.box, mat.stone);
-  frame1.scale.set(0.07, 0.07, 1.05); frame1.position.set(0, 0.52, 0); b.add(frame1);
-  const frame2 = new THREE.Mesh(geo.box, mat.stone);
-  frame2.scale.set(0.07, 0.5, 0.07); frame2.position.set(0, 0.72, 0.5); b.add(frame2);
-  const seatpost = new THREE.Mesh(geo.box, mat.stone);
-  seatpost.scale.set(0.07, 0.35, 0.07); seatpost.position.set(0, 0.68, -0.42); b.add(seatpost);
-  const saddle = new THREE.Mesh(geo.box, mat.black);
-  saddle.scale.set(0.16, 0.07, 0.3); saddle.position.set(0, 0.88, -0.42); b.add(saddle);
-  const bar = new THREE.Mesh(geo.box, mat.black);
-  bar.scale.set(0.56, 0.06, 0.06); bar.position.set(0, 1.0, 0.5); b.add(bar);
+  /* рама */
+  const rearHub = V(0,0.36,-0.56), frontHub = V(0,0.36,0.56);
+  const bb = V(0,0.4,-0.02), seatTop = V(0,0.92,-0.3), headTop = V(0,0.98,0.38);
+  tube(bb, headTop, 0.035, mat.frame);            // нижняя труба
+  tube(seatTop, V(0,0.94,0.34), 0.03, mat.frame); // верхняя труба
+  tube(bb, seatTop, 0.03, mat.frame);             // подседельная труба
+  tube(rearHub, bb, 0.022, mat.frame);            // цепные перья
+  tube(rearHub, seatTop, 0.022, mat.frame);       // верхние перья
+  tube(headTop, frontHub, 0.028, mat.frame);      // вилка
+  tube(V(0,1.06,0.4), headTop, 0.03, mat.frame);  // шток руля
+  tube(V(-0.3,1.06,0.41), V(0.3,1.06,0.41), 0.028, mat.black); // руль
+  tube(V(0,1.08,-0.33), seatTop, 0.025, mat.frame); // подседельный штырь
+  box(V(0,1.11,-0.33), 0.15,0.05,0.32, mat.black);  // седло
+  /* шатуны и педали (в противофазе) */
+  const pedL = V(-0.13,0.28,0.12), pedR = V(0.13,0.52,-0.16);
+  tube(V(-0.08,0.4,-0.02), V(-0.09,0.3,0.11), 0.018, mat.gray);
+  tube(V(0.08,0.4,-0.02), V(0.09,0.5,-0.15), 0.018, mat.gray);
+  box(pedL, 0.13,0.03,0.1, mat.black); box(pedR, 0.13,0.03,0.1, mat.black);
 
-  const mkBoxPart = (m, sx,sy,sz, x,y,z, rx=0,rz=0) => {
-    const p = new THREE.Mesh(geo.box, m); p.scale.set(sx,sy,sz);
-    p.position.set(x,y,z); p.rotation.x = rx; p.rotation.z = rz; b.add(p); return p;
-  };
-  // ноги (чёрные штаны), торс (белая футболка), руки
-  mkBoxPart(mat.pants, 0.14, 0.5, 0.17, -0.13, 0.72, -0.18, 0.45);
-  mkBoxPart(mat.pants, 0.14, 0.5, 0.17,  0.13, 0.72, -0.18, 0.45);
-  const torso = mkBoxPart(mat.white, 0.46, 0.56, 0.24, 0, 1.22, -0.18, 0.5);
-  mkBoxPart(mat.white, 0.1, 0.4, 0.1, -0.26, 1.22, 0.14, 0.9);
-  mkBoxPart(mat.white, 0.1, 0.4, 0.1,  0.26, 1.22, 0.14, 0.9);
-  mkBoxPart(mat.skin, 0.09, 0.22, 0.09, -0.26, 1.06, 0.34, 1.1);
-  mkBoxPart(mat.skin, 0.09, 0.22, 0.09,  0.26, 1.06, 0.34, 1.1);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 10), mat.skin);
-  head.position.set(0, 1.56, 0.02); b.add(head);
-  const bun = new THREE.Mesh(new THREE.SphereGeometry(0.1, 10, 8), mat.hair);
-  bun.position.set(0, 1.68, -0.08); b.add(bun);
-  const hairCap = new THREE.Mesh(new THREE.SphereGeometry(0.165, 12, 10), mat.hair);
-  hairCap.scale.set(1, 0.7, 1); hairCap.position.set(0, 1.62, -0.02); b.add(hairCap);
+  /* райдер: чёрные штаны, белый кроп-топ, кроссовки, пучок */
+  const hip = V(0,1.12,-0.28);
+  const kneeL = V(-0.14,0.7,0.18), kneeR = V(0.14,0.86,-0.06);
+  tube(hip.clone().add(V(-0.09,0,0)), kneeL, 0.062, mat.pants);
+  tube(hip.clone().add(V(0.09,0,0)), kneeR, 0.062, mat.pants);
+  tube(kneeL, pedL.clone().add(V(0,0.08,-0.02)), 0.052, mat.pants);
+  tube(kneeR, pedR.clone().add(V(0,0.08,-0.02)), 0.052, mat.pants);
+  ball(kneeL, 0.065, mat.pants); ball(kneeR, 0.065, mat.pants);
+  box(pedL.clone().add(V(0,0.07,0.04)), 0.1,0.08,0.22, mat.white);  // кроссовки
+  box(pedR.clone().add(V(0,0.07,0.04)), 0.1,0.08,0.22, mat.white);
+  ball(hip, 0.135, mat.pants);                       // бёдра
+  tube(hip, V(0,1.28,-0.19), 0.105, mat.skin);       // талия (кроп-топ)
+  const chest = V(0,1.52,0.02);
+  tube(V(0,1.26,-0.2), chest, 0.12, mat.white);      // торс
+  ball(chest.clone().add(V(0,0.04,0.02)), 0.115, mat.white); // плечи
+  /* руки к рулю */
+  const shL = V(-0.19,1.52,0.05), shR = V(0.19,1.52,0.05);
+  const elbL = V(-0.27,1.28,0.22), elbR = V(0.27,1.28,0.22);
+  const handL = V(-0.25,1.08,0.4), handR = V(0.25,1.08,0.4);
+  tube(shL, elbL, 0.05, mat.white); tube(shR, elbR, 0.05, mat.white);
+  tube(elbL, handL, 0.042, mat.skin); tube(elbR, handR, 0.042, mat.skin);
+  ball(elbL, 0.05, mat.skin); ball(elbR, 0.05, mat.skin);
+  ball(handL, 0.052, mat.skin); ball(handR, 0.052, mat.skin);
+  /* голова с пучком */
+  const headP = V(0,1.74,0.1);
+  ball(headP, 0.145, mat.skin);
+  const cap = new THREE.Mesh(new THREE.SphereGeometry(0.15,12,10), mat.hair);
+  cap.scale.set(1,0.72,1); cap.position.copy(headP).add(V(0,0.055,-0.02)); b.add(cap);
+  ball(headP.clone().add(V(0,0.15,-0.1)), 0.085, mat.hair); // пучок
 
-  return { g, flip, body:b, wF, wB };
+  return { g, flip, wF, wB };
 }
 const rider = buildRider();
 scene.add(rider.g);
@@ -844,11 +888,11 @@ function updateVisual(dt){
   blobShadow.scale.setScalar(1 - Math.min(P.airY,3)*0.12);
 
   // камера
-  const camZ = P.z - 6.8, camY = trackY(P.z) + 4.6 + Math.min(P.airY*0.4, 2);
-  camera.position.x += (P.x*0.55 - camera.position.x) * Math.min(1, dt*6);
+  const camZ = P.z - 4.7, camY = trackY(P.z) + 3.15 + Math.min(P.airY*0.4, 2);
+  camera.position.x += (P.x*0.6 - camera.position.x) * Math.min(1, dt*6);
   camera.position.y += (camY - camera.position.y) * Math.min(1, dt*8);
   camera.position.z = camZ;
-  camera.lookAt(P.x*0.75, trackY(P.z+10) + 0.5 + P.airY*0.5, P.z + 10);
+  camera.lookAt(P.x*0.8, trackY(P.z+10) + 0.6 + P.airY*0.5, P.z + 10);
   const targetFov = 72 + (boostKick > 0 ? 10 : 0) + P.v*0.08;
   camera.fov += (targetFov - camera.fov) * Math.min(1, dt*4);
   camera.updateProjectionMatrix();
