@@ -25,6 +25,12 @@
         try { return Lampa.Storage.get(PLUGIN_NAME + '_on', true) !== false; }
         catch (_) { return true; }
     }
+    // Бета: возврат таймкода просмотренного в Lampa. По умолчанию ВЫКЛ — чтобы
+    // ничего не менять, пока пользователь сам не включит и не проверит.
+    function timecodeReturn() {
+        try { return Lampa.Storage.get(PLUGIN_NAME + '_timecode', false) === true; }
+        catch (_) { return false; }
+    }
 
     // Есть ли нативный Android-мост Lampa (TV/мобильное приложение-обёртка).
     function hasAndroidBridge() {
@@ -103,6 +109,47 @@
     }
 
     // ── Запуск APK ────────────────────────────────────────────────────────
+    // Возврат таймкода: запуск через РОДНОЙ мост Lampa (Lampa.Android.openPlayer),
+    // который стартует плеер «на результат» и записывает вернувшуюся позицию через
+    // timeline.handler в file_view / синхронизацию. Требует приложение Lampa
+    // (AndroidJS + Lampa.Android.openPlayer) и валидный timeline. Возвращает false —
+    // вызывающий тихо откатывается на обычный запуск (никакой регрессии).
+    // packedTitle — уже собранный конверт lmpmeta:// (с окном плейлиста), чтобы
+    // нативный плеер получил метаданные и соседние серии.
+    function launchWithTimelineResult(videoUrl, packedTitle, cardMeta, sourceObj) {
+        try {
+            if (!timecodeReturn()) return false;
+            if (!(window.Lampa && Lampa.Android && typeof Lampa.Android.openPlayer === 'function')) return false;
+            if (typeof window.AndroidJS === 'undefined') return false;
+
+            var timeline = sourceObj && sourceObj.timeline;
+            // Предпочитаем таймлайн, созданный самой Lampa (в нём верный hash).
+            // Реконструируем только если его нет.
+            if ((!timeline || !timeline.hash || typeof timeline.handler !== 'function') &&
+                Lampa.Timeline && Lampa.Utils &&
+                typeof Lampa.Timeline.view === 'function' && typeof Lampa.Utils.hash === 'function') {
+                var original = cardMeta && (cardMeta.original_title || cardMeta.title);
+                if (original) {
+                    var s  = parseInt((cardMeta.season  != null ? cardMeta.season  : cardMeta.season_number)  || 0, 10);
+                    var ep = parseInt((cardMeta.episode != null ? cardMeta.episode : cardMeta.episode_number) || 0, 10);
+                    var hash = (s && ep)
+                        ? Lampa.Utils.hash([s, s > 10 ? ':' : '', ep, original].join(''))
+                        : Lampa.Utils.hash(original);
+                    timeline = Lampa.Timeline.view(hash);
+                }
+            }
+            if (!timeline || !timeline.hash || typeof timeline.handler !== 'function') return false;
+
+            Lampa.Android.openPlayer(videoUrl, {
+                title:      packedTitle || ('lmpmeta://' + b64utf8(JSON.stringify(cardMeta || {}))),
+                timeline:   timeline,
+                position:   Math.max(0, Math.round((timeline.time || 0) * 1000)),
+                from_start: false
+            });
+            return true;
+        } catch (e) { return false; }
+    }
+
     function launch(videoUrl, cardData) {
         var json      = JSON.stringify(cardData);
         var intentUri = buildIntentUri(videoUrl, json);
@@ -1115,6 +1162,14 @@
                                     video.headers = merged;
                                 }
                             } catch (e) {}
+                            // Кино/сериал: пробуем мост с возвратом таймкода (бета,
+                            // по умолчанию выкл). Успех → Lampa запустит плеер сама
+                            // «на результат», обычный _origPlay не нужен.
+                            if (!iptv && video && video.url &&
+                                launchWithTimelineResult(video.url, video.title, cardData, video)) {
+                                _lastLaunch = Date.now();
+                                return;
+                            }
                             _origPlay.apply(self, args);
                         };
 
@@ -1133,6 +1188,12 @@
                         cleanMeta(meta);
                         if (meta.title || meta.tmdb_id || meta.iptv)
                             video.title = 'lmpmeta://' + b64utf8(JSON.stringify(meta));
+                        // Фильм/одиночная серия: тот же мост возврата таймкода (бета).
+                        if (!iptv && video && video.url &&
+                            launchWithTimelineResult(video.url, video.title, cardData, video)) {
+                            _lastLaunch = Date.now();
+                            return;
+                        }
                     }
                 }
             } catch (e) {}
@@ -1272,6 +1333,17 @@
             field: { name: 'Нативный плеер', description: 'Запускать видео через Native Player APK' },
             onChange: function (v) {
                 try { Lampa.Storage.set(PLUGIN_NAME + '_on', v === true || v === 'true'); } catch (_) {}
+            }
+        });
+        safeParam({
+            component: PLUGIN_NAME,
+            param: { name: PLUGIN_NAME + '_timecode', type: 'trigger', 'default': false },
+            field: {
+                name: 'Возврат таймкода (бета)',
+                description: 'Запускать кино/сериалы через мост Lampa, чтобы просмотренная позиция сохранялась. Если пропадёт переключение серий/EPG — выключите.'
+            },
+            onChange: function (v) {
+                try { Lampa.Storage.set(PLUGIN_NAME + '_timecode', v === true || v === 'true'); } catch (_) {}
             }
         });
         // NB: no 'input' param here — on some Lampa builds (incl. Bylampa) rendering
