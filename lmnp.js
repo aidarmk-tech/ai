@@ -116,9 +116,20 @@
     // вызывающий тихо откатывается на обычный запуск (никакой регрессии).
     // packedTitle — уже собранный конверт lmpmeta:// (с окном плейлиста), чтобы
     // нативный плеер получил метаданные и соседние серии.
+    // Признак торрент-потока (TorrServe). Такие URL нельзя гнать через мост
+    // openPlayer — теряется прямая передача потока/заголовков и торрент не грузится
+    // («соединение»). Для них оставляем обычный запуск.
+    function isTorrentUrl(u) {
+        if (!u || typeof u !== 'string') return false;
+        return /(?:127\.0\.0\.1|localhost|\/stream\/|\/play\/)/i.test(u) ||
+               (/[?&]link=/i.test(u) && /[?&]index=/i.test(u)) ||
+               /torrserv|torrserver|:8090|:8091/i.test(u);
+    }
+
     function launchWithTimelineResult(videoUrl, packedTitle, cardMeta, sourceObj) {
         try {
             if (!timecodeReturn()) return false;
+            if (isTorrentUrl(videoUrl)) return false;   // торренты — только обычным запуском
             if (!(window.Lampa && Lampa.Android && typeof Lampa.Android.openPlayer === 'function')) return false;
             if (typeof window.AndroidJS === 'undefined') return false;
 
