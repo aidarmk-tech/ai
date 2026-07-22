@@ -615,6 +615,34 @@ class TradingService : Service() {
                 }
             }
         }
+
+        // Сверка с биржей: если монеты фактически нет на счету (позицию закрыли
+        // вручную или это пыль), сбрасываем фантом — иначе он «занимает» лимит
+        // позиций и блокирует торговлю.
+        var reconciled = false
+        for (p in pairs) {
+            if (!p.inPosition) continue
+            try {
+                val price = client.lastPrice(p.symbol)
+                val freeBase = client.freeBalance(p.rules.baseAsset)
+                val sellable = BinanceClient.roundToStep(minOf(p.qty, freeBase), p.rules.stepSize)
+                if (sellable < p.rules.minQty ||
+                    sellable.toDouble() * price < p.rules.minNotional.toDouble()
+                ) {
+                    log("${p.symbol}: позиция не найдена на бирже (закрыта вручную?) — сбрасываю фантом")
+                    p.inPosition = false
+                    p.posType = ""
+                    p.entryPrice = 0.0; p.qty = 0.0; p.spentQuote = 0.0
+                    p.stopPrice = 0.0; p.targetPrice = 0.0; p.trailDistance = 0.0
+                    p.highestPrice = 0.0; p.barsHeld = 0; p.breakeven = false
+                    reconciled = true
+                }
+            } catch (_: Exception) {
+                // Сеть/лимит — оставляем позицию как есть, сверимся позже.
+            }
+        }
+        if (reconciled) savePositions(pairs)
+
         if (pairs.isEmpty()) throw IllegalStateException("Список пар пуст")
         return pairs
     }
