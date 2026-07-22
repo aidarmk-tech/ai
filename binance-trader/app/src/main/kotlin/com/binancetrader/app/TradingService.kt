@@ -44,7 +44,8 @@ private class PairState(
     var trailDistance: Double = 0.0,
     var highestPrice: Double = 0.0,
     var barsHeld: Int = 0,
-    var breakeven: Boolean = false
+    var breakeven: Boolean = false,
+    var lastPrice: Double = 0.0
 )
 
 /**
@@ -155,6 +156,7 @@ class TradingService : Service() {
             var lastAutoRefresh = System.currentTimeMillis()
             var btcNotBear = true
             var lastBtcCheck = 0L
+            var lastHourlyReport = 0L // 0 → первый отчёт сразу после запуска
             var errorStreak = 0
 
             while (isActive) {
@@ -213,6 +215,16 @@ class TradingService : Service() {
                     errorStreak = 0
                 } else if (!cycleFailed) errorStreak = 0
 
+                // Часовой отчёт: баланс, позиции, итог дня (первый — сразу после запуска).
+                if (System.currentTimeMillis() - lastHourlyReport > 60 * 60 * 1000L) {
+                    try {
+                        hourlyReport(client, pairs)
+                        lastHourlyReport = System.currentTimeMillis()
+                    } catch (e: Exception) {
+                        log("Не удалось получить баланс: ${e.message}")
+                    }
+                }
+
                 updateStatus(pairs, btcNotBear)
                 delay(POLL_MS)
             }
@@ -233,6 +245,7 @@ class TradingService : Service() {
         if (closed.size < Strategy.MIN_CANDLES) return
 
         val price = client.lastPrice(p.symbol)
+        p.lastPrice = price
         val newCandle = closed.last().closeTime != p.lastClosedTime
 
         if (newCandle) {
@@ -393,6 +406,44 @@ class TradingService : Service() {
         )
         clearPosition(p, pairs)
         saveDayRisk()
+    }
+
+    /** Часовая сводка в журнал и уведомление: баланс, позиции, итог дня. */
+    private fun hourlyReport(client: BinanceClient, pairs: List<PairState>) {
+        val quote = pairs.firstOrNull()?.rules?.quoteAsset ?: "USDT"
+        val free = client.freeBalance(quote)
+        val open = pairs.filter { it.inPosition }
+        val inPositions = open.sumOf {
+            it.qty * (if (it.lastPrice > 0) it.lastPrice else it.entryPrice)
+        }
+        val total = free + inPositions
+
+        val sb = StringBuilder()
+        sb.append(
+            "📊 Баланс: %.2f %s свободно".format(Locale.US, free, quote)
+        )
+        if (open.isNotEmpty()) {
+            sb.append(", в позициях %.2f, всего %.2f".format(Locale.US, inPositions, total))
+        }
+        sb.append(" | итог дня: %+.2f %s".format(Locale.US, dayRealizedPnl, quote))
+        log(sb.toString())
+
+        for (p in open) {
+            val cur = if (p.lastPrice > 0) p.lastPrice else p.entryPrice
+            val pnl = if (p.entryPrice > 0) (cur - p.entryPrice) / p.entryPrice * 100 else 0.0
+            log(
+                "    %s [%s]: вход %.6g, сейчас %.6g (%+.2f%%), стоп %.6g"
+                    .format(Locale.US, p.symbol, p.posType, p.entryPrice, cur, pnl, p.stopPrice)
+            )
+        }
+
+        notifyUser(
+            "Баланс: %.2f %s".format(Locale.US, total, quote),
+            if (open.isEmpty())
+                "Позиций нет, свободно %.2f | день: %+.2f".format(Locale.US, free, dayRealizedPnl)
+            else
+                "Позиций: ${open.size}, в них %.2f | день: %+.2f".format(Locale.US, inPositions, dayRealizedPnl)
+        )
     }
 
     // ── Дневной риск-контроль ──
