@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.BinanceTrader" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">#F0B90B</item>
+        <item name="colorOnPrimary">#1E2026</item>
+    </style>
+</resources>
