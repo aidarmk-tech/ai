@@ -57,9 +57,10 @@ data class EntryPlan(
 object Strategy {
 
     const val ER_PERIOD = 20
-    const val ER_TREND = 0.32
-    const val ER_RANGE = 0.18
-    const val DONCHIAN = 20
+    // Пороги режима сближены: «мёртвая» нейтральная зона узкая, бот чаще активен.
+    const val ER_TREND = 0.27
+    const val ER_RANGE = 0.22
+    const val DONCHIAN = 15
     const val SMA_PERIOD = 20
     const val ATR_PERIOD = 14
     const val MOM_STOP_ATR = 2.2
@@ -190,7 +191,7 @@ object Strategy {
                     .maxOf { it.high }
                 if (closes[last] <= donchianHigh) return null
                 val volZ = volumeZ(candles)
-                if (volZ < 1.0) return null
+                if (volZ < 0.7) return null
                 // Не покупаем перегрев.
                 if (closes[last] - sma20 > 3.0 * atrNow) return null
                 if (rsi(closes.takeLast(80), 14) >= 78.0) return null
@@ -212,12 +213,12 @@ object Strategy {
                 val sd = stdev(closes, SMA_PERIOD)
                 if (sd <= 0) return null
                 val z = (closes[last] - sma20) / sd
-                if (z > -2.0) return null
-                if (rsi(closes.takeLast(30), 3) >= 15.0) return null
+                if (z > -1.7) return null
+                if (rsi(closes.takeLast(30), 3) >= 20.0) return null
                 // Свеча закрылась зелёной — падение приостановилось, не ловим нож.
                 if (candles[last].close <= candles[last].open) return null
-                // Цель должна оправдывать риск: до средней минимум 1×ATR.
-                if (sma20 - closes[last] < atrNow) return null
+                // Цель должна оправдывать риск: до средней минимум 0.7×ATR.
+                if (sma20 - closes[last] < 0.7 * atrNow) return null
 
                 val score = min(100, (abs(z) * 25).toInt() + ((1 - er) * 30).toInt())
                 return EntryPlan(

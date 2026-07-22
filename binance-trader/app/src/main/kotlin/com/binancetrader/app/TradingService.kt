@@ -64,10 +64,10 @@ class TradingService : Service() {
         private const val AUTO_REFRESH_MS = 6 * 60 * 60 * 1000L
 
         /** Риск на сделку: сколько капитала теряем, если сработает стоп. */
-        private const val RISK_PCT = 1.5
+        private const val RISK_PCT = 2.5
         /** Дневной лимит убытка: после него новые входы закрыты до завтра (UTC). */
-        private const val DAILY_LOSS_PCT = 3.0
-        private const val COOLDOWN_BARS = 8
+        private const val DAILY_LOSS_PCT = 4.0
+        private const val COOLDOWN_BARS = 5
         private const val MOM_TIME_STOP_BARS = 32
         private const val REV_TIME_STOP_BARS = 16
 
@@ -302,12 +302,17 @@ class TradingService : Service() {
         val riskAmount = equity * RISK_PCT / 100.0
         val notionalByRisk = riskAmount / plan.stopDistance * price
         val cap = free * positionPct / 100.0
-        val spend = min(notionalByRisk, cap)
+        // Биржевой минимум с небольшим запасом (цена может сдвинуться до исполнения).
+        val minOrder = max(p.rules.minNotional.toDouble(), 5.0) * 1.02
+        var spend = min(notionalByRisk, cap)
+        // Маленький депозит: расчётная сумма ниже биржевого минимума — торгуем
+        // минимально возможным ордером, иначе бот не сможет войти вообще.
+        if (spend < minOrder) spend = minOrder
 
-        if (spend < p.rules.minNotional.toDouble() || spend < 5.0 || spend > free) {
+        if (spend > free) {
             log(
-                "%s: сигнал (%s), но сумма %.2f %s вне лимитов (свободно %.2f)"
-                    .format(Locale.US, p.symbol, plan.reason, spend, p.rules.quoteAsset, free)
+                "%s: сигнал (%s), но свободных %s не хватает даже на минимальный ордер (%.2f < %.2f)"
+                    .format(Locale.US, p.symbol, plan.reason, p.rules.quoteAsset, free, minOrder)
             )
             return
         }
