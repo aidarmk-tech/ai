@@ -1,9 +1,13 @@
 package com.binancetrader.app
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
@@ -107,6 +111,8 @@ class MainActivity : AppCompatActivity() {
         Prefs.putString(this, "interval", intervals[b.spinnerInterval.selectedItemPosition])
         Prefs.putBoolean(this, "testnet", b.switchTestnet.isChecked)
 
+        requestBatteryExemption()
+
         if (!b.switchTestnet.isChecked) {
             AlertDialog.Builder(this)
                 .setTitle("Реальная торговля")
@@ -119,6 +125,25 @@ class MainActivity : AppCompatActivity() {
                 .show()
         } else {
             TradingService.start(this)
+        }
+    }
+
+    /**
+     * Просим систему не «оптимизировать» приложение: без этого агрессивные
+     * прошивки замораживают сервис при выключенном экране и бот пропускает циклы.
+     */
+    private fun requestBatteryExemption() {
+        try {
+            val pm = getSystemService(PowerManager::class.java)
+            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                startActivity(
+                    Intent(
+                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        Uri.parse("package:$packageName")
+                    )
+                )
+            }
+        } catch (_: Exception) {
         }
     }
 }

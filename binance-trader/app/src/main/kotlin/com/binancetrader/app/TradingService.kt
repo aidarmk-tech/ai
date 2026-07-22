@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -84,6 +85,7 @@ class TradingService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var loopJob: Job? = null
+    private var wakeLock: PowerManager.WakeLock? = null
 
     // Дневной риск-контроль (переживает перезапуск через Prefs).
     private var dayKey = ""
@@ -110,6 +112,7 @@ class TradingService : Service() {
 
     override fun onDestroy() {
         loopJob?.cancel()
+        releaseWakeLock()
         BotState.setRunning(false)
         super.onDestroy()
     }
@@ -118,6 +121,22 @@ class TradingService : Service() {
         Prefs.load(this)
         BotState.setRunning(true)
         log("── Бот запущен (стратегия «Хамелеон») ──")
+
+        // Держим CPU: без WakeLock агрессивные прошивки (MIUI/ColorOS и т.п.)
+        // замораживают даже foreground-сервис при выключенном экране.
+        try {
+            val pm = getSystemService(PowerManager::class.java)
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "BinanceTrader:loop").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        } catch (e: Exception) {
+            log("Не удалось взять WakeLock: ${e.message}")
+        }
+        val pm = getSystemService(PowerManager::class.java)
+        if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+            log("⚠ Приложение под оптимизацией батареи — телефон может усыплять бота. Разрешите работу в фоне в настройках батареи.")
+        }
 
         loopJob = scope.launch {
             val symbolsSetting = Prefs.getString(this@TradingService, "symbols", "AUTO")
@@ -157,9 +176,19 @@ class TradingService : Service() {
             var btcNotBear = true
             var lastBtcCheck = 0L
             var lastHourlyReport = 0L // 0 → первый отчёт сразу после запуска
+            var lastCycleAt = System.currentTimeMillis()
             var errorStreak = 0
 
             while (isActive) {
+                // Сторожок: если между циклами прошло сильно больше POLL_MS —
+                // систему замораживала бота, фиксируем это в журнале.
+                val sinceLast = System.currentTimeMillis() - lastCycleAt
+                if (sinceLast > POLL_MS * 6) {
+                    log(
+                        "⏸ Система приостанавливала бота на ~%d мин. Отключите оптимизацию батареи для приложения."
+                            .format(sinceLast / 60000)
+                    )
+                }
                 if (autoMode && System.currentTimeMillis() - lastAutoRefresh > AUTO_REFRESH_MS) {
                     try {
                         pairs = refreshAutoPairs(client, pairs)
@@ -226,9 +255,18 @@ class TradingService : Service() {
                 }
 
                 updateStatus(pairs, btcNotBear)
+                lastCycleAt = System.currentTimeMillis()
                 delay(POLL_MS)
             }
         }
+    }
+
+    private fun releaseWakeLock() {
+        try {
+            wakeLock?.release()
+        } catch (_: Exception) {
+        }
+        wakeLock = null
     }
 
     private fun processPair(
@@ -655,6 +693,7 @@ class TradingService : Service() {
     private fun stopLoop(finalStatus: String) {
         loopJob?.cancel()
         loopJob = null
+        releaseWakeLock()
         BotState.setRunning(false)
         BotState.setStatusLine(finalStatus)
         log("── Бот остановлен ──")
