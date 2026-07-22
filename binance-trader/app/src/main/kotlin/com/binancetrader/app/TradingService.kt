@@ -21,10 +21,24 @@ import java.io.File
 import java.util.Locale
 import kotlin.math.max
 
+/** Состояние одной торговой пары: индикаторы + открытая позиция. */
+private class PairState(
+    val symbol: String,
+    val rules: SymbolRules,
+    var lastClosedTime: Long = 0L,
+    var lastAtr: Double = 0.0,
+    var inPosition: Boolean = false,
+    var entryPrice: Double = 0.0,
+    var qty: Double = 0.0,
+    var stopPrice: Double = 0.0,
+    var takePrice: Double = 0.0,
+    var highestPrice: Double = 0.0
+)
+
 /**
- * Foreground-сервис: крутит торговый цикл, пока пользователь не остановит.
- * Раз в POLL_MS опрашивает свечи/цену, на закрытии новой свечи считает сигналы,
- * между свечами следит за стопом и тейком по последней цене.
+ * Foreground-сервис: торгует сразу несколькими парами.
+ * Список пар либо задан вручную, либо (режим AUTO) выбирается автоматически —
+ * топ по обороту за 24 часа, с пересмотром каждые 6 часов.
  */
 class TradingService : Service() {
 
@@ -33,7 +47,9 @@ class TradingService : Service() {
         const val ACTION_STOP = "stop"
         private const val CHANNEL_ID = "trading"
         private const val NOTIF_ID = 1
-        private const val POLL_MS = 20_000L
+        private const val POLL_MS = 25_000L
+        private const val AUTO_WATCHLIST = 8
+        private const val AUTO_REFRESH_MS = 6 * 60 * 60 * 1000L
 
         fun start(context: Context) {
             val i = Intent(context, TradingService::class.java).setAction(ACTION_START)
@@ -47,14 +63,6 @@ class TradingService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var loopJob: Job? = null
-
-    // ── Позиция (переживает перезапуск через Prefs) ──
-    private var inPosition = false
-    private var entryPrice = 0.0
-    private var qty = 0.0
-    private var stopPrice = 0.0
-    private var takePrice = 0.0
-    private var highestPrice = 0.0
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -81,216 +89,339 @@ class TradingService : Service() {
 
     private fun startLoop() {
         Prefs.load(this)
-        loadPosition()
         BotState.setRunning(true)
         log("── Бот запущен ──")
 
         loopJob = scope.launch {
-            val symbol = Prefs.getString(this@TradingService, "symbol", "BTCUSDT").uppercase(Locale.US)
+            val symbolsSetting = Prefs.getString(this@TradingService, "symbols", "AUTO")
+                .uppercase(Locale.US)
             val interval = Prefs.getString(this@TradingService, "interval", "15m")
             val positionPct = Prefs.getString(this@TradingService, "positionPct", "20").toDoubleOrNull() ?: 20.0
+            val maxPositions = Prefs.getString(this@TradingService, "maxPositions", "3").toIntOrNull() ?: 3
             val testnet = Prefs.getBoolean(this@TradingService, "testnet", true)
 
             val client = BinanceClient(Prefs.apiKey, Prefs.apiSecret, testnet)
 
-            log("Пара: $symbol, таймфрейм: $interval, размер позиции: ${positionPct.toInt()}% депозита")
+            val manualSymbols = symbolsSetting.split(',', ';', ' ')
+                .map { it.trim() }.filter { it.isNotEmpty() && it != "AUTO" }
+            val autoMode = manualSymbols.isEmpty()
+
+            log(
+                if (autoMode) "Режим пар: АВТО (топ-$AUTO_WATCHLIST по обороту, пересмотр каждые 6 ч)"
+                else "Пары: ${manualSymbols.joinToString(", ")}"
+            )
+            log("Таймфрейм: $interval, на сделку: ${positionPct.toInt()}% депозита, макс. позиций: $maxPositions")
             log(if (testnet) "Режим: ТЕСТНЕТ (виртуальные деньги)" else "⚠ Режим: РЕАЛЬНАЯ ТОРГОВЛЯ")
 
-            val rules = try {
+            var pairs: MutableList<PairState>
+            try {
                 client.syncTime()
-                client.symbolRules(symbol)
+                pairs = buildPairs(client, autoMode, manualSymbols)
             } catch (e: Exception) {
                 log("Ошибка инициализации: ${e.message}")
                 stopLoop("Ошибка: ${e.message}")
                 stopSelf()
                 return@launch
             }
+            log("Наблюдаю: ${pairs.joinToString(", ") { it.symbol }}")
 
-            var lastClosedTime = 0L
-            var lastAtr = 0.0
+            var lastAutoRefresh = System.currentTimeMillis()
             var errorStreak = 0
 
             while (isActive) {
-                try {
-                    val now = System.currentTimeMillis()
-                    val all = client.klines(symbol, interval, 200)
-                    val closed = all.filter { it.closeTime <= now }
-                    if (closed.size < Strategy.MIN_CANDLES) {
-                        log("Мало истории (${closed.size} свечей), жду…")
-                        delay(POLL_MS)
-                        continue
+                // Периодический пересмотр авто-списка (открытые позиции не выбрасываем).
+                if (autoMode && System.currentTimeMillis() - lastAutoRefresh > AUTO_REFRESH_MS) {
+                    try {
+                        pairs = refreshAutoPairs(client, pairs)
+                        lastAutoRefresh = System.currentTimeMillis()
+                        log("Список пар обновлён: ${pairs.joinToString(", ") { it.symbol }}")
+                    } catch (e: Exception) {
+                        log("Не удалось обновить список пар: ${e.message}")
                     }
+                }
 
-                    val price = client.lastPrice(symbol)
-                    val newCandle = closed.last().closeTime != lastClosedTime
-                    var result: StrategyResult? = null
-
-                    if (newCandle) {
-                        result = Strategy.evaluate(closed)
-                        lastClosedTime = closed.last().closeTime
-                        lastAtr = result.atr
-                        log(
-                            "Свеча закрыта: цена=%.6g RSI=%.1f EMA9=%.6g EMA21=%.6g → %s"
-                                .format(Locale.US, closed.last().close, result.rsi, result.ema9, result.ema21, result.signal)
-                        )
-                    }
-
-                    if (!inPosition) {
-                        if (newCandle && result?.signal == Signal.BUY) {
-                            tryBuy(client, symbol, rules, positionPct, result.atr, price)
-                        }
-                        status("Ждём сигнал | $symbol %.6g".format(Locale.US, price))
-                    } else {
-                        // Трейлинг-стоп: подтягиваем вверх за ценой, вниз не опускаем.
-                        highestPrice = max(highestPrice, price)
-                        if (lastAtr > 0) {
-                            stopPrice = max(stopPrice, highestPrice - Strategy.STOP_ATR * lastAtr)
-                        }
-                        savePosition()
-
-                        val exitReason = when {
-                            price <= stopPrice -> "стоп-лосс"
-                            price >= takePrice -> "тейк-профит"
-                            newCandle && result?.signal == Signal.SELL -> "сигнал на выход (EMA-кросс вниз)"
-                            else -> null
-                        }
-                        if (exitReason != null) {
-                            trySell(client, symbol, rules, price, exitReason)
-                        } else {
-                            val pnl = (price - entryPrice) / entryPrice * 100
-                            status(
-                                "В позиции | вход %.6g | сейчас %.6g (%+.2f%%) | стоп %.6g | тейк %.6g"
-                                    .format(Locale.US, entryPrice, price, pnl, stopPrice, takePrice)
-                            )
+                var cycleFailed = false
+                for (p in pairs) {
+                    if (!isActive) break
+                    try {
+                        processPair(client, p, pairs, interval, positionPct, maxPositions)
+                    } catch (e: Exception) {
+                        cycleFailed = true
+                        log("${p.symbol}: ошибка — ${e.message}")
+                        if (e is BinanceException && (e.code == -2014 || e.code == -2015 || e.code == -1022)) {
+                            log("Ключи API не подходят — останавливаюсь.")
+                            stopLoop("Неверные ключи API")
+                            stopSelf()
+                            return@launch
                         }
                     }
-                    errorStreak = 0
-                } catch (e: Exception) {
+                }
+
+                if (cycleFailed) {
                     errorStreak++
-                    log("Ошибка (${errorStreak}): ${e.message}")
-                    if (e is BinanceException && (e.code == -2014 || e.code == -2015 || e.code == -1022)) {
-                        log("Ключи API не подходят — останавливаюсь.")
-                        stopLoop("Неверные ключи API")
-                        stopSelf()
-                        return@launch
-                    }
                     if (errorStreak >= 3) {
                         try {
                             client.syncTime()
                         } catch (_: Exception) {
                         }
+                        errorStreak = 0
                     }
+                } else {
+                    errorStreak = 0
                 }
+
+                updateStatus(pairs)
                 delay(POLL_MS)
             }
         }
     }
 
-    private fun tryBuy(
+    /** Один проход по паре: новая свеча → сигналы; между свечами → стоп/тейк. */
+    private fun processPair(
         client: BinanceClient,
-        symbol: String,
-        rules: SymbolRules,
+        p: PairState,
+        pairs: List<PairState>,
+        interval: String,
         positionPct: Double,
-        atr: Double,
-        price: Double
+        maxPositions: Int
     ) {
-        val free = client.freeBalance(rules.quoteAsset)
+        val now = System.currentTimeMillis()
+        val closed = client.klines(p.symbol, interval, 120).filter { it.closeTime <= now }
+        if (closed.size < Strategy.MIN_CANDLES) return
+
+        val price = client.lastPrice(p.symbol)
+        val newCandle = closed.last().closeTime != p.lastClosedTime
+        var result: StrategyResult? = null
+
+        if (newCandle) {
+            result = Strategy.evaluate(closed)
+            p.lastClosedTime = closed.last().closeTime
+            p.lastAtr = result.atr
+            if (result.signal != Signal.HOLD) {
+                log(
+                    "%s: свеча закрыта, цена=%.6g RSI=%.1f → %s"
+                        .format(Locale.US, p.symbol, closed.last().close, result.rsi, result.signal)
+                )
+            }
+        }
+
+        if (!p.inPosition) {
+            val openCount = pairs.count { it.inPosition }
+            if (newCandle && result?.signal == Signal.BUY && openCount < maxPositions) {
+                tryBuy(client, p, positionPct, result.atr)
+            }
+        } else {
+            p.highestPrice = max(p.highestPrice, price)
+            if (p.lastAtr > 0) {
+                p.stopPrice = max(p.stopPrice, p.highestPrice - Strategy.STOP_ATR * p.lastAtr)
+            }
+            savePositions(pairsSnapshot = pairs)
+
+            val exitReason = when {
+                price <= p.stopPrice -> "стоп-лосс"
+                price >= p.takePrice -> "тейк-профит"
+                newCandle && result?.signal == Signal.SELL -> "EMA-кросс вниз"
+                else -> null
+            }
+            if (exitReason != null) {
+                trySell(client, p, pairs, price, exitReason)
+            }
+        }
+    }
+
+    private fun tryBuy(client: BinanceClient, p: PairState, positionPct: Double, atr: Double) {
+        val free = client.freeBalance(p.rules.quoteAsset)
         val spend = free * positionPct / 100.0
-        if (spend < rules.minNotional.toDouble() || spend < 5.0) {
-            log("Сигнал BUY, но недостаточно ${rules.quoteAsset}: свободно %.2f, нужно ≥ %.2f".format(
-                Locale.US, free, max(rules.minNotional.toDouble(), 5.0)))
+        if (spend < p.rules.minNotional.toDouble() || spend < 5.0) {
+            log(
+                "%s: сигнал BUY, но мало %s (свободно %.2f)"
+                    .format(Locale.US, p.symbol, p.rules.quoteAsset, free)
+            )
             return
         }
-        val fill = client.marketBuy(symbol, spend)
+        val fill = client.marketBuy(p.symbol, spend)
         if (fill.executedQty <= 0) {
-            log("Ордер BUY не исполнился")
+            log("${p.symbol}: ордер BUY не исполнился")
             return
         }
-        inPosition = true
-        entryPrice = fill.avgPrice
-        qty = fill.executedQty
-        highestPrice = fill.avgPrice
-        stopPrice = fill.avgPrice - Strategy.STOP_ATR * atr
-        takePrice = fill.avgPrice + Strategy.TAKE_ATR * atr
-        savePosition()
+        p.inPosition = true
+        p.entryPrice = fill.avgPrice
+        p.qty = fill.executedQty
+        p.highestPrice = fill.avgPrice
+        p.stopPrice = fill.avgPrice - Strategy.STOP_ATR * atr
+        p.takePrice = fill.avgPrice + Strategy.TAKE_ATR * atr
         log(
-            "✅ КУПЛЕНО %.8g %s по %.6g (потрачено %.2f %s). Стоп %.6g, тейк %.6g"
-                .format(Locale.US, qty, rules.baseAsset, entryPrice, fill.quoteSpent, rules.quoteAsset, stopPrice, takePrice)
+            "✅ %s: куплено %.8g по %.6g (%.2f %s). Стоп %.6g, тейк %.6g"
+                .format(
+                    Locale.US, p.symbol, p.qty, p.entryPrice, fill.quoteSpent,
+                    p.rules.quoteAsset, p.stopPrice, p.takePrice
+                )
         )
-        notifyUser("Куплено $symbol", "Вход %.6g, стоп %.6g".format(Locale.US, entryPrice, stopPrice))
+        notifyUser("Куплено ${p.symbol}", "Вход %.6g, стоп %.6g".format(Locale.US, p.entryPrice, p.stopPrice))
     }
 
     private fun trySell(
         client: BinanceClient,
-        symbol: String,
-        rules: SymbolRules,
+        p: PairState,
+        pairs: List<PairState>,
         price: Double,
         reason: String
     ) {
         // Продаём фактический свободный остаток (комиссия могла списаться в базовой валюте).
-        val freeBase = client.freeBalance(rules.baseAsset)
-        val sellQty = BinanceClient.roundToStep(minOf(qty, freeBase), rules.stepSize)
-        if (sellQty < rules.minQty || sellQty.toDouble() * price < rules.minNotional.toDouble()) {
-            log("Нечего продавать (остаток %.8g %s ниже минимума) — сбрасываю позицию".format(
-                Locale.US, freeBase, rules.baseAsset))
-            clearPosition()
+        val freeBase = client.freeBalance(p.rules.baseAsset)
+        val sellQty = BinanceClient.roundToStep(minOf(p.qty, freeBase), p.rules.stepSize)
+        if (sellQty < p.rules.minQty || sellQty.toDouble() * price < p.rules.minNotional.toDouble()) {
+            log(
+                "%s: остаток %.8g ниже минимума — сбрасываю позицию"
+                    .format(Locale.US, p.symbol, freeBase)
+            )
+            clearPosition(p, pairs)
             return
         }
-        val fill = client.marketSell(symbol, sellQty)
-        val pnl = (fill.avgPrice - entryPrice) / entryPrice * 100
+        val fill = client.marketSell(p.symbol, sellQty)
+        val pnl = (fill.avgPrice - p.entryPrice) / p.entryPrice * 100
         log(
-            "🔻 ПРОДАНО %.8g %s по %.6g (%s). Результат: %+.2f%%"
-                .format(Locale.US, fill.executedQty, rules.baseAsset, fill.avgPrice, reason, pnl)
+            "🔻 %s: продано %.8g по %.6g (%s). Результат: %+.2f%%"
+                .format(Locale.US, p.symbol, fill.executedQty, fill.avgPrice, reason, pnl)
         )
         notifyUser(
-            "Продано $symbol (%+.2f%%)".format(Locale.US, pnl),
+            "Продано ${p.symbol} (%+.2f%%)".format(Locale.US, pnl),
             "Причина: $reason, выход %.6g".format(Locale.US, fill.avgPrice)
         )
-        clearPosition()
+        clearPosition(p, pairs)
     }
 
-    // ── Персистентность позиции ──
+    // ── Формирование списка пар ──
 
-    private fun savePosition() {
-        val j = JSONObject()
-            .put("inPosition", inPosition)
-            .put("entryPrice", entryPrice)
-            .put("qty", qty)
-            .put("stopPrice", stopPrice)
-            .put("takePrice", takePrice)
-            .put("highestPrice", highestPrice)
-        Prefs.putString(this, "position", j.toString())
-    }
+    private fun buildPairs(
+        client: BinanceClient,
+        autoMode: Boolean,
+        manualSymbols: List<String>
+    ): MutableList<PairState> {
+        val saved = loadPositions()
+        val pairs = mutableListOf<PairState>()
 
-    private fun loadPosition() {
-        try {
-            val s = Prefs.getString(this, "position", "")
-            if (s.isEmpty()) return
-            val j = JSONObject(s)
-            inPosition = j.optBoolean("inPosition", false)
-            entryPrice = j.optDouble("entryPrice", 0.0)
-            qty = j.optDouble("qty", 0.0)
-            stopPrice = j.optDouble("stopPrice", 0.0)
-            takePrice = j.optDouble("takePrice", 0.0)
-            highestPrice = j.optDouble("highestPrice", 0.0)
-            if (inPosition) {
-                log("Восстановлена открытая позиция: вход %.6g, кол-во %.8g".format(Locale.US, entryPrice, qty))
+        val symbols: List<String> = if (autoMode) {
+            val rules = client.allUsdtRules()
+            val top = client.topByVolume(rules, AUTO_WATCHLIST)
+            // Пары с сохранённой открытой позицией держим, даже если выпали из топа.
+            val withOpen = saved.keys.filter { it !in top }
+            (top + withOpen).map { sym ->
+                pairs.add(PairState(sym, rules[sym] ?: client.symbolRules(sym)))
+                sym
             }
+        } else {
+            manualSymbols.map { sym ->
+                pairs.add(PairState(sym, client.symbolRules(sym)))
+                sym
+            }
+        }
+
+        for (p in pairs) {
+            saved[p.symbol]?.let { j ->
+                p.inPosition = j.optBoolean("inPosition", false)
+                p.entryPrice = j.optDouble("entryPrice", 0.0)
+                p.qty = j.optDouble("qty", 0.0)
+                p.stopPrice = j.optDouble("stopPrice", 0.0)
+                p.takePrice = j.optDouble("takePrice", 0.0)
+                p.highestPrice = j.optDouble("highestPrice", 0.0)
+                p.lastAtr = j.optDouble("lastAtr", 0.0)
+                if (p.inPosition) {
+                    log(
+                        "%s: восстановлена позиция — вход %.6g, стоп %.6g"
+                            .format(Locale.US, p.symbol, p.entryPrice, p.stopPrice)
+                    )
+                }
+            }
+        }
+        if (symbols.isEmpty()) throw IllegalStateException("Список пар пуст")
+        return pairs
+    }
+
+    private fun refreshAutoPairs(
+        client: BinanceClient,
+        current: MutableList<PairState>
+    ): MutableList<PairState> {
+        val rules = client.allUsdtRules()
+        val top = client.topByVolume(rules, AUTO_WATCHLIST)
+        val result = mutableListOf<PairState>()
+        // Открытые позиции переносим как есть — их надо довести до выхода.
+        for (p in current) {
+            if (p.inPosition) result.add(p)
+        }
+        for (sym in top) {
+            if (result.none { it.symbol == sym }) {
+                val existing = current.find { it.symbol == sym }
+                result.add(existing ?: PairState(sym, rules[sym] ?: continue))
+            }
+        }
+        return result
+    }
+
+    // ── Персистентность позиций (все пары одним JSON-объектом) ──
+
+    private fun savePositions(pairsSnapshot: List<PairState>) {
+        val root = JSONObject()
+        for (p in pairsSnapshot) {
+            if (!p.inPosition) continue
+            root.put(
+                p.symbol,
+                JSONObject()
+                    .put("inPosition", true)
+                    .put("entryPrice", p.entryPrice)
+                    .put("qty", p.qty)
+                    .put("stopPrice", p.stopPrice)
+                    .put("takePrice", p.takePrice)
+                    .put("highestPrice", p.highestPrice)
+                    .put("lastAtr", p.lastAtr)
+            )
+        }
+        Prefs.putString(this, "positions", root.toString())
+    }
+
+    private fun loadPositions(): Map<String, JSONObject> {
+        return try {
+            val s = Prefs.getString(this, "positions", "")
+            if (s.isEmpty()) return emptyMap()
+            val root = JSONObject(s)
+            val out = HashMap<String, JSONObject>()
+            for (key in root.keys()) out[key] = root.getJSONObject(key)
+            out
         } catch (_: Exception) {
+            emptyMap()
         }
     }
 
-    private fun clearPosition() {
-        inPosition = false
-        entryPrice = 0.0
-        qty = 0.0
-        stopPrice = 0.0
-        takePrice = 0.0
-        highestPrice = 0.0
-        savePosition()
+    private fun clearPosition(p: PairState, pairs: List<PairState>) {
+        p.inPosition = false
+        p.entryPrice = 0.0
+        p.qty = 0.0
+        p.stopPrice = 0.0
+        p.takePrice = 0.0
+        p.highestPrice = 0.0
+        savePositions(pairs)
     }
 
     // ── Служебное ──
+
+    private fun updateStatus(pairs: List<PairState>) {
+        val open = pairs.filter { it.inPosition }
+        val line = if (open.isEmpty()) {
+            "Ждём сигнал | слежу за ${pairs.size} парами"
+        } else {
+            val parts = open.map { p ->
+                val pnl =
+                    if (p.entryPrice > 0 && p.highestPrice > 0)
+                        (p.highestPrice - p.entryPrice) / p.entryPrice * 100
+                    else 0.0
+                "%s (пик %+.1f%%)".format(Locale.US, p.symbol, pnl)
+            }
+            "Позиции ${open.size}: ${parts.joinToString(", ")}"
+        }
+        BotState.setStatusLine(line)
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.notify(NOTIF_ID, buildNotification(line))
+    }
 
     private fun stopLoop(finalStatus: String) {
         loopJob?.cancel()
@@ -298,12 +429,6 @@ class TradingService : Service() {
         BotState.setRunning(false)
         BotState.setStatusLine(finalStatus)
         log("── Бот остановлен ──")
-    }
-
-    private fun status(line: String) {
-        BotState.setStatusLine(line)
-        val nm = getSystemService(NotificationManager::class.java)
-        nm.notify(NOTIF_ID, buildNotification(line))
     }
 
     private fun log(line: String) {
@@ -331,6 +456,7 @@ class TradingService : Service() {
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentTitle("Binance Trader")
             .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setContentIntent(pi)
             .setOngoing(true)
             .setOnlyAlertOnce(true)

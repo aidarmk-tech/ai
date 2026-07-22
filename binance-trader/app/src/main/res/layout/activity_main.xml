@@ -65,14 +65,14 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:hint="Торговая пара (например BTCUSDT)">
+                android:hint="Пары через запятую или AUTO (топ по обороту)">
 
                 <com.google.android.material.textfield.TextInputEditText
-                    android:id="@+id/editSymbol"
+                    android:id="@+id/editSymbols"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:inputType="textCapCharacters|textNoSuggestions"
-                    android:maxLines="1" />
+                    android:maxLines="2" />
             </com.google.android.material.textfield.TextInputLayout>
 
             <LinearLayout
@@ -85,7 +85,7 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:hint="Размер позиции, % депозита">
+                    android:hint="На сделку, %">
 
                     <com.google.android.material.textfield.TextInputEditText
                         android:id="@+id/editPct"
@@ -95,9 +95,24 @@
                         android:maxLines="1" />
                 </com.google.android.material.textfield.TextInputLayout>
 
+                <com.google.android.material.textfield.TextInputLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="8dp"
+                    android:hint="Макс. позиций">
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/editMaxPos"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="number"
+                        android:maxLines="1" />
+                </com.google.android.material.textfield.TextInputLayout>
+
                 <Spinner
                     android:id="@+id/spinnerInterval"
-                    android:layout_width="110dp"
+                    android:layout_width="90dp"
                     android:layout_height="wrap_content"
                     android:layout_gravity="center_vertical"
                     android:layout_marginStart="8dp" />

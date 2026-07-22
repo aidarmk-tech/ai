@@ -143,7 +143,47 @@ class BinanceClient(
 
     fun symbolRules(symbol: String): SymbolRules {
         val j = JSONObject(raw("/api/v3/exchangeInfo", "symbol=$symbol"))
-        val info = j.getJSONArray("symbols").getJSONObject(0)
+        return parseRules(j.getJSONArray("symbols").getJSONObject(0))
+    }
+
+    /** Все спотовые пары к USDT в статусе TRADING с их фильтрами (один запрос). */
+    fun allUsdtRules(): Map<String, SymbolRules> {
+        val j = JSONObject(raw("/api/v3/exchangeInfo"))
+        val arr = j.getJSONArray("symbols")
+        val out = HashMap<String, SymbolRules>()
+        for (i in 0 until arr.length()) {
+            val info = arr.getJSONObject(i)
+            if (info.getString("status") != "TRADING") continue
+            if (info.getString("quoteAsset") != "USDT") continue
+            if (!info.optBoolean("isSpotTradingAllowed", true)) continue
+            out[info.getString("symbol")] = parseRules(info)
+        }
+        return out
+    }
+
+    /**
+     * Топ-[count] пар по обороту за 24 часа среди [rules].
+     * Стейблкоины к стейблкоинам исключаются — там нет трендов.
+     */
+    fun topByVolume(rules: Map<String, SymbolRules>, count: Int): List<String> {
+        val stables = setOf(
+            "USDC", "FDUSD", "TUSD", "BUSD", "DAI", "USDP", "EUR", "EURI",
+            "AEUR", "USD1", "USDE", "XUSD", "PAX", "UST", "SUSD"
+        )
+        val arr = JSONArray(raw("/api/v3/ticker/24hr"))
+        val vols = ArrayList<Pair<String, Double>>()
+        for (i in 0 until arr.length()) {
+            val t = arr.getJSONObject(i)
+            val sym = t.getString("symbol")
+            val r = rules[sym] ?: continue
+            if (r.baseAsset in stables) continue
+            val qv = t.optString("quoteVolume", "0").toDoubleOrNull() ?: 0.0
+            vols.add(sym to qv)
+        }
+        return vols.sortedByDescending { it.second }.take(count).map { it.first }
+    }
+
+    private fun parseRules(info: JSONObject): SymbolRules {
         val filters = info.getJSONArray("filters")
         var step = BigDecimal("0.00000001")
         var minQty = BigDecimal.ZERO

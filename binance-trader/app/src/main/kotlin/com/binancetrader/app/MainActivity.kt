@@ -29,8 +29,9 @@ class MainActivity : AppCompatActivity() {
         Prefs.load(this)
         b.editApiKey.setText(Prefs.apiKey)
         b.editApiSecret.setText(Prefs.apiSecret)
-        b.editSymbol.setText(Prefs.getString(this, "symbol", "BTCUSDT"))
+        b.editSymbols.setText(Prefs.getString(this, "symbols", "AUTO"))
         b.editPct.setText(Prefs.getString(this, "positionPct", "20"))
+        b.editMaxPos.setText(Prefs.getString(this, "maxPositions", "3"))
         b.switchTestnet.isChecked = Prefs.getBoolean(this, "testnet", true)
 
         b.spinnerInterval.adapter =
@@ -63,8 +64,9 @@ class MainActivity : AppCompatActivity() {
     private fun setInputsEnabled(enabled: Boolean) {
         b.editApiKey.isEnabled = enabled
         b.editApiSecret.isEnabled = enabled
-        b.editSymbol.isEnabled = enabled
+        b.editSymbols.isEnabled = enabled
         b.editPct.isEnabled = enabled
+        b.editMaxPos.isEnabled = enabled
         b.spinnerInterval.isEnabled = enabled
         b.switchTestnet.isEnabled = enabled
     }
@@ -77,25 +79,31 @@ class MainActivity : AppCompatActivity() {
 
         val key = b.editApiKey.text.toString().trim()
         val secret = b.editApiSecret.text.toString().trim()
-        val symbol = b.editSymbol.text.toString().trim().uppercase()
+        val symbols = b.editSymbols.text.toString().trim().uppercase()
         val pct = b.editPct.text.toString().trim().toDoubleOrNull()
+        val maxPos = b.editMaxPos.text.toString().trim().toIntOrNull()
 
         if (key.isEmpty() || secret.isEmpty()) {
             Toast.makeText(this, "Введите API-ключ и секрет", Toast.LENGTH_LONG).show()
             return
         }
-        if (symbol.length < 5) {
-            Toast.makeText(this, "Укажите торговую пару, например BTCUSDT", Toast.LENGTH_LONG).show()
+        if (symbols.isEmpty()) {
+            Toast.makeText(this, "Укажите пары (BTCUSDT,ETHUSDT) или AUTO", Toast.LENGTH_LONG).show()
             return
         }
         if (pct == null || pct < 1 || pct > 100) {
-            Toast.makeText(this, "Размер позиции: число от 1 до 100 (%)", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "«На сделку»: число от 1 до 100 (%)", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (maxPos == null || maxPos < 1 || maxPos > 10) {
+            Toast.makeText(this, "Макс. позиций: от 1 до 10", Toast.LENGTH_LONG).show()
             return
         }
 
         Prefs.saveKeys(this, key, secret)
-        Prefs.putString(this, "symbol", symbol)
+        Prefs.putString(this, "symbols", symbols)
         Prefs.putString(this, "positionPct", pct.toString())
+        Prefs.putString(this, "maxPositions", maxPos.toString())
         Prefs.putString(this, "interval", intervals[b.spinnerInterval.selectedItemPosition])
         Prefs.putBoolean(this, "testnet", b.switchTestnet.isChecked)
 
