@@ -375,17 +375,19 @@ class TradingService : Service() {
         val riskAmount = equity * RISK_PCT / 100.0
         val notionalByRisk = riskAmount / plan.stopDistance * price
         val cap = free * positionPct / 100.0
-        // Биржевой минимум с небольшим запасом (цена может сдвинуться до исполнения).
-        val minOrder = max(p.rules.minNotional.toDouble(), 5.0) * 1.02
+        val minNotional = max(p.rules.minNotional.toDouble(), 5.0)
+        // Минимальный БЕЗОПАСНЫЙ вход = 2× биржевого минимума. Позиция размером
+        // с минимум — ловушка: после комиссии (списывается в монете) и падения
+        // цены остаток проваливается ниже минимума и его нельзя продать —
+        // монеты застревают пылью. Двойной запас гарантирует выход.
+        val minEntry = minNotional * 2.0
         var spend = min(notionalByRisk, cap)
-        // Маленький депозит: расчётная сумма ниже биржевого минимума — торгуем
-        // минимально возможным ордером, иначе бот не сможет войти вообще.
-        if (spend < minOrder) spend = minOrder
+        if (spend < minEntry) spend = minEntry
 
         if (spend > free) {
             log(
-                "%s: сигнал (%s), но свободных %s не хватает даже на минимальный ордер (%.2f < %.2f)"
-                    .format(Locale.US, p.symbol, plan.reason, p.rules.quoteAsset, free, minOrder)
+                "%s: сигнал (%s), но свободных %.2f %s не хватает на безопасный вход (нужно ≥ %.2f = 2× минимума). Пополните депозит или уменьшите «Макс. позиций»."
+                    .format(Locale.US, p.symbol, plan.reason, free, p.rules.quoteAsset, minEntry)
             )
             return
         }
