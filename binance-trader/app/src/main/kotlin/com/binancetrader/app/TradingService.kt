@@ -46,7 +46,8 @@ private class PairState(
     var highestPrice: Double = 0.0,
     var barsHeld: Int = 0,
     var breakeven: Boolean = false,
-    var lastPrice: Double = 0.0
+    var lastPrice: Double = 0.0,
+    var diag: String = "—"
 )
 
 /**
@@ -176,6 +177,7 @@ class TradingService : Service() {
             var btcNotBear = true
             var lastBtcCheck = 0L
             var lastHourlyReport = 0L // 0 → первый отчёт сразу после запуска
+            var lastScan = 0L         // 0 → первый скан сразу после запуска
             var lastCycleAt = System.currentTimeMillis()
             var errorStreak = 0
 
@@ -254,6 +256,18 @@ class TradingService : Service() {
                     }
                 }
 
+                // Диагностический скан: раз в 15 минут показываем, что бот видит
+                // по каждой паре и чего не хватает до входа (первый — сразу).
+                if (System.currentTimeMillis() - lastScan > 15 * 60 * 1000L) {
+                    val free = pairs.count { !it.inPosition }
+                    if (free > 0) {
+                        val parts = pairs.filter { !it.inPosition }
+                            .joinToString("  ") { "${it.symbol.removeSuffix("USDT")}:${it.diag}" }
+                        log("🔎 Скан: $parts")
+                    }
+                    lastScan = System.currentTimeMillis()
+                }
+
                 updateStatus(pairs, btcNotBear)
                 lastCycleAt = System.currentTimeMillis()
                 delay(POLL_MS)
@@ -300,6 +314,14 @@ class TradingService : Service() {
         }
 
         if (!p.inPosition) {
+            // Диагностика для скана — обновляем каждый цикл, чтобы журнал
+            // показывал актуальное состояние даже между свечами.
+            p.diag = when {
+                p.cooldownBars > 0 -> "кулдаун ${p.cooldownBars}"
+                dailyLossHit -> "дневной-лимит"
+                pairs.count { it.inPosition } >= maxPositions -> "лимит-позиций"
+                else -> Strategy.entryDiag(closed, p.ctxUp, btcNotBear)
+            }
             if (!newCandle) return
             if (p.cooldownBars > 0 || dailyLossHit) return
             if (pairs.count { it.inPosition } >= maxPositions) return

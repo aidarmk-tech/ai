@@ -202,7 +202,7 @@ object Strategy {
                     score = score,
                     stopDistance = MOM_STOP_ATR * atrNow,
                     target = 0.0,
-                    reason = "пробой 20-свечного максимума, объём z=%.1f, ER=%.2f".format(volZ, er)
+                    reason = "пробой $DONCHIAN-свечного максимума, объём z=%.1f, ER=%.2f".format(volZ, er)
                 )
             }
             Regime.RANGE -> {
@@ -210,8 +210,8 @@ object Strategy {
                 val sd = stdev(closes, SMA_PERIOD)
                 if (sd <= 0) return null
                 val z = (closes[last] - sma20) / sd
-                if (z > -1.5) return null
-                if (rsi(closes.takeLast(30), 3) >= 25.0) return null
+                if (z > -1.3) return null
+                if (rsi(closes.takeLast(30), 3) >= 30.0) return null
                 // Свеча закрылась зелёной — падение приостановилось, не ловим нож.
                 if (candles[last].close <= candles[last].open) return null
                 // Цель должна оправдывать риск: до средней минимум 0.5×ATR.
@@ -223,10 +223,56 @@ object Strategy {
                     score = score,
                     stopDistance = REV_STOP_ATR * atrNow,
                     target = sma20,
-                    reason = "капитуляция z=%.1f сигм ниже средней, RSI(3)<15".format(z)
+                    reason = "капитуляция z=%.1f сигм ниже средней".format(z)
                 )
             }
             Regime.NEUTRAL -> return null
+        }
+    }
+
+    /**
+     * Короткая диагностика: что бот видит по паре и чего не хватает до входа.
+     * Возвращает компактный токен для журнала — чтобы было видно, что бот
+     * «думает», а не спит, и понятно, какой фильтр держит вход.
+     */
+    fun entryDiag(candles: List<Candle>, ctxUp: Boolean, notBear: Boolean): String {
+        if (candles.size < MIN_CANDLES) return "мало-истории"
+        if (!notBear) return "медвежий-BTC"
+        val closes = candles.map { it.close }
+        val last = closes.size - 1
+        val atrNow = atr(candles, ATR_PERIOD)
+        if (atrNow <= 0) return "нет-ATR"
+        val sma20 = sma(closes, SMA_PERIOD)
+        val er = efficiencyRatio(closes, ER_PERIOD)
+
+        return when (regime(closes)) {
+            Regime.TREND -> {
+                if (!ctxUp) return "тренд/против-1h"
+                val donchianHigh = candles.subList(candles.size - DONCHIAN - 1, candles.size - 1)
+                    .maxOf { it.high }
+                when {
+                    closes[last] <= donchianHigh -> {
+                        val pct = (donchianHigh - closes[last]) / closes[last] * 100
+                        "тренд/до-пробоя %.1f%%".format(pct)
+                    }
+                    volumeZ(candles) < 0.4 -> "тренд/мало-объёма"
+                    closes[last] - sma20 > 3.5 * atrNow -> "тренд/перегрет"
+                    rsi(closes.takeLast(80), 14) >= 82.0 -> "тренд/RSI-высок"
+                    else -> "тренд/ГОТОВ⚡"
+                }
+            }
+            else -> {
+                val sd = stdev(closes, SMA_PERIOD)
+                if (sd <= 0) return "боковик/нет-vol"
+                val z = (closes[last] - sma20) / sd
+                when {
+                    z > -1.3 -> "боковик/z=%.1f".format(z)
+                    rsi(closes.takeLast(30), 3) >= 30.0 -> "боковик/RSI3-высок"
+                    candles[last].close <= candles[last].open -> "боковик/красная"
+                    sma20 - closes[last] < 0.5 * atrNow -> "боковик/цель-мала"
+                    else -> "боковик/ГОТОВ⚡"
+                }
+            }
         }
     }
 
