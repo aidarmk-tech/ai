@@ -64,10 +64,10 @@ class TradingService : Service() {
         private const val AUTO_REFRESH_MS = 6 * 60 * 60 * 1000L
 
         /** Риск на сделку: сколько капитала теряем, если сработает стоп. */
-        private const val RISK_PCT = 2.5
+        private const val RISK_PCT = 4.0
         /** Дневной лимит убытка: после него новые входы закрыты до завтра (UTC). */
-        private const val DAILY_LOSS_PCT = 4.0
-        private const val COOLDOWN_BARS = 5
+        private const val DAILY_LOSS_PCT = 6.0
+        private const val COOLDOWN_BARS = 3
         private const val MOM_TIME_STOP_BARS = 32
         private const val REV_TIME_STOP_BARS = 16
 

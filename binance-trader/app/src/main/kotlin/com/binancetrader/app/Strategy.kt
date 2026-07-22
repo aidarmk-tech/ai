@@ -57,10 +57,11 @@ data class EntryPlan(
 object Strategy {
 
     const val ER_PERIOD = 20
-    // Пороги режима сближены: «мёртвая» нейтральная зона узкая, бот чаще активен.
-    const val ER_TREND = 0.27
-    const val ER_RANGE = 0.22
-    const val DONCHIAN = 15
+    // Нейтральной зоны нет: рынок всегда либо ТРЕНД, либо БОКОВИК —
+    // один из движков активен в любой момент.
+    const val ER_TREND = 0.25
+    const val ER_RANGE = 0.25
+    const val DONCHIAN = 10
     const val SMA_PERIOD = 20
     const val ATR_PERIOD = 14
     const val MOM_STOP_ATR = 2.2
@@ -145,23 +146,19 @@ object Strategy {
 
     fun regime(closes: List<Double>): Regime {
         val er = efficiencyRatio(closes, ER_PERIOD)
-        return when {
-            er >= ER_TREND -> Regime.TREND
-            er <= ER_RANGE -> Regime.RANGE
-            else -> Regime.NEUTRAL
-        }
+        return if (er >= ER_TREND) Regime.TREND else Regime.RANGE
     }
 
     // ── Контекст старшего таймфрейма ──
 
-    /** 1h-тренд восходящий: цена выше EMA50 и EMA20 растёт. */
+    /** 1h-контекст не против нас: цена выше EMA50 ИЛИ EMA20 растёт. */
     fun contextTrendUp(candles1h: List<Candle>): Boolean {
         if (candles1h.size < 55) return false
         val closes = candles1h.map { it.close }
         val e50 = ema(closes, 50)
         val e20 = ema(closes, 20)
         val last = closes.size - 1
-        return closes[last] > e50[last] && e20[last] > e20[last - 3]
+        return closes[last] > e50[last] || e20[last] > e20[last - 3]
     }
 
     /** Макро-фильтр: BTC на 1h выше SMA200 — рынок не медвежий. */
@@ -191,10 +188,10 @@ object Strategy {
                     .maxOf { it.high }
                 if (closes[last] <= donchianHigh) return null
                 val volZ = volumeZ(candles)
-                if (volZ < 0.7) return null
+                if (volZ < 0.4) return null
                 // Не покупаем перегрев.
-                if (closes[last] - sma20 > 3.0 * atrNow) return null
-                if (rsi(closes.takeLast(80), 14) >= 78.0) return null
+                if (closes[last] - sma20 > 3.5 * atrNow) return null
+                if (rsi(closes.takeLast(80), 14) >= 82.0) return null
 
                 val score = min(
                     100,
@@ -213,12 +210,12 @@ object Strategy {
                 val sd = stdev(closes, SMA_PERIOD)
                 if (sd <= 0) return null
                 val z = (closes[last] - sma20) / sd
-                if (z > -1.7) return null
-                if (rsi(closes.takeLast(30), 3) >= 20.0) return null
+                if (z > -1.5) return null
+                if (rsi(closes.takeLast(30), 3) >= 25.0) return null
                 // Свеча закрылась зелёной — падение приостановилось, не ловим нож.
                 if (candles[last].close <= candles[last].open) return null
-                // Цель должна оправдывать риск: до средней минимум 0.7×ATR.
-                if (sma20 - closes[last] < 0.7 * atrNow) return null
+                // Цель должна оправдывать риск: до средней минимум 0.5×ATR.
+                if (sma20 - closes[last] < 0.5 * atrNow) return null
 
                 val score = min(100, (abs(z) * 25).toInt() + ((1 - er) * 30).toInt())
                 return EntryPlan(
@@ -244,6 +241,6 @@ object Strategy {
 
     /** Для контртрендовой позиции: краткосрочная перепроданность снята. */
     fun reversionExitSignal(candles: List<Candle>): Boolean {
-        return rsi(candles.map { it.close }.takeLast(30), 3) >= 65.0
+        return rsi(candles.map { it.close }.takeLast(30), 3) >= 60.0
     }
 }
