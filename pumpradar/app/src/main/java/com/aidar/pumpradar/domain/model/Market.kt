@@ -30,7 +30,8 @@ data class AggTrade(
     val quantity: Double,
     val quoteValue: Double,
     val buyerIsMaker: Boolean,
-    val tradeTime: Long
+    val tradeTime: Long,
+    val aggId: Long = 0            // aggregateTradeId — для дедупа/порядка (ТЗ 0A.7)
 ) {
     /** m == false → покупатель taker → агрессивный покупатель (ТЗ раздел 8.2). */
     val isAggressiveBuy: Boolean get() = !buyerIsMaker
@@ -40,7 +41,8 @@ data class AggTrade(
 data class BookTicker(
     val symbol: String,
     val bidPrice: Double,
-    val askPrice: Double
+    val askPrice: Double,
+    val updateId: Long = 0         // orderBookUpdateId — монотонность (ТЗ 0A.7)
 )
 
 /** Уровень стакана. */
@@ -50,7 +52,8 @@ data class DepthLevel(val price: Double, val qty: Double)
 data class PartialDepth(
     val symbol: String,
     val bids: List<DepthLevel>,
-    val asks: List<DepthLevel>
+    val asks: List<DepthLevel>,
+    val lastUpdateId: Long = 0     // монотонность снимков (ТЗ 0A.7)
 )
 
 /** Метрики стакана (ТЗ раздел 8.3). */
@@ -73,7 +76,8 @@ data class CandidateMetrics(
     val cvd30s: Double,
     val cvdSlope: Double,
     val volumeZ30s: Double?,   // null → NotReady (мало истории)
-    val spreadBps: Double?
+    val spreadBps: Double?,
+    val tradeGap: Boolean = false  // недавно обнаружен разрыв потока сделок (ТЗ 0A.7)
 )
 
 /** Готовый живой сигнал для UI и уведомлений. */

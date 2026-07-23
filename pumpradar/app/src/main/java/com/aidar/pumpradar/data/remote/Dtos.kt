@@ -38,6 +38,7 @@ data class MiniTickerDto(
 @Serializable
 data class AggTradeDto(
     @SerialName("s") val symbol: String = "",
+    @SerialName("a") val aggId: Long = 0,
     @SerialName("p") val price: String,
     @SerialName("q") val quantity: String,
     @SerialName("m") val buyerIsMaker: Boolean = false,
@@ -47,14 +48,15 @@ data class AggTradeDto(
         val p = price.toDoubleOrNull() ?: return null
         val q = quantity.toDoubleOrNull() ?: return null
         if (!p.validMarketNumber() || !q.validMarketNumber() || p <= 0.0) return null
-        return AggTrade(symbol, p, q, p * q, buyerIsMaker, tradeTime)
+        return AggTrade(symbol, p, q, p * q, buyerIsMaker, tradeTime, aggId)
     }
 }
 
-/** bookTicker: b лучший bid, a лучший ask. */
+/** bookTicker: b лучший bid, a лучший ask, u orderBookUpdateId. */
 @Serializable
 data class BookTickerDto(
     @SerialName("s") val symbol: String = "",
+    @SerialName("u") val updateId: Long = 0,
     @SerialName("b") val bidPrice: String,
     @SerialName("a") val askPrice: String
 ) {
@@ -62,13 +64,14 @@ data class BookTickerDto(
         val b = bidPrice.toDoubleOrNull() ?: return null
         val a = askPrice.toDoubleOrNull() ?: return null
         if (a < b || a <= 0.0 || b <= 0.0) return null
-        return BookTicker(symbol, b, a)
+        return BookTicker(symbol, b, a, updateId)
     }
 }
 
-/** depth20@100ms: bids/asks — массивы пар ["price","qty"]. */
+/** depth20@100ms: bids/asks — массивы пар ["price","qty"], lastUpdateId. */
 @Serializable
 data class DepthDto(
+    val lastUpdateId: Long = 0,
     val bids: List<List<String>> = emptyList(),
     val asks: List<List<String>> = emptyList()
 ) {
@@ -79,6 +82,6 @@ data class DepthDto(
             val q = row[1].toDoubleOrNull() ?: return@mapNotNull null
             if (p <= 0.0 || q < 0.0) null else DepthLevel(p, q)
         }
-        return PartialDepth(symbol, levels(bids), levels(asks))
+        return PartialDepth(symbol, levels(bids), levels(asks), lastUpdateId)
     }
 }

@@ -183,7 +183,10 @@ class PumpScoreCalculator @Inject constructor() {
             else -> 4.0
         }
         if (feedAgeMillis != null && feedAgeMillis > 10_000) risks.add("фид отстаёт (%.0fс)".format(feedAgeMillis / 1000.0))
-        val noGaps = 10.0
+        // Разрыв потока сделок (ТЗ 0A.7) обнуляет «нет пропусков» и снижает Confidence.
+        val tradeGap = m?.tradeGap == true
+        val noGaps = if (tradeGap) 0.0 else 10.0
+        if (tradeGap) risks.add("разрыв потока сделок")
         val priceOk = r15 > 0 || r60 > 0 || accel > 0
         val flowOk = m != null && m.ready && tbr != null && tbr >= 0.52 && volumeZ != null
         val liqOk = ob != null && slip != null && ob.spreadBps < 60.0

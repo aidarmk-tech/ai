@@ -24,6 +24,9 @@ class CandidateAnalyzer @Inject constructor() {
         val volBuckets = HashMap<Long, Double>()   // bucketIdx -> суммарный quote-объём
         var book: BookTicker? = null
         var seeded = false
+        var lastAggId = -1L        // дедуп/порядок aggTrade (ТЗ 0A.7)
+        var lastGapAt = -1L        // время последнего разрыва потока сделок
+        var lastBookUpdateId = -1L // монотонность bookTicker
     }
 
     private val rows = HashMap<String, Row>()
@@ -35,12 +38,19 @@ class CandidateAnalyzer @Inject constructor() {
         // без warm start; с warm start база готова мгновенно.
         const val BUCKET_MS = 10_000L
         const val MIN_BUCKETS = 6
+        const val GAP_RECOVERY_MS = 60_000L   // окно «недавнего разрыва» (ТЗ 0A.7)
     }
 
     fun onAggTrade(t: AggTrade) = synchronized(lock) {
         val row = rows.getOrPut(t.symbol) { Row() }
-        row.trades.addLast(Trade(t.tradeTime, t.quoteValue, t.isAggressiveBuy))
         val now = System.currentTimeMillis()
+        // Дедуп и порядок по aggregateTradeId (ТЗ 0A.7).
+        if (t.aggId > 0 && row.lastAggId >= 0) {
+            if (t.aggId <= row.lastAggId) return   // дубликат/из прошлого — пропустить
+            if (t.aggId > row.lastAggId + 1) row.lastGapAt = now  // пропущены сделки → разрыв
+        }
+        if (t.aggId > row.lastAggId) row.lastAggId = t.aggId
+        row.trades.addLast(Trade(t.tradeTime, t.quoteValue, t.isAggressiveBuy))
         val cutoff = now - MAX_AGE_MS
         while (row.trades.isNotEmpty() && row.trades.first().t < cutoff) row.trades.removeFirst()
         val idx = t.tradeTime / BUCKET_MS
@@ -49,7 +59,11 @@ class CandidateAnalyzer @Inject constructor() {
     }
 
     fun onBookTicker(b: BookTicker) = synchronized(lock) {
-        rows.getOrPut(b.symbol) { Row() }.book = b
+        val row = rows.getOrPut(b.symbol) { Row() }
+        // Не принимать снимок старше уже принятого (ТЗ 0A.7).
+        if (b.updateId > 0 && b.updateId <= row.lastBookUpdateId) return
+        if (b.updateId > 0) row.lastBookUpdateId = b.updateId
+        row.book = b
     }
 
     /**
@@ -107,6 +121,7 @@ class CandidateAnalyzer @Inject constructor() {
                 MathUtils.safeDivide(b.askPrice - b.bidPrice, mid)?.times(10_000.0)
             }
             val ready = count30 >= 3 && volumeZ != null
+            val tradeGap = row.lastGapAt > 0 && now - row.lastGapAt < GAP_RECOVERY_MS
 
             CandidateMetrics(
                 ready = ready,
@@ -117,7 +132,8 @@ class CandidateAnalyzer @Inject constructor() {
                 cvd30s = cvd30,
                 cvdSlope = cvdSlope,
                 volumeZ30s = volumeZ,
-                spreadBps = spreadBps
+                spreadBps = spreadBps,
+                tradeGap = tradeGap
             )
         }
 

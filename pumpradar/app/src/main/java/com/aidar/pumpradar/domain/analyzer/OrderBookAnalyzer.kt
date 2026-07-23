@@ -14,11 +14,25 @@ import javax.inject.Singleton
 class OrderBookAnalyzer @Inject constructor() {
 
     private val books = HashMap<String, PartialDepth>()
+    private val lastUpdateId = HashMap<String, Long>()
     private val lock = Any()
 
-    fun onDepth(d: PartialDepth) = synchronized(lock) { books[d.symbol] = d }
-    fun retain(symbols: Set<String>) = synchronized(lock) { books.keys.retainAll(symbols) }
-    fun clear() = synchronized(lock) { books.clear() }
+    fun onDepth(d: PartialDepth) = synchronized(lock) {
+        // Не принимать снимок с lastUpdateId <= уже принятого (ТЗ 0A.7).
+        if (d.lastUpdateId > 0) {
+            val prev = lastUpdateId[d.symbol] ?: -1L
+            if (d.lastUpdateId <= prev) return@synchronized
+            lastUpdateId[d.symbol] = d.lastUpdateId
+        }
+        books[d.symbol] = d
+    }
+
+    fun retain(symbols: Set<String>) = synchronized(lock) {
+        books.keys.retainAll(symbols)
+        lastUpdateId.keys.retainAll(symbols)
+    }
+
+    fun clear() = synchronized(lock) { books.clear(); lastUpdateId.clear() }
 
     fun metrics(symbol: String, slippageAmountUsdt: Double): OrderBookMetrics? =
         synchronized(lock) {

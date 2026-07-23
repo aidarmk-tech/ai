@@ -2,6 +2,7 @@ package com.aidar.pumpradar
 
 import com.aidar.pumpradar.domain.analyzer.CandidateAnalyzer
 import com.aidar.pumpradar.domain.model.AggTrade
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -51,5 +52,24 @@ class CandidateAnalyzerTest {
         a.seedVolume("XUSDT", listOf((now - 10_000L) to 100.0))
         a.retain(setOf("YUSDT"))
         assertFalse(a.isSeeded("XUSDT"))
+    }
+
+    /** Дубликаты и сделки из прошлого по aggId отбрасываются (ТЗ 0A.7). */
+    @Test fun aggTrade_dedupAndOrder() {
+        val a = CandidateAnalyzer()
+        a.onAggTrade(AggTrade("XUSDT", 1.0, 10.0, 10.0, false, now, 5))
+        a.onAggTrade(AggTrade("XUSDT", 1.0, 10.0, 10.0, false, now, 5)) // дубликат
+        a.onAggTrade(AggTrade("XUSDT", 1.0, 10.0, 10.0, false, now, 4)) // из прошлого
+        val m = a.metrics("XUSDT", now)
+        assertEquals(1, m!!.tradeCount30s)
+    }
+
+    /** Пропуск в aggId помечается как разрыв потока (ТЗ 0A.7). */
+    @Test fun aggTrade_gapFlagged() {
+        val a = CandidateAnalyzer()
+        a.onAggTrade(AggTrade("XUSDT", 1.0, 10.0, 10.0, false, now, 5))
+        a.onAggTrade(AggTrade("XUSDT", 1.0, 10.0, 10.0, false, now, 10)) // пропущены 6..9
+        val m = a.metrics("XUSDT", now)
+        assertTrue(m!!.tradeGap)
     }
 }
