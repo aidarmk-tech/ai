@@ -43,6 +43,10 @@ class MarketScanner @Inject constructor() {
 
     fun symbolCount(): Int = synchronized(lock) { rows.size }
 
+    fun priceOf(symbol: String): Double? = synchronized(lock) {
+        rows[symbol]?.price?.takeIf { it > 0.0 }
+    }
+
     fun onTicks(tickers: List<MiniTicker>, now: Long = System.currentTimeMillis()) =
         synchronized(lock) {
             for (t in tickers) {

@@ -2,6 +2,7 @@ package com.aidar.pumpradar.service
 
 import com.aidar.pumpradar.data.local.AppEventDao
 import com.aidar.pumpradar.data.local.AppEventEntity
+import com.aidar.pumpradar.data.local.OutcomeDao
 import com.aidar.pumpradar.data.local.SignalDao
 import com.aidar.pumpradar.data.local.SignalEntity
 import com.aidar.pumpradar.data.preferences.SettingsRepository
@@ -10,6 +11,8 @@ import com.aidar.pumpradar.data.remote.CandidateStream
 import com.aidar.pumpradar.data.remote.MarketStream
 import com.aidar.pumpradar.domain.analyzer.CandidateAnalyzer
 import com.aidar.pumpradar.domain.analyzer.MarketScanner
+import com.aidar.pumpradar.domain.analyzer.OrderBookAnalyzer
+import com.aidar.pumpradar.domain.analyzer.OutcomeTracker
 import com.aidar.pumpradar.domain.analyzer.PumpScoreCalculator
 import com.aidar.pumpradar.domain.model.Candidate
 import com.aidar.pumpradar.domain.model.LiveSignal
@@ -39,10 +42,13 @@ class MonitoringEngine @Inject constructor(
     private val candidateStream: CandidateStream,
     private val scanner: MarketScanner,
     private val analyzer: CandidateAnalyzer,
+    private val orderBook: OrderBookAnalyzer,
     private val scoreCalc: PumpScoreCalculator,
+    private val outcomeTracker: OutcomeTracker,
     private val controller: MonitoringController,
     private val settings: SettingsRepository,
     private val signalDao: SignalDao,
+    private val outcomeDao: OutcomeDao,
     private val appEventDao: AppEventDao,
     private val notifier: SignalNotificationManager,
     private val json: Json
@@ -80,7 +86,8 @@ class MonitoringEngine @Inject constructor(
                 scope = scope,
                 onAggTrade = { analyzer.onAggTrade(it) },
                 onBookTicker = { analyzer.onBookTicker(it) },
-                onConnected = { c -> controller.updateStats { it.copy(candidateWsConnected = c) } }
+                onDepth = { orderBook.onDepth(it) },
+                onConnected = { c -> controller.updateStats { it.copy(candidateWsConnected = c, depthWsConnected = c) } }
             )
             controller.onStarted()
 
@@ -102,11 +109,20 @@ class MonitoringEngine @Inject constructor(
         val candidates = scanner.computeCandidates(cfg.minimum24hQuoteVolume, MAX_CANDIDATES)
         controller.setCandidates(candidates)
 
-        // Углублённо анализируем лучшие DEEP_CANDIDATES по PreScore.
+        // Углублённо анализируем лучшие DEEP_CANDIDATES; стакан — только для топа.
         val deep = candidates.take(DEEP_CANDIDATES)
         val deepSymbols = deep.map { it.symbol }
-        candidateStream.setSymbols(deepSymbols)
+        val depthSymbols = deepSymbols.take(DEPTH_CANDIDATES)
+        val streams = buildSet {
+            for (s in deepSymbols) {
+                val lo = s.lowercase(); add("$lo@aggTrade"); add("$lo@bookTicker")
+            }
+            for (s in depthSymbols) add("${s.lowercase()}@depth20@100ms")
+        }
+        candidateStream.setDesiredStreams(streams)
         analyzer.retain(deepSymbols.toSet())
+        orderBook.retain(depthSymbols.toSet())
+        controller.updateStats { it.copy(depthSymbols = depthSymbols.size) }
 
         val minLevel = runCatching { SignalLevel.valueOf(cfg.minimumNotificationLevel) }
             .getOrDefault(SignalLevel.STRONG)
@@ -114,7 +130,8 @@ class MonitoringEngine @Inject constructor(
         val signals = ArrayList<LiveSignal>(deep.size)
         for (c in deep) {
             val metrics = analyzer.metrics(c.symbol)
-            val res = scoreCalc.score(c, metrics)
+            val ob = orderBook.metrics(c.symbol, cfg.slippageTestAmountUsdt)
+            val res = scoreCalc.score(c, metrics, ob)
             val live = LiveSignal(
                 symbol = c.symbol,
                 price = c.price,
@@ -125,7 +142,9 @@ class MonitoringEngine @Inject constructor(
                 takerBuyRatio30s = metrics?.takerBuyRatio30s,
                 volumeZ30s = metrics?.volumeZ30s,
                 cvd30s = metrics?.cvd30s ?: 0.0,
-                spreadBps = metrics?.spreadBps,
+                spreadBps = ob?.spreadBps ?: metrics?.spreadBps,
+                obi10 = ob?.obi10,
+                slippagePercent = ob?.buySlippagePercent,
                 reasons = res.reasons,
                 risks = res.risks
             )
@@ -135,6 +154,9 @@ class MonitoringEngine @Inject constructor(
         signals.sortByDescending { it.score }
         controller.setLiveSignals(signals)
         controller.updateStats { it.copy(candidates = candidates.size) }
+
+        // Отслеживание исходов ранее выданных сигналов.
+        outcomeTracker.onTick(System.currentTimeMillis(), scanner::priceOf, outcomeDao)
     }
 
     private suspend fun maybeEmit(c: Candidate, live: LiveSignal, minLevel: SignalLevel) {
@@ -147,16 +169,18 @@ class MonitoringEngine @Inject constructor(
         if (!shouldPersist) return
         emitted[c.symbol] = lvl.ordinal to now
 
-        persistSignal(c, live)
+        val id = UUID.randomUUID().toString()
+        persistSignal(id, c, live)
+        outcomeTracker.track(id, c.symbol, c.price)
         if (lvl.ordinal >= minLevel.ordinal) {
             val cfg = settings.settings.first()
             notifier.maybeNotify(live, cfg.symbolCooldownMinutes)
         }
     }
 
-    private suspend fun persistSignal(c: Candidate, live: LiveSignal) {
+    private suspend fun persistSignal(id: String, c: Candidate, live: LiveSignal) {
         val entity = SignalEntity(
-            id = UUID.randomUUID().toString(),
+            id = id,
             symbol = c.symbol,
             createdAt = System.currentTimeMillis(),
             level = live.level,
@@ -172,8 +196,8 @@ class MonitoringEngine @Inject constructor(
             takerBuyRatio30s = live.takerBuyRatio30s,
             cvd30s = live.cvd30s,
             spreadBps = live.spreadBps,
-            obi10 = null,
-            slippagePercent = null,
+            obi10 = live.obi10,
+            slippagePercent = live.slippagePercent,
             relativeStrengthVsBtc = c.relativeStrengthVsBtc,
             reasonsJson = json.encodeToString(live.reasons),
             risksJson = json.encodeToString(live.risks),
@@ -199,11 +223,14 @@ class MonitoringEngine @Inject constructor(
         candidateStream.stop()
         scanner.clear()
         analyzer.clear()
+        orderBook.clear()
+        outcomeTracker.clear()
         controller.onStopped()
     }
 
     private companion object {
         const val MAX_CANDIDATES = 20
         const val DEEP_CANDIDATES = 10
+        const val DEPTH_CANDIDATES = 8
     }
 }

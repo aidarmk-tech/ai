@@ -3,7 +3,9 @@ package com.aidar.pumpradar.data.remote
 import com.aidar.pumpradar.core.math.MathUtils.validMarketNumber
 import com.aidar.pumpradar.domain.model.AggTrade
 import com.aidar.pumpradar.domain.model.BookTicker
+import com.aidar.pumpradar.domain.model.DepthLevel
 import com.aidar.pumpradar.domain.model.MiniTicker
+import com.aidar.pumpradar.domain.model.PartialDepth
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -61,5 +63,22 @@ data class BookTickerDto(
         val a = askPrice.toDoubleOrNull() ?: return null
         if (a < b || a <= 0.0 || b <= 0.0) return null
         return BookTicker(symbol, b, a)
+    }
+}
+
+/** depth20@100ms: bids/asks — массивы пар ["price","qty"]. */
+@Serializable
+data class DepthDto(
+    val bids: List<List<String>> = emptyList(),
+    val asks: List<List<String>> = emptyList()
+) {
+    fun toModel(symbol: String): PartialDepth {
+        fun levels(rows: List<List<String>>) = rows.mapNotNull { row ->
+            if (row.size < 2) return@mapNotNull null
+            val p = row[0].toDoubleOrNull() ?: return@mapNotNull null
+            val q = row[1].toDoubleOrNull() ?: return@mapNotNull null
+            if (p <= 0.0 || q < 0.0) null else DepthLevel(p, q)
+        }
+        return PartialDepth(symbol, levels(bids), levels(asks))
     }
 }

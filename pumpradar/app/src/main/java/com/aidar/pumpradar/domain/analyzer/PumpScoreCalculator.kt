@@ -4,6 +4,7 @@ import com.aidar.pumpradar.core.math.MathUtils
 import com.aidar.pumpradar.core.math.MathUtils.linearScore
 import com.aidar.pumpradar.domain.model.Candidate
 import com.aidar.pumpradar.domain.model.CandidateMetrics
+import com.aidar.pumpradar.domain.model.OrderBookMetrics
 import com.aidar.pumpradar.domain.model.SignalLevel
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -23,7 +24,7 @@ data class ScoreResult(
 @Singleton
 class PumpScoreCalculator @Inject constructor() {
 
-    fun score(c: Candidate, m: CandidateMetrics?): ScoreResult {
+    fun score(c: Candidate, m: CandidateMetrics?, ob: OrderBookMetrics?): ScoreResult {
         val reasons = mutableListOf<String>()
         val risks = mutableListOf<String>()
         var total = 0.0
@@ -67,10 +68,17 @@ class PumpScoreCalculator @Inject constructor() {
             if (tbr >= 0.60) reasons.add("покупатели доминируют (%.0f%%)".format(tbr * 100))
         }
 
-        // 5. Order book (0..15) — только спред без depth (макс ~4).
-        val spread = m?.spreadBps
-        if (spread != null) {
-            total += linearScore(spread, 40.0, 10.0, 4.0) // убывающая шкала
+        // 5. Order book (0..15): OBI + спред + проскальзывание (ТЗ 10.3).
+        val spread = ob?.spreadBps ?: m?.spreadBps
+        var orderBook = 0.0
+        if (ob != null) {
+            orderBook += linearScore(ob.obi10, 0.0, 0.60, 7.0)
+            orderBook += linearScore(ob.spreadBps, 40.0, 10.0, 4.0)
+            ob.buySlippagePercent?.let { orderBook += linearScore(it, 0.80, 0.10, 4.0) }
+            total += orderBook.coerceAtMost(15.0)
+            if (ob.obi10 >= 0.30) reasons.add("стакан подтверждает (OBI %.2f)".format(ob.obi10))
+        } else if (spread != null) {
+            total += linearScore(spread, 40.0, 10.0, 4.0)
         }
 
         // 6. Breakout (0..10) — упрощённо через 5-минутный ход.
@@ -89,11 +97,12 @@ class PumpScoreCalculator @Inject constructor() {
 
         // 8. Data quality (0..5)
         val quality = when {
-            m != null && m.ready && spread != null -> 5.0
+            m != null && m.ready && ob != null -> 5.0
             m != null && spread != null -> 3.0
             else -> 2.0
         }
         total += quality
+        if (ob != null && ob.buySlippagePercent == null) risks.add("недостаточная глубина стакана")
 
         // ── Штрафы (ТЗ 11.1) ──
         if (tbr != null && tbr < 0.52) { total -= 10; risks.add("слабые покупки") }
@@ -107,9 +116,11 @@ class PumpScoreCalculator @Inject constructor() {
         if (volumeZ == null) total = total.coerceAtMost(69.0)
 
         // ── Hard veto для сильного уведомления (ТЗ 11.2) ──
+        val depthInsufficient = ob != null && ob.buySlippagePercent == null
         val veto = (spread != null && spread >= 150) ||
             (tbr != null && tbr < 0.45) ||
-            r5m >= 25 || c.price <= 0
+            r5m >= 25 || c.price <= 0 || depthInsufficient ||
+            (ob?.buySlippagePercent?.let { it >= 0.8 } == true)
         val strongAllowed = !veto
         if (veto) risks.add("запрет сильного сигнала (риск)")
 

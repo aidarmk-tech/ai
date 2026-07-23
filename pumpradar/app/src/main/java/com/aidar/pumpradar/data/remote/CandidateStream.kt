@@ -2,6 +2,7 @@ package com.aidar.pumpradar.data.remote
 
 import com.aidar.pumpradar.domain.model.AggTrade
 import com.aidar.pumpradar.domain.model.BookTicker
+import com.aidar.pumpradar.domain.model.PartialDepth
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -44,17 +45,20 @@ class CandidateStream @Inject constructor(
 
     private var onAggTrade: ((AggTrade) -> Unit)? = null
     private var onBookTicker: ((BookTicker) -> Unit)? = null
+    private var onDepth: ((PartialDepth) -> Unit)? = null
     private var onConnected: ((Boolean) -> Unit)? = null
 
     fun start(
         scope: CoroutineScope,
         onAggTrade: (AggTrade) -> Unit,
         onBookTicker: (BookTicker) -> Unit,
+        onDepth: (PartialDepth) -> Unit,
         onConnected: (Boolean) -> Unit
     ) {
         this.scope = scope
         this.onAggTrade = onAggTrade
         this.onBookTicker = onBookTicker
+        this.onDepth = onDepth
         this.onConnected = onConnected
         running = true
         attempt = 0
@@ -70,15 +74,11 @@ class CandidateStream @Inject constructor(
         ws = null
     }
 
-    /** Задать желаемый набор символов для углублённого анализа. */
+    /** Задать желаемый набор потоков (aggTrade/bookTicker/depth) напрямую. */
     @Synchronized
-    fun setSymbols(symbols: List<String>) {
+    fun setDesiredStreams(streams: Set<String>) {
         desired.clear()
-        for (s in symbols) {
-            val lo = s.lowercase()
-            desired.add("$lo@aggTrade")
-            desired.add("$lo@bookTicker")
-        }
+        desired.addAll(streams)
         if (connected) reconcile()
     }
 
@@ -136,6 +136,11 @@ class CandidateStream @Inject constructor(
                         val sym = stream.substringBefore("@").uppercase()
                         val dto = json.decodeFromJsonElement(BookTickerDto.serializer(), data)
                         dto.toModel(sym)?.let { onBookTicker?.invoke(it) }
+                    }
+                    stream.contains("@depth20") -> {
+                        val sym = stream.substringBefore("@").uppercase()
+                        val dto = json.decodeFromJsonElement(DepthDto.serializer(), data)
+                        onDepth?.invoke(dto.toModel(sym))
                     }
                 }
             } catch (e: Exception) {

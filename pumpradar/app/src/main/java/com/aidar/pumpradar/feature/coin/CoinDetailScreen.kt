@@ -69,6 +69,8 @@ fun CoinDetailScreen(
                     Line("CVD 30с", "%+.0f".format(s.cvd30s))
                     Line("Объём Z (30с)", s.volumeZ30s?.let { "%.1f".format(it) } ?: "прогрев…")
                     Line("Спред", s.spreadBps?.let { "%.0f bps".format(it) } ?: "—")
+                    Line("OBI top-10", s.obi10?.let { "%+.2f".format(it) } ?: "—")
+                    Line("Проскальзывание 10 USDT", s.slippagePercent?.let { "%.2f%%".format(it) } ?: "—")
                 }
             }
             if (s.reasons.isNotEmpty()) InfoCard("Причины", s.reasons)

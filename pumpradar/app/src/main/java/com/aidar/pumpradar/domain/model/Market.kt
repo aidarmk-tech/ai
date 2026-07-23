@@ -43,6 +43,26 @@ data class BookTicker(
     val askPrice: Double
 )
 
+/** Уровень стакана. */
+data class DepthLevel(val price: Double, val qty: Double)
+
+/** Снимок top-20 стакана (depth20@100ms). */
+data class PartialDepth(
+    val symbol: String,
+    val bids: List<DepthLevel>,
+    val asks: List<DepthLevel>
+)
+
+/** Метрики стакана (ТЗ раздел 8.3). */
+data class OrderBookMetrics(
+    val spreadBps: Double,
+    val obi10: Double,
+    val obi20: Double,
+    val buySlippagePercent: Double?,   // null → InsufficientDepth
+    val bidNotionalTop10: Double,
+    val askNotionalTop10: Double
+)
+
 /** Метрики потока сделок и стакана по кандидату (ТЗ раздел 8.2). */
 data class CandidateMetrics(
     val ready: Boolean,
@@ -68,6 +88,8 @@ data class LiveSignal(
     val volumeZ30s: Double?,
     val cvd30s: Double,
     val spreadBps: Double?,
+    val obi10: Double?,
+    val slippagePercent: Double?,
     val reasons: List<String>,
     val risks: List<String>
 )
