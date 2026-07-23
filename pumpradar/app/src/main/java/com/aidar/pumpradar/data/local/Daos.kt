@@ -43,6 +43,19 @@ interface OutcomeDao {
 
     @Query("SELECT * FROM outcomes WHERE completed = 1")
     fun completed(): Flow<List<OutcomeEntity>>
+
+    @Query(
+        """
+        SELECT s.symbol AS symbol, s.level AS level, s.score AS score,
+               s.createdAt AS createdAt, o.mfePercent AS mfePercent,
+               o.maePercent AS maePercent, o.timeToMfeSeconds AS timeToMfeSeconds
+        FROM outcomes o JOIN signals s ON s.id = o.signalId
+        WHERE o.completed = 1
+        ORDER BY s.createdAt DESC
+        LIMIT :limit
+        """
+    )
+    fun completedWithSignal(limit: Int): Flow<List<SignalOutcome>>
 }
 
 @Dao

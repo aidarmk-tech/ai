@@ -58,6 +58,17 @@ data class OutcomeEntity(
     val approximate: Boolean = false
 )
 
+/** Проекция: завершённый исход вместе с полями исходного сигнала (JOIN). */
+data class SignalOutcome(
+    val symbol: String,
+    val level: String,
+    val score: Int,
+    val createdAt: Long,
+    val mfePercent: Double?,
+    val maePercent: Double?,
+    val timeToMfeSeconds: Long?
+)
+
 @Entity(tableName = "app_events")
 data class AppEventEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
