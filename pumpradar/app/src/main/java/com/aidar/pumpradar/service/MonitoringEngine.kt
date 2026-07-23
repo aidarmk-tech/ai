@@ -56,10 +56,14 @@ class MonitoringEngine @Inject constructor(
     // Антиспам-персист: символ → (уровень, время последней записи).
     private val emitted = HashMap<String, Pair<Int, Long>>()
 
+    // Удержание кандидатов (ТЗ 17.3): символ → (firstSeen, lastQualified).
+    private val retention = HashMap<String, Pair<Long, Long>>()
+
     fun start(scope: CoroutineScope) {
         controller.onStarting()
         notifier.reset()
         emitted.clear()
+        retention.clear()
         scope.launch {
             try {
                 val universe = rest.usdtUniverse(BinanceRest.DEFAULT_EXCLUDED)
@@ -106,7 +110,11 @@ class MonitoringEngine @Inject constructor(
 
     private suspend fun tick() {
         val cfg = settings.settings.first()
-        val candidates = scanner.computeCandidates(cfg.minimum24hQuoteVolume, MAX_CANDIDATES)
+        val now = System.currentTimeMillis()
+        val candidates = scanner.computeCandidates(
+            cfg.minimum24hQuoteVolume, MAX_CANDIDATES, now, keep = retention.keys.toSet()
+        )
+        updateRetention(candidates, now)
         controller.setCandidates(candidates)
 
         // Углублённо анализируем лучшие DEEP_CANDIDATES; стакан — только для топа.
@@ -159,6 +167,36 @@ class MonitoringEngine @Inject constructor(
         // Отслеживание исходов ранее выданных сигналов.
         outcomeTracker.onTick(System.currentTimeMillis(), scanner::priceOf, outcomeDao)
     }
+
+    /**
+     * Удержание кандидатов (ТЗ 17.3). Кандидат остаётся в списке минимум
+     * [MIN_LIFETIME_MS] и ещё [EXIT_GRACE_MS] после того, как в последний раз
+     * прошёл порог — чтобы не «мигал» и чтобы глубокий анализ успел прогреться.
+     */
+    private fun updateRetention(candidates: List<Candidate>, now: Long) {
+        val present = candidates.mapTo(HashSet()) { it.symbol }
+        for (c in candidates) {
+            if (qualifies(c)) {
+                val firstSeen = retention[c.symbol]?.first ?: now
+                retention[c.symbol] = firstSeen to now
+            }
+        }
+        val it = retention.entries.iterator()
+        while (it.hasNext()) {
+            val (sym, times) = it.next()
+            val (firstSeen, lastQualified) = times
+            val droppedOut = sym !in present            // упал по объёму/цене
+            val expired = now - firstSeen >= MIN_LIFETIME_MS &&
+                now - lastQualified >= EXIT_GRACE_MS
+            if (droppedOut || expired) it.remove()
+        }
+    }
+
+    /** Прошёл ли кандидат порог первого уровня прямо сейчас. */
+    private fun qualifies(c: Candidate): Boolean =
+        (c.return15s != null && c.return15s >= 0.35) ||
+            (c.return60s != null && c.return60s >= 0.80) ||
+            (c.acceleration != null && c.acceleration >= 0.30)
 
     private suspend fun maybeEmit(c: Candidate, live: LiveSignal, minLevel: SignalLevel) {
         val lvl = SignalLevel.valueOf(live.level)
@@ -233,6 +271,7 @@ class MonitoringEngine @Inject constructor(
         analyzer.clear()
         orderBook.clear()
         outcomeTracker.clear()
+        retention.clear()
         controller.onStopped()
     }
 
@@ -240,5 +279,7 @@ class MonitoringEngine @Inject constructor(
         const val MAX_CANDIDATES = 20
         const val DEEP_CANDIDATES = 10
         const val DEPTH_CANDIDATES = 8
+        const val MIN_LIFETIME_MS = 60_000L   // ТЗ 17.3: минимальное время жизни кандидата
+        const val EXIT_GRACE_MS = 30_000L     // ТЗ 17.3: льготный период после порога
     }
 }

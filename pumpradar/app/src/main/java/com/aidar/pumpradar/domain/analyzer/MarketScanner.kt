@@ -68,11 +68,18 @@ class MarketScanner @Inject constructor() {
             }
         }
 
-    /** Кандидаты первого уровня, отсортированные по PreScore. */
+    /**
+     * Кандидаты первого уровня, отсортированные по PreScore.
+     *
+     * [keep] — символы, которые нужно удержать в списке даже если они сейчас не
+     * проходят порог (удержание из ТЗ 17.3: минимальное время жизни + льготный
+     * период). Для удерживаемых по-прежнему проверяем цену > 0 и объём.
+     */
     fun computeCandidates(
         minVolume: Double,
         maxCandidates: Int,
-        now: Long = System.currentTimeMillis()
+        now: Long = System.currentTimeMillis(),
+        keep: Set<String> = emptySet()
     ): List<Candidate> = synchronized(lock) {
         val btcRet60 = rows["BTCUSDT"]?.let { returnOverWindow(it, 60_000, now) }
         val out = ArrayList<Candidate>()
@@ -86,7 +93,7 @@ class MarketScanner @Inject constructor() {
             val passes = (r15 != null && r15 >= 0.35) ||
                 (r60 != null && r60 >= 0.80) ||
                 (accel != null && accel >= CONFIGURED_ACCEL)
-            if (!passes) continue
+            if (!passes && row.info.symbol !in keep) continue
             val relBtc = if (r60 != null && btcRet60 != null) r60 - btcRet60 else null
             out.add(
                 Candidate(
