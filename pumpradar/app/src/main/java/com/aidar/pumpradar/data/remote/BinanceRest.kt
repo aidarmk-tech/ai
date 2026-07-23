@@ -6,8 +6,13 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.double
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -30,7 +35,8 @@ private data class ServerTimeDto(@SerialName("serverTime") val serverTime: Long 
 @Singleton
 class BinanceRest @Inject constructor(
     private val client: OkHttpClient,
-    private val json: Json
+    private val json: Json,
+    private val limiter: BinanceRestRateLimiter
 ) {
     private val base = "https://api.binance.com"
     private val fallback = "https://data-api.binance.vision"
@@ -61,11 +67,60 @@ class BinanceRest @Inject constructor(
         server - (before + after) / 2
     }
 
+    /**
+     * Warm start (ТЗ 0A.4): последние [limit] секундных клайнов для прогрева
+     * базы объёма кандидата. Возвращает пары (closeTime, quoteAssetVolume).
+     * Запрос идёт через rate-limiter; при паузе/ошибке — пустой список
+     * (вызывающий продолжает в WARMING без REST).
+     */
+    suspend fun klines1sQuoteVolume(symbol: String, limit: Int = 600): List<Pair<Long, Double>> =
+        withContext(Dispatchers.IO) {
+            if (!limiter.acquire(KLINES_WEIGHT)) return@withContext emptyList()
+            limiter.withBackfillSlot {
+                try {
+                    val body = getWeighted(
+                        "/api/v3/klines?symbol=$symbol&interval=1s&limit=$limit"
+                    )
+                    val arr = json.parseToJsonElement(body).jsonArray
+                    arr.mapNotNull { row ->
+                        val k = row.jsonArray
+                        // [0]openTime [6]closeTime [7]quoteAssetVolume …
+                        val closeTime = k[6].jsonPrimitive.long
+                        val quoteVol = k[7].jsonPrimitive.double
+                        if (quoteVol >= 0.0) closeTime to quoteVol else null
+                    }
+                } catch (e: ThrottleException) {
+                    if (e.banned) limiter.onBanned(e.retryAfterSeconds)
+                    else limiter.onRateLimited(e.retryAfterSeconds)
+                    emptyList()
+                } catch (e: Exception) {
+                    Timber.w(e, "klines warm start failed for %s", symbol)
+                    emptyList()
+                }
+            }
+        }
+
     private fun get(path: String): String {
         try {
             return call("$base$path")
         } catch (e: Exception) {
             return call("$fallback$path")
+        }
+    }
+
+    /** GET с чтением заголовка веса и обработкой 429/418. */
+    private suspend fun getWeighted(path: String): String {
+        val req = Request.Builder().url("$base$path").build()
+        client.newCall(req).execute().use { resp ->
+            limiter.onUsedWeight(resp.header("X-MBX-USED-WEIGHT-1M"))
+            if (resp.code == 429 || resp.code == 418) {
+                throw ThrottleException(
+                    banned = resp.code == 418,
+                    retryAfterSeconds = resp.header("Retry-After")?.toLongOrNull()
+                )
+            }
+            if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code} for $path")
+            return resp.body?.string() ?: throw IllegalStateException("Empty body")
         }
     }
 
@@ -77,7 +132,14 @@ class BinanceRest @Inject constructor(
         }
     }
 
+    /** Внутреннее: сигнал о троттлинге REST (429/418). */
+    private class ThrottleException(
+        val banned: Boolean,
+        val retryAfterSeconds: Long?
+    ) : Exception()
+
     companion object {
+        private const val KLINES_WEIGHT = 2
         private val LEVERAGED_SUFFIXES = listOf("UPUSDT", "DOWNUSDT", "BULLUSDT", "BEARUSDT")
         val DEFAULT_EXCLUDED = setOf(
             "USDC", "FDUSD", "TUSD", "USDP", "DAI", "EUR", "TRY", "BRL",

@@ -1,0 +1,53 @@
+package com.aidar.pumpradar
+
+import com.aidar.pumpradar.domain.analyzer.CandidateAnalyzer
+import com.aidar.pumpradar.domain.model.AggTrade
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/** Warm start базы объёма (ТЗ 0A.4). */
+class CandidateAnalyzerTest {
+
+    private val now = 10_000_000L
+
+    /** Без прогрева и без истории Объём Z не готов. */
+    @Test fun volumeZ_notReady_withoutHistory() {
+        val a = CandidateAnalyzer()
+        a.onAggTrade(AggTrade("XUSDT", 1.0, 10.0, 10.0, false, now))
+        val m = a.metrics("XUSDT", now)
+        assertNotNull(m)
+        assertNull(m!!.volumeZ30s)
+    }
+
+    /** После seed из 1s-клайнов Объём Z доступен сразу. */
+    @Test fun volumeZ_ready_afterSeed() {
+        val a = CandidateAnalyzer()
+        // 12 завершённых 10с-бакетов в прошлом с нормальным объёмом.
+        val kl = (1..12).map { i -> (now - i * 10_000L) to 100.0 }
+        a.seedVolume("XUSDT", kl)
+        val m = a.metrics("XUSDT", now)
+        assertNotNull(m)
+        assertNotNull(m!!.volumeZ30s)
+    }
+
+    /** Повторный seed игнорируется (idempotent). */
+    @Test fun seed_isOnce() {
+        val a = CandidateAnalyzer()
+        val kl = (1..12).map { i -> (now - i * 10_000L) to 100.0 }
+        a.seedVolume("XUSDT", kl)
+        assertTrue(a.isSeeded("XUSDT"))
+        a.seedVolume("XUSDT", kl) // второй раз — без эффекта
+        assertTrue(a.isSeeded("XUSDT"))
+    }
+
+    /** retain освобождает неактивные символы. */
+    @Test fun retain_dropsInactive() {
+        val a = CandidateAnalyzer()
+        a.seedVolume("XUSDT", listOf((now - 10_000L) to 100.0))
+        a.retain(setOf("YUSDT"))
+        assertFalse(a.isSeeded("XUSDT"))
+    }
+}

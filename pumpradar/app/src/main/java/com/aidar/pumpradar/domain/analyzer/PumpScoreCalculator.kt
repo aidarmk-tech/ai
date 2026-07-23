@@ -35,7 +35,12 @@ data class ScoreResult(
 @Singleton
 class PumpScoreCalculator @Inject constructor() {
 
-    fun score(c: Candidate, m: CandidateMetrics?, ob: OrderBookMetrics?): ScoreResult {
+    fun score(
+        c: Candidate,
+        m: CandidateMetrics?,
+        ob: OrderBookMetrics?,
+        feedAgeMillis: Long? = null
+    ): ScoreResult {
         val reasons = mutableListOf<String>()
         val risks = mutableListOf<String>()
         var total = 0.0
@@ -170,7 +175,14 @@ class PumpScoreCalculator @Inject constructor() {
             ob != null -> 8.0
             else -> 0.0
         }
-        val feedFreshness = 12.0
+        // Свежесть фида по возрасту последнего рыночного сообщения (ТЗ 0A.20).
+        val feedFreshness = when {
+            feedAgeMillis == null -> 12.0            // возраст неизвестен — предположительно
+            feedAgeMillis <= 3_000 -> 20.0
+            feedAgeMillis <= 10_000 -> linearScore(feedAgeMillis.toDouble(), 10_000.0, 3_000.0, 20.0)
+            else -> 4.0
+        }
+        if (feedAgeMillis != null && feedAgeMillis > 10_000) risks.add("фид отстаёт (%.0fс)".format(feedAgeMillis / 1000.0))
         val noGaps = 10.0
         val priceOk = r15 > 0 || r60 > 0 || accel > 0
         val flowOk = m != null && m.ready && tbr != null && tbr >= 0.52 && volumeZ != null

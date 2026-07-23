@@ -59,11 +59,17 @@ class MonitoringEngine @Inject constructor(
     // Удержание кандидатов (ТЗ 17.3): символ → (firstSeen, lastQualified).
     private val retention = HashMap<String, Pair<Long, Long>>()
 
+    // Warm start (ТЗ 0A.4): символы, для которых уже запущен прогрев объёма.
+    private val warmed = HashSet<String>()
+    @Volatile private var scopeRef: CoroutineScope? = null
+
     fun start(scope: CoroutineScope) {
         controller.onStarting()
         notifier.reset()
         emitted.clear()
         retention.clear()
+        synchronized(warmed) { warmed.clear() }
+        scopeRef = scope
         scope.launch {
             try {
                 val universe = rest.usdtUniverse(BinanceRest.DEFAULT_EXCLUDED)
@@ -134,14 +140,33 @@ class MonitoringEngine @Inject constructor(
         orderBook.retain(depthSymbols.toSet())
         controller.updateStats { it.copy(depthSymbols = depthSymbols.size) }
 
+        // Warm start (ТЗ 0A.4): для ещё не прогретых кандидатов подгружаем базу
+        // объёма из 1s-клайнов параллельно, не блокируя tick. `warmed` — набор
+        // «в процессе»: снимается по завершении, поэтому rate-limited попытка
+        // повторяется на следующем тике (а не блокируется навсегда).
+        for (sym in flowSymbols) {
+            if (analyzer.isSeeded(sym)) continue
+            val started = synchronized(warmed) { warmed.add(sym) }
+            if (started) scopeRef?.launch {
+                try {
+                    warmStart(sym)
+                } finally {
+                    synchronized(warmed) { warmed.remove(sym) }
+                }
+            }
+        }
+
         val minLevel = runCatching { SignalLevel.valueOf(cfg.minimumNotificationLevel) }
             .getOrDefault(SignalLevel.STRONG)
+
+        val lastMsg = controller.stats.value.lastMessageAt
+        val feedAge = if (lastMsg > 0) now - lastMsg else null
 
         val signals = ArrayList<LiveSignal>(deep.size)
         for (c in deep) {
             val metrics = analyzer.metrics(c.symbol)
             val ob = orderBook.metrics(c.symbol, cfg.slippageTestAmountUsdt)
-            val res = scoreCalc.score(c, metrics, ob)
+            val res = scoreCalc.score(c, metrics, ob, feedAge)
             val live = LiveSignal(
                 symbol = c.symbol,
                 price = c.price,
@@ -202,6 +227,16 @@ class MonitoringEngine @Inject constructor(
         (c.return15s != null && c.return15s >= 0.35) ||
             (c.return60s != null && c.return60s >= 0.80) ||
             (c.acceleration != null && c.acceleration >= 0.30)
+
+    /** Прогрев базы объёма кандидата из 1s-клайнов (ТЗ 0A.4). */
+    private suspend fun warmStart(symbol: String) {
+        if (analyzer.isSeeded(symbol)) return
+        val kl = rest.klines1sQuoteVolume(symbol, 600)
+        if (kl.isNotEmpty()) {
+            analyzer.seedVolume(symbol, kl)
+            logEvent("INFO", "warmstart", "Прогрев $symbol: ${kl.size} клайнов")
+        }
+    }
 
     private suspend fun maybeEmit(c: Candidate, live: LiveSignal, minLevel: SignalLevel) {
         val lvl = SignalLevel.valueOf(live.level)
@@ -277,6 +312,8 @@ class MonitoringEngine @Inject constructor(
         orderBook.clear()
         outcomeTracker.clear()
         retention.clear()
+        synchronized(warmed) { warmed.clear() }
+        scopeRef = null
         controller.onStopped()
     }
 

@@ -9,7 +9,11 @@ import javax.inject.Singleton
 
 /**
  * Уровень 2 (ТЗ раздел 8.2): агрессивный поток покупок/продаж, интенсивность,
- * аномалия объёма (robust Z по 30с-бакетам), спред. Хранит сделки за 10 минут.
+ * аномалия объёма (robust Z по 10с-бакетам), спред. Хранит сделки за 10 минут.
+ *
+ * База объёма (bucket-история) отделена от сырых сделок и может прогреваться из
+ * 1s-клайнов (warm start, ТЗ 0A.4), поэтому «Объём Z» готов сразу, а не через
+ * минуту накопления live-сделок.
  */
 @Singleton
 class CandidateAnalyzer @Inject constructor() {
@@ -17,7 +21,9 @@ class CandidateAnalyzer @Inject constructor() {
     private data class Trade(val t: Long, val quote: Double, val buy: Boolean)
     private class Row {
         val trades = ArrayDeque<Trade>()
+        val volBuckets = HashMap<Long, Double>()   // bucketIdx -> суммарный quote-объём
         var book: BookTicker? = null
+        var seeded = false
     }
 
     private val rows = HashMap<String, Row>()
@@ -25,8 +31,8 @@ class CandidateAnalyzer @Inject constructor() {
 
     private companion object {
         const val MAX_AGE_MS = 10 * 60 * 1000L
-        // Бакет 10с и минимум 6 завершённых бакетов истории → прогрев ~70–80с,
-        // чтобы «Объём Z» успевал накопить базу в пределах окна удержания.
+        // Бакет 10с и минимум 6 завершённых бакетов истории → прогрев ~70–80с
+        // без warm start; с warm start база готова мгновенно.
         const val BUCKET_MS = 10_000L
         const val MIN_BUCKETS = 6
     }
@@ -34,13 +40,35 @@ class CandidateAnalyzer @Inject constructor() {
     fun onAggTrade(t: AggTrade) = synchronized(lock) {
         val row = rows.getOrPut(t.symbol) { Row() }
         row.trades.addLast(Trade(t.tradeTime, t.quoteValue, t.isAggressiveBuy))
-        val cutoff = System.currentTimeMillis() - MAX_AGE_MS
+        val now = System.currentTimeMillis()
+        val cutoff = now - MAX_AGE_MS
         while (row.trades.isNotEmpty() && row.trades.first().t < cutoff) row.trades.removeFirst()
+        val idx = t.tradeTime / BUCKET_MS
+        row.volBuckets[idx] = (row.volBuckets[idx] ?: 0.0) + t.quoteValue
+        pruneBuckets(row, now)
     }
 
     fun onBookTicker(b: BookTicker) = synchronized(lock) {
         rows.getOrPut(b.symbol) { Row() }.book = b
     }
+
+    /**
+     * Warm start (ТЗ 0A.4): засеять базу объёма из 1s-клайнов
+     * (пары closeTime→quoteVolume). Выполняется один раз на символ.
+     */
+    fun seedVolume(symbol: String, klines: List<Pair<Long, Double>>) = synchronized(lock) {
+        if (klines.isEmpty()) return
+        val row = rows.getOrPut(symbol) { Row() }
+        if (row.seeded) return
+        for ((time, quote) in klines) {
+            val idx = time / BUCKET_MS
+            row.volBuckets[idx] = (row.volBuckets[idx] ?: 0.0) + quote
+        }
+        row.seeded = true
+        pruneBuckets(row, System.currentTimeMillis())
+    }
+
+    fun isSeeded(symbol: String): Boolean = synchronized(lock) { rows[symbol]?.seeded == true }
 
     /** Оставить только активные символы, остальные освободить. */
     fun retain(symbols: Set<String>) = synchronized(lock) {
@@ -53,7 +81,7 @@ class CandidateAnalyzer @Inject constructor() {
         synchronized(lock) {
             val row = rows[symbol] ?: return null
             val trades = row.trades
-            if (trades.isEmpty() && row.book == null) return null
+            if (trades.isEmpty() && row.book == null && row.volBuckets.isEmpty()) return null
 
             var buy30 = 0.0; var sell30 = 0.0; var count30 = 0
             var buy60 = 0.0; var sell60 = 0.0
@@ -71,10 +99,9 @@ class CandidateAnalyzer @Inject constructor() {
             val takerBuyRatio = if (total30 > MathUtils.EPSILON) buy30 / total30 else null
             val cvd30 = buy30 - sell30
             val cvd60 = buy60 - sell60
-            // Наклон CVD: последние 30с минус предыдущие 30с.
             val cvdSlope = cvd30 - (cvd60 - cvd30)
 
-            val volumeZ = volumeAnomalyZ(trades, now)
+            val volumeZ = volumeAnomalyZ(row, now)
             val spreadBps = row.book?.let { b ->
                 val mid = (b.bidPrice + b.askPrice) / 2.0
                 MathUtils.safeDivide(b.askPrice - b.bidPrice, mid)?.times(10_000.0)
@@ -94,16 +121,16 @@ class CandidateAnalyzer @Inject constructor() {
             )
         }
 
-    /** robust Z-score объёма текущего завершённого 30с-бакета к истории. */
-    private fun volumeAnomalyZ(trades: ArrayDeque<Trade>, now: Long): Double? {
-        if (trades.size < 10) return null
-        val buckets = HashMap<Long, Double>()
-        for (tr in trades) {
-            val idx = tr.t / BUCKET_MS
-            buckets[idx] = (buckets[idx] ?: 0.0) + tr.quote
-        }
+    private fun pruneBuckets(row: Row, now: Long) {
+        val minIdx = (now - MAX_AGE_MS) / BUCKET_MS
+        val it = row.volBuckets.keys.iterator()
+        while (it.hasNext()) if (it.next() < minIdx) it.remove()
+    }
+
+    /** robust Z-score объёма последнего завершённого бакета к истории. */
+    private fun volumeAnomalyZ(row: Row, now: Long): Double? {
+        val buckets = row.volBuckets
         val currentIdx = now / BUCKET_MS
-        // Завершённые бакеты (исключая текущий незавершённый), по возрастанию.
         val completed = buckets.filterKeys { it < currentIdx }.toSortedMap()
         if (completed.size < MIN_BUCKETS + 1) return null
         val vals = completed.values.toList()
