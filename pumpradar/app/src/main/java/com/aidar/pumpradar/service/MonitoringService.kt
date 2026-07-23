@@ -28,6 +28,7 @@ class MonitoringService : Service() {
 
     @Inject lateinit var controller: MonitoringController
     @Inject lateinit var notificationFactory: ServiceNotificationFactory
+    @Inject lateinit var engine: MonitoringEngine
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var started = false
@@ -59,7 +60,9 @@ class MonitoringService : Service() {
         } else {
             startForeground(NOTIF_ID, notif)
         }
-        controller.onStarted()
+
+        // Запускаем живой движок (REST universe + WebSocket + сканер).
+        engine.start(scope)
 
         // Перерисовываем уведомление при изменении статистики/паузы.
         combine(controller.stats, controller.paused) { stats, paused -> stats to paused }
@@ -80,14 +83,14 @@ class MonitoringService : Service() {
 
     private fun stopMonitoring() {
         started = false
-        controller.onStopped()
+        engine.stop()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
     override fun onDestroy() {
+        engine.stop()
         scope.cancel()
-        if (started) controller.onStopped()
         super.onDestroy()
     }
 

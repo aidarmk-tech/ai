@@ -1,5 +1,6 @@
 package com.aidar.pumpradar.service
 
+import com.aidar.pumpradar.domain.model.Candidate
 import com.aidar.pumpradar.domain.model.MonitoringState
 import com.aidar.pumpradar.domain.model.MonitoringStats
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,6 +26,13 @@ class MonitoringController @Inject constructor() {
     private val _paused = MutableStateFlow(false)
     val paused: StateFlow<Boolean> = _paused.asStateFlow()
 
+    private val _candidates = MutableStateFlow<List<Candidate>>(emptyList())
+    val candidates: StateFlow<List<Candidate>> = _candidates.asStateFlow()
+
+    fun setCandidates(list: List<Candidate>) {
+        _candidates.value = list
+    }
+
     fun onStarting() {
         _state.value = MonitoringState.Starting
     }
@@ -38,6 +46,7 @@ class MonitoringController @Inject constructor() {
         _state.value = MonitoringState.Stopped
         _stats.value = MonitoringStats()
         _paused.value = false
+        _candidates.value = emptyList()
     }
 
     fun setPaused(value: Boolean) {
