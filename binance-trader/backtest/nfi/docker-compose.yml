@@ -1,0 +1,7 @@
+services:
+  freqtrade:
+    image: freqtradeorg/freqtrade:stable
+    volumes:
+      - "./user_data:/freqtrade/user_data"
+    # Команды передаются через `docker compose run --rm freqtrade <...>`
+    # (см. run_nfi_backtest.sh / .bat). Ключи API для бэктеста не нужны.
