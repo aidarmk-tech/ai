@@ -26,6 +26,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.aidar.pumpradar.data.preferences.AppSettings
+import com.aidar.pumpradar.data.preferences.MonitoringProfile
 import com.aidar.pumpradar.data.preferences.SettingsRepository
 import com.aidar.pumpradar.data.preferences.ThemeMode
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -45,6 +46,7 @@ class SettingsViewModel @Inject constructor(
     fun setTheme(t: ThemeMode) = viewModelScope.launch { repo.setTheme(t) }
     fun setMinLevel(level: String) = viewModelScope.launch { repo.setMinimumNotificationLevel(level) }
     fun setMinVolume(v: Double) = viewModelScope.launch { repo.setMinimum24hQuoteVolume(v) }
+    fun setProfile(p: MonitoringProfile) = viewModelScope.launch { repo.setMonitoringProfile(p) }
     fun setDisclaimer(v: Boolean) = viewModelScope.launch { repo.setShowRiskDisclaimer(v) }
 }
 
@@ -87,6 +89,28 @@ fun SettingsScreen(
                     )
                 }
             }
+        }
+
+        Group("Профиль риска") {
+            Text("Тиры ликвидности в сканировании", style = MaterialTheme.typography.bodyMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MonitoringProfile.entries.forEach { p ->
+                    FilterChip(
+                        selected = s.monitoringProfile == p,
+                        onClick = { vm.setProfile(p) },
+                        label = { Text(when (p) {
+                            MonitoringProfile.CAUTIOUS -> "Осторожный"
+                            MonitoringProfile.BALANCED -> "Сбалансир."
+                            MonitoringProfile.EXPLORE -> "Исследоват."
+                        }) }
+                    )
+                }
+            }
+            Text(when (s.monitoringProfile) {
+                MonitoringProfile.CAUTIOUS -> "Только Tier A/B (крупная ликвидность), меньше шума."
+                MonitoringProfile.BALANCED -> "Tier A/B/C — режим по умолчанию."
+                MonitoringProfile.EXPLORE -> "Все тиры вкл. D — высокий риск манипуляции, STRONG-уведомления Tier D включены."
+            }, style = MaterialTheme.typography.bodySmall)
         }
 
         Group("Фильтры рынка") {

@@ -85,8 +85,8 @@ private fun SignalCard(s: LiveSignal, onClick: () -> Unit) {
                     style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
             }
             Text(
-                "Импульс %d · Риск %d · Достоверн. %d".format(
-                    s.score, s.entryRiskScore, s.confidenceScore
+                "Импульс %d · Риск %d · Достоверн. %d · Tier %s".format(
+                    s.score, s.entryRiskScore, s.confidenceScore, s.liquidityTier
                 ),
                 style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold
             )

@@ -18,6 +18,20 @@ enum class SignalStage {
     NORMAL, WARMING, WATCH, EARLY, STRONG, EXTREME, RETEST, EXHAUSTION, CANCELLED, STALE
 }
 
+/** Тир ликвидности по 24ч объёму в USDT (ТЗ v2, раздел 0A.9). */
+enum class LiquidityTier {
+    A, B, C, D;
+
+    companion object {
+        fun of(quoteVolume24h: Double): LiquidityTier = when {
+            quoteVolume24h >= 50_000_000.0 -> A
+            quoteVolume24h >= 10_000_000.0 -> B
+            quoteVolume24h >= 1_000_000.0 -> C
+            else -> D
+        }
+    }
+}
+
 /** Состояние сервиса мониторинга (ТЗ раздел 32). */
 sealed interface MonitoringState {
     data object Stopped : MonitoringState

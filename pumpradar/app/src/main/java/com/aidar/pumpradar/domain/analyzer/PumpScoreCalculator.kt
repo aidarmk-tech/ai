@@ -4,6 +4,7 @@ import com.aidar.pumpradar.core.math.MathUtils
 import com.aidar.pumpradar.core.math.MathUtils.linearScore
 import com.aidar.pumpradar.domain.model.Candidate
 import com.aidar.pumpradar.domain.model.CandidateMetrics
+import com.aidar.pumpradar.domain.model.LiquidityTier
 import com.aidar.pumpradar.domain.model.OrderBookMetrics
 import com.aidar.pumpradar.domain.model.SignalLevel
 import javax.inject.Inject
@@ -21,6 +22,7 @@ data class ScoreResult(
     val confidence: Int,
     val level: SignalLevel,
     val opportunityLabel: String,
+    val liquidityTier: LiquidityTier,
     val reasons: List<String>,
     val risks: List<String>,
     val strongAllowed: Boolean
@@ -144,8 +146,15 @@ class PumpScoreCalculator @Inject constructor() {
         if (r60 > 0 && m != null && m.cvdSlope < 0) exhaustion += 12.0
         if (r5m >= 8.0 && accel < 0) exhaustion += 8.0
         exhaustion = exhaustion.coerceAtMost(20.0)
-        // Концентрацию объёма (largestTrade/…) пока не отслеживаем — 0 (0A.10, будущий этап).
-        val concentrationRisk = 0.0
+        // Риск концентрации/манипуляции по тиру ликвидности (ТЗ 0A.9/0A.10):
+        // на тонком рынке памп легко накачать одним кошельком.
+        val tier = LiquidityTier.of(c.quoteVolume24h)
+        val concentrationRisk = when (tier) {
+            LiquidityTier.D -> 10.0
+            LiquidityTier.C -> 4.0
+            else -> 0.0
+        }
+        if (tier == LiquidityTier.D) risks.add("высокий риск манипуляции (низкая ликвидность)")
         var dataRisk = 0.0
         if (volumeZ == null) dataRisk += 5.0
         if (ob == null) dataRisk += 3.0
@@ -236,6 +245,7 @@ class PumpScoreCalculator @Inject constructor() {
             confidence = confidence,
             level = level,
             opportunityLabel = label,
+            liquidityTier = tier,
             reasons = reasons,
             risks = risks,
             strongAllowed = strongAllowed

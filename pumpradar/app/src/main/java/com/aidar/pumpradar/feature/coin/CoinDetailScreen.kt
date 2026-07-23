@@ -75,6 +75,7 @@ fun CoinDetailScreen(
                     Line("Импульс", "${s.score}/100")
                     Line("Риск входа", "${s.entryRiskScore}/100")
                     Line("Достоверность", "${s.confidenceScore}/100")
+                    Line("Ликвидность", "Tier ${s.liquidityTier}")
                     Line("Цена", "%.6g".format(s.price))
                     Line("Рост 1 мин", s.return60s?.let { "%+.2f%%".format(it) } ?: "—")
                     Line("Агрессивные покупки", s.takerBuyRatio30s?.let { "%.0f%%".format(it * 100) } ?: "—")
@@ -84,6 +85,11 @@ fun CoinDetailScreen(
                     Line("OBI top-10", s.obi10?.let { "%+.2f".format(it) } ?: "—")
                     Line("Проскальзывание 10 USDT", s.slippagePercent?.let { "%.2f%%".format(it) } ?: "—")
                 }
+            }
+            if (s.liquidityTier == "D") {
+                Text("⚠ Tier D — низкая ликвидность, ВЫСОКИЙ РИСК МАНИПУЛЯЦИИ. " +
+                    "Такую монету легко накачать одним кошельком.",
+                    style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
             }
             if (s.reasons.isNotEmpty()) InfoCard("Причины", s.reasons)
             if (s.risks.isNotEmpty()) InfoCard("Риски", s.risks)

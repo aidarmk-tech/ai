@@ -5,6 +5,7 @@ import com.aidar.pumpradar.data.local.AppEventEntity
 import com.aidar.pumpradar.data.local.OutcomeDao
 import com.aidar.pumpradar.data.local.SignalDao
 import com.aidar.pumpradar.data.local.SignalEntity
+import com.aidar.pumpradar.data.preferences.MonitoringProfile
 import com.aidar.pumpradar.data.preferences.SettingsRepository
 import com.aidar.pumpradar.data.remote.BinanceRest
 import com.aidar.pumpradar.data.remote.CandidateStream
@@ -15,6 +16,7 @@ import com.aidar.pumpradar.domain.analyzer.OrderBookAnalyzer
 import com.aidar.pumpradar.domain.analyzer.OutcomeTracker
 import com.aidar.pumpradar.domain.analyzer.PumpScoreCalculator
 import com.aidar.pumpradar.domain.model.Candidate
+import com.aidar.pumpradar.domain.model.LiquidityTier
 import com.aidar.pumpradar.domain.model.LiveSignal
 import com.aidar.pumpradar.domain.model.SignalLevel
 import com.aidar.pumpradar.notification.SignalNotificationManager
@@ -117,10 +119,13 @@ class MonitoringEngine @Inject constructor(
     private suspend fun tick() {
         val cfg = settings.settings.first()
         val now = System.currentTimeMillis()
-        val candidates = scanner.computeCandidates(
+        val raw = scanner.computeCandidates(
             cfg.minimum24hQuoteVolume, MAX_CANDIDATES, now, keep = retention.keys.toSet()
         )
-        updateRetention(candidates, now)
+        updateRetention(raw, now)
+        // Фильтр по тирам ликвидности согласно профилю (ТЗ 0A.9).
+        val allowedTiers = allowedTiersFor(cfg.monitoringProfile)
+        val candidates = raw.filter { LiquidityTier.of(it.quoteVolume24h) in allowedTiers }
         controller.setCandidates(candidates)
 
         // Поток сделок (aggTrade/bookTicker) держим по ВСЕМ кандидатам, чтобы
@@ -174,6 +179,7 @@ class MonitoringEngine @Inject constructor(
                 entryRiskScore = res.entryRisk,
                 confidenceScore = res.confidence,
                 opportunityLabel = res.opportunityLabel,
+                liquidityTier = res.liquidityTier.name,
                 level = res.level.name,
                 stage = stageOf(res.level, metrics?.ready == true),
                 return60s = c.return60s,
@@ -253,8 +259,18 @@ class MonitoringEngine @Inject constructor(
         outcomeTracker.track(id, c.symbol, c.price)
         if (lvl.ordinal >= minLevel.ordinal) {
             val cfg = settings.settings.first()
-            notifier.maybeNotify(live, cfg.symbolCooldownMinutes)
+            // Системные уведомления по Tier D выключены вне режима «Исследовательский» (ТЗ 0A.9).
+            val tierDMuted = live.liquidityTier == "D" &&
+                cfg.monitoringProfile != MonitoringProfile.EXPLORE
+            if (!tierDMuted) notifier.maybeNotify(live, cfg.symbolCooldownMinutes)
         }
+    }
+
+    /** Разрешённые тиры для профиля (ТЗ 0A.9). */
+    private fun allowedTiersFor(profile: MonitoringProfile): Set<LiquidityTier> = when (profile) {
+        MonitoringProfile.CAUTIOUS -> setOf(LiquidityTier.A, LiquidityTier.B)
+        MonitoringProfile.BALANCED -> setOf(LiquidityTier.A, LiquidityTier.B, LiquidityTier.C)
+        MonitoringProfile.EXPLORE -> setOf(LiquidityTier.A, LiquidityTier.B, LiquidityTier.C, LiquidityTier.D)
     }
 
     private suspend fun persistSignal(id: String, c: Candidate, live: LiveSignal) {
