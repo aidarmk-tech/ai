@@ -35,7 +35,7 @@ class MathUtilsTest {
     }
 
     @Test fun median_oddEven() {
-        assertEquals(3.0, MathUtils.median(listOf(1.0, 3.0, 2.0)), 1e-9)
+        assertEquals(2.0, MathUtils.median(listOf(1.0, 3.0, 2.0)), 1e-9)
         assertEquals(2.5, MathUtils.median(listOf(1.0, 2.0, 3.0, 4.0)), 1e-9)
     }
 
