@@ -1,0 +1,61 @@
+name: Build PumpRadar APK
+
+on:
+  push:
+    branches: [ "claude/binance-trading-bot-apk-yaud0x", "main", "master" ]
+    paths:
+      - "pumpradar/**"
+      - ".github/workflows/build-pumpradar.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+
+      - name: Setup Gradle 8.9
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: "8.9"
+
+      - name: Unit tests
+        working-directory: pumpradar
+        run: gradle test --no-daemon --stacktrace
+
+      - name: Build Debug APK
+        working-directory: pumpradar
+        run: gradle assembleDebug --no-daemon --stacktrace -PverCode=${{ github.run_number }} -PverName=1.0.${{ github.run_number }}
+
+      - name: Stage APK
+        run: |
+          mkdir -p dist
+          cp pumpradar/app/build/outputs/apk/debug/app-debug.apk dist/PumpRadar.apk
+          ls -lh dist/
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PumpRadar-${{ github.run_number }}
+          path: dist/PumpRadar.apk
+          retention-days: 30
+
+      - name: Publish rolling release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: pumpradar
+          name: PumpRadar (последняя сборка)
+          body: "Автосборка #${{ github.run_number }}. Скачайте PumpRadar.apk и установите на телефон."
+          prerelease: true
+          files: dist/PumpRadar.apk
