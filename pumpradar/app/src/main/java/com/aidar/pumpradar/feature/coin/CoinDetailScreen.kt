@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aidar.pumpradar.feature.MonitoringViewModel
+import com.aidar.pumpradar.ui.component.Sparkline
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -57,6 +58,14 @@ fun CoinDetailScreen(
                 Text("Нет живых данных по $symbol. Открой из «Сканера» при активном мониторинге.",
                     style = MaterialTheme.typography.bodyMedium)
                 return@Column
+            }
+            if (s.spark.size >= 2) {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Цена за последние минуты", style = MaterialTheme.typography.bodySmall)
+                        Sparkline(s.spark)
+                    }
+                }
             }
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {

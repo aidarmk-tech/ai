@@ -146,7 +146,8 @@ class MonitoringEngine @Inject constructor(
                 obi10 = ob?.obi10,
                 slippagePercent = ob?.buySlippagePercent,
                 reasons = res.reasons,
-                risks = res.risks
+                risks = res.risks,
+                spark = downsample(scanner.recentPrices(c.symbol, 120), 40)
             )
             signals.add(live)
             maybeEmit(c, live, minLevel)
@@ -211,6 +212,13 @@ class MonitoringEngine @Inject constructor(
             appEventDao.insert(AppEventEntity(timestamp = System.currentTimeMillis(),
                 severity = sev, subsystem = sub, message = msg))
         }
+    }
+
+    /** Равномерно прореживает ряд до не более [target] точек. */
+    private fun downsample(values: List<Double>, target: Int): List<Double> {
+        if (values.size <= target) return values
+        val step = values.size.toDouble() / target
+        return (0 until target).map { values[(it * step).toInt()] }
     }
 
     private fun stageOf(level: SignalLevel, ready: Boolean): String = when {

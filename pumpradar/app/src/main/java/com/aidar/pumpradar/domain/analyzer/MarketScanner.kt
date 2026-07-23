@@ -47,6 +47,13 @@ class MarketScanner @Inject constructor() {
         rows[symbol]?.price?.takeIf { it > 0.0 }
     }
 
+    /** Последние до [max] точек цены для мини-графика. */
+    fun recentPrices(symbol: String, max: Int): List<Double> = synchronized(lock) {
+        val dq = rows[symbol]?.samples ?: return emptyList()
+        val list = dq.map { it.price }
+        if (list.size <= max) list else list.subList(list.size - max, list.size).toList()
+    }
+
     fun onTicks(tickers: List<MiniTicker>, now: Long = System.currentTimeMillis()) =
         synchronized(lock) {
             for (t in tickers) {

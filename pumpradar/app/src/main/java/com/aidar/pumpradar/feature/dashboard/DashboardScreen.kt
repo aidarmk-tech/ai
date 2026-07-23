@@ -1,5 +1,6 @@
 package com.aidar.pumpradar.feature.dashboard
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -33,6 +34,7 @@ fun DashboardScreen(
     val paused by vm.paused.collectAsStateWithLifecycle()
     val signalsToday by vm.signalsToday.collectAsStateWithLifecycle()
     val strongToday by vm.strongToday.collectAsStateWithLifecycle()
+    val signals by vm.liveSignals.collectAsStateWithLifecycle()
 
     val statusText = when (state) {
         is MonitoringState.Stopped -> "Остановлен"
@@ -79,6 +81,29 @@ fun DashboardScreen(
                 StatRow("Сигналов сегодня", signalsToday.toString())
                 StatRow("STRONG+ сегодня", strongToday.toString())
                 StatRow("Market WS", if (stats.marketWsConnected) "подключён" else "нет")
+            }
+        }
+
+        if (signals.isNotEmpty()) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Топ сейчас", fontWeight = FontWeight.Bold)
+                    signals.take(5).forEach { s ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable { onOpenCoin(s.symbol) },
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("${s.symbol} · ${s.level}", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                "%d · %s".format(
+                                    s.score,
+                                    s.return60s?.let { "%+.1f%%".format(it) } ?: "—"
+                                ),
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
             }
         }
 

@@ -91,7 +91,8 @@ data class LiveSignal(
     val obi10: Double?,
     val slippagePercent: Double?,
     val reasons: List<String>,
-    val risks: List<String>
+    val risks: List<String>,
+    val spark: List<Double> = emptyList()
 )
 
 /** Кандидат первого уровня для живого сканера. */
