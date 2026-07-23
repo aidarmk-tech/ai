@@ -11,7 +11,9 @@ import org.junit.Test
 /** Warm start базы объёма (ТЗ 0A.4). */
 class CandidateAnalyzerTest {
 
-    private val now = 10_000_000L
+    // Реальные часы: onAggTrade/seedVolume чистят историю по System-времени,
+    // поэтому метки должны быть «свежими» относительно текущего момента.
+    private val now = System.currentTimeMillis()
 
     /** Без прогрева и без истории Объём Z не готов. */
     @Test fun volumeZ_notReady_withoutHistory() {
