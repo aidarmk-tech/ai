@@ -1,6 +1,7 @@
 package com.aidar.pumpradar.service
 
 import com.aidar.pumpradar.domain.model.Candidate
+import com.aidar.pumpradar.domain.model.LiveSignal
 import com.aidar.pumpradar.domain.model.MonitoringState
 import com.aidar.pumpradar.domain.model.MonitoringStats
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,6 +34,15 @@ class MonitoringController @Inject constructor() {
         _candidates.value = list
     }
 
+    private val _liveSignals = MutableStateFlow<List<LiveSignal>>(emptyList())
+    val liveSignals: StateFlow<List<LiveSignal>> = _liveSignals.asStateFlow()
+
+    fun setLiveSignals(list: List<LiveSignal>) {
+        _liveSignals.value = list
+    }
+
+    fun signalFor(symbol: String): LiveSignal? = _liveSignals.value.firstOrNull { it.symbol == symbol }
+
     fun onStarting() {
         _state.value = MonitoringState.Starting
     }
@@ -47,6 +57,7 @@ class MonitoringController @Inject constructor() {
         _stats.value = MonitoringStats()
         _paused.value = false
         _candidates.value = emptyList()
+        _liveSignals.value = emptyList()
     }
 
     fun setPaused(value: Boolean) {

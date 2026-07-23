@@ -1,6 +1,8 @@
 package com.aidar.pumpradar.data.remote
 
 import com.aidar.pumpradar.core.math.MathUtils.validMarketNumber
+import com.aidar.pumpradar.domain.model.AggTrade
+import com.aidar.pumpradar.domain.model.BookTicker
 import com.aidar.pumpradar.domain.model.MiniTicker
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -27,5 +29,37 @@ data class MiniTickerDto(
             quoteVolume = quoteVolume.toDoubleOrNull() ?: 0.0,
             eventTime = eventTime
         )
+    }
+}
+
+/** aggTrade: p цена, q количество, m покупатель-maker, T время сделки. */
+@Serializable
+data class AggTradeDto(
+    @SerialName("s") val symbol: String = "",
+    @SerialName("p") val price: String,
+    @SerialName("q") val quantity: String,
+    @SerialName("m") val buyerIsMaker: Boolean = false,
+    @SerialName("T") val tradeTime: Long = 0
+) {
+    fun toModel(symbol: String): AggTrade? {
+        val p = price.toDoubleOrNull() ?: return null
+        val q = quantity.toDoubleOrNull() ?: return null
+        if (!p.validMarketNumber() || !q.validMarketNumber() || p <= 0.0) return null
+        return AggTrade(symbol, p, q, p * q, buyerIsMaker, tradeTime)
+    }
+}
+
+/** bookTicker: b лучший bid, a лучший ask. */
+@Serializable
+data class BookTickerDto(
+    @SerialName("s") val symbol: String = "",
+    @SerialName("b") val bidPrice: String,
+    @SerialName("a") val askPrice: String
+) {
+    fun toModel(symbol: String): BookTicker? {
+        val b = bidPrice.toDoubleOrNull() ?: return null
+        val a = askPrice.toDoubleOrNull() ?: return null
+        if (a < b || a <= 0.0 || b <= 0.0) return null
+        return BookTicker(symbol, b, a)
     }
 }

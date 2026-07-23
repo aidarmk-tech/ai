@@ -28,6 +28,7 @@ class MonitoringViewModel @Inject constructor(
     val stats = controller.stats
     val paused = controller.paused
     val candidates = controller.candidates
+    val liveSignals = controller.liveSignals
 
     val settings = settingsRepo.settings.stateIn(
         viewModelScope, SharingStarted.WhileSubscribed(5000), AppSettings()
