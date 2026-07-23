@@ -69,9 +69,12 @@ fun CoinDetailScreen(
             }
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("${s.level} · ${s.score}/100", fontWeight = FontWeight.Bold,
+                    Text(labelRu(s.opportunityLabel), fontWeight = FontWeight.Bold,
                         style = MaterialTheme.typography.titleMedium)
                     Text("Стадия: ${s.stage}", style = MaterialTheme.typography.bodySmall)
+                    Line("Импульс", "${s.score}/100")
+                    Line("Риск входа", "${s.entryRiskScore}/100")
+                    Line("Достоверность", "${s.confidenceScore}/100")
                     Line("Цена", "%.6g".format(s.price))
                     Line("Рост 1 мин", s.return60s?.let { "%+.2f%%".format(it) } ?: "—")
                     Line("Агрессивные покупки", s.takerBuyRatio30s?.let { "%.0f%%".format(it * 100) } ?: "—")
@@ -88,6 +91,20 @@ fun CoinDetailScreen(
                 style = MaterialTheme.typography.bodySmall)
         }
     }
+}
+
+/** Человекочитаемая метка возможности (ТЗ 0A.12). */
+internal fun labelRu(label: String): String = when (label) {
+    "CONFIRMED" -> "ПОДТВЕРЖДЁН"
+    "EARLY_CLEAN" -> "РАННИЙ ЧИСТЫЙ"
+    "STRONG_BUT_RISKY" -> "СИЛЬНЫЙ, НО РИСКОВЫЙ"
+    "TOO_LATE" -> "ПОЗДНО — НЕ ГНАТЬСЯ ЗА ЦЕНОЙ"
+    "DATA_INCOMPLETE" -> "ДАННЫЕ НЕПОЛНЫЕ"
+    "RETEST" -> "РЕТЕСТ"
+    "EXHAUSTION" -> "ИСТОЩЕНИЕ"
+    "CANCELLED" -> "ОТМЕНЁН"
+    "STALE" -> "УСТАРЕЛ"
+    else -> "НАБЛЮДЕНИЕ"
 }
 
 @Composable

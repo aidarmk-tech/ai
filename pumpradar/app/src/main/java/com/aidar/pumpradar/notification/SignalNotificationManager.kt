@@ -8,6 +8,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.aidar.pumpradar.MainActivity
 import com.aidar.pumpradar.domain.model.LiveSignal
+import com.aidar.pumpradar.feature.coin.labelRu
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -39,15 +40,16 @@ class SignalNotificationManager @Inject constructor(
         if (!allow) return false
         lastBySymbol[signal.symbol] = Last(levelOrd, now)
 
-        val emoji = when (signal.level) {
-            "EXTREME" -> "🔴"; "STRONG" -> "🟠"
-            "EARLY" -> "🟠"; else -> "🔵"
+        val emoji = when (signal.opportunityLabel) {
+            "TOO_LATE", "STRONG_BUT_RISKY", "EXHAUSTION" -> "🔴"
+            "CONFIRMED" -> "🟢"; "EARLY_CLEAN" -> "🟠"; else -> "🔵"
         }
-        val title = "$emoji ${signal.level} — ${signal.symbol} · ${signal.score}/100"
+        // Уведомление начинается с OpportunityLabel (ТЗ 0A.12), не с одного score.
+        val title = "$emoji ${labelRu(signal.opportunityLabel)} — ${signal.symbol}"
         val body = buildString {
-            signal.return60s?.let { append("1м %+.1f%% · ".format(it)) }
-            signal.takerBuyRatio30s?.let { append("Покупки %.0f%% · ".format(it * 100)) }
-            signal.volumeZ30s?.let { append("Объём Z %.1f".format(it)) }
+            append("Импульс %d · Риск %d · Достоверн. %d".format(
+                signal.score, signal.entryRiskScore, signal.confidenceScore))
+            signal.return60s?.let { append(" · 1м %+.1f%%".format(it)) }
         }.ifBlank { "Рыночная аномалия" }
         val expanded = buildString {
             if (signal.reasons.isNotEmpty()) {

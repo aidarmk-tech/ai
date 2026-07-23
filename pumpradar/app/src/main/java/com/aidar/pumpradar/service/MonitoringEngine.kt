@@ -145,7 +145,10 @@ class MonitoringEngine @Inject constructor(
             val live = LiveSignal(
                 symbol = c.symbol,
                 price = c.price,
-                score = res.score,
+                score = res.impulse,
+                entryRiskScore = res.entryRisk,
+                confidenceScore = res.confidence,
+                opportunityLabel = res.opportunityLabel,
                 level = res.level.name,
                 stage = stageOf(res.level, metrics?.ready == true),
                 return60s = c.return60s,

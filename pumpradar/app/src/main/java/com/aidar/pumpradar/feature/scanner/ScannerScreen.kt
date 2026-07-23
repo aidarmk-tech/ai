@@ -28,6 +28,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.aidar.pumpradar.domain.model.LiveSignal
 import com.aidar.pumpradar.domain.model.MonitoringState
 import com.aidar.pumpradar.feature.MonitoringViewModel
+import com.aidar.pumpradar.feature.coin.labelRu
 import com.aidar.pumpradar.ui.theme.ColorEarly
 import com.aidar.pumpradar.ui.theme.ColorExtreme
 import com.aidar.pumpradar.ui.theme.ColorNormal
@@ -80,8 +81,15 @@ private fun SignalCard(s: LiveSignal, onClick: () -> Unit) {
                     Text(s.symbol, fontWeight = FontWeight.Bold)
                     LevelChip(s.level, s.stage)
                 }
-                Text("${s.score}/100", fontWeight = FontWeight.Bold)
+                Text(labelRu(s.opportunityLabel), color = labelColor(s.opportunityLabel),
+                    style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
             }
+            Text(
+                "Импульс %d · Риск %d · Достоверн. %d".format(
+                    s.score, s.entryRiskScore, s.confidenceScore
+                ),
+                style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold
+            )
             Text(
                 "1м %s · Покупки %s · Объём Z %s · Спред %s".format(
                     pct(s.return60s),
@@ -111,6 +119,14 @@ private fun LevelChip(level: String, stage: String) {
     ) {
         Text(label, color = color, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
     }
+}
+
+private fun labelColor(label: String): Color = when (label) {
+    "CONFIRMED" -> ColorStrong
+    "EARLY_CLEAN" -> ColorEarly
+    "STRONG_BUT_RISKY", "TOO_LATE", "EXHAUSTION" -> ColorExtreme
+    "DATA_INCOMPLETE", "STALE", "CANCELLED" -> ColorNormal
+    else -> ColorWatch
 }
 
 private fun pct(v: Double?): String = v?.let { "%+.2f%%".format(it) } ?: "—"

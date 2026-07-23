@@ -80,7 +80,10 @@ data class CandidateMetrics(
 data class LiveSignal(
     val symbol: String,
     val price: Double,
-    val score: Int,
+    val score: Int,               // = Impulse Score (0A.1); имя сохранено для совместимости
+    val entryRiskScore: Int = 0,  // 0A.10
+    val confidenceScore: Int = 0, // 0A.11
+    val opportunityLabel: String = "WATCH", // 0A.12
     val level: String,
     val stage: String,
     val return60s: Double?,
