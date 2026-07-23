@@ -141,6 +141,12 @@ class BinanceClient(
         return j.getString("price").toDouble()
     }
 
+    /** Лучшие bid/ask из стакана — для спред-фильтра перед входом. */
+    fun bookTicker(symbol: String): Pair<Double, Double> {
+        val j = JSONObject(raw("/api/v3/ticker/bookTicker", "symbol=$symbol"))
+        return j.getString("bidPrice").toDouble() to j.getString("askPrice").toDouble()
+    }
+
     fun symbolRules(symbol: String): SymbolRules {
         val j = JSONObject(raw("/api/v3/exchangeInfo", "symbol=$symbol"))
         return parseRules(j.getJSONArray("symbols").getJSONObject(0))

@@ -47,7 +47,10 @@ private class PairState(
     var barsHeld: Int = 0,
     var breakeven: Boolean = false,
     var lastPrice: Double = 0.0,
-    var diag: String = "—"
+    var diag: String = "—",
+    // LowProfitPairs: результаты последних сделок и время блокировки пары.
+    val recentPnls: MutableList<Double> = mutableListOf(),
+    var lockedUntil: Long = 0L
 )
 
 /**
@@ -74,6 +77,19 @@ class TradingService : Service() {
         private const val MOM_TIME_STOP_BARS = 32
         private const val REV_TIME_STOP_BARS = 16
 
+        // ── Батч №1: фильтры качества (идеи из freqtrade) ──
+        /** Спред-фильтр: не входим, если (ask−bid)/ask больше, %. */
+        private const val MAX_SPREAD_PCT = 0.15
+        /** Пыль от шага лота: не входим, если один шаг лота дороже, % позиции. */
+        private const val MAX_LOTSTEP_PCT = 2.0
+        /** StoplossGuard: N стопов за окно → пауза по всем парам. */
+        private const val SG_LOOKBACK_MS = 2 * 60 * 60 * 1000L
+        private const val SG_TRADE_LIMIT = 4
+        private const val SG_HALT_MS = 60 * 60 * 1000L
+        /** LowProfitPairs: убыток по паре за последние N сделок → блок пары. */
+        private const val LPP_WINDOW = 3
+        private const val LPP_LOCK_MS = 3 * 60 * 60 * 1000L
+
         fun start(context: Context) {
             val i = Intent(context, TradingService::class.java).setAction(ACTION_START)
             context.startForegroundService(i)
@@ -93,6 +109,10 @@ class TradingService : Service() {
     private var dayStartEquity = 0.0
     private var dayRealizedPnl = 0.0
     private var dailyLossHit = false
+
+    // StoplossGuard: моменты стопов по всем парам + время паузы (в памяти сессии).
+    private val stopTimestamps = mutableListOf<Long>()
+    private var tradingHaltUntil = 0L
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -314,16 +334,21 @@ class TradingService : Service() {
         }
 
         if (!p.inPosition) {
+            val nowMs = System.currentTimeMillis()
             // Диагностика для скана — обновляем каждый цикл, чтобы журнал
             // показывал актуальное состояние даже между свечами.
             p.diag = when {
                 p.cooldownBars > 0 -> "кулдаун ${p.cooldownBars}"
                 dailyLossHit -> "дневной-лимит"
+                nowMs < tradingHaltUntil -> "стоп-гвард"
+                nowMs < p.lockedUntil -> "пара-заблок"
                 pairs.count { it.inPosition } >= maxPositions -> "лимит-позиций"
                 else -> Strategy.entryDiag(closed, p.ctxUp, btcNotBear)
             }
             if (!newCandle) return
             if (p.cooldownBars > 0 || dailyLossHit) return
+            if (nowMs < tradingHaltUntil) return          // StoplossGuard
+            if (nowMs < p.lockedUntil) return             // LowProfitPairs
             if (pairs.count { it.inPosition } >= maxPositions) return
             val plan = Strategy.considerEntry(closed, p.ctxUp, btcNotBear) ?: return
             tryBuy(client, p, pairs, plan, positionPct)
@@ -392,6 +417,34 @@ class TradingService : Service() {
             return
         }
 
+        // Фильтр пыли: если один шаг лота дороже MAX_LOTSTEP_PCT % позиции,
+        // округление количества при продаже съест результат — пропускаем пару.
+        val lotStepPct = p.rules.stepSize.toDouble() * price / spend * 100
+        if (lotStepPct > MAX_LOTSTEP_PCT) {
+            log(
+                "%s: пропуск — грубый шаг лота, округление ~%.1f%% позиции (>%.1f%%). Монета не подходит под такой размер сделки."
+                    .format(Locale.US, p.symbol, lotStepPct, MAX_LOTSTEP_PCT)
+            )
+            return
+        }
+
+        // Спред-фильтр: широкий bid/ask = скрытая потеря на входе+выходе.
+        try {
+            val (bid, ask) = client.bookTicker(p.symbol)
+            if (ask > 0 && bid > 0) {
+                val spreadPct = (ask - bid) / ask * 100
+                if (spreadPct > MAX_SPREAD_PCT) {
+                    log(
+                        "%s: пропуск — широкий спред %.2f%% (>%.2f%%), низкая ликвидность."
+                            .format(Locale.US, p.symbol, spreadPct, MAX_SPREAD_PCT)
+                    )
+                    return
+                }
+            }
+        } catch (_: Exception) {
+            // Стакан недоступен — не блокируем вход из-за сетевой ошибки.
+        }
+
         val fill = client.marketBuy(p.symbol, spend)
         if (fill.executedQty <= 0) {
             log("${p.symbol}: ордер BUY не исполнился")
@@ -453,6 +506,16 @@ class TradingService : Service() {
         if (reason == "стоп-лосс" && pnlQuote < 0) {
             p.cooldownBars = COOLDOWN_BARS
             log("${p.symbol}: кулдаун $COOLDOWN_BARS свечей после стопа")
+            registerStop()
+        }
+
+        // LowProfitPairs: копим результаты сделок пары; серия убытков → блок.
+        p.recentPnls.add(pnlQuote)
+        while (p.recentPnls.size > LPP_WINDOW) p.recentPnls.removeAt(0)
+        if (p.recentPnls.size >= LPP_WINDOW && p.recentPnls.sum() < 0) {
+            p.lockedUntil = System.currentTimeMillis() + LPP_LOCK_MS
+            p.recentPnls.clear()
+            log("${p.symbol}: заблокирована на 3 ч — $LPP_WINDOW убыточные сделки подряд")
         }
 
         log(
@@ -506,6 +569,19 @@ class TradingService : Service() {
             else
                 "Позиций: ${open.size}, в них %.2f | день: %+.2f".format(Locale.US, inPositions, dayRealizedPnl)
         )
+    }
+
+    /** StoplossGuard: считаем стопы за окно; при переборе — пауза по всем парам. */
+    private fun registerStop() {
+        val now = System.currentTimeMillis()
+        stopTimestamps.add(now)
+        stopTimestamps.removeAll { now - it > SG_LOOKBACK_MS }
+        if (stopTimestamps.size >= SG_TRADE_LIMIT) {
+            tradingHaltUntil = now + SG_HALT_MS
+            stopTimestamps.clear()
+            log("⛔ Стоп-гвард: $SG_TRADE_LIMIT стопа за 2 ч — пауза входов на 1 ч по всем парам")
+            notifyUser("Сработал стоп-гвард", "$SG_TRADE_LIMIT стопа подряд — бот на паузе 1 час")
+        }
     }
 
     // ── Дневной риск-контроль ──
@@ -734,6 +810,7 @@ class TradingService : Service() {
                 "Позиции ${open.size}: ${parts.joinToString(", ")}"
             }
             dailyLossHit -> "⛔ Дневной лимит убытка — входы завтра"
+            System.currentTimeMillis() < tradingHaltUntil -> "⛔ Стоп-гвард — пауза входов"
             !btcNotBear -> "Медвежий рынок (BTC < SMA200) — жду"
             else -> "Ждём сигнал | слежу за ${pairs.size} парами"
         }
