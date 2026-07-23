@@ -25,8 +25,10 @@ class CandidateAnalyzer @Inject constructor() {
 
     private companion object {
         const val MAX_AGE_MS = 10 * 60 * 1000L
-        const val BUCKET_MS = 30_000L
-        const val MIN_BUCKETS = 10
+        // Бакет 10с и минимум 6 завершённых бакетов истории → прогрев ~70–80с,
+        // чтобы «Объём Z» успевал накопить базу в пределах окна удержания.
+        const val BUCKET_MS = 10_000L
+        const val MIN_BUCKETS = 6
     }
 
     fun onAggTrade(t: AggTrade) = synchronized(lock) {

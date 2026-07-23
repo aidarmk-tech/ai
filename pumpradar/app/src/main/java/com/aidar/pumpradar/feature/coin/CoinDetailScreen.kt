@@ -76,7 +76,7 @@ fun CoinDetailScreen(
                     Line("Рост 1 мин", s.return60s?.let { "%+.2f%%".format(it) } ?: "—")
                     Line("Агрессивные покупки", s.takerBuyRatio30s?.let { "%.0f%%".format(it * 100) } ?: "—")
                     Line("CVD 30с", "%+.0f".format(s.cvd30s))
-                    Line("Объём Z (30с)", s.volumeZ30s?.let { "%.1f".format(it) } ?: "прогрев…")
+                    Line("Объём Z (10с)", s.volumeZ30s?.let { "%.1f".format(it) } ?: "прогрев…")
                     Line("Спред", s.spreadBps?.let { "%.0f bps".format(it) } ?: "—")
                     Line("OBI top-10", s.obi10?.let { "%+.2f".format(it) } ?: "—")
                     Line("Проскальзывание 10 USDT", s.slippagePercent?.let { "%.2f%%".format(it) } ?: "—")

@@ -117,18 +117,20 @@ class MonitoringEngine @Inject constructor(
         updateRetention(candidates, now)
         controller.setCandidates(candidates)
 
-        // Углублённо анализируем лучшие DEEP_CANDIDATES; стакан — только для топа.
+        // Поток сделок (aggTrade/bookTicker) держим по ВСЕМ кандидатам, чтобы
+        // история для «Объём Z» и CVD копилась и не стиралась при перестановке
+        // топа. Скоринг/UI — по лучшим DEEP_CANDIDATES, стакан (тяжёлый) — по топу.
+        val flowSymbols = candidates.map { it.symbol }
         val deep = candidates.take(DEEP_CANDIDATES)
-        val deepSymbols = deep.map { it.symbol }
-        val depthSymbols = deepSymbols.take(DEPTH_CANDIDATES)
+        val depthSymbols = flowSymbols.take(DEPTH_CANDIDATES)
         val streams = buildSet {
-            for (s in deepSymbols) {
+            for (s in flowSymbols) {
                 val lo = s.lowercase(); add("$lo@aggTrade"); add("$lo@bookTicker")
             }
             for (s in depthSymbols) add("${s.lowercase()}@depth20@100ms")
         }
         candidateStream.setDesiredStreams(streams)
-        analyzer.retain(deepSymbols.toSet())
+        analyzer.retain(flowSymbols.toSet())
         orderBook.retain(depthSymbols.toSet())
         controller.updateStats { it.copy(depthSymbols = depthSymbols.size) }
 
