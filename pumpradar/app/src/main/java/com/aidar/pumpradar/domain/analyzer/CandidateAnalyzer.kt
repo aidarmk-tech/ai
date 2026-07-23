@@ -33,11 +33,14 @@ class CandidateAnalyzer @Inject constructor() {
     private val lock = Any()
 
     private companion object {
-        const val MAX_AGE_MS = 10 * 60 * 1000L
-        // Бакет 10с и минимум 6 завершённых бакетов истории → прогрев ~70–80с
-        // без warm start; с warm start база готова мгновенно.
+        // Сырые сделки держим 10 мин (хватает для окон CVD/taker ≤60с).
+        const val TRADE_MAX_AGE_MS = 10 * 60 * 1000L
+        // База объёма — 60 мин: длинный baseline (ТЗ 0A.8), устойчивее к одному всплеску.
+        const val BUCKET_MAX_AGE_MS = 60 * 60 * 1000L
+        // Бакет 10с и минимум 6 завершённых бакетов → прогрев ~70–80с (warm start мгновенно).
         const val BUCKET_MS = 10_000L
         const val MIN_BUCKETS = 6
+        const val SHORT_BUCKETS = 60          // короткий baseline ~10 мин
         const val GAP_RECOVERY_MS = 60_000L   // окно «недавнего разрыва» (ТЗ 0A.7)
     }
 
@@ -51,7 +54,7 @@ class CandidateAnalyzer @Inject constructor() {
         }
         if (t.aggId > row.lastAggId) row.lastAggId = t.aggId
         row.trades.addLast(Trade(t.tradeTime, t.quoteValue, t.isAggressiveBuy))
-        val cutoff = now - MAX_AGE_MS
+        val cutoff = now - TRADE_MAX_AGE_MS
         while (row.trades.isNotEmpty() && row.trades.first().t < cutoff) row.trades.removeFirst()
         val idx = t.tradeTime / BUCKET_MS
         row.volBuckets[idx] = (row.volBuckets[idx] ?: 0.0) + t.quoteValue
@@ -138,20 +141,26 @@ class CandidateAnalyzer @Inject constructor() {
         }
 
     private fun pruneBuckets(row: Row, now: Long) {
-        val minIdx = (now - MAX_AGE_MS) / BUCKET_MS
+        val minIdx = (now - BUCKET_MAX_AGE_MS) / BUCKET_MS
         val it = row.volBuckets.keys.iterator()
         while (it.hasNext()) if (it.next() < minIdx) it.remove()
     }
 
-    /** robust Z-score объёма последнего завершённого бакета к истории. */
+    /**
+     * robust Z-score объёма последнего завершённого бакета. Двойной baseline
+     * (ТЗ 0A.8): аномалия должна держаться и относительно короткого (~10 мин),
+     * и относительно длинного (до 60 мин) окна — берём консервативный минимум,
+     * чтобы одиночный всплеск не выдавался за устойчивую аномалию.
+     */
     private fun volumeAnomalyZ(row: Row, now: Long): Double? {
-        val buckets = row.volBuckets
         val currentIdx = now / BUCKET_MS
-        val completed = buckets.filterKeys { it < currentIdx }.toSortedMap()
+        val completed = row.volBuckets.filterKeys { it < currentIdx }.toSortedMap()
         if (completed.size < MIN_BUCKETS + 1) return null
         val vals = completed.values.toList()
         val current = vals.last()
         val history = vals.dropLast(1)
-        return MathUtils.robustZScore(current, history)
+        val shortZ = MathUtils.robustZScore(current, history.takeLast(SHORT_BUCKETS))
+        val longZ = if (history.size > SHORT_BUCKETS) MathUtils.robustZScore(current, history) else null
+        return if (longZ != null) minOf(shortZ, longZ) else shortZ
     }
 }

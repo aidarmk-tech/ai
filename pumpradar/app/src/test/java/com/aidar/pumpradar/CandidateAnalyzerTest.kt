@@ -72,4 +72,16 @@ class CandidateAnalyzerTest {
         val m = a.metrics("XUSDT", now)
         assertTrue(m!!.tradeGap)
     }
+
+    /** Всплеск объёма над ровным baseline даёт высокий Z (ТЗ 0A.8). */
+    @Test fun volumeZ_spikeDetected() {
+        val a = CandidateAnalyzer()
+        // 39 бакетов ~100 (с небольшим разбросом, чтобы MAD>0) + свежий бакет 1000.
+        val base = (2..40).map { i -> (now - i * 10_000L) to (100.0 + (i % 5)) }
+        val spike = listOf((now - 10_000L) to 1000.0)
+        a.seedVolume("XUSDT", base + spike)
+        val m = a.metrics("XUSDT", now)
+        assertNotNull(m!!.volumeZ30s)
+        assertTrue(m.volumeZ30s!! > 3.0)
+    }
 }

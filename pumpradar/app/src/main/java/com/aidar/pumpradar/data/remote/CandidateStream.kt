@@ -35,6 +35,7 @@ class CandidateStream @Inject constructor(
     private var ws: WebSocket? = null
     @Volatile private var running = false
     @Volatile private var connected = false
+    @Volatile private var connectedAt = 0L
     private var attempt = 0
     private var useAlt = false
     private var scope: CoroutineScope? = null
@@ -63,15 +64,36 @@ class CandidateStream @Inject constructor(
         running = true
         attempt = 0
         connect()
+        startRotationWatchdog(scope)
     }
 
     fun stop() {
         running = false
         connected = false
+        connectedAt = 0L
         desired.clear()
         current.clear()
         ws?.close(1000, "stopped")
         ws = null
+    }
+
+    /**
+     * Проактивная ротация до жёсткого лимита Binance ~24ч (ТЗ 0A.6): закрываем
+     * по возрасту, штатный reconnect переподключается и заново подписывается на
+     * текущий набор потоков в onOpen.
+     */
+    private fun startRotationWatchdog(scope: CoroutineScope) {
+        scope.launch {
+            while (running) {
+                delay(60_000)
+                val c = connectedAt
+                if (running && c > 0 && System.currentTimeMillis() - c > PROACTIVE_ROTATION_MS) {
+                    Timber.i("Проактивная ротация candidate WS по возрасту")
+                    connectedAt = 0L
+                    ws?.close(1000, "rotate")
+                }
+            }
+        }
     }
 
     /** Задать желаемый набор потоков (aggTrade/bookTicker/depth) напрямую. */
@@ -116,6 +138,7 @@ class CandidateStream @Inject constructor(
         override fun onOpen(webSocket: WebSocket, response: Response) {
             attempt = 0
             connected = true
+            connectedAt = System.currentTimeMillis()
             current.clear()
             onConnected?.invoke(true)
             reconcile() // повторная подписка после reconnect
@@ -175,5 +198,7 @@ class CandidateStream @Inject constructor(
 
     companion object {
         private val BACKOFF_SECONDS = intArrayOf(1, 1, 2, 4, 8, 15, 30, 60)
+        // Ротация до жёсткого лимита Binance 24ч (ТЗ 0A.6): 23ч45м.
+        private const val PROACTIVE_ROTATION_MS = 23L * 60 * 60 * 1000 + 45L * 60 * 1000
     }
 }
