@@ -125,8 +125,27 @@ def volume_z(candles):
 
 # ─────────────────────── Логика входа/выхода ───────────────────────
 
-def regime_is_trend(closes):
-    return efficiency_ratio(closes, ER_PERIOD) >= ER_TREND
+# Конфиг стратегии. DEFAULT_CFG = текущие параметры бота (агрессивные).
+# Пресеты и перебор задают отклонения от него.
+DEFAULT_CFG = {
+    "er_trend": 0.25,        # порог тренда (ER); режим=тренд если ER>=этого
+    "donchian": 10,          # окно пробоя
+    "vol_z_min": 0.4,        # минимальный z-score объёма для пробоя
+    "mom_overext": 3.5,      # отсечка перегрева, ×ATR
+    "mom_rsi_max": 82.0,     # верхний RSI14 для пробоя
+    "mom_stop_atr": 2.2,     # стоп пробоя, ×ATR
+    "rev_z": -1.3,           # порог просадки для выкупа, сигм
+    "rev_rsi3": 30.0,        # верхний RSI3 для выкупа
+    "rev_min_atr": 0.5,      # мин. расстояние до цели, ×ATR
+    "rev_stop_atr": 2.0,     # стоп выкупа, ×ATR
+    "use_mom": True,         # включён ли движок пробоя
+    "use_rev": True,         # включён ли движок выкупа
+    "risk_pct": 4.0,         # риск на сделку, % капитала
+}
+
+
+def regime_is_trend(closes, cfg):
+    return efficiency_ratio(closes, ER_PERIOD) >= cfg["er_trend"]
 
 
 def context_up(closes_1h):
@@ -144,7 +163,7 @@ def not_bear(btc_closes_1h):
     return btc_closes_1h[-1] > sma(btc_closes_1h, 200)
 
 
-def consider_entry(candles, ctx_up, notbear):
+def consider_entry(candles, ctx_up, notbear, cfg):
     """Возвращает dict(type, stop_dist, target) или None."""
     if len(candles) < MIN_CANDLES or not notbear:
         return None
@@ -155,33 +174,37 @@ def consider_entry(candles, ctx_up, notbear):
         return None
     sma20 = sma(closes, SMA_PERIOD)
 
-    if regime_is_trend(closes):
+    if regime_is_trend(closes, cfg):
+        if not cfg["use_mom"]:
+            return None
         if not ctx_up:
             return None
-        donchian_high = max(c["h"] for c in candles[-DONCHIAN - 1:-1])
+        donchian_high = max(c["h"] for c in candles[-cfg["donchian"] - 1:-1])
         if closes[last] <= donchian_high:
             return None
-        if volume_z(candles) < 0.4:
+        if volume_z(candles) < cfg["vol_z_min"]:
             return None
-        if closes[last] - sma20 > 3.5 * a:
+        if closes[last] - sma20 > cfg["mom_overext"] * a:
             return None
-        if rsi(closes[-80:], 14) >= 82.0:
+        if rsi(closes[-80:], 14) >= cfg["mom_rsi_max"]:
             return None
-        return {"type": "MOM", "stop_dist": MOM_STOP_ATR * a, "target": 0.0}
+        return {"type": "MOM", "stop_dist": cfg["mom_stop_atr"] * a, "target": 0.0}
     else:
+        if not cfg["use_rev"]:
+            return None
         sd = stdev(closes, SMA_PERIOD)
         if sd <= 0:
             return None
         z = (closes[last] - sma20) / sd
-        if z > -1.3:
+        if z > cfg["rev_z"]:
             return None
-        if rsi(closes[-30:], 3) >= 30.0:
+        if rsi(closes[-30:], 3) >= cfg["rev_rsi3"]:
             return None
         if candles[last]["c"] <= candles[last]["o"]:
             return None
-        if sma20 - closes[last] < 0.5 * a:
+        if sma20 - closes[last] < cfg["rev_min_atr"] * a:
             return None
-        return {"type": "REV", "stop_dist": REV_STOP_ATR * a, "target": sma20}
+        return {"type": "REV", "stop_dist": cfg["rev_stop_atr"] * a, "target": sma20}
 
 
 def momentum_exit(candles):
@@ -251,7 +274,9 @@ class Pos:
 
 
 def backtest(data15, data1h, btc1h, equity0, max_positions, pos_pct,
-             fee=0.001, slip=0.0005, verbose=False):
+             fee=0.001, slip=0.0005, verbose=False, cfg=None):
+    if cfg is None:
+        cfg = DEFAULT_CFG
     """
     data15: {symbol: [candles]}  — вход, 15m
     data1h: {symbol: [candles]}  — контекст, 1h
@@ -367,13 +392,13 @@ def backtest(data15, data1h, btc1h, equity0, max_positions, pos_pct,
             if len(positions) >= max_positions:
                 continue
             ctx = context_up(cur_1h_closes(sym, ct))
-            plan = consider_entry(window, ctx, notbear)
+            plan = consider_entry(window, ctx, notbear, cfg)
             if not plan:
                 continue
 
             invested = sum(p.spent for p in positions.values())
             eq = cash + invested
-            risk_amt = eq * RISK_PCT / 100
+            risk_amt = eq * cfg["risk_pct"] / 100
             notional_risk = risk_amt / plan["stop_dist"] * price
             cap = cash * pos_pct / 100
             spend = min(notional_risk, cap)
@@ -440,6 +465,83 @@ def report(equity0, cash, trades, equity_curve, label):
     print("=" * 62)
 
 
+# ─────────────────────────── Перебор конфигураций ───────────────────────────
+
+def metrics(equity0, cash, trades, curve):
+    wins = [t for t in trades if t.pnl > 0]
+    gw = sum(t.pnl for t in wins)
+    gl = -sum(t.pnl for t in trades if t.pnl <= 0)
+    peak, dd = -1e9, 0.0
+    for v in curve:
+        peak = max(peak, v)
+        if peak > 0:
+            dd = max(dd, (peak - v) / peak * 100)
+    return {
+        "ret": (cash - equity0) / equity0 * 100,
+        "n": len(trades),
+        "wr": (len(wins) / len(trades) * 100) if trades else 0.0,
+        "pf": (gw / gl) if gl > 0 else float("inf"),
+        "dd": dd,
+    }
+
+
+# Список конфигураций для перебора: (имя, отклонения от DEFAULT_CFG).
+SWEEP = [
+    ("текущий (агрессивный)", {}),
+    ("консервативный", dict(er_trend=0.35, donchian=20, vol_z_min=1.5,
+                            mom_overext=3.0, mom_rsi_max=75, rev_z=-2.0,
+                            rev_rsi3=15, rev_min_atr=1.0, risk_pct=1.5)),
+    ("только выкуп", dict(use_mom=False)),
+    ("только выкуп (строгий)", dict(use_mom=False, rev_z=-2.0, rev_rsi3=15,
+                                    rev_min_atr=1.0)),
+    ("только пробой", dict(use_rev=False)),
+    ("только пробой (строгий)", dict(use_rev=False, vol_z_min=2.0, donchian=20,
+                                     er_trend=0.4, mom_rsi_max=72)),
+    ("ER порог 0.35", dict(er_trend=0.35)),
+    ("объём z>=1.5", dict(vol_z_min=1.5)),
+    ("Donchian 20", dict(donchian=20)),
+    ("просадка z<=-2", dict(rev_z=-2.0, rev_rsi3=15)),
+    ("узкие стопы", dict(mom_stop_atr=1.5, rev_stop_atr=1.5)),
+    ("широкие стопы", dict(mom_stop_atr=3.0, rev_stop_atr=2.5)),
+    ("конс.+только выкуп", dict(use_mom=False, rev_z=-2.0, rev_rsi3=15,
+                               rev_min_atr=1.0, risk_pct=1.5)),
+    ("конс.+только пробой", dict(use_rev=False, vol_z_min=2.0, donchian=20,
+                                er_trend=0.4, mom_rsi_max=72, risk_pct=1.5)),
+]
+
+
+def run_sweep(data15, data1h, btc1h, equity, maxpos, pospct, fee, slip):
+    print(f"\nПеребор {len(SWEEP)} конфигураций (каждая — полный прогон, "
+          f"минута-две суммарно)…\n")
+    rows = []
+    for i, (name, over) in enumerate(SWEEP, 1):
+        cfg = {**DEFAULT_CFG, **over}
+        cash, trades, curve = backtest(data15, data1h, btc1h, equity, maxpos,
+                                       pospct, fee, slip, cfg=cfg)
+        m = metrics(equity, cash, trades, curve)
+        rows.append((name, m))
+        print(f"  [{i:2}/{len(SWEEP)}] {name:26} → {m['ret']:+7.1f}%  "
+              f"сделок {m['n']:4}  винрейт {m['wr']:4.0f}%  просадка {m['dd']:4.0f}%")
+    rows.sort(key=lambda r: -r[1]["ret"])
+    print(f"\n{'=' * 72}\n  ИТОГ — конфигурации от лучшей к худшей\n{'=' * 72}")
+    print(f"  {'конфигурация':26} {'доход':>8} {'сделок':>7} {'винрейт':>8} "
+          f"{'PF':>6} {'просадка':>9}")
+    print("  " + "-" * 68)
+    for name, m in rows:
+        pf = "inf" if m["pf"] == float("inf") else f"{m['pf']:.2f}"
+        print(f"  {name:26} {m['ret']:+7.1f}% {m['n']:7} {m['wr']:7.0f}% "
+              f"{pf:>6} {m['dd']:8.0f}%")
+    print("=" * 72)
+    best = rows[0]
+    if best[1]["ret"] > 0:
+        print(f"\n✅ Лучшая прибыльная: «{best[0]}» ({best[1]['ret']:+.1f}%, "
+              f"просадка {best[1]['dd']:.0f}%). Пришли таблицу — разберём.")
+    else:
+        print("\n⚠️  Ни одна конфигурация не прибыльна на этом периоде. "
+              "Честный вывод: у стратегии нет преимущества на 15m после комиссий. "
+              "Пришли таблицу — обсудим, что это значит и что делать.")
+
+
 # ─────────────────────────── Self-test ───────────────────────────
 
 def synth(days, seed, mu=0.0, vol=0.02, start=100.0):
@@ -500,6 +602,8 @@ def main():
     ap.add_argument("--fee", type=float, default=0.001)
     ap.add_argument("--slip", type=float, default=0.0005)
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--sweep", action="store_true",
+                    help="перебрать десятки конфигураций и вывести таблицу")
     args = ap.parse_args()
 
     if args.selftest:
@@ -521,6 +625,11 @@ def main():
         print("Не удалось загрузить данные. Проверь доступ к api.binance.com.")
         sys.exit(1)
     btc1h = data1h.get("BTCUSDT") or fetch_klines("BTCUSDT", "1h", args.days)
+
+    if args.sweep:
+        run_sweep(data15, data1h, btc1h, args.equity, args.max_positions,
+                  args.pos_pct, args.fee, args.slip)
+        return
 
     cash, trades, curve = backtest(data15, data1h, btc1h, args.equity,
                                    args.max_positions, args.pos_pct,
