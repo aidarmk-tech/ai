@@ -21,6 +21,7 @@ data class ScoreResult(
     val entryRisk: Int,
     val confidence: Int,
     val exhaustionRisk: Int,
+    val artificialRisk: Int,
     val level: SignalLevel,
     val opportunityLabel: String,
     val liquidityTier: LiquidityTier,
@@ -234,13 +235,22 @@ class PumpScoreCalculator @Inject constructor() {
         val exhaustionRisk = ExhaustionDetector.risk(r5m, r60, m?.cvdSlope ?: 0.0, tbr, spread)
         if (exhaustionRisk >= 70) risks.add("истощение импульса (риск %d)".format(exhaustionRisk))
 
-        // ── OpportunityLabel (ТЗ 0A.12 + патч §2/§4/§6) ──
+        // ── Artificial activity risk (патч §8) ──
+        val artificialRisk = ArtificialActivityDetector.risk(
+            m?.tradeCount30s ?: 0, m?.largestTradeShare, m?.top3TradeShare, m?.tinyTradeShare, r60
+        )
+        if (artificialRisk >= 70) risks.add("возможна накрутка активности (риск %d)".format(artificialRisk))
+
+        // ── OpportunityLabel (ТЗ 0A.12 + патч §2/§4/§6/§8) ──
         // Строгий EARLY_CLEAN gate: не одна сумма баллов, а независимые условия
         // цены/потока/ликвидности/контекста + tier-лимиты (патч §4/§7).
-        val earlyClean = qualifiesAsEarlyClean(c, m, ob, confidence, entryRisk, tier, veto, tradeGap)
+        val earlyClean = qualifiesAsEarlyClean(
+            c, m, ob, confidence, entryRisk, tier, veto, tradeGap, exhaustionRisk, artificialRisk
+        )
         val continuation = continuationGate(c, m)
         val label = when {
             confidence < 60 -> "DATA_INCOMPLETE"
+            artificialRisk >= 85 -> "POSSIBLE_ARTIFICIAL_ACTIVITY"
             exhaustionRisk >= 85 -> "TOO_LATE"
             exhaustionRisk >= 70 -> "EXHAUSTION_RISK"    // блокирует EARLY_CLEAN/CONFIRMED
             earlyClean -> "EARLY_CLEAN"
@@ -256,6 +266,7 @@ class PumpScoreCalculator @Inject constructor() {
             entryRisk = entryRisk,
             confidence = confidence,
             exhaustionRisk = exhaustionRisk,
+            artificialRisk = artificialRisk,
             level = level,
             opportunityLabel = label,
             liquidityTier = tier,
@@ -279,9 +290,12 @@ class PumpScoreCalculator @Inject constructor() {
         entryRisk: Int,
         tier: LiquidityTier,
         veto: Boolean,
-        tradeGap: Boolean
+        tradeGap: Boolean,
+        exhaustionRisk: Int,
+        artificialRisk: Int
     ): Boolean {
         if (veto || tradeGap) return false
+        if (exhaustionRisk >= 70 || artificialRisk >= 70) return false  // патч §6/§8
         if (confidence < 75 || entryRisk > 35) return false
         if (tier == LiquidityTier.D) return false            // §7.1: D только в Research
         // PRICE

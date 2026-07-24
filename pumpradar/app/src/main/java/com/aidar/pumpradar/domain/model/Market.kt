@@ -77,7 +77,11 @@ data class CandidateMetrics(
     val cvdSlope: Double,
     val volumeZ30s: Double?,   // null → NotReady (мало истории)
     val spreadBps: Double?,
-    val tradeGap: Boolean = false  // недавно обнаружен разрыв потока сделок (ТЗ 0A.7)
+    val tradeGap: Boolean = false, // недавно обнаружен разрыв потока сделок (ТЗ 0A.7)
+    // Распределение размеров сделок за 30с — для риска накрутки (патч §8).
+    val largestTradeShare: Double? = null,
+    val top3TradeShare: Double? = null,
+    val tinyTradeShare: Double? = null
 )
 
 /** Готовый живой сигнал для UI и уведомлений. */
@@ -88,6 +92,7 @@ data class LiveSignal(
     val entryRiskScore: Int = 0,  // 0A.10
     val confidenceScore: Int = 0, // 0A.11
     val exhaustionRiskScore: Int = 0, // патч §6
+    val artificialRiskScore: Int = 0, // патч §8
     val opportunityLabel: String = "WATCH", // 0A.12
     val liquidityTier: String = "C",        // 0A.9
     val level: String,

@@ -193,6 +193,7 @@ class MonitoringEngine @Inject constructor(
                 entryRiskScore = res.entryRisk,
                 confidenceScore = res.confidence,
                 exhaustionRiskScore = res.exhaustionRisk,
+                artificialRiskScore = res.artificialRisk,
                 opportunityLabel = label,
                 liquidityTier = res.liquidityTier.name,
                 level = res.level.name,

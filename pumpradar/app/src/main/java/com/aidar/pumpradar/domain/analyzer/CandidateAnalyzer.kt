@@ -42,6 +42,7 @@ class CandidateAnalyzer @Inject constructor() {
         const val MIN_BUCKETS = 6
         const val SHORT_BUCKETS = 60          // короткий baseline ~10 мин
         const val GAP_RECOVERY_MS = 60_000L   // окно «недавнего разрыва» (ТЗ 0A.7)
+        const val TINY_TRADE_QUOTE = 10.0     // сделка < 10 USDT считается «мелкой» (§8)
     }
 
     fun onAggTrade(t: AggTrade) = synchronized(lock) {
@@ -102,6 +103,8 @@ class CandidateAnalyzer @Inject constructor() {
 
             var buy30 = 0.0; var sell30 = 0.0; var count30 = 0
             var buy60 = 0.0; var sell60 = 0.0
+            var tinyCount = 0
+            val quotes30 = ArrayList<Double>()
             for (tr in trades) {
                 val age = now - tr.t
                 if (age <= 60_000) {
@@ -110,6 +113,8 @@ class CandidateAnalyzer @Inject constructor() {
                 if (age <= 30_000) {
                     if (tr.buy) buy30 += tr.quote else sell30 += tr.quote
                     count30++
+                    quotes30.add(tr.quote)
+                    if (tr.quote < TINY_TRADE_QUOTE) tinyCount++
                 }
             }
             val total30 = buy30 + sell30
@@ -126,6 +131,19 @@ class CandidateAnalyzer @Inject constructor() {
             val ready = count30 >= 3 && volumeZ != null
             val tradeGap = row.lastGapAt > 0 && now - row.lastGapAt < GAP_RECOVERY_MS
 
+            // Распределение размеров сделок за 30с (патч §8).
+            val largestShare: Double?
+            val top3Share: Double?
+            val tinyShare: Double?
+            if (total30 > MathUtils.EPSILON && quotes30.isNotEmpty()) {
+                val sorted = quotes30.sortedDescending()
+                largestShare = sorted[0] / total30
+                top3Share = sorted.take(3).sum() / total30
+                tinyShare = tinyCount.toDouble() / quotes30.size
+            } else {
+                largestShare = null; top3Share = null; tinyShare = null
+            }
+
             CandidateMetrics(
                 ready = ready,
                 quoteVolume30s = total30,
@@ -136,7 +154,10 @@ class CandidateAnalyzer @Inject constructor() {
                 cvdSlope = cvdSlope,
                 volumeZ30s = volumeZ,
                 spreadBps = spreadBps,
-                tradeGap = tradeGap
+                tradeGap = tradeGap,
+                largestTradeShare = largestShare,
+                top3TradeShare = top3Share,
+                tinyTradeShare = tinyShare
             )
         }
 
