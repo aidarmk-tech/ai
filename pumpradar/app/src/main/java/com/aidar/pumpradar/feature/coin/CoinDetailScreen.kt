@@ -75,6 +75,7 @@ fun CoinDetailScreen(
                     Line("Импульс", "${s.score}/100")
                     Line("Риск входа", "${s.entryRiskScore}/100")
                     Line("Достоверность", "${s.confidenceScore}/100")
+                    Line("Риск истощения", "${s.exhaustionRiskScore}/100")
                     Line("Ликвидность", "Tier ${s.liquidityTier}")
                     Line("Цена", "%.6g".format(s.price))
                     Line("Рост 1 мин", s.return60s?.let { "%+.2f%%".format(it) } ?: "—")

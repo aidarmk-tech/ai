@@ -87,6 +87,7 @@ data class LiveSignal(
     val score: Int,               // = Impulse Score (0A.1); имя сохранено для совместимости
     val entryRiskScore: Int = 0,  // 0A.10
     val confidenceScore: Int = 0, // 0A.11
+    val exhaustionRiskScore: Int = 0, // патч §6
     val opportunityLabel: String = "WATCH", // 0A.12
     val liquidityTier: String = "C",        // 0A.9
     val level: String,
