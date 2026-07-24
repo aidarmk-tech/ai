@@ -64,3 +64,26 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
         db.execSQL("CREATE INDEX IF NOT EXISTS index_training_snapshots_snapshotTime ON training_snapshots(snapshotTime)")
     }
 }
+
+/**
+ * v3 → v4 (двусторонний анализ): таблица signal_trajectories — секундная
+ * траектория best bid/ask после сигнала для пересчёта исхода по временной
+ * последовательности. Только новая таблица, существующие данные не затронуты.
+ */
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS signal_trajectories (
+                signalId TEXT NOT NULL PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                referencePrice REAL NOT NULL,
+                startedAt INTEGER NOT NULL,
+                resolutionMs INTEGER NOT NULL,
+                pointCount INTEGER NOT NULL,
+                pointsJson TEXT NOT NULL
+            )
+            """.trimIndent()
+        )
+    }
+}

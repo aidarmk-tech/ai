@@ -5,6 +5,7 @@ import com.aidar.pumpradar.data.local.AppEventEntity
 import com.aidar.pumpradar.data.local.OutcomeDao
 import com.aidar.pumpradar.data.local.SignalDao
 import com.aidar.pumpradar.data.local.SignalEntity
+import com.aidar.pumpradar.data.local.SignalTrajectoryDao
 import com.aidar.pumpradar.data.preferences.MonitoringProfile
 import com.aidar.pumpradar.data.preferences.SettingsRepository
 import com.aidar.pumpradar.data.remote.BinanceRest
@@ -59,6 +60,7 @@ class MonitoringEngine @Inject constructor(
     private val clusterer: MarketEventClusterer,
     private val clusterDao: ClusterDao,
     private val trainingSnapshotDao: TrainingSnapshotDao,
+    private val signalTrajectoryDao: SignalTrajectoryDao,
     private val outcomeTracker: OutcomeTracker,
     private val controller: MonitoringController,
     private val settings: SettingsRepository,
@@ -244,8 +246,11 @@ class MonitoringEngine @Inject constructor(
         // Сэмплирование не-сработавших окон для датасета (патч §14).
         sampleNonTriggered(evaluated, now)
 
-        // Отслеживание исходов ранее выданных сигналов.
-        outcomeTracker.onTick(System.currentTimeMillis(), scanner::priceOf, outcomeDao)
+        // Отслеживание исходов ранее выданных сигналов + секундная траектория bid/ask.
+        outcomeTracker.onTick(
+            System.currentTimeMillis(), scanner::priceOf, outcomeDao,
+            bookOf = { analyzer.bestBidAsk(it) }, trajectoryDao = signalTrajectoryDao
+        )
     }
 
     /**

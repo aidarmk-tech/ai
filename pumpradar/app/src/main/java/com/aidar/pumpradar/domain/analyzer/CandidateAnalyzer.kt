@@ -88,6 +88,12 @@ class CandidateAnalyzer @Inject constructor() {
 
     fun isSeeded(symbol: String): Boolean = synchronized(lock) { rows[symbol]?.seeded == true }
 
+    /** Текущие лучшие bid/ask по последнему bookTicker (для секундной траектории). */
+    fun bestBidAsk(symbol: String): Pair<Double, Double>? = synchronized(lock) {
+        val b = rows[symbol]?.book ?: return null
+        if (b.bidPrice > 0.0 && b.askPrice > 0.0) b.bidPrice to b.askPrice else null
+    }
+
     /** Оставить только активные символы, остальные освободить. */
     fun retain(symbols: Set<String>) = synchronized(lock) {
         rows.keys.retainAll(symbols)

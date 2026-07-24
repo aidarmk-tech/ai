@@ -6,9 +6,10 @@ import androidx.room.RoomDatabase
 @Database(
     entities = [
         SignalEntity::class, OutcomeEntity::class, AppEventEntity::class,
-        MarketEventClusterEntity::class, TrainingSnapshotEntity::class
+        MarketEventClusterEntity::class, TrainingSnapshotEntity::class,
+        SignalTrajectoryEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class PumpRadarDatabase : RoomDatabase() {
@@ -17,4 +18,5 @@ abstract class PumpRadarDatabase : RoomDatabase() {
     abstract fun appEventDao(): AppEventDao
     abstract fun clusterDao(): ClusterDao
     abstract fun trainingSnapshotDao(): TrainingSnapshotDao
+    abstract fun signalTrajectoryDao(): SignalTrajectoryDao
 }

@@ -127,6 +127,23 @@ data class SignalOutcome(
     val confidenceScore: Int?
 )
 
+/**
+ * Секундная траектория best bid/ask после сигнала (двусторонний анализ).
+ * Позволяет пересчитать исход по временной последовательности с учётом стороны
+ * стакана, спреда, проскальзывания и задержки реакции — то, что нельзя
+ * восстановить из 5 контрольных точек. Пишется только для новых событий.
+ */
+@Entity(tableName = "signal_trajectories")
+data class SignalTrajectoryEntity(
+    @PrimaryKey val signalId: String,
+    val symbol: String,
+    val referencePrice: Double,
+    val startedAt: Long,
+    val resolutionMs: Long,        // номинальный шаг сэмплирования (~тик движка)
+    val pointCount: Int,
+    val pointsJson: String         // сериализованный List<TrajectoryPoint>
+)
+
 @Entity(tableName = "app_events")
 data class AppEventEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,

@@ -95,6 +95,24 @@ interface ClusterDao {
 }
 
 @Dao
+interface SignalTrajectoryDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(trajectory: SignalTrajectoryEntity)
+
+    @Query("SELECT * FROM signal_trajectories WHERE signalId = :id")
+    suspend fun get(id: String): SignalTrajectoryEntity?
+
+    @Query("SELECT * FROM signal_trajectories WHERE signalId IN (:ids)")
+    suspend fun forIds(ids: List<String>): List<SignalTrajectoryEntity>
+
+    @Query("SELECT COUNT(*) FROM signal_trajectories")
+    suspend fun count(): Int
+
+    @Query("DELETE FROM signal_trajectories WHERE startedAt < :olderThan")
+    suspend fun deleteOlderThan(olderThan: Long)
+}
+
+@Dao
 interface AppEventDao {
     @Insert
     suspend fun insert(event: AppEventEntity)
