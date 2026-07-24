@@ -430,6 +430,7 @@ class MonitoringEngine @Inject constructor(
             return15s = c.return15s, return60s = c.return60s, return5m = c.return5m,
             acceleration = c.acceleration, volumeZ30s = live.volumeZ30s,
             takerBuyRatio30s = live.takerBuyRatio30s, cvd30s = live.cvd30s,
+            cvdSlope = metrics?.cvdSlope,
             spreadBps = live.spreadBps, obi10 = live.obi10, slippagePercent = live.slippagePercent,
             relativeStrengthVsBtc = c.relativeStrengthVsBtc,
             largestTradeShare = metrics?.largestTradeShare, top3TradeShare = metrics?.top3TradeShare,

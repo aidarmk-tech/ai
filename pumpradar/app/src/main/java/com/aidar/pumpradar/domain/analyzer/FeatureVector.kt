@@ -16,6 +16,7 @@ data class FeatureVector(
     val volumeZ30s: Double? = null,
     val takerBuyRatio30s: Double? = null,
     val cvd30s: Double? = null,
+    val cvdSlope: Double? = null,        // наклон CVD (для диагностики exhaustion, item 5)
     val spreadBps: Double? = null,
     val obi10: Double? = null,
     val slippagePercent: Double? = null,

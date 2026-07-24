@@ -37,7 +37,9 @@ import com.aidar.pumpradar.data.preferences.SettingsRepository
 import com.aidar.pumpradar.domain.analyzer.CalibrationEval
 import com.aidar.pumpradar.domain.analyzer.ExecutableOutcome
 import com.aidar.pumpradar.domain.analyzer.ExecutablePathEval
+import com.aidar.pumpradar.domain.analyzer.FeatureVector
 import com.aidar.pumpradar.domain.analyzer.OutcomeClassifier
+import com.aidar.pumpradar.domain.analyzer.RiskDiagnostics
 import com.aidar.pumpradar.domain.analyzer.StrategyLab
 import com.aidar.pumpradar.domain.analyzer.TradeSide
 import com.aidar.pumpradar.domain.model.TrajectoryPoint
@@ -57,13 +59,17 @@ data class SnapCounts(
     val allTypesLabeled: Boolean get() = triggered > 0 && nearMiss > 0 && randomNormal > 0
 }
 
+/** Агрегат сработавших риск-условий по последним снимкам (item 5). */
+data class RiskDiag(val total: Int = 0, val counts: Map<String, Int> = emptyMap())
+
 @HiltViewModel
 class StatisticsViewModel @Inject constructor(
     dao: OutcomeDao,
     shadowDao: ShadowSignalDao,
     snapshotDao: TrainingSnapshotDao,
     snapshotOutcomeDao: SnapshotOutcomeDao,
-    settings: SettingsRepository
+    settings: SettingsRepository,
+    private val json: Json
 ) : ViewModel() {
     val outcomes = dao.completedWithSignal(200).stateIn(
         viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
@@ -84,6 +90,23 @@ class StatisticsViewModel @Inject constructor(
             )
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SnapCounts())
+    val riskDiag = flow {
+        val snaps = snapshotDao.recent(500)
+        val counts = LinkedHashMap<String, Int>()
+        RiskDiagnostics.CONDITION_IDS.forEach { counts[it] = 0 }
+        var n = 0
+        for (s in snaps) {
+            val fv = runCatching {
+                json.decodeFromString(FeatureVector.serializer(), s.featureVectorJson)
+            }.getOrNull() ?: continue
+            n++
+            RiskDiagnostics.firedConditions(
+                fv.return5m, fv.return60s, fv.cvdSlope, fv.takerBuyRatio30s,
+                fv.spreadBps, fv.slippagePercent, fv.volumeZ30s, fv.obi10
+            ).forEach { (k, v) -> if (v) counts[k] = (counts[k] ?: 0) + 1 }
+        }
+        emit(RiskDiag(n, counts))
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), RiskDiag())
     val calibrating = settings.settings.map { it.calibrationMode }.stateIn(
         viewModelScope, SharingStarted.WhileSubscribed(5000), false
     )
@@ -95,6 +118,7 @@ fun StatisticsScreen(vm: StatisticsViewModel = hiltViewModel()) {
     val shadows by vm.shadows.collectAsStateWithLifecycle()
     val noTradeCount by vm.noTradeCount.collectAsStateWithLifecycle()
     val snapCounts by vm.snapCounts.collectAsStateWithLifecycle()
+    val riskDiag by vm.riskDiag.collectAsStateWithLifecycle()
     val calibrating by vm.calibrating.collectAsStateWithLifecycle()
 
     Column(
@@ -221,6 +245,9 @@ fun StatisticsScreen(vm: StatisticsViewModel = hiltViewModel()) {
 
         // Двусторонний анализ (LONG + SHORT) — теневые стратегии.
         TwoSidedCard(shadows, noTradeCount)
+
+        // Диагностика риск-условий (item 5): какие условия срабатывают и как часто.
+        RiskDiagnosticsCard(riskDiag)
 
         // Готовность к ML (item 10): гейт из нескольких обязательных условий.
         Card(Modifier.fillMaxWidth()) {
@@ -529,6 +556,28 @@ private fun TwoSidedCard(shadows: List<ShadowSignalEntity>, noTradeCount: Int) {
                 "задержки реакции 0.5/2/5 c; иначе — грубая оценка по 5 точкам. Это не доходность: " +
                 "сделки не исполнялись.",
                 style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+@Composable
+private fun RiskDiagnosticsCard(diag: RiskDiag) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Диагностика риск-условий", fontWeight = FontWeight.Bold)
+            if (diag.total == 0) {
+                Text("Пока нет снимков для диагностики.", style = MaterialTheme.typography.bodySmall)
+                return@Column
+            }
+            Text("По ${diag.total} последним снимкам: как часто срабатывает каждое под-условие " +
+                "риск-скоров. Если условия истощения (EXH_*) почти не срабатывают — понятно, " +
+                "почему exhaustionRisk ≈ 0 на чистых событиях (жёсткая фильтрация EARLY_CLEAN).",
+                style = MaterialTheme.typography.bodySmall)
+            RiskDiagnostics.CONDITION_IDS.forEach { id ->
+                val c = diag.counts[id] ?: 0
+                val rate = c * 100.0 / diag.total
+                StatRow(RiskDiagnostics.ru(id), "%d/%d (%.0f%%)".format(c, diag.total, rate))
+            }
         }
     }
 }
