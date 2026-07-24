@@ -22,6 +22,7 @@ data class ScoreResult(
     val confidence: Int,
     val exhaustionRisk: Int,
     val artificialRisk: Int,
+    val marketWideRisk: Int,
     val level: SignalLevel,
     val opportunityLabel: String,
     val liquidityTier: LiquidityTier,
@@ -43,7 +44,8 @@ class PumpScoreCalculator @Inject constructor() {
         c: Candidate,
         m: CandidateMetrics?,
         ob: OrderBookMetrics?,
-        feedAgeMillis: Long? = null
+        feedAgeMillis: Long? = null,
+        marketWideRisk: Int = 0
     ): ScoreResult {
         val reasons = mutableListOf<String>()
         val risks = mutableListOf<String>()
@@ -241,11 +243,15 @@ class PumpScoreCalculator @Inject constructor() {
         )
         if (artificialRisk >= 70) risks.add("возможна накрутка активности (риск %d)".format(artificialRisk))
 
+        // ── Market-wide move risk (патч §9) ──
+        if (marketWideRisk >= 70) risks.add("движется весь рынок (риск %d)".format(marketWideRisk))
+
         // ── OpportunityLabel (ТЗ 0A.12 + патч §2/§4/§6/§8) ──
         // Строгий EARLY_CLEAN gate: не одна сумма баллов, а независимые условия
         // цены/потока/ликвидности/контекста + tier-лимиты (патч §4/§7).
         val earlyClean = qualifiesAsEarlyClean(
-            c, m, ob, confidence, entryRisk, tier, veto, tradeGap, exhaustionRisk, artificialRisk
+            c, m, ob, confidence, entryRisk, tier, veto, tradeGap,
+            exhaustionRisk, artificialRisk, marketWideRisk
         )
         val continuation = continuationGate(c, m)
         val label = when {
@@ -267,6 +273,7 @@ class PumpScoreCalculator @Inject constructor() {
             confidence = confidence,
             exhaustionRisk = exhaustionRisk,
             artificialRisk = artificialRisk,
+            marketWideRisk = marketWideRisk,
             level = level,
             opportunityLabel = label,
             liquidityTier = tier,
@@ -292,10 +299,11 @@ class PumpScoreCalculator @Inject constructor() {
         veto: Boolean,
         tradeGap: Boolean,
         exhaustionRisk: Int,
-        artificialRisk: Int
+        artificialRisk: Int,
+        marketWideRisk: Int
     ): Boolean {
         if (veto || tradeGap) return false
-        if (exhaustionRisk >= 70 || artificialRisk >= 70) return false  // патч §6/§8
+        if (exhaustionRisk >= 70 || artificialRisk >= 70 || marketWideRisk >= 70) return false  // §6/§8/§9
         if (confidence < 75 || entryRisk > 35) return false
         if (tier == LiquidityTier.D) return false            // §7.1: D только в Research
         // PRICE

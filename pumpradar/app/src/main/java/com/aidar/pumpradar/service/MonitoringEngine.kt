@@ -12,6 +12,7 @@ import com.aidar.pumpradar.data.remote.CandidateStream
 import com.aidar.pumpradar.data.remote.MarketStream
 import com.aidar.pumpradar.domain.analyzer.CandidateAnalyzer
 import com.aidar.pumpradar.domain.analyzer.MarketScanner
+import com.aidar.pumpradar.domain.analyzer.MarketWideMoveDetector
 import com.aidar.pumpradar.domain.analyzer.OrderBookAnalyzer
 import com.aidar.pumpradar.domain.analyzer.OutcomeTracker
 import com.aidar.pumpradar.domain.analyzer.PumpScoreCalculator
@@ -166,12 +167,16 @@ class MonitoringEngine @Inject constructor(
 
         val lastMsg = controller.stats.value.lastMessageAt
         val feedAge = if (lastMsg > 0) now - lastMsg else null
+        val marketCtx = scanner.marketContext(now)   // патч §9
 
         val signals = ArrayList<LiveSignal>(deep.size)
         for (c in deep) {
             val metrics = analyzer.metrics(c.symbol)
             val ob = orderBook.metrics(c.symbol, cfg.slippageTestAmountUsdt)
-            val res = scoreCalc.score(c, metrics, ob, feedAge)
+            val marketWideRisk = MarketWideMoveDetector.risk(
+                c.return60s ?: 0.0, marketCtx.medianReturn60s, marketCtx.breadthPositive
+            )
+            val res = scoreCalc.score(c, metrics, ob, feedAge, marketWideRisk)
             // RETEST (патч §5): подтверждение возобновления после отката перекрывает метку.
             val retest = retestDetector.update(
                 c.symbol,
@@ -194,6 +199,7 @@ class MonitoringEngine @Inject constructor(
                 confidenceScore = res.confidence,
                 exhaustionRiskScore = res.exhaustionRisk,
                 artificialRiskScore = res.artificialRisk,
+                marketWideRiskScore = res.marketWideRisk,
                 opportunityLabel = label,
                 liquidityTier = res.liquidityTier.name,
                 level = res.level.name,

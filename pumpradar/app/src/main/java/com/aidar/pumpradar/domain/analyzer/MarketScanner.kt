@@ -43,6 +43,20 @@ class MarketScanner @Inject constructor() {
 
     fun symbolCount(): Int = synchronized(lock) { rows.size }
 
+    /** Рыночный контекст: медиана return60s и доля растущих пар (патч §9). */
+    data class MarketContext(val medianReturn60s: Double, val breadthPositive: Double)
+
+    fun marketContext(now: Long = System.currentTimeMillis()): MarketContext = synchronized(lock) {
+        val rets = ArrayList<Double>()
+        for (row in rows.values) {
+            if (row.price <= 0.0) continue
+            val r = returnOverWindow(row, 60_000, now) ?: continue
+            rets.add(r)
+        }
+        if (rets.isEmpty()) return MarketContext(0.0, 0.5)
+        MarketContext(MathUtils.median(rets), rets.count { it > 0.0 }.toDouble() / rets.size)
+    }
+
     fun priceOf(symbol: String): Double? = synchronized(lock) {
         rows[symbol]?.price?.takeIf { it > 0.0 }
     }

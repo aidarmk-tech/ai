@@ -93,6 +93,7 @@ data class LiveSignal(
     val confidenceScore: Int = 0, // 0A.11
     val exhaustionRiskScore: Int = 0, // патч §6
     val artificialRiskScore: Int = 0, // патч §8
+    val marketWideRiskScore: Int = 0, // патч §9
     val opportunityLabel: String = "WATCH", // 0A.12
     val liquidityTier: String = "C",        // 0A.9
     val level: String,
