@@ -28,26 +28,43 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.aidar.pumpradar.data.local.OutcomeDao
+import com.aidar.pumpradar.data.local.ShadowSignalDao
+import com.aidar.pumpradar.data.local.ShadowSignalEntity
 import com.aidar.pumpradar.data.local.SignalOutcome
+import com.aidar.pumpradar.data.local.TrainingSnapshotDao
 import com.aidar.pumpradar.data.preferences.SettingsRepository
 import com.aidar.pumpradar.domain.analyzer.CalibrationEval
 import com.aidar.pumpradar.domain.analyzer.ExecutableOutcome
+import com.aidar.pumpradar.domain.analyzer.ExecutablePathEval
 import com.aidar.pumpradar.domain.analyzer.OutcomeClassifier
 import com.aidar.pumpradar.domain.analyzer.StrategyLab
+import com.aidar.pumpradar.domain.analyzer.TradeSide
+import com.aidar.pumpradar.domain.model.TrajectoryPoint
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
 import javax.inject.Inject
 
 @HiltViewModel
 class StatisticsViewModel @Inject constructor(
     dao: OutcomeDao,
+    shadowDao: ShadowSignalDao,
+    snapshotDao: TrainingSnapshotDao,
     settings: SettingsRepository
 ) : ViewModel() {
     val outcomes = dao.completedWithSignal(200).stateIn(
         viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
     )
+    val shadows = shadowDao.completed(300).stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
+    )
+    val noTradeCount = flow {
+        emit(snapshotDao.countByType("NEAR_MISS") + snapshotDao.countByType("RANDOM_NORMAL"))
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
     val calibrating = settings.settings.map { it.calibrationMode }.stateIn(
         viewModelScope, SharingStarted.WhileSubscribed(5000), false
     )
@@ -56,6 +73,8 @@ class StatisticsViewModel @Inject constructor(
 @Composable
 fun StatisticsScreen(vm: StatisticsViewModel = hiltViewModel()) {
     val outcomes by vm.outcomes.collectAsStateWithLifecycle()
+    val shadows by vm.shadows.collectAsStateWithLifecycle()
+    val noTradeCount by vm.noTradeCount.collectAsStateWithLifecycle()
     val calibrating by vm.calibrating.collectAsStateWithLifecycle()
 
     Column(
@@ -177,6 +196,9 @@ fun StatisticsScreen(vm: StatisticsViewModel = hiltViewModel()) {
                 }
             }
         }
+
+        // Двусторонний анализ (LONG + SHORT) — теневые стратегии.
+        TwoSidedCard(shadows, noTradeCount)
 
         // Готовность к ML (патч §18): не обучать, пока мало данных.
         Card(Modifier.fillMaxWidth()) {
@@ -366,6 +388,108 @@ private fun categoryRu(c: String): String = when (c) {
 
 private fun horizonLabel(sec: Int): String = when (sec) {
     60 -> "1м"; 180 -> "3м"; 300 -> "5м"; else -> "15м"
+}
+
+// ── Двусторонний анализ (LONG + SHORT), теневые стратегии ──
+
+private class ShadowStrategyDef(val id: String, val ru: String, val side: TradeSide)
+
+private val SHADOW_STRATEGIES = listOf(
+    ShadowStrategyDef("LONG_CONTINUATION", "LONG продолжение (ретест)", TradeSide.LONG),
+    ShadowStrategyDef("PUMP_REVERSAL_SHORT", "SHORT разворот пампа", TradeSide.SHORT),
+    ShadowStrategyDef("DUMP_CONTINUATION_SHORT", "SHORT продолжение дампа", TradeSide.SHORT),
+    ShadowStrategyDef("DUMP_REBOUND_LONG", "LONG отскок от дна", TradeSide.LONG)
+)
+
+// Зеркальные цели: LONG «+T% раньше −S%», SHORT «−T% раньше +S%» (те же числа).
+private val MIRROR_TARGETS = listOf(0.75 to 0.50, 1.00 to 0.75, 2.00 to 1.00)
+
+private val TRAJECTORY_JSON = Json { ignoreUnknownKeys = true }
+
+private fun shadowReturns(s: ShadowSignalEntity): List<Pair<Int, Double>> =
+    CalibrationEval.checkpointReturns(
+        s.referencePrice, s.price30s, s.price1m, s.price3m, s.price5m, s.price15m
+    )
+
+private fun shadowTargetHit(s: ShadowSignalEntity, target: Double, stop: Double, side: TradeSide): Boolean {
+    val rets = shadowReturns(s)
+    if (rets.isEmpty()) return false
+    return CalibrationEval.targetBeforeStop(rets, target, stop, 900, side)
+}
+
+private fun shadowPath(s: ShadowSignalEntity): List<ExecutablePathEval.PathPoint>? {
+    val pj = s.pointsJson ?: return null
+    val pts = runCatching {
+        TRAJECTORY_JSON.decodeFromString(ListSerializer(TrajectoryPoint.serializer()), pj)
+    }.getOrNull() ?: return null
+    if (pts.isEmpty()) return null
+    return pts.map { ExecutablePathEval.PathPoint(it.offsetMs, it.bid, it.ask) }
+}
+
+/** Executable «цель раньше стопа» по секундной траектории при задержке реакции. */
+private fun shadowExecTarget(
+    s: ShadowSignalEntity, target: Double, stop: Double, side: TradeSide, reactionMs: Long
+): ExecutablePathEval.Hit? {
+    val path = shadowPath(s) ?: return null
+    return ExecutablePathEval.evaluate(
+        path, side, target, stop, reactionMs, horizonMs = 300_000, slippagePercent = s.slippagePercent
+    ).hit
+}
+
+@Composable
+private fun TwoSidedCard(shadows: List<ShadowSignalEntity>, noTradeCount: Int) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Двусторонний анализ (LONG + SHORT)", fontWeight = FontWeight.Bold)
+            Text("Теневые стратегии (SHADOW/PAPER): ордера не отправляются, API-ключ не нужен. " +
+                "Текущий LONG-сигнал не переворачивается — SHORT считается отдельно.",
+                style = MaterialTheme.typography.bodySmall)
+
+            SHADOW_STRATEGIES.forEach { def ->
+                val list = shadows.filter { it.strategy == def.id }
+                Text(def.ru, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                if (list.size < 5) {
+                    StatRow("Событий", "мало данных (${list.size})")
+                } else {
+                    StatRow("Событий", list.size.toString())
+                    // Зеркальные цели по 5 контрольным точкам (грубая нижняя граница).
+                    MIRROR_TARGETS.forEach { (t, stop) ->
+                        val hits = list.count { shadowTargetHit(it, t, stop, def.side) }
+                        val rate = hits * 100.0 / list.size
+                        val lbl = if (def.side == TradeSide.LONG)
+                            "+%.2f%% / −%.2f%%".format(t, stop)
+                        else "−%.2f%% / +%.2f%%".format(t, stop)
+                        StatRow("  $lbl", "%d/%d (%.0f%%)".format(hits, list.size, rate))
+                    }
+                    // Executable по секундной траектории (порядок уровней, bid/ask, спред,
+                    // проскальзывание) при разных задержках реакции — только где траектория есть.
+                    val withPath = list.filter { it.pointsJson != null }
+                    if (withPath.size >= 5) {
+                        val (t, stop) = MIRROR_TARGETS[1]  // средняя цель 1.00/0.75
+                        ExecutablePathEval.REACTION_MS.forEach { rms ->
+                            val hits = withPath.count {
+                                shadowExecTarget(it, t, stop, def.side, rms) == ExecutablePathEval.Hit.TARGET
+                            }
+                            val rate = hits * 100.0 / withPath.size
+                            StatRow("  exec %.1fс".format(rms / 1000.0),
+                                "%d/%d (%.0f%%)".format(hits, withPath.size, rate))
+                        }
+                    } else {
+                        Text("  секундная траектория копится (${withPath.size}/5) — " +
+                            "executable по времени появится позже",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+
+            StatRow("NO_TRADE (окна без сигнала)", noTradeCount.toString())
+            Text("Вывод не по одним MFE/MAE: где есть секундная траектория — считается порядок " +
+                "достижения уровней (executable) с учётом best bid/ask, спреда, проскальзывания и " +
+                "задержки реакции 0.5/2/5 c; иначе — грубая оценка по 5 точкам. Это не доходность: " +
+                "сделки не исполнялись.",
+                style = MaterialTheme.typography.bodySmall)
+        }
+    }
 }
 
 @Composable
