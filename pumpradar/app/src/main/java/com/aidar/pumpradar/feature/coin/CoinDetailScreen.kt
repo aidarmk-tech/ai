@@ -89,6 +89,13 @@ fun CoinDetailScreen(
                     Line("Проскальзывание 10 USDT", s.slippagePercent?.let { "%.2f%%".format(it) } ?: "—")
                 }
             }
+            if (s.opportunityLabel == "LONG_CONTINUATION") {
+                Text(
+                    "Сигнал означает один из двух сценариев: ранний сильный импульс либо восстановление спроса после контролируемого отката. Цель 5–7% не гарантируется — движение нужно сопровождать вручную.",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Bold
+                )
+            }
             if (s.liquidityTier == "D") {
                 Text("⚠ Tier D — низкая ликвидность, ВЫСОКИЙ РИСК МАНИПУЛЯЦИИ. " +
                     "Такую монету легко накачать одним кошельком.",
@@ -102,8 +109,9 @@ fun CoinDetailScreen(
     }
 }
 
-/** Человекочитаемая метка возможности (ТЗ 0A.12). */
+/** Человекочитаемая метка возможности. */
 internal fun labelRu(label: String): String = when (label) {
+    "LONG_CONTINUATION" -> "РАННИЙ ИМПУЛЬС / ВОССТАНОВЛЕНИЕ ПОСЛЕ ОТКАТА"
     "CONFIRMED", "CONFIRMED_CONTINUATION" -> "ПОДТВЕРЖДЁННОЕ ПРОДОЛЖЕНИЕ"
     "EARLY_CLEAN" -> "РАННИЙ ЧИСТЫЙ"
     "STRONG_BUT_RISKY" -> "СИЛЬНЫЙ, НО РИСКОВЫЙ"
