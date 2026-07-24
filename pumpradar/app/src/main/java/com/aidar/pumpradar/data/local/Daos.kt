@@ -113,6 +113,24 @@ interface SignalTrajectoryDao {
 }
 
 @Dao
+interface SnapshotOutcomeDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(outcome: SnapshotOutcomeEntity)
+
+    @Query("SELECT * FROM snapshot_outcomes WHERE snapshotId = :id")
+    suspend fun get(id: String): SnapshotOutcomeEntity?
+
+    @Query("SELECT COUNT(*) FROM snapshot_outcomes WHERE completed = 1")
+    suspend fun completedCount(): Int
+
+    @Query("SELECT COUNT(*) FROM snapshot_outcomes WHERE completed = 1 AND snapshotType = :type")
+    suspend fun completedCountByType(type: String): Int
+
+    @Query("DELETE FROM snapshot_outcomes WHERE createdAt < :olderThan")
+    suspend fun deleteOlderThan(olderThan: Long)
+}
+
+@Dao
 interface ShadowSignalDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(signal: ShadowSignalEntity)

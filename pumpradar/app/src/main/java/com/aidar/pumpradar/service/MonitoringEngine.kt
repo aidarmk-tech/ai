@@ -29,7 +29,9 @@ import com.aidar.pumpradar.domain.analyzer.PumpScoreCalculator
 import com.aidar.pumpradar.domain.analyzer.RetestDetector
 import com.aidar.pumpradar.domain.analyzer.ShadowOutcomeTracker
 import com.aidar.pumpradar.domain.analyzer.ShadowStrategyInput
+import com.aidar.pumpradar.domain.analyzer.SnapshotOutcomeTracker
 import com.aidar.pumpradar.data.local.ShadowSignalDao
+import com.aidar.pumpradar.data.local.SnapshotOutcomeDao
 import com.aidar.pumpradar.domain.model.Candidate
 import com.aidar.pumpradar.domain.model.CandidateMetrics
 import com.aidar.pumpradar.domain.model.LiquidityTier
@@ -69,6 +71,8 @@ class MonitoringEngine @Inject constructor(
     private val dumpReboundLong: DumpReboundLongDetector,
     private val shadowOutcomeTracker: ShadowOutcomeTracker,
     private val shadowSignalDao: ShadowSignalDao,
+    private val snapshotOutcomeTracker: SnapshotOutcomeTracker,
+    private val snapshotOutcomeDao: SnapshotOutcomeDao,
     private val clusterer: MarketEventClusterer,
     private val clusterDao: ClusterDao,
     private val trainingSnapshotDao: TrainingSnapshotDao,
@@ -296,6 +300,10 @@ class MonitoringEngine @Inject constructor(
         shadowOutcomeTracker.onTick(
             System.currentTimeMillis(), scanner::priceOf, { analyzer.bestBidAsk(it) }, shadowSignalDao
         )
+        // Разметка исходов всех снимков признаков (barrier-последовательность).
+        snapshotOutcomeTracker.onTick(
+            System.currentTimeMillis(), scanner::priceOf, { analyzer.bestBidAsk(it) }, snapshotOutcomeDao
+        )
     }
 
     /**
@@ -424,10 +432,11 @@ class MonitoringEngine @Inject constructor(
             exhaustionRisk = live.exhaustionRiskScore, artificialRisk = live.artificialRiskScore,
             marketWideRisk = live.marketWideRiskScore
         )
+        val snapshotId = UUID.randomUUID().toString()
         runCatching {
             trainingSnapshotDao.insert(
                 TrainingSnapshotEntity(
-                    id = UUID.randomUUID().toString(),
+                    id = snapshotId,
                     signalId = signalId, eventId = eventId, symbol = c.symbol,
                     snapshotTime = now, snapshotType = type,
                     algorithmVersion = ALGO_VERSION, liquidityTier = live.liquidityTier,
@@ -436,6 +445,8 @@ class MonitoringEngine @Inject constructor(
                 )
             )
         }
+        // Разметка исхода для КАЖДОГО снимка (в т.ч. NEAR_MISS/RANDOM_NORMAL).
+        snapshotOutcomeTracker.track(snapshotOutcomeDao, snapshotId, c.symbol, type, c.price, now)
     }
 
     /**
@@ -558,6 +569,7 @@ class MonitoringEngine @Inject constructor(
         clusterer.clear()
         outcomeTracker.clear()
         shadowOutcomeTracker.clear()
+        snapshotOutcomeTracker.clear()
         retention.clear()
         synchronized(warmed) { warmed.clear() }
         scopeRef = null

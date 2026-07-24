@@ -145,6 +145,54 @@ data class SignalTrajectoryEntity(
 )
 
 /**
+ * Исход снимка признаков для supervised learning — для ЛЮБОГО типа снимка
+ * (TRIGGERED / NEAR_MISS / RANDOM_NORMAL). Хранит контрольные точки, MFE/MAE и
+ * временную последовательность достижения барьеров цель/стоп с классификацией
+ * порядка (см. [com.aidar.pumpradar.domain.analyzer.BarrierAnalyzer]).
+ *
+ * Раньше исход был только у TRIGGERED (через signalId), из-за чего NEAR_MISS и
+ * RANDOM_NORMAL оставались без разметки. Здесь ключ — snapshotId, поэтому размечены
+ * все снимки.
+ */
+@Entity(tableName = "snapshot_outcomes")
+data class SnapshotOutcomeEntity(
+    @PrimaryKey val snapshotId: String,
+    val symbol: String,
+    val snapshotType: String,
+    val referencePrice: Double,
+    val createdAt: Long,
+    val price30s: Double? = null,
+    val price1m: Double? = null,
+    val price3m: Double? = null,
+    val price5m: Double? = null,
+    val price15m: Double? = null,
+    val mfePercent: Double? = null,
+    val maePercent: Double? = null,
+    val pointCount: Int = 0,
+    // Время первого касания барьеров, мс от снимка (null — не достигнут).
+    val long075TargetTime: Long? = null,
+    val long050StopTime: Long? = null,
+    val long100TargetTime: Long? = null,
+    val long075StopTime: Long? = null,
+    val long200TargetTime: Long? = null,
+    val long100StopTime: Long? = null,
+    val short075TargetTime: Long? = null,
+    val short050StopTime: Long? = null,
+    val short100TargetTime: Long? = null,
+    val short075StopTime: Long? = null,
+    val short200TargetTime: Long? = null,
+    val short100StopTime: Long? = null,
+    // Классификация порядка: TARGET_FIRST/STOP_FIRST/BOTH_SAME_INTERVAL/NEITHER/DATA_INCOMPLETE.
+    val firstBarrierLong075_050: String? = null,
+    val firstBarrierLong100_075: String? = null,
+    val firstBarrierLong200_100: String? = null,
+    val firstBarrierShort075_050: String? = null,
+    val firstBarrierShort100_075: String? = null,
+    val firstBarrierShort200_100: String? = null,
+    val completed: Boolean = false
+)
+
+/**
  * Теневой (SHADOW/PAPER) сигнал двусторонней стратегии. Не связан с LONG-историей
  * и уведомлениями: отдельная разметка исходов по стратегиям
  * (LONG_CONTINUATION / PUMP_REVERSAL_SHORT / DUMP_CONTINUATION_SHORT /

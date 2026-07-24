@@ -115,3 +115,37 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
         db.execSQL("CREATE INDEX IF NOT EXISTS index_shadow_signals_createdAt ON shadow_signals(createdAt)")
     }
 }
+
+/**
+ * v4 → v5 (supervised dataset): таблица snapshot_outcomes — исход ЛЮБОГО снимка
+ * (TRIGGERED / NEAR_MISS / RANDOM_NORMAL) с временем достижения барьеров и
+ * классификацией порядка (first-barrier). Только новая таблица, существующие
+ * данные не затронуты.
+ */
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS snapshot_outcomes (
+                snapshotId TEXT NOT NULL PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                snapshotType TEXT NOT NULL,
+                referencePrice REAL NOT NULL,
+                createdAt INTEGER NOT NULL,
+                price30s REAL, price1m REAL, price3m REAL, price5m REAL, price15m REAL,
+                mfePercent REAL, maePercent REAL,
+                pointCount INTEGER NOT NULL,
+                long075TargetTime INTEGER, long050StopTime INTEGER,
+                long100TargetTime INTEGER, long075StopTime INTEGER,
+                long200TargetTime INTEGER, long100StopTime INTEGER,
+                short075TargetTime INTEGER, short050StopTime INTEGER,
+                short100TargetTime INTEGER, short075StopTime INTEGER,
+                short200TargetTime INTEGER, short100StopTime INTEGER,
+                firstBarrierLong075_050 TEXT, firstBarrierLong100_075 TEXT, firstBarrierLong200_100 TEXT,
+                firstBarrierShort075_050 TEXT, firstBarrierShort100_075 TEXT, firstBarrierShort200_100 TEXT,
+                completed INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
+    }
+}

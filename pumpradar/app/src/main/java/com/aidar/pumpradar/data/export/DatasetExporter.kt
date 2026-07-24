@@ -4,8 +4,8 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.content.FileProvider
 import com.aidar.pumpradar.data.local.OutcomeDao
+import com.aidar.pumpradar.data.local.SnapshotOutcomeDao
 import com.aidar.pumpradar.data.local.TrainingSnapshotDao
-import com.aidar.pumpradar.domain.analyzer.FeatureVector
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -23,41 +23,28 @@ import javax.inject.Singleton
 class DatasetExporter @Inject constructor(
     @ApplicationContext private val context: Context,
     private val snapshotDao: TrainingSnapshotDao,
+    private val snapshotOutcomeDao: SnapshotOutcomeDao,
     private val outcomeDao: OutcomeDao,
     private val json: Json
 ) {
-    private val header = listOf(
-        "snapshotType", "symbol", "snapshotTime", "eventId", "opportunityLabel",
-        "liquidityTier", "algorithmVersion",
-        "return15s", "return60s", "return5m", "acceleration", "volumeZ30s",
-        "takerBuyRatio30s", "cvd30s", "spreadBps", "obi10", "slippagePercent",
-        "relativeStrengthVsBtc", "largestTradeShare", "top3TradeShare", "tinyTradeShare",
-        "impulse", "entryRisk", "confidence", "exhaustionRisk", "artificialRisk", "marketWideRisk",
-        "mfePercent", "maePercent", "outcomeCompleted"
-    )
-
     suspend fun exportCsv(): File = withContext(Dispatchers.IO) {
         val snaps = snapshotDao.all()
         val sb = StringBuilder()
-        sb.append(header.joinToString(",")).append('\n')
+        sb.append(CsvFormat.encodeRow(DatasetRows.HEADER, DatasetRows.COLUMN_COUNT)).append("\r\n")
         for (s in snaps) {
-            val fv = runCatching {
-                json.decodeFromString(FeatureVector.serializer(), s.featureVectorJson)
-            }.getOrNull() ?: FeatureVector()
-            val outcome = s.signalId?.let { runCatching { outcomeDao.get(it) }.getOrNull() }
-            val row = listOf(
-                s.snapshotType, s.symbol, s.snapshotTime.toString(), s.eventId ?: "",
-                s.opportunityLabel, s.liquidityTier, s.algorithmVersion,
-                n(fv.return15s), n(fv.return60s), n(fv.return5m), n(fv.acceleration),
-                n(fv.volumeZ30s), n(fv.takerBuyRatio30s), n(fv.cvd30s), n(fv.spreadBps),
-                n(fv.obi10), n(fv.slippagePercent), n(fv.relativeStrengthVsBtc),
-                n(fv.largestTradeShare), n(fv.top3TradeShare), n(fv.tinyTradeShare),
-                fv.impulse.toString(), fv.entryRisk.toString(), fv.confidence.toString(),
-                fv.exhaustionRisk.toString(), fv.artificialRisk.toString(), fv.marketWideRisk.toString(),
-                n(outcome?.mfePercent), n(outcome?.maePercent),
-                (outcome?.completed == true).toString()
-            )
-            sb.append(row.joinToString(",")).append('\n')
+            // Исход берём по snapshotId (работает и для NEAR_MISS/RANDOM_NORMAL),
+            // с откатом на legacy-outcome сигнала для старых записей.
+            val so = runCatching { snapshotOutcomeDao.get(s.id) }.getOrNull()
+            val legacy = if (so == null) {
+                s.signalId?.let { runCatching { outcomeDao.get(it) }.getOrNull() }
+            } else null
+            val view = when {
+                so != null -> DatasetRows.OutcomeView(so.mfePercent, so.maePercent, so.completed)
+                legacy != null -> DatasetRows.OutcomeView(legacy.mfePercent, legacy.maePercent, legacy.completed)
+                else -> null
+            }
+            sb.append(CsvFormat.encodeRow(DatasetRows.buildRow(json, s, view), DatasetRows.COLUMN_COUNT))
+                .append("\r\n")
         }
         val dir = context.getExternalFilesDir(null) ?: context.filesDir
         val file = File(dir, "pumpradar_dataset.csv")
@@ -73,6 +60,4 @@ class DatasetExporter @Inject constructor(
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
     }
-
-    private fun n(v: Double?): String = v?.let { "%.6f".format(it) } ?: ""
 }
