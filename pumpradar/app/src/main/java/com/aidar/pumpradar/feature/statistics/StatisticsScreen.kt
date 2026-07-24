@@ -24,6 +24,7 @@ import androidx.lifecycle.viewModelScope
 import com.aidar.pumpradar.data.local.OutcomeDao
 import com.aidar.pumpradar.data.local.SignalOutcome
 import com.aidar.pumpradar.data.preferences.SettingsRepository
+import com.aidar.pumpradar.domain.analyzer.ExecutableOutcome
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.map
@@ -101,6 +102,23 @@ fun StatisticsScreen(vm: StatisticsViewModel = hiltViewModel()) {
                 StatRow("Достигли +2% раньше −1%", s.successLabel)
                 StatRow("Медиана MFE (макс. рост)", s.medianMfe)
                 StatRow("Медиана MAE (макс. просадка)", s.medianMae)
+            }
+        }
+
+        // Исполнимый исход (executable) — честнее last price (ТЗ 0A.13).
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Исполнимый исход (executable)", fontWeight = FontWeight.Bold)
+                val total = outcomes.size
+                val success = outcomes.count { successfulExecutable(it) }
+                val rate = if (total > 0) success * 100.0 / total else 0.0
+                StatRow("+2% раньше −1% (с издержками)", "%d (%.0f%%)".format(success, rate))
+                StatRow("Медиана MFE executable", median(outcomes.mapNotNull { execMfe(it) }))
+                StatRow("Медиана MAE executable", median(outcomes.mapNotNull { execMae(it) }))
+                Text("Вход по ask + проскальзывание, выход по bid, минус издержки " +
+                    "(комиссия 10 bps/сторона, доп. проскальзывание 5 bps). Спред/проскальзывание " +
+                    "взяты на момент сигнала. Консервативная оценка, а не факт сделки.",
+                    style = MaterialTheme.typography.bodySmall)
             }
         }
 
@@ -182,6 +200,16 @@ private fun successful(o: SignalOutcome): Boolean {
     val mae = o.maePercent ?: return false
     return mfe >= 2.0 && mae > -1.0
 }
+
+// Executable-оценка (ТЗ 0A.13) — логика в ExecutableOutcome (тестируется отдельно).
+private fun execMfe(o: SignalOutcome): Double? =
+    ExecutableOutcome.mfe(o.mfePercent, o.spreadBps, o.slippagePercent)
+
+private fun execMae(o: SignalOutcome): Double? =
+    ExecutableOutcome.mae(o.maePercent, o.spreadBps, o.slippagePercent)
+
+private fun successfulExecutable(o: SignalOutcome): Boolean =
+    ExecutableOutcome.successful(o.mfePercent, o.maePercent, o.spreadBps, o.slippagePercent)
 
 private fun pct(v: Double?): String = v?.let { "%+.2f%%".format(it) } ?: "—"
 

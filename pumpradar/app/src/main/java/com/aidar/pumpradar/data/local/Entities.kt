@@ -66,7 +66,9 @@ data class SignalOutcome(
     val createdAt: Long,
     val mfePercent: Double?,
     val maePercent: Double?,
-    val timeToMfeSeconds: Long?
+    val timeToMfeSeconds: Long?,
+    val spreadBps: Double?,        // спред на момент сигнала — для executable-оценки (0A.13)
+    val slippagePercent: Double?   // проскальзывание на момент сигнала
 )
 
 @Entity(tableName = "app_events")

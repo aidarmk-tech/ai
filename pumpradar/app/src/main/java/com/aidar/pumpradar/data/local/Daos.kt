@@ -48,7 +48,8 @@ interface OutcomeDao {
         """
         SELECT s.symbol AS symbol, s.level AS level, s.score AS score,
                s.createdAt AS createdAt, o.mfePercent AS mfePercent,
-               o.maePercent AS maePercent, o.timeToMfeSeconds AS timeToMfeSeconds
+               o.maePercent AS maePercent, o.timeToMfeSeconds AS timeToMfeSeconds,
+               s.spreadBps AS spreadBps, s.slippagePercent AS slippagePercent
         FROM outcomes o JOIN signals s ON s.id = o.signalId
         WHERE o.completed = 1
         ORDER BY s.createdAt DESC
