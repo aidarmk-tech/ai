@@ -15,20 +15,35 @@ object CalibrationEval {
 
     /**
      * @param returnsByTime пары (времяСек, доходность%) — только доступные точки.
+     * @param side LONG: цель = рост +target%, стоп = падение −stop%.
+     *             SHORT (зеркально): цель = падение −target%, стоп = рост +stop%.
      * @return true, если цель достигнута на точке не позже первой точки стопа.
+     *
+     * Доходности везде считаются от опорной цены (long-семантика ряда): для SHORT
+     * знаки инвертируются внутри, а не в вызывающем коде — так один и тот же ряд
+     * контрольных точек оценивается для обеих сторон.
      */
     fun targetBeforeStop(
         returnsByTime: List<Pair<Int, Double>>,
         targetPercent: Double,
         stopPercent: Double,
-        horizonSec: Int
+        horizonSec: Int,
+        side: TradeSide = TradeSide.LONG
     ): Boolean {
         val within = returnsByTime.filter { it.first <= horizonSec }.sortedBy { it.first }
         var firstTarget = Int.MAX_VALUE
         var firstStop = Int.MAX_VALUE
         for ((t, r) in within) {
-            if (firstTarget == Int.MAX_VALUE && r >= targetPercent) firstTarget = t
-            if (firstStop == Int.MAX_VALUE && r <= -stopPercent) firstStop = t
+            val targetHit = when (side) {
+                TradeSide.LONG -> r >= targetPercent
+                TradeSide.SHORT -> r <= -targetPercent
+            }
+            val stopHit = when (side) {
+                TradeSide.LONG -> r <= -stopPercent
+                TradeSide.SHORT -> r >= stopPercent
+            }
+            if (firstTarget == Int.MAX_VALUE && targetHit) firstTarget = t
+            if (firstStop == Int.MAX_VALUE && stopHit) firstStop = t
         }
         return firstTarget != Int.MAX_VALUE && firstTarget <= firstStop
     }
