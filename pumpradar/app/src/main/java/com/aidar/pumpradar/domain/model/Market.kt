@@ -87,7 +87,10 @@ data class CandidateMetrics(
     val tradesPerSecond: Double,
     val takerBuyRatio30s: Double?,
     val takerBuyRatio15s: Double? = null,   // короткое окно 15с для теневых стратегий (item 7)
+    val takerBuyRatio5s: Double? = null,    // окно 5с (item 4: тренд давления покупателей)
     val cvd30s: Double,
+    val cvd15s: Double = 0.0,               // item 4
+    val cvd5s: Double = 0.0,                // item 4
     val cvdSlope: Double,
     val volumeZ30s: Double?,   // null → NotReady (мало истории)
     val spreadBps: Double?,
