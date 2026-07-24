@@ -3,13 +3,12 @@ package com.aidar.pumpradar.domain.analyzer
 import kotlin.math.abs
 
 /**
- * Ужесточённое решение по LONG-сигналу (items 1,2,3,5,7,8). Чистая логика,
- * тестируется отдельно. Заменяет «высокий Impulse Score = хороший вход» на
- * пользовательские состояния и жёсткие запреты, снижающие ложные сигналы.
+ * Решение по LONG-сигналу. Поддерживает два качественно разных сценария:
+ * 1) раннее продолжение импульса;
+ * 2) восстановление после контролируемого отката, пока цена ещё ниже вершины.
  *
- * Состояния (item 7): LONG_CONTINUATION / STRONG_BUT_LATE / EXHAUSTION_RISK /
- * REVERSAL_WATCH / NO_TRADE. SHORT здесь НЕ открывается — только пометка
- * REVERSAL_WATCH; подтверждение шорта — в PumpReversalShortDetector (SHADOW).
+ * Оба сценария возвращают LONG_CONTINUATION, поэтому существующий движок и
+ * уведомления начинают использовать новую логику без изменения архитектуры.
  */
 object LongSignalDecider {
 
@@ -19,9 +18,8 @@ object LongSignalDecider {
     const val REVERSAL_WATCH = "REVERSAL_WATCH"
     const val NO_TRADE = "NO_TRADE"
 
-    /** Признаки вершины (item 6), считаются PeakTracker'ом. */
     data class PeakFeatures(
-        val distanceFromLocalHighPct: Double = 0.0,   // % ниже локального максимума (0 = на максимуме)
+        val distanceFromLocalHighPct: Double = 0.0,
         val secondsSinceLocalHigh: Long = 0,
         val pullbackFromHighPct: Double = 0.0,
         val failedHighAttempts: Int = 0,
@@ -43,16 +41,16 @@ object LongSignalDecider {
         val slippagePercent: Double?,
         val impulseScore: Int,
         val dataFresh: Boolean,
-        val hardVeto: Boolean,                 // hard veto из PumpScoreCalculator
-        val buyerPressureDeclining: Boolean,   // item 4 (BuyerPressureTracker)
-        val newHighWithoutCvdHigh: Boolean,    // item 5 (цена обновила максимум, CVD — нет)
+        val hardVeto: Boolean,
+        val buyerPressureDeclining: Boolean,
+        val newHighWithoutCvdHigh: Boolean,
         val peak: PeakFeatures = PeakFeatures(),
-        val repeatBlocked: Boolean = false     // item 10 (governor)
+        val repeatBlocked: Boolean = false
     )
 
     data class Decision(
         val label: String,
-        val maxTargetPercent: Double,          // до какой цели допускаем (1.0 обычно, 3.0 при строгих условиях)
+        val maxTargetPercent: Double,
         val entryRisk: Int,
         val exhaustionRisk: Int,
         val priceProgressEfficiency: Double,
@@ -68,65 +66,70 @@ object LongSignalDecider {
         val relBtc = i.relativeStrengthVsBtc ?: -1.0
         val volZ = i.volumeZ30s ?: 0.0
         val spread = i.spreadBps ?: Double.MAX_VALUE
+        val slip = i.slippagePercent
 
-        // Объём сам по себе НЕ положительный признак (item 3): эффективность
-        // продвижения цены на единицу объёма.
         val ppe = abs(r15) / maxOf(abs(i.quoteVolume30s), cfg.epsilon)
-
         val exhaustionRisk = exhaustionRisk(i, cfg, reasons)
-        val entryRisk = entryRisk(i, cfg)
+        val entryRisk = entryRisk(i)
 
-        // Ликвидность: null проскальзывание = недостаточная глубина → не ok.
-        val liquidityOk = i.dataFresh && spread <= cfg.maxSpreadBps &&
-            i.slippagePercent != null && i.slippagePercent <= cfg.maxSlippagePercent
+        val liquidityOk = i.dataFresh &&
+            spread <= cfg.maxSpreadBps &&
+            slip != null && slip <= cfg.maxSlippagePercent
 
-        // Поглощение (item 3): экстремальный объём при слабом продвижении цены/слабом потоке.
         val absorption = volZ > cfg.extremeVolumeZ &&
             (r15 < cfg.minReturn15s || tbr < cfg.minTakerBuyForExtremeVol)
-        if (absorption) reasons.add("поглощение: объём есть, цена не идёт")
+        if (absorption) reasons.add("поглощение: объём есть, цена не продвигается")
 
-        // Жёсткие запреты LONG (item 2).
-        val hardLongVeto = i.hardVeto ||
-            tbr < cfg.hardVetoTakerBuyRatio30s ||
-            r15 < cfg.minReturn15s ||
-            r60 < cfg.minReturn60s ||
+        val strictGate = passesStrictGate(i, cfg)
+        val retestGate = passesRetestGate(i, cfg)
+
+        // Общие запреты действуют для раннего входа и для ретеста.
+        val commonHardVeto = i.hardVeto ||
             r5m > cfg.maxReturn5m ||
             i.cvd30s <= 0.0 ||
             i.cvdSlope < 0.0 ||
             !liquidityOk ||
             absorption ||
-            // Вершина (item 6).
-            i.peak.distanceFromLocalHighPct > cfg.maxDistanceFromHighPct ||
             i.peak.lowerHighDetected ||
             !i.peak.breakoutLevelHeld ||
             i.peak.failedHighAttempts >= cfg.maxFailedHighAttempts
 
-        // REVERSAL_WATCH (item 8): давление покупателей выдыхается.
         val reversalWatch = tbr <= cfg.reversalTakerBuyRatio30s &&
             r60 <= cfg.reversalReturn60s && i.buyerPressureDeclining
 
-        // Приоритет состояний.
+        val highPotential = strictGate &&
+            r60 >= cfg.minReturn60sForHighPotential &&
+            r5m <= cfg.maxReturn5mForHighTarget &&
+            relBtc >= cfg.minRelStrengthForHighTarget
+
         val label = when {
             i.repeatBlocked -> NO_TRADE
             exhaustionRisk >= cfg.exhaustionBlock -> EXHAUSTION_RISK
             reversalWatch -> REVERSAL_WATCH
-            hardLongVeto -> if (i.impulseScore >= 70) STRONG_BUT_LATE else NO_TRADE
-            passesStrictGate(i, cfg) -> LONG_CONTINUATION
+            commonHardVeto -> if (i.impulseScore >= 70) STRONG_BUT_LATE else NO_TRADE
+            retestGate -> LONG_CONTINUATION
+            strictGate -> LONG_CONTINUATION
             i.impulseScore >= 70 -> STRONG_BUT_LATE
             else -> NO_TRADE
         }
 
-        // Целевой ярус: до 3% только при самых строгих условиях (item 1).
-        val highTargetOk = r5m <= cfg.maxReturn5mForHighTarget &&
-            relBtc >= cfg.minRelStrengthForHighTarget
-        val maxTarget = if (label == LONG_CONTINUATION && highTargetOk)
-            (cfg.extraTargetsPercent.maxOrNull() ?: cfg.primaryTargetPercent)
-        else cfg.primaryTargetPercent
+        val maxTarget = when {
+            label != LONG_CONTINUATION -> cfg.primaryTargetPercent
+            highPotential -> {
+                reasons.add("ранняя фаза: потенциал 5–7% только при сохранении потока")
+                cfg.highPotentialTargetPercent
+            }
+            retestGate -> {
+                reasons.add("контролируемый откат: цена восстановилась до повторной вершины")
+                5.0
+            }
+            else -> cfg.primaryTargetPercent
+        }
 
         return Decision(label, maxTarget, entryRisk, exhaustionRisk, ppe, reasons)
     }
 
-    /** Строгий гейт LONG_CONTINUATION (item 1). */
+    /** Ранний импульс: сильный поток, небольшое уже пройденное движение, цена у high. */
     private fun passesStrictGate(i: Input, cfg: SignalConfig): Boolean {
         val r15 = i.return15s ?: return false
         val r60 = i.return60s ?: return false
@@ -146,17 +149,50 @@ object LongSignalDecider {
             spread <= cfg.maxSpreadBps &&
             slip <= cfg.maxSlippagePercent &&
             !i.hardVeto &&
-            // объёмные запреты (item 2)
             !((i.volumeZ30s ?: 0.0) > cfg.extremeVolumeZ && r15 < cfg.minReturn15s) &&
             !((i.volumeZ30s ?: 0.0) > cfg.extremeVolumeZ && tbr < cfg.minTakerBuyForExtremeVol) &&
-            // вершина (item 6)
             i.peak.distanceFromLocalHighPct <= cfg.maxDistanceFromHighPct &&
             !i.peak.lowerHighDetected &&
             i.peak.breakoutLevelHeld &&
             i.peak.failedHighAttempts < cfg.maxFailedHighAttempts
     }
 
-    /** Exhaustion Risk (item 5): реально варьируется по признакам истощения. */
+    /**
+     * Ретест: был откат 0.8–3.5%, текущая цена уже отскочила минимум на 0.35 п.п.,
+     * но всё ещё находится ниже старой вершины. Поток покупателей снова положительный.
+     */
+    private fun passesRetestGate(i: Input, cfg: SignalConfig): Boolean {
+        val r15 = i.return15s ?: return false
+        val r5m = i.return5m ?: return false
+        val tbr = i.takerBuyRatio30s ?: return false
+        val relBtc = i.relativeStrengthVsBtc ?: return false
+        val spread = i.spreadBps ?: return false
+        val slip = i.slippagePercent ?: return false
+        val pullback = i.peak.pullbackFromHighPct
+        val distance = i.peak.distanceFromLocalHighPct
+        val recovered = pullback - distance
+
+        return pullback in cfg.minRetestPullbackPercent..cfg.maxRetestPullbackPercent &&
+            distance >= 0.15 &&
+            distance <= cfg.maxRetestDistanceFromHighPercent &&
+            recovered >= cfg.minRetestRecoveryPercent &&
+            r15 >= cfg.minRetestReturn15s &&
+            r5m <= cfg.maxReturn5m &&
+            tbr >= cfg.minRetestTakerBuyRatio30s &&
+            i.cvd30s > 0.0 &&
+            i.cvdSlope > 0.0 &&
+            relBtc > cfg.minRelativeStrengthVsBtc &&
+            i.dataFresh &&
+            spread <= cfg.maxSpreadBps &&
+            slip <= cfg.maxSlippagePercent &&
+            !i.hardVeto &&
+            !i.buyerPressureDeclining &&
+            !i.newHighWithoutCvdHigh &&
+            !i.peak.lowerHighDetected &&
+            i.peak.breakoutLevelHeld &&
+            i.peak.failedHighAttempts < cfg.maxFailedHighAttempts
+    }
+
     private fun exhaustionRisk(i: Input, cfg: SignalConfig, reasons: ArrayList<String>): Int {
         var r = 0.0
         val r60 = i.return60s ?: 0.0
@@ -168,13 +204,13 @@ object LongSignalDecider {
         if (i.peak.lowerHighDetected) { r += 15.0; reasons.add("lower high") }
         if ((i.spreadBps ?: 0.0) > 60.0) r += 10.0
         if (r5m >= 8.0) r += 15.0
-        // Огромный объём без продвижения цены.
-        if ((i.volumeZ30s ?: 0.0) > cfg.extremeVolumeZ && (i.return15s ?: 0.0) < cfg.minReturn15s) r += 15.0
+        if ((i.volumeZ30s ?: 0.0) > cfg.extremeVolumeZ &&
+            (i.return15s ?: 0.0) < cfg.minReturn15s
+        ) r += 15.0
         return r.coerceIn(0.0, 100.0).toInt()
     }
 
-    /** Entry Risk (item 5): поздняя стадия, удалённость/откат от максимума, ликвидность, повтор. */
-    private fun entryRisk(i: Input, cfg: SignalConfig): Int {
+    private fun entryRisk(i: Input): Int {
         var r = 0.0
         val r5m = i.return5m ?: 0.0
         r += when {
@@ -191,7 +227,7 @@ object LongSignalDecider {
         val slip = i.slippagePercent
         r += when {
             slip == null -> 15.0
-            else -> (slip / 1.0 * 15.0).coerceIn(0.0, 15.0)
+            else -> (slip * 15.0).coerceIn(0.0, 15.0)
         }
         if (i.repeatBlocked) r += 10.0
         return r.coerceIn(0.0, 100.0).toInt()
