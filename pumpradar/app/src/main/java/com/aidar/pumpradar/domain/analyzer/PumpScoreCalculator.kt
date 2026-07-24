@@ -229,13 +229,18 @@ class PumpScoreCalculator @Inject constructor() {
         val level = if (byImpulse.ordinal <= cap.ordinal) byImpulse else cap
         val strongAllowed = level.min >= SignalLevel.STRONG.min
 
-        // ── OpportunityLabel (ТЗ 0A.12) ──
+        // ── OpportunityLabel (ТЗ 0A.12 + патч §2/§4) ──
+        // Строгий EARLY_CLEAN gate: не одна сумма баллов, а независимые условия
+        // цены/потока/ликвидности/контекста + tier-лимиты (патч §4/§7).
+        val earlyClean = qualifiesAsEarlyClean(c, m, ob, confidence, entryRisk, tier, veto, tradeGap)
+        val continuation = continuationGate(c, m)
         val label = when {
             confidence < 60 -> "DATA_INCOMPLETE"
+            earlyClean -> "EARLY_CLEAN"
             entryRisk >= 70 -> "TOO_LATE"
-            impulseScore >= 70 && entryRisk < 40 && confidence >= 70 -> "CONFIRMED"
-            impulseScore >= 70 && entryRisk in 40..69 -> "STRONG_BUT_RISKY"
-            impulseScore >= 55 && entryRisk < 40 -> "EARLY_CLEAN"
+            impulseScore >= 70 && entryRisk >= 60 -> "STRONG_BUT_LATE"
+            impulseScore >= 70 && entryRisk in 40..59 -> "STRONG_BUT_RISKY"
+            impulseScore >= 70 && entryRisk < 40 && confidence >= 75 && continuation -> "CONFIRMED_CONTINUATION"
             else -> "WATCH"
         }
 
@@ -250,5 +255,60 @@ class PumpScoreCalculator @Inject constructor() {
             risks = risks,
             strongAllowed = strongAllowed
         )
+    }
+
+    /**
+     * Строгий EARLY_CLEAN gate (патч §4/§7). Требует одновременного подтверждения
+     * PRICE + FLOW + LIQUIDITY + CONTEXT и tier-лимитов по спреду/проскальзыванию.
+     * Признаки искусственной активности и общерыночного движения добавятся на
+     * этапах 3–4 патча и ужесточат этот gate.
+     */
+    private fun qualifiesAsEarlyClean(
+        c: Candidate,
+        m: CandidateMetrics?,
+        ob: OrderBookMetrics?,
+        confidence: Int,
+        entryRisk: Int,
+        tier: LiquidityTier,
+        veto: Boolean,
+        tradeGap: Boolean
+    ): Boolean {
+        if (veto || tradeGap) return false
+        if (confidence < 75 || entryRisk > 35) return false
+        if (tier == LiquidityTier.D) return false            // §7.1: D только в Research
+        // PRICE
+        val r60 = c.return60s ?: return false
+        if (r60 < 0.50 || r60 > 3.00) return false
+        if ((c.return5m ?: 0.0) >= 6.00) return false
+        // FLOW
+        val tbr = m?.takerBuyRatio30s ?: return false
+        if (tbr < 0.62) return false
+        if (m.cvd30s <= 0.0 || m.cvdSlope <= 0.0) return false
+        if (m.volumeZ30s == null) return false               // аномалия объёма готова
+        // LIQUIDITY (tier-лимиты §7.2)
+        val spread = ob?.spreadBps ?: return false
+        val slip = ob.buySlippagePercent ?: return false
+        val (spreadLimit, slipLimit) = when (tier) {
+            LiquidityTier.A -> 25.0 to 0.25
+            LiquidityTier.B -> 35.0 to 0.35
+            else -> 45.0 to 0.45                             // C
+        }
+        if (spread > spreadLimit || slip > slipLimit) return false
+        if (ob.obi10 < 0.05) return false
+        val minVol = when (tier) {
+            LiquidityTier.A -> 20_000.0
+            LiquidityTier.B -> 10_000.0
+            else -> 3_000.0
+        }
+        if (m.quoteVolume30s < minVol) return false
+        // CONTEXT
+        val rel = c.relativeStrengthVsBtc ?: return false
+        return rel > 0.0
+    }
+
+    /** Есть ли ещё потенциал продолжения (для CONFIRMED_CONTINUATION, патч §2). */
+    private fun continuationGate(c: Candidate, m: CandidateMetrics?): Boolean {
+        val tbr = m?.takerBuyRatio30s ?: return false
+        return m.cvdSlope > 0.0 && tbr >= 0.60 && (c.return5m ?: 0.0) < 8.0
     }
 }

@@ -161,9 +161,6 @@ class MonitoringEngine @Inject constructor(
             }
         }
 
-        val minLevel = runCatching { SignalLevel.valueOf(cfg.minimumNotificationLevel) }
-            .getOrDefault(SignalLevel.STRONG)
-
         val lastMsg = controller.stats.value.lastMessageAt
         val feedAge = if (lastMsg > 0) now - lastMsg else null
 
@@ -194,7 +191,7 @@ class MonitoringEngine @Inject constructor(
                 spark = downsample(scanner.recentPrices(c.symbol, 120), 40)
             )
             signals.add(live)
-            maybeEmit(c, live, minLevel)
+            maybeEmit(c, live)
         }
         signals.sortByDescending { it.score }
         controller.setLiveSignals(signals)
@@ -244,8 +241,9 @@ class MonitoringEngine @Inject constructor(
         }
     }
 
-    private suspend fun maybeEmit(c: Candidate, live: LiveSignal, minLevel: SignalLevel) {
+    private suspend fun maybeEmit(c: Candidate, live: LiveSignal) {
         val lvl = SignalLevel.valueOf(live.level)
+        // В историю/статистику пишем все EARLY+ (даже не-уведомляемые) — патч §3.
         if (lvl.ordinal < SignalLevel.EARLY.ordinal) return
         val now = System.currentTimeMillis()
         val prev = emitted[c.symbol]
@@ -257,13 +255,15 @@ class MonitoringEngine @Inject constructor(
         val id = UUID.randomUUID().toString()
         persistSignal(id, c, live)
         outcomeTracker.track(id, c.symbol, c.price)
-        if (lvl.ordinal >= minLevel.ordinal) {
-            val cfg = settings.settings.first()
-            // Системные уведомления по Tier D выключены вне режима «Исследовательский» (ТЗ 0A.9).
-            val tierDMuted = live.liquidityTier == "D" &&
-                cfg.monitoringProfile != MonitoringProfile.EXPLORE
-            // В режиме калибровки (ТЗ 0A.24) собираем историю без системных уведомлений.
-            if (!tierDMuted && !cfg.calibrationMode) notifier.maybeNotify(live, cfg.symbolCooldownMinutes)
+
+        // Уведомления только для основных категорий (патч §2/§3): по умолчанию
+        // EARLY_CLEAN и RETEST_CONFIRMED. STRONG-метки в уведомления не идут.
+        val cfg = settings.settings.first()
+        val notifyByLabel = live.opportunityLabel in NOTIFY_LABELS || cfg.notifyAllCategories
+        val tierDMuted = live.liquidityTier == "D" &&
+            cfg.monitoringProfile != MonitoringProfile.EXPLORE
+        if (notifyByLabel && !tierDMuted && !cfg.calibrationMode) {
+            notifier.maybeNotify(live, cfg.symbolCooldownMinutes)
         }
     }
 
@@ -335,6 +335,8 @@ class MonitoringEngine @Inject constructor(
     }
 
     private companion object {
+        // Метки, дающие системное уведомление по умолчанию (патч §3).
+        val NOTIFY_LABELS = setOf("EARLY_CLEAN", "RETEST_CONFIRMED")
         const val MAX_CANDIDATES = 20
         const val DEEP_CANDIDATES = 10
         const val DEPTH_CANDIDATES = 8

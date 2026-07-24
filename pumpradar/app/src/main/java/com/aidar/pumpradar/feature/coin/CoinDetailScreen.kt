@@ -101,13 +101,15 @@ fun CoinDetailScreen(
 
 /** Человекочитаемая метка возможности (ТЗ 0A.12). */
 internal fun labelRu(label: String): String = when (label) {
-    "CONFIRMED" -> "ПОДТВЕРЖДЁН"
+    "CONFIRMED", "CONFIRMED_CONTINUATION" -> "ПОДТВЕРЖДЁННОЕ ПРОДОЛЖЕНИЕ"
     "EARLY_CLEAN" -> "РАННИЙ ЧИСТЫЙ"
     "STRONG_BUT_RISKY" -> "СИЛЬНЫЙ, НО РИСКОВЫЙ"
+    "STRONG_BUT_LATE" -> "ПОЗДНИЙ ИМПУЛЬС"
     "TOO_LATE" -> "ПОЗДНО — НЕ ГНАТЬСЯ ЗА ЦЕНОЙ"
     "DATA_INCOMPLETE" -> "ДАННЫЕ НЕПОЛНЫЕ"
-    "RETEST" -> "РЕТЕСТ"
-    "EXHAUSTION" -> "ИСТОЩЕНИЕ"
+    "RETEST", "RETEST_CONFIRMED" -> "РЕТЕСТ ПОДТВЕРЖДЁН"
+    "EXHAUSTION", "EXHAUSTION_RISK" -> "РИСК ИСТОЩЕНИЯ"
+    "POSSIBLE_ARTIFICIAL_ACTIVITY" -> "ВОЗМОЖНА НАКРУТКА"
     "CANCELLED" -> "ОТМЕНЁН"
     "STALE" -> "УСТАРЕЛ"
     else -> "НАБЛЮДЕНИЕ"

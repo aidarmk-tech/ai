@@ -33,7 +33,8 @@ data class AppSettings(
     val symbolCooldownMinutes: Int = 15,
     val maxNotificationsPerHour: Int = 12,
     val showRiskDisclaimer: Boolean = true,
-    val calibrationMode: Boolean = false   // 0A.24: сбор без системных уведомлений
+    val calibrationMode: Boolean = false,  // 0A.24: сбор без системных уведомлений
+    val notifyAllCategories: Boolean = false  // патч §3: по умолчанию только EARLY_CLEAN/RETEST
 )
 
 @Singleton
@@ -52,6 +53,7 @@ class SettingsRepository @Inject constructor(
         val maxNotif = intPreferencesKey("maxNotificationsPerHour")
         val disclaimer = booleanPreferencesKey("showRiskDisclaimer")
         val calibration = booleanPreferencesKey("calibrationMode")
+        val notifyAll = booleanPreferencesKey("notifyAllCategories")
     }
 
     val settings: Flow<AppSettings> = store.data.map { p ->
@@ -66,7 +68,8 @@ class SettingsRepository @Inject constructor(
             symbolCooldownMinutes = p[Keys.cooldown] ?: 15,
             maxNotificationsPerHour = p[Keys.maxNotif] ?: 12,
             showRiskDisclaimer = p[Keys.disclaimer] ?: true,
-            calibrationMode = p[Keys.calibration] ?: false
+            calibrationMode = p[Keys.calibration] ?: false,
+            notifyAllCategories = p[Keys.notifyAll] ?: false
         )
     }
 
@@ -78,4 +81,5 @@ class SettingsRepository @Inject constructor(
     suspend fun setMinimumNotificationLevel(value: String) = store.edit { it[Keys.minNotif] = value }
     suspend fun setShowRiskDisclaimer(value: Boolean) = store.edit { it[Keys.disclaimer] = value }
     suspend fun setCalibrationMode(value: Boolean) = store.edit { it[Keys.calibration] = value }
+    suspend fun setNotifyAllCategories(value: Boolean) = store.edit { it[Keys.notifyAll] = value }
 }

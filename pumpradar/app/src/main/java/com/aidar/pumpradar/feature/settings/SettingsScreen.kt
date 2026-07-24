@@ -49,6 +49,7 @@ class SettingsViewModel @Inject constructor(
     fun setProfile(p: MonitoringProfile) = viewModelScope.launch { repo.setMonitoringProfile(p) }
     fun setDisclaimer(v: Boolean) = viewModelScope.launch { repo.setShowRiskDisclaimer(v) }
     fun setCalibration(v: Boolean) = viewModelScope.launch { repo.setCalibrationMode(v) }
+    fun setNotifyAll(v: Boolean) = viewModelScope.launch { repo.setNotifyAllCategories(v) }
 }
 
 @Composable
@@ -80,15 +81,18 @@ fun SettingsScreen(
         }
 
         Group("Уведомления") {
-            Text("Минимальный уровень сигнала", style = MaterialTheme.typography.bodyMedium)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("WATCH", "EARLY", "STRONG", "EXTREME").forEach { lvl ->
-                    FilterChip(
-                        selected = s.minimumNotificationLevel == lvl,
-                        onClick = { vm.setMinLevel(lvl) },
-                        label = { Text(lvl) }
-                    )
-                }
+            Text("По умолчанию системные уведомления приходят только по чистым " +
+                "категориям: РАННИЙ ЧИСТЫЙ и РЕТЕСТ ПОДТВЕРЖДЁН. Остальное видно " +
+                "в сканере и истории, но не шлётся (патч §3).",
+                style = MaterialTheme.typography.bodySmall)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Уведомлять по всем категориям", Modifier.weight(1f))
+                Switch(checked = s.notifyAllCategories, onCheckedChange = { vm.setNotifyAll(it) })
+            }
+            if (s.notifyAllCategories) {
+                Text("⚠ Включено больше категорий — заметно больше ложных сигналов.",
+                    style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
             }
         }
 

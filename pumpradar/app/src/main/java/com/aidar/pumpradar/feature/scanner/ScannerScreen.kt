@@ -122,9 +122,10 @@ private fun LevelChip(level: String, stage: String) {
 }
 
 private fun labelColor(label: String): Color = when (label) {
-    "CONFIRMED" -> ColorStrong
+    "CONFIRMED", "CONFIRMED_CONTINUATION", "RETEST", "RETEST_CONFIRMED" -> ColorStrong
     "EARLY_CLEAN" -> ColorEarly
-    "STRONG_BUT_RISKY", "TOO_LATE", "EXHAUSTION" -> ColorExtreme
+    "STRONG_BUT_RISKY", "STRONG_BUT_LATE", "TOO_LATE", "EXHAUSTION",
+    "EXHAUSTION_RISK", "POSSIBLE_ARTIFICIAL_ACTIVITY" -> ColorExtreme
     "DATA_INCOMPLETE", "STALE", "CANCELLED" -> ColorNormal
     else -> ColorWatch
 }
