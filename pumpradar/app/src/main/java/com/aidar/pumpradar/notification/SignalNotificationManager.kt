@@ -13,10 +13,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * Уведомления о сигналах с антиспамом (ТЗ раздел 23.3): кулдаун на символ,
- * повторно только при переходе на более высокий уровень.
- */
+/** Уведомления о сигналах с антиспамом и понятным описанием ручного сценария. */
 @Singleton
 class SignalNotificationManager @Inject constructor(
     @ApplicationContext private val context: Context
@@ -41,17 +38,27 @@ class SignalNotificationManager @Inject constructor(
         lastBySymbol[signal.symbol] = Last(levelOrd, now)
 
         val emoji = when (signal.opportunityLabel) {
-            "TOO_LATE", "STRONG_BUT_RISKY", "EXHAUSTION" -> "🔴"
-            "CONFIRMED" -> "🟢"; "EARLY_CLEAN" -> "🟠"; else -> "🔵"
+            "LONG_CONTINUATION" -> "🟢"
+            "TOO_LATE", "STRONG_BUT_RISKY", "EXHAUSTION", "EXHAUSTION_RISK" -> "🔴"
+            "CONFIRMED", "CONFIRMED_CONTINUATION", "RETEST_CONFIRMED" -> "🟣"
+            "EARLY_CLEAN" -> "🟠"
+            else -> "🔵"
         }
-        // Уведомление начинается с OpportunityLabel (ТЗ 0A.12), не с одного score.
         val title = "$emoji ${labelRu(signal.opportunityLabel)} — ${signal.symbol}"
         val body = buildString {
             append("Импульс %d · Риск %d · Достоверн. %d".format(
                 signal.score, signal.entryRiskScore, signal.confidenceScore))
             signal.return60s?.let { append(" · 1м %+.1f%%".format(it)) }
+            if (signal.opportunityLabel == "LONG_CONTINUATION") {
+                append(" · проверить вход вручную")
+            }
         }.ifBlank { "Рыночная аномалия" }
         val expanded = buildString {
+            if (signal.opportunityLabel == "LONG_CONTINUATION") {
+                append("Сценарий: ранний импульс либо восстановление после отката.\n")
+                append("Не входить, если цена уже резко ушла выше уведомления.\n")
+                append("Потенциал 5–7% не является гарантией.\n")
+            }
             if (signal.reasons.isNotEmpty()) {
                 append("Причины:\n")
                 signal.reasons.forEach { append("• $it\n") }
@@ -69,7 +76,8 @@ class SignalNotificationManager @Inject constructor(
                 .setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val channel = if (signal.level == "EXTREME") NotificationChannels.RISK else NotificationChannels.SIGNALS
+        val channel = if (signal.level == "EXTREME") NotificationChannels.RISK
+        else NotificationChannels.SIGNALS
         val notif = NotificationCompat.Builder(context, channel)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentTitle(title)
@@ -79,7 +87,7 @@ class SignalNotificationManager @Inject constructor(
             .setAutoCancel(true)
             .build()
         return try {
-            NotificationManagerCompat.from(context).notify(idSeq++ , notif)
+            NotificationManagerCompat.from(context).notify(idSeq++, notif)
             true
         } catch (e: SecurityException) {
             false
@@ -89,6 +97,10 @@ class SignalNotificationManager @Inject constructor(
     fun reset() = lastBySymbol.clear()
 
     private fun levelOrdinal(level: String): Int = when (level) {
-        "WATCH" -> 1; "EARLY" -> 2; "STRONG" -> 3; "EXTREME" -> 4; else -> 0
+        "WATCH" -> 1
+        "EARLY" -> 2
+        "STRONG" -> 3
+        "EXTREME" -> 4
+        else -> 0
     }
 }
