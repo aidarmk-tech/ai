@@ -68,7 +68,6 @@ object LongSignalDecider {
         val relBtc = i.relativeStrengthVsBtc ?: -1.0
         val volZ = i.volumeZ30s ?: 0.0
         val spread = i.spreadBps ?: Double.MAX_VALUE
-        val slip = i.slippagePercent ?: 0.0
 
         // Объём сам по себе НЕ положительный признак (item 3): эффективность
         // продвижения цены на единицу объёма.
@@ -77,7 +76,9 @@ object LongSignalDecider {
         val exhaustionRisk = exhaustionRisk(i, cfg, reasons)
         val entryRisk = entryRisk(i, cfg)
 
-        val liquidityOk = i.dataFresh && spread <= cfg.maxSpreadBps && slip <= cfg.maxSlippagePercent
+        // Ликвидность: null проскальзывание = недостаточная глубина → не ok.
+        val liquidityOk = i.dataFresh && spread <= cfg.maxSpreadBps &&
+            i.slippagePercent != null && i.slippagePercent <= cfg.maxSlippagePercent
 
         // Поглощение (item 3): экстремальный объём при слабом продвижении цены/слабом потоке.
         val absorption = volZ > cfg.extremeVolumeZ &&

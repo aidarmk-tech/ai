@@ -21,10 +21,15 @@ import com.aidar.pumpradar.domain.analyzer.MarketEventClusterer
 import com.aidar.pumpradar.domain.analyzer.MarketScanner
 import com.aidar.pumpradar.domain.analyzer.MarketWideMoveDetector
 import com.aidar.pumpradar.domain.analyzer.OrderBookAnalyzer
+import com.aidar.pumpradar.domain.analyzer.BuyerPressure
 import com.aidar.pumpradar.domain.analyzer.DumpContinuationShortDetector
 import com.aidar.pumpradar.domain.analyzer.DumpReboundLongDetector
+import com.aidar.pumpradar.domain.analyzer.LongSignalDecider
 import com.aidar.pumpradar.domain.analyzer.LongStrictDetector
 import com.aidar.pumpradar.domain.analyzer.OutcomeTracker
+import com.aidar.pumpradar.domain.analyzer.PeakTracker
+import com.aidar.pumpradar.domain.analyzer.SignalConfig
+import com.aidar.pumpradar.domain.analyzer.SignalGovernor
 import com.aidar.pumpradar.domain.analyzer.PumpReversalShortDetector
 import com.aidar.pumpradar.domain.analyzer.PumpScoreCalculator
 import com.aidar.pumpradar.domain.analyzer.RetestDetector
@@ -71,6 +76,9 @@ class MonitoringEngine @Inject constructor(
     private val dumpContinuationShort: DumpContinuationShortDetector,
     private val dumpReboundLong: DumpReboundLongDetector,
     private val longStrict: LongStrictDetector,
+    private val peakTracker: PeakTracker,
+    private val signalGovernor: SignalGovernor,
+    private val signalConfig: SignalConfig,
     private val shadowOutcomeTracker: ShadowOutcomeTracker,
     private val shadowSignalDao: ShadowSignalDao,
     private val snapshotOutcomeTracker: SnapshotOutcomeTracker,
@@ -195,6 +203,8 @@ class MonitoringEngine @Inject constructor(
         dumpContinuationShort.retain(flowSet)
         dumpReboundLong.retain(flowSet)
         longStrict.retain(flowSet)
+        peakTracker.retain(flowSet)
+        signalGovernor.retain(flowSet)
         clusterer.retain(flowSymbols.toSet())
         controller.updateStats { it.copy(depthSymbols = depthSymbols.size) }
 
@@ -227,8 +237,9 @@ class MonitoringEngine @Inject constructor(
                 c.return60s ?: 0.0, marketCtx.medianReturn60s, marketCtx.breadthPositive
             )
             val res = scoreCalc.score(c, metrics, ob, feedAge, marketWideRisk)
-            // RETEST (патч §5): подтверждение возобновления после отката перекрывает метку.
-            val retest = retestDetector.update(
+            // RetestDetector продолжает вести своё состояние (для истории), но метку
+            // теперь определяет LongSignalDecider.
+            retestDetector.update(
                 c.symbol,
                 RetestDetector.Input(
                     now = now, price = c.price,
@@ -240,14 +251,46 @@ class MonitoringEngine @Inject constructor(
                     isImpulse = res.level.ordinal >= SignalLevel.EARLY.ordinal
                 )
             )
-            val label = if (retest) "RETEST_CONFIRMED" else res.opportunityLabel
+            // Ужесточённое LONG-решение (items 1-8): состояние вместо «высокий Impulse = вход».
+            val peak = peakTracker.update(c.symbol, c.price, metrics?.cvd30s ?: 0.0, now)
+            val declining = BuyerPressure.declining(
+                metrics?.takerBuyRatio5s, metrics?.takerBuyRatio15s, metrics?.takerBuyRatio30s,
+                metrics?.cvd5s ?: 0.0, metrics?.cvd15s ?: 0.0, metrics?.cvd30s ?: 0.0
+            )
+            val dataFresh = feedAge == null || feedAge <= signalConfig.maxFeedAgeMs
+            val decision = LongSignalDecider.decide(
+                LongSignalDecider.Input(
+                    return15s = c.return15s, return60s = c.return60s, return5m = c.return5m,
+                    takerBuyRatio30s = metrics?.takerBuyRatio30s,
+                    cvd30s = metrics?.cvd30s ?: 0.0, cvdSlope = metrics?.cvdSlope ?: 0.0,
+                    volumeZ30s = metrics?.volumeZ30s, quoteVolume30s = metrics?.quoteVolume30s ?: 0.0,
+                    relativeStrengthVsBtc = c.relativeStrengthVsBtc,
+                    spreadBps = ob?.spreadBps ?: metrics?.spreadBps,
+                    slippagePercent = ob?.buySlippagePercent,
+                    impulseScore = res.impulse,
+                    dataFresh = dataFresh,
+                    hardVeto = false,
+                    buyerPressureDeclining = declining,
+                    newHighWithoutCvdHigh = peak.newHighWithoutCvdHigh,
+                    peak = peak.features,
+                    repeatBlocked = !signalGovernor.allow(c.symbol)
+                ),
+                signalConfig
+            )
+            // Governor: отслеживаем возврат рынка в NORMAL для ограничения повторов (item 10).
+            signalGovernor.observe(
+                c.symbol, now,
+                elevated = res.level.ordinal >= SignalLevel.EARLY.ordinal,
+                repeatNormalMs = signalConfig.repeatNormalMinutes * 60_000L
+            )
+            val label = decision.label
             val live = LiveSignal(
                 symbol = c.symbol,
                 price = c.price,
                 score = res.impulse,
-                entryRiskScore = res.entryRisk,
+                entryRiskScore = maxOf(res.entryRisk, decision.entryRisk),
                 confidenceScore = res.confidence,
-                exhaustionRiskScore = res.exhaustionRisk,
+                exhaustionRiskScore = maxOf(res.exhaustionRisk, decision.exhaustionRisk),
                 artificialRiskScore = res.artificialRisk,
                 marketWideRiskScore = res.marketWideRisk,
                 opportunityLabel = label,
@@ -273,8 +316,9 @@ class MonitoringEngine @Inject constructor(
                 isUp = res.level.ordinal >= SignalLevel.EARLY.ordinal,
                 isDown = isDownMove(c), return60s = c.return60s, now = now
             )
-            // LONG_CONTINUATION = подтверждённый ретест (та же точка, что уведомление LONG).
-            if (retest) trackShadow("LONG_CONTINUATION", "LONG", c.symbol, c.price, ob, metrics, now)
+            // Теневой исход LONG_CONTINUATION считаем ровно там, где сработал новый гейт.
+            if (decision.label == LongSignalDecider.LONG_CONTINUATION)
+                trackShadow("LONG_CONTINUATION", "LONG", c.symbol, c.price, ob, metrics, now)
             maybeEmit(c, live, metrics)
         }
 
@@ -380,14 +424,19 @@ class MonitoringEngine @Inject constructor(
         }
         outcomeTracker.track(id, c.symbol, c.price)
 
-        // Уведомления только для основных категорий (патч §2/§3): по умолчанию
-        // EARLY_CLEAN и RETEST_CONFIRMED. STRONG-метки в уведомления не идут.
+        // Уведомление только по LONG_CONTINUATION (item 7): высокий Impulse Score
+        // сам по себе НЕ уведомляет. STRONG_BUT_LATE/EXHAUSTION_RISK/REVERSAL_WATCH/
+        // NO_TRADE видны в сканере/истории, но не шлются.
         val cfg = settings.settings.first()
         val notifyByLabel = live.opportunityLabel in NOTIFY_LABELS || cfg.notifyAllCategories
         val tierDMuted = live.liquidityTier == "D" &&
             cfg.monitoringProfile != MonitoringProfile.EXPLORE
         if (notifyByLabel && !tierDMuted && !cfg.calibrationMode) {
             notifier.maybeNotify(live, cfg.symbolCooldownMinutes)
+            // Ограничение повторов (item 10): фиксируем сигнал в governor.
+            if (live.opportunityLabel == LongSignalDecider.LONG_CONTINUATION) {
+                signalGovernor.recordSignal(c.symbol, now)
+            }
         }
     }
 
@@ -469,6 +518,7 @@ class MonitoringEngine @Inject constructor(
             cvd = metrics?.cvd30s ?: 0.0, cvdSlope = metrics?.cvdSlope ?: 0.0,
             takerBuyRatio = metrics?.takerBuyRatio30s,
             takerBuyRatio15s = metrics?.takerBuyRatio15s,
+            cvd15s = metrics?.cvd15s,
             return60s = return60s,
             spreadBps = ob?.spreadBps ?: metrics?.spreadBps,
             slippagePercent = ob?.buySlippagePercent,
@@ -578,6 +628,8 @@ class MonitoringEngine @Inject constructor(
         dumpContinuationShort.clear()
         dumpReboundLong.clear()
         longStrict.clear()
+        peakTracker.clear()
+        signalGovernor.clear()
         clusterer.clear()
         outcomeTracker.clear()
         shadowOutcomeTracker.clear()
@@ -589,8 +641,9 @@ class MonitoringEngine @Inject constructor(
     }
 
     private companion object {
-        // Метки, дающие системное уведомление по умолчанию (патч §3).
-        val NOTIFY_LABELS = setOf("EARLY_CLEAN", "RETEST_CONFIRMED")
+        // Единственная метка, дающая системное уведомление (item 7): ужесточённый
+        // LONG_CONTINUATION. STRONG сам по себе не уведомляет.
+        val NOTIFY_LABELS = setOf(LongSignalDecider.LONG_CONTINUATION)
         const val ALGO_VERSION = "3.0.0"
         const val MAX_CANDIDATES = 20
         const val DEEP_CANDIDATES = 10

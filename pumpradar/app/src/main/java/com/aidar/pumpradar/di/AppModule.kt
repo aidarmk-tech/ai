@@ -68,4 +68,10 @@ object AppModule {
     @Singleton
     fun provideDataStore(@ApplicationContext context: Context): DataStore<Preferences> =
         context.dataStore
+
+    /** Единый источник числовых порогов сигналов (item 11). */
+    @Provides
+    @Singleton
+    fun provideSignalConfig(): com.aidar.pumpradar.domain.analyzer.SignalConfig =
+        com.aidar.pumpradar.domain.analyzer.SignalConfig()
 }

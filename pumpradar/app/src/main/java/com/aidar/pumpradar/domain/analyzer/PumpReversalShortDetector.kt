@@ -94,8 +94,10 @@ class PumpReversalShortDetector @Inject constructor() {
                         (i.bidNotionalTop10 ?: row.bidDepthHigh) <= BID_DEPTH_FRAC * row.bidDepthHigh
                     // takerBuyRatio15s < 0.45 (короткое окно, откат к 30с если 15с нет).
                     val tbrShort = i.takerBuyRatio15s ?: i.takerBuyRatio ?: 1.0
+                    // CVD15s < 0 (откат к 30с-CVD, если 15с нет).
+                    val cvdShort = i.cvd15s ?: i.cvd
                     val confirmed = i.price < row.swingLow &&                 // пробой локального минимума
-                        i.cvd < 0.0 &&                                        // отрицательный CVD
+                        i.cvd < 0.0 && cvdShort < 0.0 &&                      // отрицательный CVD (30с и 15с)
                         tbrShort < TAKER_SELL_DOM &&                          // доминируют taker-продажи (15с)
                         (i.obi10 ?: 0.0) <= OBI_NEG &&                        // отрицательный OBI
                         bidGone &&                                            // исчезает bid depth
