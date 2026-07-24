@@ -25,6 +25,10 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
+import android.content.Intent
+import androidx.compose.material3.Button
+import androidx.compose.ui.platform.LocalContext
+import com.aidar.pumpradar.data.export.DatasetExporter
 import com.aidar.pumpradar.data.preferences.AppSettings
 import com.aidar.pumpradar.data.preferences.MonitoringProfile
 import com.aidar.pumpradar.data.preferences.SettingsRepository
@@ -33,11 +37,13 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.io.File
 import javax.inject.Inject
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
-    private val repo: SettingsRepository
+    private val repo: SettingsRepository,
+    private val exporter: DatasetExporter
 ) : ViewModel() {
     val settings = repo.settings.stateIn(
         viewModelScope, SharingStarted.WhileSubscribed(5000), AppSettings()
@@ -50,6 +56,10 @@ class SettingsViewModel @Inject constructor(
     fun setDisclaimer(v: Boolean) = viewModelScope.launch { repo.setShowRiskDisclaimer(v) }
     fun setCalibration(v: Boolean) = viewModelScope.launch { repo.setCalibrationMode(v) }
     fun setNotifyAll(v: Boolean) = viewModelScope.launch { repo.setNotifyAllCategories(v) }
+    fun exportDataset(onReady: (File) -> Unit) = viewModelScope.launch {
+        runCatching { exporter.exportCsv() }.getOrNull()?.let(onReady)
+    }
+    fun shareIntent(file: File): Intent = exporter.shareIntent(file)
 }
 
 @Composable
@@ -150,6 +160,25 @@ fun SettingsScreen(
                 Text("Показывать предупреждение о риске", Modifier.weight(1f))
                 Switch(checked = s.showRiskDisclaimer, onCheckedChange = { vm.setDisclaimer(it) })
             }
+        }
+
+        Group("Данные для ML") {
+            Text("Экспорт снимков признаков + исходов в CSV для оффлайн-обучения " +
+                "(патч §19). Обучение вне телефона; приложение модель не обучает.",
+                style = MaterialTheme.typography.bodySmall)
+            val context = LocalContext.current
+            Button(
+                onClick = {
+                    vm.exportDataset { file ->
+                        runCatching {
+                            context.startActivity(
+                                Intent.createChooser(vm.shareIntent(file), "Экспорт датасета")
+                            )
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Экспорт датасета (CSV)") }
         }
 
         OutlinedButton(onClick = onOpenDiagnostics, modifier = Modifier.fillMaxWidth()) {

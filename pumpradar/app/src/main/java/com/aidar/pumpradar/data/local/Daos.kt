@@ -77,6 +77,9 @@ interface TrainingSnapshotDao {
 
     @Query("SELECT * FROM training_snapshots ORDER BY snapshotTime DESC LIMIT :limit")
     suspend fun recent(limit: Int): List<TrainingSnapshotEntity>
+
+    @Query("SELECT * FROM training_snapshots ORDER BY snapshotTime ASC")
+    suspend fun all(): List<TrainingSnapshotEntity>
 }
 
 @Dao
