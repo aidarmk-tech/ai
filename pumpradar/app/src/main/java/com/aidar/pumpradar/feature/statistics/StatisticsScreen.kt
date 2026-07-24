@@ -32,6 +32,7 @@ import com.aidar.pumpradar.data.local.SignalOutcome
 import com.aidar.pumpradar.data.preferences.SettingsRepository
 import com.aidar.pumpradar.domain.analyzer.CalibrationEval
 import com.aidar.pumpradar.domain.analyzer.ExecutableOutcome
+import com.aidar.pumpradar.domain.analyzer.OutcomeClassifier
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.map
@@ -62,27 +63,17 @@ fun StatisticsScreen(vm: StatisticsViewModel = hiltViewModel()) {
     ) {
         Text("Статистика", style = MaterialTheme.typography.titleLarge)
 
-        // Калибровка (ТЗ 0A.24): прогресс сбора и доля ложных.
+        // Калибровка (ТЗ 0A.24 + патч §24): прогресс сбора, без термина «ложные».
         if (calibrating || outcomes.isNotEmpty()) {
-            val target = 200
             val collected = outcomes.size
-            val falseRate = if (collected > 0)
-                outcomes.count { !successful(it) } * 100.0 / collected else 0.0
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(if (calibrating) "Калибровка активна" else "Калибровка",
                         fontWeight = FontWeight.Bold)
-                    StatRow("Собрано (оценок)", "$collected / $target")
-                    if (collected >= 30) {
-                        StatRow("Доля ложных", "%.0f%%".format(falseRate))
-                    } else {
-                        Text("Нужно ≥30 завершённых оценок для устойчивой доли ложных.",
-                            style = MaterialTheme.typography.bodySmall)
-                    }
-                    if (calibrating) {
-                        Text("Идёт сбор без системных уведомлений. Пороги автоматически не меняются.",
-                            style = MaterialTheme.typography.bodySmall)
-                    }
+                    StatRow("Собрано (оценок)", "$collected / 200")
+                    Text("Выборка пока мала. Пороги автоматически не меняются. Исход оценивается " +
+                        "по нескольким целям и категориям, а не одной цифрой «ложных».",
+                        style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
@@ -100,15 +91,45 @@ fun StatisticsScreen(vm: StatisticsViewModel = hiltViewModel()) {
             return@Column
         }
 
-        // Общая сводка.
+        // Обзор (патч §24).
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Всего", fontWeight = FontWeight.Bold)
-                val s = summarize(outcomes)
-                StatRow("Завершённых оценок", s.total.toString())
-                StatRow("Достигли +2% раньше −1%", s.successLabel)
-                StatRow("Медиана MFE (макс. рост)", s.medianMfe)
-                StatRow("Медиана MAE (макс. просадка)", s.medianMae)
+                Text("Обзор", fontWeight = FontWeight.Bold)
+                val coverage = outcomes.count { hasCheckpoints(it) } * 100.0 / outcomes.size
+                StatRow("Завершённых оценок", outcomes.size.toString())
+                StatRow("Outcome coverage", "%.0f%%".format(coverage))
+                StatRow("Медиана MFE (макс. рост)", median(outcomes.mapNotNull { it.mfePercent }))
+                StatRow("Медиана MAE (макс. просадка)", median(outcomes.mapNotNull { it.maePercent }))
+            }
+        }
+
+        // Цели раньше стопа (патч §10.1) — вместо одной цифры «ложных».
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Цели (достигнута раньше стопа)", fontWeight = FontWeight.Bold)
+                TARGETS.forEach { t ->
+                    val hits = outcomes.count { targetHit(it, t) }
+                    val rate = hits * 100.0 / outcomes.size
+                    StatRow(t.label, "%d/%d (%.0f%%)".format(hits, outcomes.size, rate))
+                }
+                Text("«Цель раньше стопа» по 5 контрольным точкам за 15 мин (грубая нижняя граница). " +
+                    "Разные пороги — разный смысл, а не одна метка «ложный».",
+                    style = MaterialTheme.typography.bodySmall)
+            }
+        }
+
+        // Категории исходов (патч §10.2).
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Категории исходов", fontWeight = FontWeight.Bold)
+                val counts = outcomes.groupingBy { outcomeCategory(it) }.eachCount()
+                CATEGORY_ORDER.forEach { c ->
+                    val n = counts[c] ?: 0
+                    if (n > 0) StatRow(categoryRu(c), n.toString())
+                }
+                Text("«85% ложных» — слишком грубо: часть из них это пилы и поздние входы, " +
+                    "а не пустышки. Точные пороги — в разделе «Настраиваемый критерий».",
+                    style = MaterialTheme.typography.bodySmall)
             }
         }
 
@@ -137,7 +158,7 @@ fun StatisticsScreen(vm: StatisticsViewModel = hiltViewModel()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Точность по уровням", fontWeight = FontWeight.Bold)
                 Text(
-                    "Доля сигналов, где рост +2% случился раньше просадки −1%.",
+                    "Доля «+2% раньше −1%». При выборке <30 процент не показываем (патч §24).",
                     style = MaterialTheme.typography.bodySmall
                 )
                 val order = listOf("EXTREME", "STRONG", "EARLY", "WATCH")
@@ -147,8 +168,13 @@ fun StatisticsScreen(vm: StatisticsViewModel = hiltViewModel()) {
                     Text("—", style = MaterialTheme.typography.bodyMedium)
                 } else {
                     present.forEach { lvl ->
-                        val s = summarize(byLevel.getValue(lvl))
-                        StatRow("$lvl (${s.total})", s.successLabel)
+                        val list = byLevel.getValue(lvl)
+                        if (list.size < 30) {
+                            StatRow("$lvl (${list.size})", "недостаточно данных")
+                        } else {
+                            val s = summarize(list)
+                            StatRow("$lvl (${s.total})", s.successLabel)
+                        }
                     }
                 }
             }
@@ -242,6 +268,43 @@ private fun outcomeReturns(o: SignalOutcome): List<Pair<Int, Double>> =
     CalibrationEval.checkpointReturns(
         o.referencePrice, o.price30s, o.price1m, o.price3m, o.price5m, o.price15m
     )
+
+private fun hasCheckpoints(o: SignalOutcome): Boolean = outcomeReturns(o).isNotEmpty()
+
+// Набор целей (патч §10.1): цель% / стоп%.
+private class TargetDef(val target: Double, val stop: Double, val label: String)
+
+private val TARGETS = listOf(
+    TargetDef(0.75, 0.50, "+0.75% / −0.50%"),
+    TargetDef(1.00, 0.75, "+1.00% / −0.75%"),
+    TargetDef(1.50, 1.00, "+1.50% / −1.00%"),
+    TargetDef(2.00, 1.00, "+2.00% / −1.00%"),
+    TargetDef(3.00, 1.50, "+3.00% / −1.50%")
+)
+
+private fun targetHit(o: SignalOutcome, t: TargetDef): Boolean {
+    val rets = outcomeReturns(o)
+    if (rets.isEmpty()) return false
+    return CalibrationEval.targetBeforeStop(rets, t.target, t.stop, 900)
+}
+
+private val CATEGORY_ORDER = listOf(
+    "CLEAN_WIN", "SMALL_WIN", "WHIPSAW", "LOW_LIQUIDITY_MOVE", "NO_CONTINUATION", "DATA_INCOMPLETE"
+)
+
+/** Категория исхода (патч §10.2) — логика в OutcomeClassifier (тестируется). */
+private fun outcomeCategory(o: SignalOutcome): String =
+    OutcomeClassifier.category(outcomeReturns(o), o.mfePercent, o.maePercent, o.spreadBps)
+
+private fun categoryRu(c: String): String = when (c) {
+    "CLEAN_WIN" -> "Чистый вход"
+    "SMALL_WIN" -> "Малый плюс"
+    "WHIPSAW" -> "Пила (туда-сюда)"
+    "LOW_LIQUIDITY_MOVE" -> "Плохая ликвидность"
+    "NO_CONTINUATION" -> "Без продолжения"
+    "DATA_INCOMPLETE" -> "Мало данных"
+    else -> c
+}
 
 private fun horizonLabel(sec: Int): String = when (sec) {
     60 -> "1м"; 180 -> "3м"; 300 -> "5м"; else -> "15м"
