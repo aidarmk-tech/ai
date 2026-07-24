@@ -33,6 +33,7 @@ import com.aidar.pumpradar.data.preferences.SettingsRepository
 import com.aidar.pumpradar.domain.analyzer.CalibrationEval
 import com.aidar.pumpradar.domain.analyzer.ExecutableOutcome
 import com.aidar.pumpradar.domain.analyzer.OutcomeClassifier
+import com.aidar.pumpradar.domain.analyzer.StrategyLab
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.map
@@ -156,6 +157,27 @@ fun StatisticsScreen(vm: StatisticsViewModel = hiltViewModel()) {
         // Настраиваемый критерий: цель/стоп/горизонт под свою стратегию.
         CalibrationCard(outcomes)
 
+        // Лаборатория стратегий (патч §13): champion/challenger в теневом режиме.
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Лаборатория стратегий (тень)", fontWeight = FontWeight.Bold)
+                Text("Уведомлениями управляет champion (S1). Остальные сравниваются в тени. " +
+                    "Победитель автоматически не выбирается — нужна большая выборка.",
+                    style = MaterialTheme.typography.bodySmall)
+                StrategyLab.STRATEGIES.forEach { s ->
+                    val trig = outcomes.filter { s.triggers(features(it)) }
+                    val events = trig.map { eventKey(it) }.distinct()
+                    if (events.size < 10) {
+                        StatRow(s.title, "мало данных (${events.size})")
+                    } else {
+                        val wins = trig.filter { targetHit(it, TARGETS[3]) }.map { eventKey(it) }.distinct()
+                        val prec = wins.size * 100.0 / events.size
+                        StatRow(s.title, "%d соб · %.0f%%".format(events.size, prec))
+                    }
+                }
+            }
+        }
+
         // Разбивка по уровням.
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -273,6 +295,16 @@ private fun outcomeReturns(o: SignalOutcome): List<Pair<Int, Double>> =
     )
 
 private fun hasCheckpoints(o: SignalOutcome): Boolean = outcomeReturns(o).isNotEmpty()
+
+private fun eventKey(o: SignalOutcome): String = o.eventId ?: "${o.symbol}-${o.createdAt}"
+
+private fun features(o: SignalOutcome): StrategyLab.Features = StrategyLab.Features(
+    opportunityLabel = o.opportunityLabel,
+    liquidityTier = o.liquidityTier,
+    entryRisk = o.entryRiskScore,
+    confidence = o.confidenceScore,
+    impulse = o.score
+)
 
 // Набор целей (патч §10.1): цель% / стоп%.
 private class TargetDef(val target: Double, val stop: Double, val label: String)

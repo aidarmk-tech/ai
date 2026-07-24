@@ -52,7 +52,9 @@ interface OutcomeDao {
                s.spreadBps AS spreadBps, s.slippagePercent AS slippagePercent,
                s.referencePrice AS referencePrice, o.price30s AS price30s,
                o.price1m AS price1m, o.price3m AS price3m, o.price5m AS price5m,
-               o.price15m AS price15m, s.eventId AS eventId
+               o.price15m AS price15m, s.eventId AS eventId,
+               s.opportunityLabel AS opportunityLabel, s.liquidityTier AS liquidityTier,
+               s.entryRiskScore AS entryRiskScore, s.confidenceScore AS confidenceScore
         FROM outcomes o JOIN signals s ON s.id = o.signalId
         WHERE o.completed = 1
         ORDER BY s.createdAt DESC

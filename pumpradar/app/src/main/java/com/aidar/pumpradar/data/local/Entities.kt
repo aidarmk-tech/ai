@@ -100,7 +100,12 @@ data class SignalOutcome(
     val price3m: Double?,
     val price5m: Double?,
     val price15m: Double?,
-    val eventId: String?          // кластер рыночного события (патч §12)
+    val eventId: String?,          // кластер рыночного события (патч §12)
+    // Поля для Strategy Lab (патч §13) — вычисление стратегий по истории.
+    val opportunityLabel: String?,
+    val liquidityTier: String?,
+    val entryRiskScore: Int?,
+    val confidenceScore: Int?
 )
 
 @Entity(tableName = "app_events")
