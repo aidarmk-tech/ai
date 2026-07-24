@@ -83,7 +83,6 @@ object LongSignalDecider {
         val strictGate = passesStrictGate(i, cfg)
         val retestGate = passesRetestGate(i, cfg)
 
-        // Общие запреты действуют для раннего входа и для ретеста.
         val commonHardVeto = i.hardVeto ||
             r5m > cfg.maxReturn5m ||
             i.cvd30s <= 0.0 ||
@@ -172,7 +171,8 @@ object LongSignalDecider {
         val distance = i.peak.distanceFromLocalHighPct
         val recovered = pullback - distance
 
-        return pullback in cfg.minRetestPullbackPercent..cfg.maxRetestPullbackPercent &&
+        return i.impulseScore >= 55 &&
+            pullback in cfg.minRetestPullbackPercent..cfg.maxRetestPullbackPercent &&
             distance >= 0.15 &&
             distance <= cfg.maxRetestDistanceFromHighPercent &&
             recovered >= cfg.minRetestRecoveryPercent &&
