@@ -113,6 +113,24 @@ interface SignalTrajectoryDao {
 }
 
 @Dao
+interface ShadowSignalDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(signal: ShadowSignalEntity)
+
+    @Query("SELECT * FROM shadow_signals WHERE completed = 0")
+    suspend fun pending(): List<ShadowSignalEntity>
+
+    @Query("SELECT * FROM shadow_signals WHERE completed = 1 ORDER BY createdAt DESC LIMIT :limit")
+    fun completed(limit: Int): Flow<List<ShadowSignalEntity>>
+
+    @Query("SELECT COUNT(*) FROM shadow_signals WHERE strategy = :strategy")
+    suspend fun countByStrategy(strategy: String): Int
+
+    @Query("DELETE FROM shadow_signals WHERE createdAt < :olderThan")
+    suspend fun deleteOlderThan(olderThan: Long)
+}
+
+@Dao
 interface AppEventDao {
     @Insert
     suspend fun insert(event: AppEventEntity)

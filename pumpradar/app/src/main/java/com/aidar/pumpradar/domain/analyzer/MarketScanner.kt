@@ -127,6 +127,61 @@ class MarketScanner @Inject constructor() {
         out.subList(0, min(maxCandidates, out.size)).toList()
     }
 
+    /**
+     * Кандидаты САМОСТОЯТЕЛЬНОГО нисходящего импульса (для теневых SHORT/rebound
+     * стратегий) — зеркально [computeCandidates], но по падению. LONG-пайплайн не
+     * затрагивает: отдельный список, только для теневой разметки. preScore = сила
+     * падения (для сортировки), returns остаются отрицательными.
+     */
+    fun computeDownCandidates(
+        minVolume: Double,
+        maxCandidates: Int,
+        now: Long = System.currentTimeMillis()
+    ): List<Candidate> = synchronized(lock) {
+        val btcRet60 = rows["BTCUSDT"]?.let { returnOverWindow(it, 60_000, now) }
+        val out = ArrayList<Candidate>()
+        for (row in rows.values) {
+            if (row.price <= 0.0) continue
+            if (row.quoteVolume24h < minVolume) continue
+            val r15 = returnOverWindow(row, 15_000, now)
+            val r60 = returnOverWindow(row, 60_000, now)
+            val r5m = returnOverWindow(row, 300_000, now)
+            val accel = acceleration(row, now)
+            val passes = (r15 != null && r15 <= -0.35) ||
+                (r60 != null && r60 <= -0.80) ||
+                (accel != null && accel <= -CONFIGURED_ACCEL)
+            if (!passes) continue
+            val relBtc = if (r60 != null && btcRet60 != null) r60 - btcRet60 else null
+            out.add(
+                Candidate(
+                    symbol = row.info.symbol,
+                    price = row.price,
+                    return15s = r15,
+                    return60s = r60,
+                    return5m = r5m,
+                    acceleration = accel,
+                    quoteVolume24h = row.quoteVolume24h,
+                    relativeStrengthVsBtc = relBtc,
+                    preScore = downPreScore(r15, r60, accel, row.quoteVolume24h)
+                )
+            )
+        }
+        out.sortByDescending { it.preScore }
+        out.subList(0, min(maxCandidates, out.size)).toList()
+    }
+
+    /** Сила нисходящего импульса (чем больше падение, тем выше preScore). */
+    private fun downPreScore(r15: Double?, r60: Double?, accel: Double?, quoteVol: Double): Double {
+        fun clampNeg(v: Double?, div: Double, hi: Double): Double =
+            ((-(v ?: 0.0)) / div).coerceIn(0.0, hi)
+        val liquidity = (kotlin.math.log10((quoteVol / 1_000_000.0).coerceAtLeast(0.1)) / 2.0)
+            .coerceIn(0.0, 1.0)
+        return clampNeg(r15, 0.5, 3.0) * 20 +
+            clampNeg(r60, 1.0, 3.0) * 25 +
+            clampNeg(accel, 0.3, 3.0) * 20 +
+            liquidity * 20
+    }
+
     // ── Внутреннее ──
 
     private fun returnOverWindow(row: Row, windowMs: Long, now: Long): Double? {

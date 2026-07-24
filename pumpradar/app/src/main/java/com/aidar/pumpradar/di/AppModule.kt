@@ -11,6 +11,7 @@ import com.aidar.pumpradar.data.local.MIGRATION_2_3
 import com.aidar.pumpradar.data.local.MIGRATION_3_4
 import com.aidar.pumpradar.data.local.OutcomeDao
 import com.aidar.pumpradar.data.local.PumpRadarDatabase
+import com.aidar.pumpradar.data.local.ShadowSignalDao
 import com.aidar.pumpradar.data.local.SignalDao
 import com.aidar.pumpradar.data.local.SignalTrajectoryDao
 import com.aidar.pumpradar.data.local.TrainingSnapshotDao
@@ -52,6 +53,10 @@ object AppModule {
     @Provides
     fun provideSignalTrajectoryDao(db: PumpRadarDatabase): SignalTrajectoryDao =
         db.signalTrajectoryDao()
+
+    @Provides
+    fun provideShadowSignalDao(db: PumpRadarDatabase): ShadowSignalDao =
+        db.shadowSignalDao()
 
     @Provides
     @Singleton

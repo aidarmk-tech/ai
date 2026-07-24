@@ -66,9 +66,12 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
 }
 
 /**
- * v3 → v4 (двусторонний анализ): таблица signal_trajectories — секундная
- * траектория best bid/ask после сигнала для пересчёта исхода по временной
- * последовательности. Только новая таблица, существующие данные не затронуты.
+ * v3 → v4 (двусторонний анализ):
+ *  - signal_trajectories — секундная траектория best bid/ask после сигнала для
+ *    пересчёта исхода по временной последовательности;
+ *  - shadow_signals — теневые (SHADOW/PAPER) сигналы двусторонних стратегий с
+ *    отдельной разметкой исходов.
+ * Только новые таблицы, существующие данные не затронуты.
  */
 val MIGRATION_3_4 = object : Migration(3, 4) {
     override fun migrate(db: SupportSQLiteDatabase) {
@@ -85,5 +88,30 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
             )
             """.trimIndent()
         )
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS shadow_signals (
+                id TEXT NOT NULL PRIMARY KEY,
+                strategy TEXT NOT NULL,
+                side TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                createdAt INTEGER NOT NULL,
+                referencePrice REAL NOT NULL,
+                spreadBps REAL,
+                slippagePercent REAL,
+                price30s REAL,
+                price1m REAL,
+                price3m REAL,
+                price5m REAL,
+                price15m REAL,
+                mfePercent REAL,
+                maePercent REAL,
+                pointsJson TEXT,
+                completed INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_shadow_signals_strategy ON shadow_signals(strategy)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_shadow_signals_createdAt ON shadow_signals(createdAt)")
     }
 }

@@ -21,13 +21,20 @@ import com.aidar.pumpradar.domain.analyzer.MarketEventClusterer
 import com.aidar.pumpradar.domain.analyzer.MarketScanner
 import com.aidar.pumpradar.domain.analyzer.MarketWideMoveDetector
 import com.aidar.pumpradar.domain.analyzer.OrderBookAnalyzer
+import com.aidar.pumpradar.domain.analyzer.DumpContinuationShortDetector
+import com.aidar.pumpradar.domain.analyzer.DumpReboundLongDetector
 import com.aidar.pumpradar.domain.analyzer.OutcomeTracker
+import com.aidar.pumpradar.domain.analyzer.PumpReversalShortDetector
 import com.aidar.pumpradar.domain.analyzer.PumpScoreCalculator
 import com.aidar.pumpradar.domain.analyzer.RetestDetector
+import com.aidar.pumpradar.domain.analyzer.ShadowOutcomeTracker
+import com.aidar.pumpradar.domain.analyzer.ShadowStrategyInput
+import com.aidar.pumpradar.data.local.ShadowSignalDao
 import com.aidar.pumpradar.domain.model.Candidate
 import com.aidar.pumpradar.domain.model.CandidateMetrics
 import com.aidar.pumpradar.domain.model.LiquidityTier
 import com.aidar.pumpradar.domain.model.LiveSignal
+import com.aidar.pumpradar.domain.model.OrderBookMetrics
 import com.aidar.pumpradar.domain.model.SignalLevel
 import com.aidar.pumpradar.notification.SignalNotificationManager
 import kotlinx.coroutines.CoroutineScope
@@ -57,6 +64,11 @@ class MonitoringEngine @Inject constructor(
     private val orderBook: OrderBookAnalyzer,
     private val scoreCalc: PumpScoreCalculator,
     private val retestDetector: RetestDetector,
+    private val pumpReversalShort: PumpReversalShortDetector,
+    private val dumpContinuationShort: DumpContinuationShortDetector,
+    private val dumpReboundLong: DumpReboundLongDetector,
+    private val shadowOutcomeTracker: ShadowOutcomeTracker,
+    private val shadowSignalDao: ShadowSignalDao,
     private val clusterer: MarketEventClusterer,
     private val clusterDao: ClusterDao,
     private val trainingSnapshotDao: TrainingSnapshotDao,
@@ -152,9 +164,16 @@ class MonitoringEngine @Inject constructor(
         // Поток сделок (aggTrade/bookTicker) держим по ВСЕМ кандидатам, чтобы
         // история для «Объём Z» и CVD копилась и не стиралась при перестановке
         // топа. Скоринг/UI — по лучшим DEEP_CANDIDATES, стакан (тяжёлый) — по топу.
-        val flowSymbols = candidates.map { it.symbol }
+        // Самостоятельные нисходящие движения — для теневых SHORT/rebound стратегий.
+        // Отдельный список, LONG-пайплайн (signals/UI/уведомления) не затрагивает.
+        val downMovers = scanner.computeDownCandidates(cfg.minimum24hQuoteVolume, MAX_SHORT_CANDIDATES, now)
+        val downSymbols = downMovers.map { it.symbol }
+
         val deep = candidates.take(DEEP_CANDIDATES)
-        val depthSymbols = flowSymbols.take(DEPTH_CANDIDATES)
+        // Поток (aggTrade/bookTicker) держим по кандидатам пампа + нисходящим.
+        val flowSymbols = (candidates.map { it.symbol } + downSymbols).distinct()
+        val depthSymbols = (candidates.map { it.symbol }.take(DEPTH_CANDIDATES) +
+            downSymbols.take(DEPTH_SHORT_CANDIDATES)).distinct()
         val streams = buildSet {
             for (s in flowSymbols) {
                 val lo = s.lowercase(); add("$lo@aggTrade"); add("$lo@bookTicker")
@@ -162,9 +181,13 @@ class MonitoringEngine @Inject constructor(
             for (s in depthSymbols) add("${s.lowercase()}@depth20@100ms")
         }
         candidateStream.setDesiredStreams(streams)
-        analyzer.retain(flowSymbols.toSet())
+        val flowSet = flowSymbols.toSet()
+        analyzer.retain(flowSet)
         orderBook.retain(depthSymbols.toSet())
-        retestDetector.retain(flowSymbols.toSet())
+        retestDetector.retain(candidates.map { it.symbol }.toSet())
+        pumpReversalShort.retain(flowSet)
+        dumpContinuationShort.retain(flowSet)
+        dumpReboundLong.retain(flowSet)
         clusterer.retain(flowSymbols.toSet())
         controller.updateStats { it.copy(depthSymbols = depthSymbols.size) }
 
@@ -237,8 +260,26 @@ class MonitoringEngine @Inject constructor(
             )
             signals.add(live)
             evaluated.add(Triple(c, live, metrics))
+            // Теневые двусторонние стратегии (SHADOW/PAPER): без ордеров и API key.
+            runShadowStrategies(
+                c.symbol, c.price, metrics, ob,
+                isUp = res.level.ordinal >= SignalLevel.EARLY.ordinal,
+                isDown = isDownMove(c), now = now
+            )
+            // LONG_CONTINUATION = подтверждённый ретест (та же точка, что уведомление LONG).
+            if (retest) trackShadow("LONG_CONTINUATION", "LONG", c.symbol, c.price, ob, metrics, now)
             maybeEmit(c, live, metrics)
         }
+
+        // Теневые SHORT/rebound по самостоятельным нисходящим движениям (вне deep).
+        val deepSyms = deep.mapTo(HashSet()) { it.symbol }
+        for (dc in downMovers) {
+            if (dc.symbol in deepSyms) continue
+            val m = analyzer.metrics(dc.symbol)
+            val ob = orderBook.metrics(dc.symbol, cfg.slippageTestAmountUsdt)
+            runShadowStrategies(dc.symbol, dc.price, m, ob, isUp = false, isDown = true, now = now)
+        }
+
         signals.sortByDescending { it.score }
         controller.setLiveSignals(signals)
         controller.updateStats { it.copy(candidates = candidates.size) }
@@ -250,6 +291,10 @@ class MonitoringEngine @Inject constructor(
         outcomeTracker.onTick(
             System.currentTimeMillis(), scanner::priceOf, outcomeDao,
             bookOf = { analyzer.bestBidAsk(it) }, trajectoryDao = signalTrajectoryDao
+        )
+        // Отслеживание исходов теневых двусторонних сигналов (SHADOW/PAPER).
+        shadowOutcomeTracker.onTick(
+            System.currentTimeMillis(), scanner::priceOf, { analyzer.bestBidAsk(it) }, shadowSignalDao
         )
     }
 
@@ -393,6 +438,50 @@ class MonitoringEngine @Inject constructor(
         }
     }
 
+    /**
+     * Прогон трёх теневых двусторонних стратегий по символу. SHADOW/PAPER: только
+     * разметка исходов, ордера НЕ отправляются, API-ключ не требуется.
+     */
+    private suspend fun runShadowStrategies(
+        symbol: String, price: Double, metrics: CandidateMetrics?, ob: OrderBookMetrics?,
+        isUp: Boolean, isDown: Boolean, now: Long
+    ) {
+        val input = ShadowStrategyInput(
+            now = now, price = price,
+            cvd = metrics?.cvd30s ?: 0.0, cvdSlope = metrics?.cvdSlope ?: 0.0,
+            takerBuyRatio = metrics?.takerBuyRatio30s,
+            spreadBps = ob?.spreadBps ?: metrics?.spreadBps,
+            slippagePercent = ob?.buySlippagePercent,
+            obi10 = ob?.obi10,
+            bidNotionalTop10 = ob?.bidNotionalTop10,
+            askNotionalTop10 = ob?.askNotionalTop10,
+            isUpImpulse = isUp, isDownImpulse = isDown
+        )
+        if (pumpReversalShort.update(symbol, input))
+            trackShadow("PUMP_REVERSAL_SHORT", "SHORT", symbol, price, ob, metrics, now)
+        if (dumpContinuationShort.update(symbol, input))
+            trackShadow("DUMP_CONTINUATION_SHORT", "SHORT", symbol, price, ob, metrics, now)
+        if (dumpReboundLong.update(symbol, input))
+            trackShadow("DUMP_REBOUND_LONG", "LONG", symbol, price, ob, metrics, now)
+    }
+
+    private suspend fun trackShadow(
+        strategy: String, side: String, symbol: String, price: Double,
+        ob: OrderBookMetrics?, metrics: CandidateMetrics?, now: Long
+    ) {
+        shadowOutcomeTracker.track(
+            shadowSignalDao, UUID.randomUUID().toString(), strategy, side, symbol,
+            price, ob?.spreadBps ?: metrics?.spreadBps, ob?.buySlippagePercent, now
+        )
+        logEvent("INFO", "shadow", "%s %s @ %.6f".format(strategy, symbol, price))
+    }
+
+    /** Самостоятельное нисходящее движение (зеркально [qualifies]). */
+    private fun isDownMove(c: Candidate): Boolean =
+        (c.return15s != null && c.return15s <= -0.35) ||
+            (c.return60s != null && c.return60s <= -0.80) ||
+            (c.acceleration != null && c.acceleration <= -0.30)
+
     /** Разрешённые тиры для профиля (ТЗ 0A.9). */
     private fun allowedTiersFor(profile: MonitoringProfile): Set<LiquidityTier> = when (profile) {
         MonitoringProfile.CAUTIOUS -> setOf(LiquidityTier.A, LiquidityTier.B)
@@ -463,8 +552,12 @@ class MonitoringEngine @Inject constructor(
         analyzer.clear()
         orderBook.clear()
         retestDetector.clear()
+        pumpReversalShort.clear()
+        dumpContinuationShort.clear()
+        dumpReboundLong.clear()
         clusterer.clear()
         outcomeTracker.clear()
+        shadowOutcomeTracker.clear()
         retention.clear()
         synchronized(warmed) { warmed.clear() }
         scopeRef = null
@@ -478,6 +571,8 @@ class MonitoringEngine @Inject constructor(
         const val MAX_CANDIDATES = 20
         const val DEEP_CANDIDATES = 10
         const val DEPTH_CANDIDATES = 8
+        const val MAX_SHORT_CANDIDATES = 6     // нисходящие движения для теневых стратегий
+        const val DEPTH_SHORT_CANDIDATES = 4   // стакан по топ-нисходящим (OBI/bid depth)
         const val MIN_LIFETIME_MS = 60_000L   // ТЗ 17.3: минимальное время жизни кандидата
         const val EXIT_GRACE_MS = 30_000L     // ТЗ 17.3: льготный период после порога
         const val NEAR_MISS_INTERVAL_MS = 45_000L   // патч §14: троттлинг NEAR_MISS

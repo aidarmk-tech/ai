@@ -144,6 +144,39 @@ data class SignalTrajectoryEntity(
     val pointsJson: String         // сериализованный List<TrajectoryPoint>
 )
 
+/**
+ * Теневой (SHADOW/PAPER) сигнал двусторонней стратегии. Не связан с LONG-историей
+ * и уведомлениями: отдельная разметка исходов по стратегиям
+ * (LONG_CONTINUATION / PUMP_REVERSAL_SHORT / DUMP_CONTINUATION_SHORT /
+ * DUMP_REBOUND_LONG). Ордера не отправляются, API-ключ не требуется.
+ *
+ * Строка вставляется в момент срабатывания (completed=false) и дополняется
+ * контрольными точками, MFE/MAE и секундной траекторией через 15 мин.
+ */
+@Entity(
+    tableName = "shadow_signals",
+    indices = [Index("strategy"), Index("createdAt")]
+)
+data class ShadowSignalEntity(
+    @PrimaryKey val id: String,
+    val strategy: String,
+    val side: String,              // LONG / SHORT
+    val symbol: String,
+    val createdAt: Long,
+    val referencePrice: Double,
+    val spreadBps: Double?,
+    val slippagePercent: Double?,
+    val price30s: Double? = null,
+    val price1m: Double? = null,
+    val price3m: Double? = null,
+    val price5m: Double? = null,
+    val price15m: Double? = null,
+    val mfePercent: Double? = null,
+    val maePercent: Double? = null,
+    val pointsJson: String? = null,   // секундная траектория bid/ask (nullable)
+    val completed: Boolean = false
+)
+
 @Entity(tableName = "app_events")
 data class AppEventEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
