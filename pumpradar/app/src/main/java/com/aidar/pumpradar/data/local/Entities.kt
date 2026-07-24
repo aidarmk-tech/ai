@@ -68,7 +68,14 @@ data class SignalOutcome(
     val maePercent: Double?,
     val timeToMfeSeconds: Long?,
     val spreadBps: Double?,        // спред на момент сигнала — для executable-оценки (0A.13)
-    val slippagePercent: Double?   // проскальзывание на момент сигнала
+    val slippagePercent: Double?,  // проскальзывание на момент сигнала
+    // Опорная цена и контрольные точки — для настраиваемого критерия «цель/стоп/горизонт».
+    val referencePrice: Double?,
+    val price30s: Double?,
+    val price1m: Double?,
+    val price3m: Double?,
+    val price5m: Double?,
+    val price15m: Double?
 )
 
 @Entity(tableName = "app_events")

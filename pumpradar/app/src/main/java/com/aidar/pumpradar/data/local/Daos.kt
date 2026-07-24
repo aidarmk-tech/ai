@@ -49,7 +49,10 @@ interface OutcomeDao {
         SELECT s.symbol AS symbol, s.level AS level, s.score AS score,
                s.createdAt AS createdAt, o.mfePercent AS mfePercent,
                o.maePercent AS maePercent, o.timeToMfeSeconds AS timeToMfeSeconds,
-               s.spreadBps AS spreadBps, s.slippagePercent AS slippagePercent
+               s.spreadBps AS spreadBps, s.slippagePercent AS slippagePercent,
+               s.referencePrice AS referencePrice, o.price30s AS price30s,
+               o.price1m AS price1m, o.price3m AS price3m, o.price5m AS price5m,
+               o.price15m AS price15m
         FROM outcomes o JOIN signals s ON s.id = o.signalId
         WHERE o.completed = 1
         ORDER BY s.createdAt DESC

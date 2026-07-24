@@ -6,13 +6,19 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -24,6 +30,7 @@ import androidx.lifecycle.viewModelScope
 import com.aidar.pumpradar.data.local.OutcomeDao
 import com.aidar.pumpradar.data.local.SignalOutcome
 import com.aidar.pumpradar.data.preferences.SettingsRepository
+import com.aidar.pumpradar.domain.analyzer.CalibrationEval
 import com.aidar.pumpradar.domain.analyzer.ExecutableOutcome
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
@@ -121,6 +128,9 @@ fun StatisticsScreen(vm: StatisticsViewModel = hiltViewModel()) {
                     style = MaterialTheme.typography.bodySmall)
             }
         }
+
+        // Настраиваемый критерий: цель/стоп/горизонт под свою стратегию.
+        CalibrationCard(outcomes)
 
         // Разбивка по уровням.
         Card(Modifier.fillMaxWidth()) {
@@ -225,5 +235,71 @@ private fun StatRow(label: String, value: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, style = MaterialTheme.typography.bodyMedium)
         Text(value, fontWeight = FontWeight.Bold)
+    }
+}
+
+private fun outcomeReturns(o: SignalOutcome): List<Pair<Int, Double>> =
+    CalibrationEval.checkpointReturns(
+        o.referencePrice, o.price30s, o.price1m, o.price3m, o.price5m, o.price15m
+    )
+
+private fun horizonLabel(sec: Int): String = when (sec) {
+    60 -> "1м"; 180 -> "3м"; 300 -> "5м"; else -> "15м"
+}
+
+@Composable
+private fun CalibrationCard(outcomes: List<SignalOutcome>) {
+    var target by rememberSaveable { mutableStateOf(2.0) }
+    var stop by rememberSaveable { mutableStateOf(1.0) }
+    var horizon by rememberSaveable { mutableStateOf(900) }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Настраиваемый критерий", fontWeight = FontWeight.Bold)
+            ChoiceRow("Цель", listOf(1.0, 2.0, 3.0, 5.0), target, { "+%.0f%%".format(it) }) { target = it }
+            ChoiceRow("Стоп", listOf(1.0, 2.0, 3.0), stop, { "−%.0f%%".format(it) }) { stop = it }
+            HorizonRow(horizon) { horizon = it }
+
+            val evaluable = outcomes.filter { outcomeReturns(it).isNotEmpty() }
+            val hits = evaluable.count {
+                CalibrationEval.targetBeforeStop(outcomeReturns(it), target, stop, horizon)
+            }
+            val rate = if (evaluable.isNotEmpty()) hits * 100.0 / evaluable.size else 0.0
+            StatRow(
+                "Цель +%.0f%% раньше −%.0f%% за %s".format(target, stop, horizonLabel(horizon)),
+                "%d/%d (%.0f%%)".format(hits, evaluable.size, rate)
+            )
+            Text("Грубая оценка по 5 контрольным точкам (нижняя граница — межточечные всплески " +
+                "не видны). Подбирай цель/стоп/горизонт под свою стратегию и смотри, где процент " +
+                "попаданий становится приемлемым.",
+                style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+@Composable
+private fun ChoiceRow(
+    label: String,
+    options: List<Double>,
+    selected: Double,
+    fmt: (Double) -> String,
+    onSelect: (Double) -> Unit
+) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(label, Modifier.width(52.dp), style = MaterialTheme.typography.bodySmall)
+        options.forEach { v ->
+            FilterChip(selected = selected == v, onClick = { onSelect(v) }, label = { Text(fmt(v)) })
+        }
+    }
+}
+
+@Composable
+private fun HorizonRow(selected: Int, onSelect: (Int) -> Unit) {
+    val opts = listOf(60 to "1м", 180 to "3м", 300 to "5м", 900 to "15м")
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Гориз.", Modifier.width(52.dp), style = MaterialTheme.typography.bodySmall)
+        opts.forEach { (sec, lbl) ->
+            FilterChip(selected = selected == sec, onClick = { onSelect(sec) }, label = { Text(lbl) })
+        }
     }
 }
