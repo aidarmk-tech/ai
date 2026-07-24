@@ -48,6 +48,7 @@ class SettingsViewModel @Inject constructor(
     fun setMinVolume(v: Double) = viewModelScope.launch { repo.setMinimum24hQuoteVolume(v) }
     fun setProfile(p: MonitoringProfile) = viewModelScope.launch { repo.setMonitoringProfile(p) }
     fun setDisclaimer(v: Boolean) = viewModelScope.launch { repo.setShowRiskDisclaimer(v) }
+    fun setCalibration(v: Boolean) = viewModelScope.launch { repo.setCalibrationMode(v) }
 }
 
 @Composable
@@ -124,6 +125,19 @@ fun SettingsScreen(
                     )
                 }
             }
+        }
+
+        Group("Калибровка") {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Калибровочный сбор", Modifier.weight(1f), fontWeight = FontWeight.Bold)
+                Switch(checked = s.calibrationMode, onCheckedChange = { vm.setCalibration(it) })
+            }
+            Text("Собирает сигналы в историю БЕЗ системных уведомлений. Дай поработать " +
+                "несколько дней (цель ~200 сигналов), затем на экране «Статистика» посмотри " +
+                "распределение и долю ложных, чтобы на фактах выбрать свои пороги. " +
+                "Рекомендуется как первый режим после установки.",
+                style = MaterialTheme.typography.bodySmall)
         }
 
         Group("Риск") {

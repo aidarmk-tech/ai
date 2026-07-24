@@ -262,7 +262,8 @@ class MonitoringEngine @Inject constructor(
             // Системные уведомления по Tier D выключены вне режима «Исследовательский» (ТЗ 0A.9).
             val tierDMuted = live.liquidityTier == "D" &&
                 cfg.monitoringProfile != MonitoringProfile.EXPLORE
-            if (!tierDMuted) notifier.maybeNotify(live, cfg.symbolCooldownMinutes)
+            // В режиме калибровки (ТЗ 0A.24) собираем историю без системных уведомлений.
+            if (!tierDMuted && !cfg.calibrationMode) notifier.maybeNotify(live, cfg.symbolCooldownMinutes)
         }
     }
 

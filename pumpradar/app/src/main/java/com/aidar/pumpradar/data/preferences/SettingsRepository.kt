@@ -32,7 +32,8 @@ data class AppSettings(
     val slippageTestAmountUsdt: Double = 10.0,
     val symbolCooldownMinutes: Int = 15,
     val maxNotificationsPerHour: Int = 12,
-    val showRiskDisclaimer: Boolean = true
+    val showRiskDisclaimer: Boolean = true,
+    val calibrationMode: Boolean = false   // 0A.24: сбор без системных уведомлений
 )
 
 @Singleton
@@ -50,6 +51,7 @@ class SettingsRepository @Inject constructor(
         val cooldown = intPreferencesKey("symbolCooldownMinutes")
         val maxNotif = intPreferencesKey("maxNotificationsPerHour")
         val disclaimer = booleanPreferencesKey("showRiskDisclaimer")
+        val calibration = booleanPreferencesKey("calibrationMode")
     }
 
     val settings: Flow<AppSettings> = store.data.map { p ->
@@ -63,7 +65,8 @@ class SettingsRepository @Inject constructor(
             slippageTestAmountUsdt = p[Keys.slipAmt] ?: 10.0,
             symbolCooldownMinutes = p[Keys.cooldown] ?: 15,
             maxNotificationsPerHour = p[Keys.maxNotif] ?: 12,
-            showRiskDisclaimer = p[Keys.disclaimer] ?: true
+            showRiskDisclaimer = p[Keys.disclaimer] ?: true,
+            calibrationMode = p[Keys.calibration] ?: false
         )
     }
 
@@ -74,4 +77,5 @@ class SettingsRepository @Inject constructor(
     suspend fun setMinimum24hQuoteVolume(value: Double) = store.edit { it[Keys.minVol] = value }
     suspend fun setMinimumNotificationLevel(value: String) = store.edit { it[Keys.minNotif] = value }
     suspend fun setShowRiskDisclaimer(value: Boolean) = store.edit { it[Keys.disclaimer] = value }
+    suspend fun setCalibrationMode(value: Boolean) = store.edit { it[Keys.calibration] = value }
 }

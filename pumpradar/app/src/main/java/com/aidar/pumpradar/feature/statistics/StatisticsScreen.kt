@@ -23,27 +23,61 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.aidar.pumpradar.data.local.OutcomeDao
 import com.aidar.pumpradar.data.local.SignalOutcome
+import com.aidar.pumpradar.data.preferences.SettingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import javax.inject.Inject
 
 @HiltViewModel
-class StatisticsViewModel @Inject constructor(dao: OutcomeDao) : ViewModel() {
+class StatisticsViewModel @Inject constructor(
+    dao: OutcomeDao,
+    settings: SettingsRepository
+) : ViewModel() {
     val outcomes = dao.completedWithSignal(200).stateIn(
         viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
+    )
+    val calibrating = settings.settings.map { it.calibrationMode }.stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5000), false
     )
 }
 
 @Composable
 fun StatisticsScreen(vm: StatisticsViewModel = hiltViewModel()) {
     val outcomes by vm.outcomes.collectAsStateWithLifecycle()
+    val calibrating by vm.calibrating.collectAsStateWithLifecycle()
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text("Статистика", style = MaterialTheme.typography.titleLarge)
+
+        // Калибровка (ТЗ 0A.24): прогресс сбора и доля ложных.
+        if (calibrating || outcomes.isNotEmpty()) {
+            val target = 200
+            val collected = outcomes.size
+            val falseRate = if (collected > 0)
+                outcomes.count { !successful(it) } * 100.0 / collected else 0.0
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(if (calibrating) "Калибровка активна" else "Калибровка",
+                        fontWeight = FontWeight.Bold)
+                    StatRow("Собрано (оценок)", "$collected / $target")
+                    if (collected >= 30) {
+                        StatRow("Доля ложных", "%.0f%%".format(falseRate))
+                    } else {
+                        Text("Нужно ≥30 завершённых оценок для устойчивой доли ложных.",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (calibrating) {
+                        Text("Идёт сбор без системных уведомлений. Пороги автоматически не меняются.",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        }
 
         if (outcomes.isEmpty()) {
             Card(Modifier.fillMaxWidth()) {
