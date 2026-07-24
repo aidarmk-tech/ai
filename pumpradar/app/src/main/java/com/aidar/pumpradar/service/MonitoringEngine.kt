@@ -15,6 +15,7 @@ import com.aidar.pumpradar.domain.analyzer.MarketScanner
 import com.aidar.pumpradar.domain.analyzer.OrderBookAnalyzer
 import com.aidar.pumpradar.domain.analyzer.OutcomeTracker
 import com.aidar.pumpradar.domain.analyzer.PumpScoreCalculator
+import com.aidar.pumpradar.domain.analyzer.RetestDetector
 import com.aidar.pumpradar.domain.model.Candidate
 import com.aidar.pumpradar.domain.model.LiquidityTier
 import com.aidar.pumpradar.domain.model.LiveSignal
@@ -46,6 +47,7 @@ class MonitoringEngine @Inject constructor(
     private val analyzer: CandidateAnalyzer,
     private val orderBook: OrderBookAnalyzer,
     private val scoreCalc: PumpScoreCalculator,
+    private val retestDetector: RetestDetector,
     private val outcomeTracker: OutcomeTracker,
     private val controller: MonitoringController,
     private val settings: SettingsRepository,
@@ -143,6 +145,7 @@ class MonitoringEngine @Inject constructor(
         candidateStream.setDesiredStreams(streams)
         analyzer.retain(flowSymbols.toSet())
         orderBook.retain(depthSymbols.toSet())
+        retestDetector.retain(flowSymbols.toSet())
         controller.updateStats { it.copy(depthSymbols = depthSymbols.size) }
 
         // Warm start (ТЗ 0A.4): для ещё не прогретых кандидатов подгружаем базу
@@ -169,6 +172,20 @@ class MonitoringEngine @Inject constructor(
             val metrics = analyzer.metrics(c.symbol)
             val ob = orderBook.metrics(c.symbol, cfg.slippageTestAmountUsdt)
             val res = scoreCalc.score(c, metrics, ob, feedAge)
+            // RETEST (патч §5): подтверждение возобновления после отката перекрывает метку.
+            val retest = retestDetector.update(
+                c.symbol,
+                RetestDetector.Input(
+                    now = now, price = c.price,
+                    cvd = metrics?.cvd30s ?: 0.0, cvdSlope = metrics?.cvdSlope ?: 0.0,
+                    takerBuyRatio = metrics?.takerBuyRatio30s,
+                    spreadBps = ob?.spreadBps ?: metrics?.spreadBps,
+                    slippagePercent = ob?.buySlippagePercent,
+                    confidence = res.confidence, entryRisk = res.entryRisk,
+                    isImpulse = res.level.ordinal >= SignalLevel.EARLY.ordinal
+                )
+            )
+            val label = if (retest) "RETEST_CONFIRMED" else res.opportunityLabel
             val live = LiveSignal(
                 symbol = c.symbol,
                 price = c.price,
@@ -176,7 +193,7 @@ class MonitoringEngine @Inject constructor(
                 entryRiskScore = res.entryRisk,
                 confidenceScore = res.confidence,
                 exhaustionRiskScore = res.exhaustionRisk,
-                opportunityLabel = res.opportunityLabel,
+                opportunityLabel = label,
                 liquidityTier = res.liquidityTier.name,
                 level = res.level.name,
                 stage = stageOf(res.level, metrics?.ready == true),
@@ -328,6 +345,7 @@ class MonitoringEngine @Inject constructor(
         scanner.clear()
         analyzer.clear()
         orderBook.clear()
+        retestDetector.clear()
         outcomeTracker.clear()
         retention.clear()
         synchronized(warmed) { warmed.clear() }
