@@ -92,9 +92,11 @@ class PumpReversalShortDetector @Inject constructor() {
                     if (row.bounceHigh >= row.pumpHigh) { row.state = State.PUMP; row.pumpHigh = row.bounceHigh; return@synchronized false }
                     val bidGone = row.bidDepthHigh > 0.0 &&
                         (i.bidNotionalTop10 ?: row.bidDepthHigh) <= BID_DEPTH_FRAC * row.bidDepthHigh
+                    // takerBuyRatio15s < 0.45 (короткое окно, откат к 30с если 15с нет).
+                    val tbrShort = i.takerBuyRatio15s ?: i.takerBuyRatio ?: 1.0
                     val confirmed = i.price < row.swingLow &&                 // пробой локального минимума
                         i.cvd < 0.0 &&                                        // отрицательный CVD
-                        (i.takerBuyRatio ?: 1.0) <= TAKER_SELL_DOM &&         // доминируют taker-продажи
+                        tbrShort < TAKER_SELL_DOM &&                          // доминируют taker-продажи (15с)
                         (i.obi10 ?: 0.0) <= OBI_NEG &&                        // отрицательный OBI
                         bidGone &&                                            // исчезает bid depth
                         (i.spreadBps ?: Double.MAX_VALUE) <= MAX_SPREAD_BPS &&

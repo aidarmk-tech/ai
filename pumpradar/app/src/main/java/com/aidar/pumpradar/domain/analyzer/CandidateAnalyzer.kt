@@ -109,12 +109,16 @@ class CandidateAnalyzer @Inject constructor() {
 
             var buy30 = 0.0; var sell30 = 0.0; var count30 = 0
             var buy60 = 0.0; var sell60 = 0.0
+            var buy15 = 0.0; var sell15 = 0.0
             var tinyCount = 0
             val quotes30 = ArrayList<Double>()
             for (tr in trades) {
                 val age = now - tr.t
                 if (age <= 60_000) {
                     if (tr.buy) buy60 += tr.quote else sell60 += tr.quote
+                }
+                if (age <= 15_000) {
+                    if (tr.buy) buy15 += tr.quote else sell15 += tr.quote
                 }
                 if (age <= 30_000) {
                     if (tr.buy) buy30 += tr.quote else sell30 += tr.quote
@@ -125,6 +129,8 @@ class CandidateAnalyzer @Inject constructor() {
             }
             val total30 = buy30 + sell30
             val takerBuyRatio = if (total30 > MathUtils.EPSILON) buy30 / total30 else null
+            val total15 = buy15 + sell15
+            val takerBuyRatio15 = if (total15 > MathUtils.EPSILON) buy15 / total15 else null
             val cvd30 = buy30 - sell30
             val cvd60 = buy60 - sell60
             val cvdSlope = cvd30 - (cvd60 - cvd30)
@@ -156,6 +162,7 @@ class CandidateAnalyzer @Inject constructor() {
                 tradeCount30s = count30,
                 tradesPerSecond = count30 / 30.0,
                 takerBuyRatio30s = takerBuyRatio,
+                takerBuyRatio15s = takerBuyRatio15,
                 cvd30s = cvd30,
                 cvdSlope = cvdSlope,
                 volumeZ30s = volumeZ,

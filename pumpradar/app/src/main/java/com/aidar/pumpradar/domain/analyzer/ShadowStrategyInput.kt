@@ -12,7 +12,9 @@ data class ShadowStrategyInput(
     val price: Double,
     val cvd: Double,
     val cvdSlope: Double,
-    val takerBuyRatio: Double?,   // доля агрессивных покупок; <0.5 → доминируют продажи
+    val takerBuyRatio: Double?,   // доля агрессивных покупок 30с; <0.5 → доминируют продажи
+    val takerBuyRatio15s: Double? = null,  // короткое окно 15с (item 7)
+    val return60s: Double? = null,         // доходность за 60с (для LONG_STRICT)
     val spreadBps: Double?,
     val slippagePercent: Double?,
     val obi10: Double?,           // >0 bid-тяжёлый, <0 ask-тяжёлый

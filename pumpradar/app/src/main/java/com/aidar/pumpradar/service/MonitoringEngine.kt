@@ -23,6 +23,7 @@ import com.aidar.pumpradar.domain.analyzer.MarketWideMoveDetector
 import com.aidar.pumpradar.domain.analyzer.OrderBookAnalyzer
 import com.aidar.pumpradar.domain.analyzer.DumpContinuationShortDetector
 import com.aidar.pumpradar.domain.analyzer.DumpReboundLongDetector
+import com.aidar.pumpradar.domain.analyzer.LongStrictDetector
 import com.aidar.pumpradar.domain.analyzer.OutcomeTracker
 import com.aidar.pumpradar.domain.analyzer.PumpReversalShortDetector
 import com.aidar.pumpradar.domain.analyzer.PumpScoreCalculator
@@ -69,6 +70,7 @@ class MonitoringEngine @Inject constructor(
     private val pumpReversalShort: PumpReversalShortDetector,
     private val dumpContinuationShort: DumpContinuationShortDetector,
     private val dumpReboundLong: DumpReboundLongDetector,
+    private val longStrict: LongStrictDetector,
     private val shadowOutcomeTracker: ShadowOutcomeTracker,
     private val shadowSignalDao: ShadowSignalDao,
     private val snapshotOutcomeTracker: SnapshotOutcomeTracker,
@@ -192,6 +194,7 @@ class MonitoringEngine @Inject constructor(
         pumpReversalShort.retain(flowSet)
         dumpContinuationShort.retain(flowSet)
         dumpReboundLong.retain(flowSet)
+        longStrict.retain(flowSet)
         clusterer.retain(flowSymbols.toSet())
         controller.updateStats { it.copy(depthSymbols = depthSymbols.size) }
 
@@ -268,7 +271,7 @@ class MonitoringEngine @Inject constructor(
             runShadowStrategies(
                 c.symbol, c.price, metrics, ob,
                 isUp = res.level.ordinal >= SignalLevel.EARLY.ordinal,
-                isDown = isDownMove(c), now = now
+                isDown = isDownMove(c), return60s = c.return60s, now = now
             )
             // LONG_CONTINUATION = подтверждённый ретест (та же точка, что уведомление LONG).
             if (retest) trackShadow("LONG_CONTINUATION", "LONG", c.symbol, c.price, ob, metrics, now)
@@ -281,7 +284,10 @@ class MonitoringEngine @Inject constructor(
             if (dc.symbol in deepSyms) continue
             val m = analyzer.metrics(dc.symbol)
             val ob = orderBook.metrics(dc.symbol, cfg.slippageTestAmountUsdt)
-            runShadowStrategies(dc.symbol, dc.price, m, ob, isUp = false, isDown = true, now = now)
+            runShadowStrategies(
+                dc.symbol, dc.price, m, ob, isUp = false, isDown = true,
+                return60s = dc.return60s, now = now
+            )
         }
 
         signals.sortByDescending { it.score }
@@ -455,12 +461,14 @@ class MonitoringEngine @Inject constructor(
      */
     private suspend fun runShadowStrategies(
         symbol: String, price: Double, metrics: CandidateMetrics?, ob: OrderBookMetrics?,
-        isUp: Boolean, isDown: Boolean, now: Long
+        isUp: Boolean, isDown: Boolean, return60s: Double?, now: Long
     ) {
         val input = ShadowStrategyInput(
             now = now, price = price,
             cvd = metrics?.cvd30s ?: 0.0, cvdSlope = metrics?.cvdSlope ?: 0.0,
             takerBuyRatio = metrics?.takerBuyRatio30s,
+            takerBuyRatio15s = metrics?.takerBuyRatio15s,
+            return60s = return60s,
             spreadBps = ob?.spreadBps ?: metrics?.spreadBps,
             slippagePercent = ob?.buySlippagePercent,
             obi10 = ob?.obi10,
@@ -468,6 +476,8 @@ class MonitoringEngine @Inject constructor(
             askNotionalTop10 = ob?.askNotionalTop10,
             isUpImpulse = isUp, isDownImpulse = isDown
         )
+        if (longStrict.update(symbol, input))
+            trackShadow("LONG_STRICT", "LONG", symbol, price, ob, metrics, now)
         if (pumpReversalShort.update(symbol, input))
             trackShadow("PUMP_REVERSAL_SHORT", "SHORT", symbol, price, ob, metrics, now)
         if (dumpContinuationShort.update(symbol, input))
@@ -566,6 +576,7 @@ class MonitoringEngine @Inject constructor(
         pumpReversalShort.clear()
         dumpContinuationShort.clear()
         dumpReboundLong.clear()
+        longStrict.clear()
         clusterer.clear()
         outcomeTracker.clear()
         shadowOutcomeTracker.clear()

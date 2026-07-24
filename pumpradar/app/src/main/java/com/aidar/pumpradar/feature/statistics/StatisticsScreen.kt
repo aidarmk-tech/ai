@@ -31,6 +31,7 @@ import com.aidar.pumpradar.data.local.OutcomeDao
 import com.aidar.pumpradar.data.local.ShadowSignalDao
 import com.aidar.pumpradar.data.local.ShadowSignalEntity
 import com.aidar.pumpradar.data.local.SignalOutcome
+import com.aidar.pumpradar.data.local.SnapshotOutcomeDao
 import com.aidar.pumpradar.data.local.TrainingSnapshotDao
 import com.aidar.pumpradar.data.preferences.SettingsRepository
 import com.aidar.pumpradar.domain.analyzer.CalibrationEval
@@ -49,11 +50,19 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import javax.inject.Inject
 
+/** Разметка исходов снимков по типам (для гейта готовности к ML, item 10). */
+data class SnapCounts(
+    val total: Int = 0, val triggered: Int = 0, val nearMiss: Int = 0, val randomNormal: Int = 0
+) {
+    val allTypesLabeled: Boolean get() = triggered > 0 && nearMiss > 0 && randomNormal > 0
+}
+
 @HiltViewModel
 class StatisticsViewModel @Inject constructor(
     dao: OutcomeDao,
     shadowDao: ShadowSignalDao,
     snapshotDao: TrainingSnapshotDao,
+    snapshotOutcomeDao: SnapshotOutcomeDao,
     settings: SettingsRepository
 ) : ViewModel() {
     val outcomes = dao.completedWithSignal(200).stateIn(
@@ -65,6 +74,16 @@ class StatisticsViewModel @Inject constructor(
     val noTradeCount = flow {
         emit(snapshotDao.countByType("NEAR_MISS") + snapshotDao.countByType("RANDOM_NORMAL"))
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+    val snapCounts = flow {
+        emit(
+            SnapCounts(
+                total = snapshotOutcomeDao.completedCount(),
+                triggered = snapshotOutcomeDao.completedCountByType("TRIGGERED"),
+                nearMiss = snapshotOutcomeDao.completedCountByType("NEAR_MISS"),
+                randomNormal = snapshotOutcomeDao.completedCountByType("RANDOM_NORMAL")
+            )
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SnapCounts())
     val calibrating = settings.settings.map { it.calibrationMode }.stateIn(
         viewModelScope, SharingStarted.WhileSubscribed(5000), false
     )
@@ -75,6 +94,7 @@ fun StatisticsScreen(vm: StatisticsViewModel = hiltViewModel()) {
     val outcomes by vm.outcomes.collectAsStateWithLifecycle()
     val shadows by vm.shadows.collectAsStateWithLifecycle()
     val noTradeCount by vm.noTradeCount.collectAsStateWithLifecycle()
+    val snapCounts by vm.snapCounts.collectAsStateWithLifecycle()
     val calibrating by vm.calibrating.collectAsStateWithLifecycle()
 
     Column(
@@ -181,6 +201,7 @@ fun StatisticsScreen(vm: StatisticsViewModel = hiltViewModel()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("Лаборатория стратегий (тень)", fontWeight = FontWeight.Bold)
                 Text("Уведомлениями управляет champion (S1). Остальные сравниваются в тени. " +
+                    "Точность = доля первичной цели +1%/−0.75% (item 9). " +
                     "Победитель автоматически не выбирается — нужна большая выборка.",
                     style = MaterialTheme.typography.bodySmall)
                 StrategyLab.STRATEGIES.forEach { s ->
@@ -189,7 +210,8 @@ fun StatisticsScreen(vm: StatisticsViewModel = hiltViewModel()) {
                     if (events.size < 10) {
                         StatRow(s.title, "мало данных (${events.size})")
                     } else {
-                        val wins = trig.filter { targetHit(it, TARGETS[3]) }.map { eventKey(it) }.distinct()
+                        // Первичная цель +1%/−0.75% (item 9); 2%/3% — дополнительные.
+                        val wins = trig.filter { targetHit(it, TARGETS[1]) }.map { eventKey(it) }.distinct()
                         val prec = wins.size * 100.0 / events.size
                         StatRow(s.title, "%d соб · %.0f%%".format(events.size, prec))
                     }
@@ -200,25 +222,40 @@ fun StatisticsScreen(vm: StatisticsViewModel = hiltViewModel()) {
         // Двусторонний анализ (LONG + SHORT) — теневые стратегии.
         TwoSidedCard(shadows, noTradeCount)
 
-        // Готовность к ML (патч §18): не обучать, пока мало данных.
+        // Готовность к ML (item 10): гейт из нескольких обязательных условий.
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("Готовность к обучению", fontWeight = FontWeight.Bold)
                 val events = outcomes.map { eventKey(it) }.distinct().size
-                val positives = outcomes.filter { targetHit(it, TARGETS[3]) }
+                // Первичная цель (item 9): +1% раньше −0.75% (TARGETS[1]).
+                val positives = outcomes.filter { targetHit(it, TARGETS[1]) }
                     .map { eventKey(it) }.distinct().size
                 val minAt = outcomes.minOf { it.createdAt }
                 val maxAt = outcomes.maxOf { it.createdAt }
                 val days = ((maxAt - minAt) / 86_400_000L + 1).toInt()
-                StatRow("Уникальных событий", "$events / 300")
-                StatRow("Позитивов (T4)", "$positives / 50")
-                StatRow("Негативов", "${(events - positives).coerceAtLeast(0)}")
-                StatRow("Дней покрыто", "$days / 30")
-                val ready = events >= 300 && positives >= 50 && days >= 30
-                Text(if (ready)
-                    "Данных достаточно для оффлайн-обучения (модель обучается вне телефона)."
+
+                val enoughEvents = events >= 300
+                val allTypes = snapCounts.allTypesLabeled
+                val enoughDays = days >= 30
+                val enoughPos = positives >= 50
+
+                StatRow("Уникальных событий", gate("$events / 300", enoughEvents))
+                StatRow("Позитивов (перв. +1%/−0.75%)", gate("$positives / 50", enoughPos))
+                StatRow("Размечено снимков (все типы)",
+                    gate("T${snapCounts.triggered}/N${snapCounts.nearMiss}/R${snapCounts.randomNormal}", allTypes))
+                StatRow("Дней покрыто", gate("$days / 30", enoughDays))
+                StatRow("Порядок first-barrier", "✓ по секундной траектории")
+                StatRow("Несколько рыночных режимов", "⚠ проверить вручную")
+
+                val autoReady = enoughEvents && enoughPos && allTypes && enoughDays
+                Text(if (autoReady)
+                    "Автопроверки пройдены. Перед обучением ещё убедись, что данные покрывают " +
+                        "разные рыночные режимы (тренд/флет/распродажа) и что first-barrier " +
+                        "разметка корректна. Модель обучается вне телефона."
                 else
-                    "Рано обучать модель — данные копятся. Пороги автоматически не меняются.",
+                    "Рано обучать production-модель. Нужны: ≥300 событий, исходы для triggered/" +
+                        "near-miss/random-normal, ≥30 дней, несколько режимов и корректный порядок " +
+                        "first-barrier. Пороги автоматически не меняются.",
                     style = MaterialTheme.typography.bodySmall)
             }
         }
@@ -326,6 +363,9 @@ private fun median(v: List<Double>): String {
     return "%+.2f%%".format(m)
 }
 
+/** Пометка выполнения условия гейта готовности (item 10). */
+private fun gate(value: String, ok: Boolean): String = if (ok) "✓ $value" else "✗ $value"
+
 @Composable
 private fun StatRow(label: String, value: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -396,6 +436,7 @@ private class ShadowStrategyDef(val id: String, val ru: String, val side: TradeS
 
 private val SHADOW_STRATEGIES = listOf(
     ShadowStrategyDef("LONG_CONTINUATION", "LONG продолжение (ретест)", TradeSide.LONG),
+    ShadowStrategyDef("LONG_STRICT", "LONG строгий", TradeSide.LONG),
     ShadowStrategyDef("PUMP_REVERSAL_SHORT", "SHORT разворот пампа", TradeSide.SHORT),
     ShadowStrategyDef("DUMP_CONTINUATION_SHORT", "SHORT продолжение дампа", TradeSide.SHORT),
     ShadowStrategyDef("DUMP_REBOUND_LONG", "LONG отскок от дна", TradeSide.LONG)
