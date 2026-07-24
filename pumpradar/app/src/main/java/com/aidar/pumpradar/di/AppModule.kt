@@ -7,9 +7,11 @@ import androidx.room.Room
 import com.aidar.pumpradar.data.local.AppEventDao
 import com.aidar.pumpradar.data.local.ClusterDao
 import com.aidar.pumpradar.data.local.MIGRATION_1_2
+import com.aidar.pumpradar.data.local.MIGRATION_2_3
 import com.aidar.pumpradar.data.local.OutcomeDao
 import com.aidar.pumpradar.data.local.PumpRadarDatabase
 import com.aidar.pumpradar.data.local.SignalDao
+import com.aidar.pumpradar.data.local.TrainingSnapshotDao
 import com.aidar.pumpradar.data.preferences.dataStore
 import dagger.Module
 import dagger.Provides
@@ -26,7 +28,7 @@ object AppModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): PumpRadarDatabase =
         Room.databaseBuilder(context, PumpRadarDatabase::class.java, "pumpradar.db")
-            .addMigrations(MIGRATION_1_2)   // патч §26: не destructive, история сохраняется
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)   // патч §26: не destructive
             .build()
 
     @Provides
@@ -40,6 +42,10 @@ object AppModule {
 
     @Provides
     fun provideClusterDao(db: PumpRadarDatabase): ClusterDao = db.clusterDao()
+
+    @Provides
+    fun provideTrainingSnapshotDao(db: PumpRadarDatabase): TrainingSnapshotDao =
+        db.trainingSnapshotDao()
 
     @Provides
     @Singleton

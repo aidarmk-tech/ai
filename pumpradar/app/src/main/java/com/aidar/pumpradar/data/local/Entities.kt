@@ -42,6 +42,25 @@ data class SignalEntity(
     val algorithmVersion: String? = null
 )
 
+/** Снимок признаков для будущего обучения (патч §15). Целевые метки берутся из
+ *  outcomes при экспорте — в самом снимке будущих данных нет (§16). */
+@Entity(
+    tableName = "training_snapshots",
+    indices = [Index("eventId"), Index("symbol"), Index("snapshotTime")]
+)
+data class TrainingSnapshotEntity(
+    @PrimaryKey val id: String,
+    val signalId: String?,
+    val eventId: String?,
+    val symbol: String,
+    val snapshotTime: Long,
+    val snapshotType: String,          // TRIGGERED / NEAR_MISS / RANDOM_NORMAL
+    val algorithmVersion: String,
+    val liquidityTier: String,
+    val opportunityLabel: String,
+    val featureVectorJson: String
+)
+
 /** Кластер сигналов одного рыночного события (патч §12). */
 @Entity(tableName = "market_event_clusters")
 data class MarketEventClusterEntity(

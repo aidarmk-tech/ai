@@ -65,6 +65,21 @@ interface OutcomeDao {
 }
 
 @Dao
+interface TrainingSnapshotDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(snapshot: TrainingSnapshotEntity)
+
+    @Query("SELECT COUNT(*) FROM training_snapshots")
+    suspend fun count(): Int
+
+    @Query("SELECT COUNT(*) FROM training_snapshots WHERE snapshotType = :type")
+    suspend fun countByType(type: String): Int
+
+    @Query("SELECT * FROM training_snapshots ORDER BY snapshotTime DESC LIMIT :limit")
+    suspend fun recent(limit: Int): List<TrainingSnapshotEntity>
+}
+
+@Dao
 interface ClusterDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(cluster: MarketEventClusterEntity)

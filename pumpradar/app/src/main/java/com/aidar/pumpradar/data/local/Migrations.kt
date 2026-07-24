@@ -36,3 +36,31 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
         db.execSQL("ALTER TABLE signals ADD COLUMN algorithmVersion TEXT")
     }
 }
+
+/**
+ * v2 → v3 (патч §15): таблица training_snapshots для будущего ML. Только новая
+ * таблица — существующие данные не затрагиваются.
+ */
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS training_snapshots (
+                id TEXT NOT NULL PRIMARY KEY,
+                signalId TEXT,
+                eventId TEXT,
+                symbol TEXT NOT NULL,
+                snapshotTime INTEGER NOT NULL,
+                snapshotType TEXT NOT NULL,
+                algorithmVersion TEXT NOT NULL,
+                liquidityTier TEXT NOT NULL,
+                opportunityLabel TEXT NOT NULL,
+                featureVectorJson TEXT NOT NULL
+            )
+            """.trimIndent()
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_training_snapshots_eventId ON training_snapshots(eventId)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_training_snapshots_symbol ON training_snapshots(symbol)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_training_snapshots_snapshotTime ON training_snapshots(snapshotTime)")
+    }
+}

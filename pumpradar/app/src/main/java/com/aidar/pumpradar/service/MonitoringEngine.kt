@@ -13,6 +13,9 @@ import com.aidar.pumpradar.data.remote.MarketStream
 import com.aidar.pumpradar.domain.analyzer.CandidateAnalyzer
 import com.aidar.pumpradar.data.local.ClusterDao
 import com.aidar.pumpradar.data.local.MarketEventClusterEntity
+import com.aidar.pumpradar.data.local.TrainingSnapshotDao
+import com.aidar.pumpradar.data.local.TrainingSnapshotEntity
+import com.aidar.pumpradar.domain.analyzer.FeatureVector
 import com.aidar.pumpradar.domain.analyzer.MarketEventClusterer
 import com.aidar.pumpradar.domain.analyzer.MarketScanner
 import com.aidar.pumpradar.domain.analyzer.MarketWideMoveDetector
@@ -21,6 +24,7 @@ import com.aidar.pumpradar.domain.analyzer.OutcomeTracker
 import com.aidar.pumpradar.domain.analyzer.PumpScoreCalculator
 import com.aidar.pumpradar.domain.analyzer.RetestDetector
 import com.aidar.pumpradar.domain.model.Candidate
+import com.aidar.pumpradar.domain.model.CandidateMetrics
 import com.aidar.pumpradar.domain.model.LiquidityTier
 import com.aidar.pumpradar.domain.model.LiveSignal
 import com.aidar.pumpradar.domain.model.SignalLevel
@@ -54,6 +58,7 @@ class MonitoringEngine @Inject constructor(
     private val retestDetector: RetestDetector,
     private val clusterer: MarketEventClusterer,
     private val clusterDao: ClusterDao,
+    private val trainingSnapshotDao: TrainingSnapshotDao,
     private val outcomeTracker: OutcomeTracker,
     private val controller: MonitoringController,
     private val settings: SettingsRepository,
@@ -222,7 +227,7 @@ class MonitoringEngine @Inject constructor(
                 spark = downsample(scanner.recentPrices(c.symbol, 120), 40)
             )
             signals.add(live)
-            maybeEmit(c, live)
+            maybeEmit(c, live, metrics)
         }
         signals.sortByDescending { it.score }
         controller.setLiveSignals(signals)
@@ -272,7 +277,7 @@ class MonitoringEngine @Inject constructor(
         }
     }
 
-    private suspend fun maybeEmit(c: Candidate, live: LiveSignal) {
+    private suspend fun maybeEmit(c: Candidate, live: LiveSignal, metrics: CandidateMetrics?) {
         val lvl = SignalLevel.valueOf(live.level)
         // В историю/статистику пишем все EARLY+ (даже не-уведомляемые) — патч §3.
         if (lvl.ordinal < SignalLevel.EARLY.ordinal) return
@@ -287,6 +292,7 @@ class MonitoringEngine @Inject constructor(
         // Кластеризация в одно рыночное событие (патч §12).
         val cluster = clusterer.assign(c.symbol, now, live.score, id)
         persistSignal(id, c, live, cluster.id)
+        recordTrainingSnapshot(id, cluster.id, c, live, metrics, now)
         runCatching {
             clusterDao.upsert(
                 MarketEventClusterEntity(
@@ -307,6 +313,37 @@ class MonitoringEngine @Inject constructor(
             cfg.monitoringProfile != MonitoringProfile.EXPLORE
         if (notifyByLabel && !tierDMuted && !cfg.calibrationMode) {
             notifier.maybeNotify(live, cfg.symbolCooldownMinutes)
+        }
+    }
+
+    /** Снимок признаков для будущего ML (патч §15/§16). Без будущих данных. */
+    private suspend fun recordTrainingSnapshot(
+        signalId: String, eventId: String, c: Candidate, live: LiveSignal,
+        metrics: CandidateMetrics?, now: Long
+    ) {
+        val fv = FeatureVector(
+            return15s = c.return15s, return60s = c.return60s, return5m = c.return5m,
+            acceleration = c.acceleration, volumeZ30s = live.volumeZ30s,
+            takerBuyRatio30s = live.takerBuyRatio30s, cvd30s = live.cvd30s,
+            spreadBps = live.spreadBps, obi10 = live.obi10, slippagePercent = live.slippagePercent,
+            relativeStrengthVsBtc = c.relativeStrengthVsBtc,
+            largestTradeShare = metrics?.largestTradeShare, top3TradeShare = metrics?.top3TradeShare,
+            tinyTradeShare = metrics?.tinyTradeShare,
+            impulse = live.score, entryRisk = live.entryRiskScore, confidence = live.confidenceScore,
+            exhaustionRisk = live.exhaustionRiskScore, artificialRisk = live.artificialRiskScore,
+            marketWideRisk = live.marketWideRiskScore
+        )
+        runCatching {
+            trainingSnapshotDao.insert(
+                TrainingSnapshotEntity(
+                    id = UUID.randomUUID().toString(),
+                    signalId = signalId, eventId = eventId, symbol = c.symbol,
+                    snapshotTime = now, snapshotType = "TRIGGERED",
+                    algorithmVersion = ALGO_VERSION, liquidityTier = live.liquidityTier,
+                    opportunityLabel = live.opportunityLabel,
+                    featureVectorJson = json.encodeToString(FeatureVector.serializer(), fv)
+                )
+            )
         }
     }
 

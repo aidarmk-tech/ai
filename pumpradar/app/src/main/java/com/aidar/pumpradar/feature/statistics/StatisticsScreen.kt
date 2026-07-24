@@ -178,6 +178,29 @@ fun StatisticsScreen(vm: StatisticsViewModel = hiltViewModel()) {
             }
         }
 
+        // Готовность к ML (патч §18): не обучать, пока мало данных.
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Готовность к обучению", fontWeight = FontWeight.Bold)
+                val events = outcomes.map { eventKey(it) }.distinct().size
+                val positives = outcomes.filter { targetHit(it, TARGETS[3]) }
+                    .map { eventKey(it) }.distinct().size
+                val minAt = outcomes.minOf { it.createdAt }
+                val maxAt = outcomes.maxOf { it.createdAt }
+                val days = ((maxAt - minAt) / 86_400_000L + 1).toInt()
+                StatRow("Уникальных событий", "$events / 300")
+                StatRow("Позитивов (T4)", "$positives / 50")
+                StatRow("Негативов", "${(events - positives).coerceAtLeast(0)}")
+                StatRow("Дней покрыто", "$days / 30")
+                val ready = events >= 300 && positives >= 50 && days >= 30
+                Text(if (ready)
+                    "Данных достаточно для оффлайн-обучения (модель обучается вне телефона)."
+                else
+                    "Рано обучать модель — данные копятся. Пороги автоматически не меняются.",
+                    style = MaterialTheme.typography.bodySmall)
+            }
+        }
+
         // Разбивка по уровням.
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
