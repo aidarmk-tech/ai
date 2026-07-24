@@ -96,7 +96,10 @@ fun StatisticsScreen(vm: StatisticsViewModel = hiltViewModel()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("Обзор", fontWeight = FontWeight.Bold)
                 val coverage = outcomes.count { hasCheckpoints(it) } * 100.0 / outcomes.size
-                StatRow("Завершённых оценок", outcomes.size.toString())
+                val uniqueEvents = outcomes
+                    .map { it.eventId ?: "${it.symbol}-${it.createdAt}" }.distinct().size
+                StatRow("Сигналов (оценок)", outcomes.size.toString())
+                StatRow("Уникальных событий", uniqueEvents.toString())
                 StatRow("Outcome coverage", "%.0f%%".format(coverage))
                 StatRow("Медиана MFE (макс. рост)", median(outcomes.mapNotNull { it.mfePercent }))
                 StatRow("Медиана MAE (макс. просадка)", median(outcomes.mapNotNull { it.maePercent }))

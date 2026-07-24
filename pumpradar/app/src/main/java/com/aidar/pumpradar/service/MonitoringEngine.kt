@@ -11,6 +11,9 @@ import com.aidar.pumpradar.data.remote.BinanceRest
 import com.aidar.pumpradar.data.remote.CandidateStream
 import com.aidar.pumpradar.data.remote.MarketStream
 import com.aidar.pumpradar.domain.analyzer.CandidateAnalyzer
+import com.aidar.pumpradar.data.local.ClusterDao
+import com.aidar.pumpradar.data.local.MarketEventClusterEntity
+import com.aidar.pumpradar.domain.analyzer.MarketEventClusterer
 import com.aidar.pumpradar.domain.analyzer.MarketScanner
 import com.aidar.pumpradar.domain.analyzer.MarketWideMoveDetector
 import com.aidar.pumpradar.domain.analyzer.OrderBookAnalyzer
@@ -49,6 +52,8 @@ class MonitoringEngine @Inject constructor(
     private val orderBook: OrderBookAnalyzer,
     private val scoreCalc: PumpScoreCalculator,
     private val retestDetector: RetestDetector,
+    private val clusterer: MarketEventClusterer,
+    private val clusterDao: ClusterDao,
     private val outcomeTracker: OutcomeTracker,
     private val controller: MonitoringController,
     private val settings: SettingsRepository,
@@ -147,6 +152,7 @@ class MonitoringEngine @Inject constructor(
         analyzer.retain(flowSymbols.toSet())
         orderBook.retain(depthSymbols.toSet())
         retestDetector.retain(flowSymbols.toSet())
+        clusterer.retain(flowSymbols.toSet())
         controller.updateStats { it.copy(depthSymbols = depthSymbols.size) }
 
         // Warm start (ТЗ 0A.4): для ещё не прогретых кандидатов подгружаем базу
@@ -278,7 +284,19 @@ class MonitoringEngine @Inject constructor(
         emitted[c.symbol] = lvl.ordinal to now
 
         val id = UUID.randomUUID().toString()
-        persistSignal(id, c, live)
+        // Кластеризация в одно рыночное событие (патч §12).
+        val cluster = clusterer.assign(c.symbol, now, live.score, id)
+        persistSignal(id, c, live, cluster.id)
+        runCatching {
+            clusterDao.upsert(
+                MarketEventClusterEntity(
+                    id = cluster.id, symbol = c.symbol, startedAt = cluster.startedAt,
+                    endedAt = null, firstSignalId = cluster.firstSignalId,
+                    peakImpulseScore = cluster.peakImpulse, signalCount = cluster.count,
+                    state = "ACTIVE"
+                )
+            )
+        }
         outcomeTracker.track(id, c.symbol, c.price)
 
         // Уведомления только для основных категорий (патч §2/§3): по умолчанию
@@ -299,7 +317,7 @@ class MonitoringEngine @Inject constructor(
         MonitoringProfile.EXPLORE -> setOf(LiquidityTier.A, LiquidityTier.B, LiquidityTier.C, LiquidityTier.D)
     }
 
-    private suspend fun persistSignal(id: String, c: Candidate, live: LiveSignal) {
+    private suspend fun persistSignal(id: String, c: Candidate, live: LiveSignal, eventId: String) {
         val entity = SignalEntity(
             id = id,
             symbol = c.symbol,
@@ -322,7 +340,16 @@ class MonitoringEngine @Inject constructor(
             relativeStrengthVsBtc = c.relativeStrengthVsBtc,
             reasonsJson = json.encodeToString(live.reasons),
             risksJson = json.encodeToString(live.risks),
-            dataQualityJson = "{}"
+            dataQualityJson = "{}",
+            eventId = eventId,
+            opportunityLabel = live.opportunityLabel,
+            entryRiskScore = live.entryRiskScore,
+            confidenceScore = live.confidenceScore,
+            exhaustionRisk = live.exhaustionRiskScore,
+            artificialRisk = live.artificialRiskScore,
+            marketWideRisk = live.marketWideRiskScore,
+            liquidityTier = live.liquidityTier,
+            algorithmVersion = ALGO_VERSION
         )
         runCatching { signalDao.insert(entity) }
     }
@@ -353,6 +380,7 @@ class MonitoringEngine @Inject constructor(
         analyzer.clear()
         orderBook.clear()
         retestDetector.clear()
+        clusterer.clear()
         outcomeTracker.clear()
         retention.clear()
         synchronized(warmed) { warmed.clear() }
@@ -363,6 +391,7 @@ class MonitoringEngine @Inject constructor(
     private companion object {
         // Метки, дающие системное уведомление по умолчанию (патч §3).
         val NOTIFY_LABELS = setOf("EARLY_CLEAN", "RETEST_CONFIRMED")
+        const val ALGO_VERSION = "3.0.0"
         const val MAX_CANDIDATES = 20
         const val DEEP_CANDIDATES = 10
         const val DEPTH_CANDIDATES = 8

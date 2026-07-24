@@ -5,6 +5,8 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.room.Room
 import com.aidar.pumpradar.data.local.AppEventDao
+import com.aidar.pumpradar.data.local.ClusterDao
+import com.aidar.pumpradar.data.local.MIGRATION_1_2
 import com.aidar.pumpradar.data.local.OutcomeDao
 import com.aidar.pumpradar.data.local.PumpRadarDatabase
 import com.aidar.pumpradar.data.local.SignalDao
@@ -24,7 +26,7 @@ object AppModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): PumpRadarDatabase =
         Room.databaseBuilder(context, PumpRadarDatabase::class.java, "pumpradar.db")
-            .fallbackToDestructiveMigration()
+            .addMigrations(MIGRATION_1_2)   // патч §26: не destructive, история сохраняется
             .build()
 
     @Provides
@@ -35,6 +37,9 @@ object AppModule {
 
     @Provides
     fun provideAppEventDao(db: PumpRadarDatabase): AppEventDao = db.appEventDao()
+
+    @Provides
+    fun provideClusterDao(db: PumpRadarDatabase): ClusterDao = db.clusterDao()
 
     @Provides
     @Singleton

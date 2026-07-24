@@ -52,7 +52,7 @@ interface OutcomeDao {
                s.spreadBps AS spreadBps, s.slippagePercent AS slippagePercent,
                s.referencePrice AS referencePrice, o.price30s AS price30s,
                o.price1m AS price1m, o.price3m AS price3m, o.price5m AS price5m,
-               o.price15m AS price15m
+               o.price15m AS price15m, s.eventId AS eventId
         FROM outcomes o JOIN signals s ON s.id = o.signalId
         WHERE o.completed = 1
         ORDER BY s.createdAt DESC
@@ -60,6 +60,18 @@ interface OutcomeDao {
         """
     )
     fun completedWithSignal(limit: Int): Flow<List<SignalOutcome>>
+}
+
+@Dao
+interface ClusterDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(cluster: MarketEventClusterEntity)
+
+    @Query("SELECT * FROM market_event_clusters ORDER BY startedAt DESC LIMIT :limit")
+    fun recent(limit: Int): Flow<List<MarketEventClusterEntity>>
+
+    @Query("SELECT COUNT(*) FROM market_event_clusters")
+    suspend fun count(): Int
 }
 
 @Dao

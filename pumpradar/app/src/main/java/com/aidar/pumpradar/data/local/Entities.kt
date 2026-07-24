@@ -28,7 +28,31 @@ data class SignalEntity(
     val relativeStrengthVsBtc: Double?,
     val reasonsJson: String,
     val risksJson: String,
-    val dataQualityJson: String
+    val dataQualityJson: String,
+    // Патч §12/§26 (v2): кластеризация и трёхосевые риски. Nullable — совместимо
+    // со старыми записями после миграции.
+    val eventId: String? = null,
+    val opportunityLabel: String? = null,
+    val entryRiskScore: Int? = null,
+    val confidenceScore: Int? = null,
+    val exhaustionRisk: Int? = null,
+    val artificialRisk: Int? = null,
+    val marketWideRisk: Int? = null,
+    val liquidityTier: String? = null,
+    val algorithmVersion: String? = null
+)
+
+/** Кластер сигналов одного рыночного события (патч §12). */
+@Entity(tableName = "market_event_clusters")
+data class MarketEventClusterEntity(
+    @PrimaryKey val id: String,
+    val symbol: String,
+    val startedAt: Long,
+    val endedAt: Long?,
+    val firstSignalId: String,
+    val peakImpulseScore: Int,
+    val signalCount: Int,
+    val state: String
 )
 
 @Entity(
@@ -75,7 +99,8 @@ data class SignalOutcome(
     val price1m: Double?,
     val price3m: Double?,
     val price5m: Double?,
-    val price15m: Double?
+    val price15m: Double?,
+    val eventId: String?          // кластер рыночного события (патч §12)
 )
 
 @Entity(tableName = "app_events")
