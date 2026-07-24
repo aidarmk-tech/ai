@@ -78,12 +78,18 @@ class MonitoringEngine @Inject constructor(
     private val warmed = HashSet<String>()
     @Volatile private var scopeRef: CoroutineScope? = null
 
+    // Троттлинг сэмплирования датасета (патч §14).
+    private var lastNearMissAt = 0L
+    private var lastRandomAt = 0L
+
     fun start(scope: CoroutineScope) {
         controller.onStarting()
         notifier.reset()
         emitted.clear()
         retention.clear()
         synchronized(warmed) { warmed.clear() }
+        lastNearMissAt = 0L
+        lastRandomAt = 0L
         scopeRef = scope
         scope.launch {
             try {
@@ -181,6 +187,7 @@ class MonitoringEngine @Inject constructor(
         val marketCtx = scanner.marketContext(now)   // патч §9
 
         val signals = ArrayList<LiveSignal>(deep.size)
+        val evaluated = ArrayList<Triple<Candidate, LiveSignal, CandidateMetrics?>>(deep.size)
         for (c in deep) {
             val metrics = analyzer.metrics(c.symbol)
             val ob = orderBook.metrics(c.symbol, cfg.slippageTestAmountUsdt)
@@ -227,11 +234,15 @@ class MonitoringEngine @Inject constructor(
                 spark = downsample(scanner.recentPrices(c.symbol, 120), 40)
             )
             signals.add(live)
+            evaluated.add(Triple(c, live, metrics))
             maybeEmit(c, live, metrics)
         }
         signals.sortByDescending { it.score }
         controller.setLiveSignals(signals)
         controller.updateStats { it.copy(candidates = candidates.size) }
+
+        // Сэмплирование не-сработавших окон для датасета (патч §14).
+        sampleNonTriggered(evaluated, now)
 
         // Отслеживание исходов ранее выданных сигналов.
         outcomeTracker.onTick(System.currentTimeMillis(), scanner::priceOf, outcomeDao)
@@ -292,7 +303,7 @@ class MonitoringEngine @Inject constructor(
         // Кластеризация в одно рыночное событие (патч §12).
         val cluster = clusterer.assign(c.symbol, now, live.score, id)
         persistSignal(id, c, live, cluster.id)
-        recordTrainingSnapshot(id, cluster.id, c, live, metrics, now)
+        recordSnapshot("TRIGGERED", id, cluster.id, c, live, metrics, now)
         runCatching {
             clusterDao.upsert(
                 MarketEventClusterEntity(
@@ -316,9 +327,39 @@ class MonitoringEngine @Inject constructor(
         }
     }
 
+    /**
+     * Сэмплирование не-сработавших окон (патч §14): NEAR_MISS — «около-пороговые»
+     * кандидаты без уведомления; RANDOM_NORMAL — случайные спокойные окна.
+     * Троттлинг по времени, чтобы датасет не был перекошен в сторону TRIGGERED.
+     */
+    private suspend fun sampleNonTriggered(
+        evaluated: List<Triple<Candidate, LiveSignal, CandidateMetrics?>>, now: Long
+    ) {
+        if (evaluated.isEmpty()) return
+        if (now - lastNearMissAt >= NEAR_MISS_INTERVAL_MS) {
+            val nm = evaluated
+                .filter {
+                    it.second.opportunityLabel !in NOTIFY_LABELS &&
+                        it.second.score in 40..69 && it.second.confidenceScore >= 55
+                }
+                .maxByOrNull { it.second.score }
+            if (nm != null) {
+                recordSnapshot("NEAR_MISS", null, null, nm.first, nm.second, nm.third, now)
+                lastNearMissAt = now
+            }
+        }
+        if (now - lastRandomAt >= RANDOM_INTERVAL_MS) {
+            val r = evaluated.filter { it.second.score < 40 }.randomOrNull()
+            if (r != null) {
+                recordSnapshot("RANDOM_NORMAL", null, null, r.first, r.second, r.third, now)
+                lastRandomAt = now
+            }
+        }
+    }
+
     /** Снимок признаков для будущего ML (патч §15/§16). Без будущих данных. */
-    private suspend fun recordTrainingSnapshot(
-        signalId: String, eventId: String, c: Candidate, live: LiveSignal,
+    private suspend fun recordSnapshot(
+        type: String, signalId: String?, eventId: String?, c: Candidate, live: LiveSignal,
         metrics: CandidateMetrics?, now: Long
     ) {
         val fv = FeatureVector(
@@ -338,7 +379,7 @@ class MonitoringEngine @Inject constructor(
                 TrainingSnapshotEntity(
                     id = UUID.randomUUID().toString(),
                     signalId = signalId, eventId = eventId, symbol = c.symbol,
-                    snapshotTime = now, snapshotType = "TRIGGERED",
+                    snapshotTime = now, snapshotType = type,
                     algorithmVersion = ALGO_VERSION, liquidityTier = live.liquidityTier,
                     opportunityLabel = live.opportunityLabel,
                     featureVectorJson = json.encodeToString(FeatureVector.serializer(), fv)
@@ -434,5 +475,7 @@ class MonitoringEngine @Inject constructor(
         const val DEPTH_CANDIDATES = 8
         const val MIN_LIFETIME_MS = 60_000L   // ТЗ 17.3: минимальное время жизни кандидата
         const val EXIT_GRACE_MS = 30_000L     // ТЗ 17.3: льготный период после порога
+        const val NEAR_MISS_INTERVAL_MS = 45_000L   // патч §14: троттлинг NEAR_MISS
+        const val RANDOM_INTERVAL_MS = 30_000L      // патч §14: троттлинг RANDOM_NORMAL
     }
 }
