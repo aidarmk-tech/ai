@@ -3,6 +3,7 @@ package com.aidar.pumpradar.domain.analyzer
 import com.aidar.pumpradar.core.math.MathUtils
 import com.aidar.pumpradar.domain.model.OrderBookMetrics
 import com.aidar.pumpradar.domain.model.PartialDepth
+import com.aidar.pumpradar.domain.model.SlippageProbe
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -50,7 +51,13 @@ class OrderBookAnalyzer @Inject constructor() {
             val bid20 = notional(d.bids, 20); val ask20 = notional(d.asks, 20)
             val obi10 = imbalance(bid10, ask10)
             val obi20 = imbalance(bid20, ask20)
-            val slippage = buySlippage(d, bestAsk, slippageAmountUsdt)
+            // buySlippagePercent сохраняет контракт «null = недостаточно глубины»
+            // на настраиваемую сумму (от него зависят скоринг/вето/EARLY_CLEAN).
+            val configProbe = probe(d, bestAsk, slippageAmountUsdt)
+            val slippage = if (configProbe.shortfallUsdt > MathUtils.EPSILON) null
+                else configProbe.slippagePercent
+            // item 6: кривая 10/50/100 USDT + стоимость спреда отдельно.
+            val spreadCostPercent = (bestAsk - bestBid) / mid * 100.0
 
             OrderBookMetrics(
                 spreadBps = spreadBps,
@@ -58,7 +65,11 @@ class OrderBookAnalyzer @Inject constructor() {
                 obi20 = obi20,
                 buySlippagePercent = slippage,
                 bidNotionalTop10 = bid10,
-                askNotionalTop10 = ask10
+                askNotionalTop10 = ask10,
+                slippage10 = probe(d, bestAsk, 10.0),
+                slippage50 = probe(d, bestAsk, 50.0),
+                slippage100 = probe(d, bestAsk, 100.0),
+                spreadCostPercent = spreadCostPercent
             )
         }
 
@@ -67,20 +78,20 @@ class OrderBookAnalyzer @Inject constructor() {
         return if (denom > MathUtils.EPSILON) (bid - ask) / denom else 0.0
     }
 
-    /** Виртуальная покупка на amount USDT: средневзвешенная цена vs best ask. */
-    private fun buySlippage(
-        d: PartialDepth,
-        bestAsk: Double,
-        amount: Double
-    ): Double? {
+    /**
+     * Виртуальная покупка на amount USDT: средневзвешенная цена vs best ask.
+     * Возвращает фактическое проскальзывание (не округляем малое к нулю),
+     * исполненный объём и нехватку глубины (item 6). slippagePercent = null,
+     * если глубины совсем нет (ни один уровень не исполнен).
+     */
+    private fun probe(d: PartialDepth, bestAsk: Double, amount: Double): SlippageProbe {
         var remaining = amount
         var quoteSpent = 0.0
         var baseBought = 0.0
         for (lvl in d.asks) {
             val levelQuote = lvl.price * lvl.qty
             if (levelQuote >= remaining) {
-                val baseHere = remaining / lvl.price
-                baseBought += baseHere
+                baseBought += remaining / lvl.price
                 quoteSpent += remaining
                 remaining = 0.0
                 break
@@ -90,9 +101,16 @@ class OrderBookAnalyzer @Inject constructor() {
                 remaining -= levelQuote
             }
         }
-        if (remaining > MathUtils.EPSILON) return null // InsufficientDepth
-        if (baseBought <= 0.0) return null
-        val wavg = quoteSpent / baseBought
-        return (wavg / bestAsk - 1.0) * 100.0
+        val filled = amount - remaining
+        val shortfall = remaining.coerceAtLeast(0.0)
+        val slip = if (baseBought > 0.0 && bestAsk > 0.0) {
+            (quoteSpent / baseBought / bestAsk - 1.0) * 100.0
+        } else null
+        return SlippageProbe(
+            amountUsdt = amount,
+            slippagePercent = slip,       // фактическое, включая очень малые значения
+            filledUsdt = filled,
+            shortfallUsdt = shortfall
+        )
     }
 }

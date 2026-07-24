@@ -56,14 +56,27 @@ data class PartialDepth(
     val lastUpdateId: Long = 0     // монотонность снимков (ТЗ 0A.7)
 )
 
-/** Метрики стакана (ТЗ раздел 8.3). */
+/** Результат симуляции проскальзывания на заданную сумму (item 6). */
+data class SlippageProbe(
+    val amountUsdt: Double,
+    val slippagePercent: Double?,   // null → глубины совсем нет; иначе фактическое (не округляем до 0)
+    val filledUsdt: Double,         // сколько удалось исполнить
+    val shortfallUsdt: Double       // сколько НЕ хватило глубины (amount − filled)
+)
+
+/** Метрики стакана (ТЗ раздел 8.3 + item 6). */
 data class OrderBookMetrics(
     val spreadBps: Double,
     val obi10: Double,
     val obi20: Double,
-    val buySlippagePercent: Double?,   // null → InsufficientDepth
+    val buySlippagePercent: Double?,   // null → InsufficientDepth (на настраиваемую сумму)
     val bidNotionalTop10: Double,
-    val askNotionalTop10: Double
+    val askNotionalTop10: Double,
+    // item 6: кривая проскальзывания 10/50/100 USDT + стоимость спреда отдельно.
+    val slippage10: SlippageProbe? = null,
+    val slippage50: SlippageProbe? = null,
+    val slippage100: SlippageProbe? = null,
+    val spreadCostPercent: Double = 0.0   // (ask−bid)/mid·100 — цена пересечения спреда
 )
 
 /** Метрики потока сделок и стакана по кандидату (ТЗ раздел 8.2). */

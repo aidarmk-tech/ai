@@ -99,7 +99,7 @@ class SnapshotOutcomeTracker @Inject constructor() {
         // Ряд (времяMs, доходность%): секундная траектория по mid, иначе 5 точек.
         val samples: List<Pair<Long, Double>> =
             if (t.points.size >= TRAJECTORY_MIN_POINTS) {
-                t.points.map { it.offsetMs to (it.mid / t.ref - 1.0) * 100.0 }
+                t.points.map { it.offsetMs to ((it.bid + it.ask) / 2.0 / t.ref - 1.0) * 100.0 }
             } else {
                 fun r(p: Double?, ms: Long): Pair<Long, Double>? =
                     p?.takeIf { it > 0.0 }?.let { ms to (it / t.ref - 1.0) * 100.0 }
