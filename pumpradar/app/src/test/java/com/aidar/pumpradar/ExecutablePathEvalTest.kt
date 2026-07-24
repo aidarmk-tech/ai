@@ -55,9 +55,10 @@ class ExecutablePathEvalTest {
         assertEquals(ExecutablePathEval.Hit.TARGET, r.hit)
     }
 
-    /** SHORT: рост раньше падения → стоп. */
+    /** SHORT: рост после входа раньше падения → стоп. */
     @Test fun shortStopFirst() {
-        val path = listOf(pt(0, 100.0), pt(1000, 101.5), pt(2000, 98.0))
+        // Вход на pt(500)=100.0 (bid ~99.95), затем цена растёт до 101.5 → стоп.
+        val path = listOf(pt(0, 100.0), pt(500, 100.0), pt(1000, 101.5))
         val r = ExecutablePathEval.evaluate(
             path, TradeSide.SHORT, targetPercent = 1.0, stopPercent = 1.0,
             reactionMs = 500, horizonMs = 60_000
@@ -65,18 +66,20 @@ class ExecutablePathEvalTest {
         assertEquals(ExecutablePathEval.Hit.STOP, r.hit)
     }
 
-    /** Задержка реакции сдвигает точку входа: при 5с вход уже после всплеска. */
+    /** Задержка реакции сдвигает точку входа: быстрый вход ловит рост, медленный
+     *  входит уже после отката и цель не берётся. */
     @Test fun reactionLatencyChangesEntry() {
-        // Всплеск +2% в первую секунду, затем откат к 0.
+        // Плавный рост до +2.2% к 3с, затем откат к ~0 на 5–7с.
         val path = listOf(
-            pt(0, 100.0), pt(1000, 102.0), pt(2000, 100.1), pt(5000, 100.1), pt(6000, 100.1)
+            pt(0, 100.0), pt(500, 100.3), pt(1000, 100.8), pt(2000, 101.5),
+            pt(3000, 102.2), pt(5000, 100.0), pt(6000, 99.9), pt(7000, 99.8)
         )
-        // Быстрая реакция (0.5с): вход ~100.05, ловит +2%.
+        // Быстрая реакция (0.5с): вход ~100.35, доходит до +1%.
         val fast = ExecutablePathEval.evaluate(
             path, TradeSide.LONG, 1.0, 1.0, reactionMs = 500, horizonMs = 60_000
         )
         assertEquals(ExecutablePathEval.Hit.TARGET, fast.hit)
-        // Медленная реакция (5с): вход уже после отката, цель не берётся.
+        // Медленная реакция (5с): вход ~100.05 уже на откате, цель не берётся.
         val slow = ExecutablePathEval.evaluate(
             path, TradeSide.LONG, 1.0, 1.0, reactionMs = 5000, horizonMs = 60_000
         )
