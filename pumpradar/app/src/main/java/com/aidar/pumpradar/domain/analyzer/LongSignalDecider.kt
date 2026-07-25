@@ -7,8 +7,9 @@ import kotlin.math.abs
  * 1) раннее продолжение импульса;
  * 2) восстановление после контролируемого отката, пока цена ещё ниже вершины.
  *
- * Качественный вход получает единый план: движение до +3%, защита после +1% и
- * дальнейшее удержание только при сохранении потока покупателей.
+ * В экспериментальной версии уведомление LONG выдаётся только после отдельного
+ * quality-gate TRADE_3. Остальные технически допустимые входы остаются NO_TRADE
+ * и продолжают собираться в датасет как контрольная группа.
  */
 object LongSignalDecider {
 
@@ -81,6 +82,14 @@ object LongSignalDecider {
 
         val strictGate = passesStrictGate(i, cfg)
         val retestGate = passesRetestGate(i, cfg)
+        val technicalEntryGate = strictGate || retestGate
+
+        val trade3QualityGate = technicalEntryGate &&
+            i.impulseScore >= cfg.minTrade3ImpulseScore &&
+            entryRisk <= cfg.maxTrade3EntryRisk &&
+            exhaustionRisk <= cfg.maxTrade3ExhaustionRisk &&
+            spread <= cfg.maxTrade3SpreadBps &&
+            slip != null && slip <= cfg.maxTrade3SlippagePercent
 
         val commonHardVeto = i.hardVeto ||
             r5m > cfg.maxReturn5m ||
@@ -95,13 +104,20 @@ object LongSignalDecider {
         val reversalWatch = tbr <= cfg.reversalTakerBuyRatio30s &&
             r60 <= cfg.reversalReturn60s && i.buyerPressureDeclining
 
+        if (technicalEntryGate && !trade3QualityGate) {
+            reasons.add(
+                "технический LONG без TRADE_3: нужен Impulse ≥ ${cfg.minTrade3ImpulseScore}, " +
+                    "низкий риск и дешёвое исполнение"
+            )
+        }
+
         val label = when {
             i.repeatBlocked -> NO_TRADE
             exhaustionRisk >= cfg.exhaustionBlock -> EXHAUSTION_RISK
             reversalWatch -> REVERSAL_WATCH
             commonHardVeto -> if (i.impulseScore >= 70) STRONG_BUT_LATE else NO_TRADE
-            retestGate -> LONG_CONTINUATION
-            strictGate -> LONG_CONTINUATION
+            trade3QualityGate -> LONG_CONTINUATION
+            technicalEntryGate -> NO_TRADE
             i.impulseScore >= 70 -> STRONG_BUT_LATE
             else -> NO_TRADE
         }
@@ -109,11 +125,11 @@ object LongSignalDecider {
         val maxTarget = if (label == LONG_CONTINUATION) cfg.target3Percent else cfg.primaryTargetPercent
         if (label == LONG_CONTINUATION) {
             if (retestGate) {
-                reasons.add("ретест подтверждён: цена восстанавливается до старой вершины")
+                reasons.add("TRADE_3: ретест подтверждён и прошёл фильтр качества")
             } else {
-                reasons.add("ранний импульс подтверждён потоком покупателей")
+                reasons.add("TRADE_3: ранний импульс прошёл фильтр качества")
             }
-            reasons.add("план: защита после +1%, сопровождение движения до +3%")
+            reasons.add("paper-план: защита после +1%, сопровождение движения до +3%")
         }
 
         return Decision(label, maxTarget, entryRisk, exhaustionRisk, ppe, reasons)
