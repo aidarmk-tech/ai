@@ -51,8 +51,21 @@ class DatasetExporter @Inject constructor(
                 )
                 else -> null
             }
-            sb.append(CsvFormat.encodeRow(DatasetRows.buildRow(json, s, view), DatasetRows.COLUMN_COUNT))
-                .append("\r\n")
+
+            // MonitoringEngine старых установок сохранял внутреннюю версию 3.0.0.
+            // Для нового эксперимента используем фиксированную границу сборки, чтобы
+            // строки после установки однозначно отделялись как 4.1.0 без переписывания
+            // старой истории в Room.
+            val exportSnapshot = if (s.snapshotTime >= EXPERIMENT_41_CUTOFF_MS) {
+                s.copy(algorithmVersion = EXPERIMENT_41_VERSION)
+            } else s
+
+            sb.append(
+                CsvFormat.encodeRow(
+                    DatasetRows.buildRow(json, exportSnapshot, view),
+                    DatasetRows.COLUMN_COUNT
+                )
+            ).append("\r\n")
         }
         val dir = context.getExternalFilesDir(null) ?: context.filesDir
         val file = File(dir, "pumpradar_dataset.csv")
@@ -67,5 +80,11 @@ class DatasetExporter @Inject constructor(
             putExtra(Intent.EXTRA_STREAM, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
+    }
+
+    private companion object {
+        const val EXPERIMENT_41_VERSION = "4.1.0"
+        // 25.07.2026 18:00 Asia/Almaty — граница новой экспериментальной сборки.
+        const val EXPERIMENT_41_CUTOFF_MS = 1_784_984_400_000L
     }
 }
