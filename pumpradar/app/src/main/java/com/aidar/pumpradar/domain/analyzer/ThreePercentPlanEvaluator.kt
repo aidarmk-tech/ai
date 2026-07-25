@@ -9,8 +9,8 @@ package com.aidar.pumpradar.domain.analyzer
  * 3) стоп остатка переносится на +0.15%;
  * 4) оставшиеся 80% сопровождаются до +3% либо до защитного выхода.
  *
- * Комиссии и проскальзывание здесь не вычитаются: они рассчитываются отдельно,
- * поскольку зависят от тарифа и фактического исполнения. Ордера не отправляются.
+ * Комиссии и проскальзывание здесь не вычитаются: они рассчитываются отдельно.
+ * Ордера не отправляются.
  */
 object ThreePercentPlanEvaluator {
 
@@ -49,7 +49,8 @@ object ThreePercentPlanEvaluator {
         var activatedAt: Long? = null
 
         for ((time, returnPct) in ordered) {
-            if (activatedAt == null) {
+            val activation = activatedAt
+            if (activation == null) {
                 if (returnPct <= cfg.initialStopPercent) {
                     return Evaluation(
                         result = Result.STOP_BEFORE_PROTECTION,
@@ -60,24 +61,23 @@ object ThreePercentPlanEvaluator {
                 if (returnPct >= cfg.protectionActivationPercent) {
                     activatedAt = time
                     if (returnPct >= cfg.finalTargetPercent) {
-                        return target(time, activatedAt, cfg)
+                        return target(time, time, cfg)
                     }
                 }
             } else {
                 if (returnPct >= cfg.finalTargetPercent) {
-                    return target(time, activatedAt, cfg)
+                    return target(time, activation, cfg)
                 }
                 if (returnPct <= cfg.protectedStopPercent) {
-                    val gross = blended(
-                        cfg.protectionActivationPercent,
-                        cfg.protectedStopPercent,
-                        cfg.partialFraction
-                    )
                     return Evaluation(
                         result = Result.PROTECTED_EXIT,
-                        activationTimeMs = activatedAt,
+                        activationTimeMs = activation,
                         exitTimeMs = time,
-                        grossReturnPercent = gross
+                        grossReturnPercent = blended(
+                            cfg.protectionActivationPercent,
+                            cfg.protectedStopPercent,
+                            cfg.partialFraction
+                        )
                     )
                 }
             }
