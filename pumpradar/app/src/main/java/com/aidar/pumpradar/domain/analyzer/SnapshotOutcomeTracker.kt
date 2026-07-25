@@ -7,11 +7,9 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Исходы для ЛЮБОГО снимка признаков (TRIGGERED / NEAR_MISS / RANDOM_NORMAL), а не
- * только для сигналов. Копит контрольные точки и секундную траекторию, а на 15-й
- * минуте считает время достижения барьеров и порядок (first-barrier) через
- * [BarrierAnalyzer]. Это делает все ~1000 ранее неразмеченных строк пригодными
- * для supervised learning. Ордера не отправляются.
+ * Исходы для ЛЮБОГО снимка признаков. Копит контрольные точки и секундную
+ * траекторию, считает порядок барьеров и защищённый план сопровождения до +3%.
+ * Ордера не отправляются.
  */
 @Singleton
 class SnapshotOutcomeTracker @Inject constructor() {
@@ -37,7 +35,6 @@ class SnapshotOutcomeTracker @Inject constructor() {
     private val tracks = ArrayList<Track>()
     private val lock = Any()
 
-    /** Зарегистрировать снимок: сразу пишем pending-исход, чтобы он считался. */
     suspend fun track(
         dao: SnapshotOutcomeDao,
         snapshotId: String, symbol: String, snapshotType: String,
@@ -96,7 +93,6 @@ class SnapshotOutcomeTracker @Inject constructor() {
     private fun finalize(t: Track): SnapshotOutcomeEntity {
         val mfe = (t.maxP / t.ref - 1.0) * 100.0
         val mae = (t.minP / t.ref - 1.0) * 100.0
-        // Ряд (времяMs, доходность%): секундная траектория по mid, иначе 5 точек.
         val samples: List<Pair<Long, Double>> =
             if (t.points.size >= TRAJECTORY_MIN_POINTS) {
                 t.points.map { it.offsetMs to ((it.bid + it.ask) / 2.0 / t.ref - 1.0) * 100.0 }
@@ -111,9 +107,11 @@ class SnapshotOutcomeTracker @Inject constructor() {
         val l1 = BarrierAnalyzer.analyze(samples, TradeSide.LONG, 0.75, 0.50)
         val l2 = BarrierAnalyzer.analyze(samples, TradeSide.LONG, 1.00, 0.75)
         val l3 = BarrierAnalyzer.analyze(samples, TradeSide.LONG, 2.00, 1.00)
+        val l4 = BarrierAnalyzer.analyze(samples, TradeSide.LONG, 3.00, 1.00)
         val s1 = BarrierAnalyzer.analyze(samples, TradeSide.SHORT, 0.75, 0.50)
         val s2 = BarrierAnalyzer.analyze(samples, TradeSide.SHORT, 1.00, 0.75)
         val s3 = BarrierAnalyzer.analyze(samples, TradeSide.SHORT, 2.00, 1.00)
+        val plan3 = ThreePercentPlanEvaluator.evaluate(samples)
         return SnapshotOutcomeEntity(
             snapshotId = t.snapshotId, symbol = t.symbol, snapshotType = t.snapshotType,
             referencePrice = t.ref, createdAt = t.start,
@@ -122,12 +120,22 @@ class SnapshotOutcomeTracker @Inject constructor() {
             long075TargetTime = l1.targetTimeMs, long050StopTime = l1.stopTimeMs,
             long100TargetTime = l2.targetTimeMs, long075StopTime = l2.stopTimeMs,
             long200TargetTime = l3.targetTimeMs, long100StopTime = l3.stopTimeMs,
+            long300TargetTime = l4.targetTimeMs,
             short075TargetTime = s1.targetTimeMs, short050StopTime = s1.stopTimeMs,
             short100TargetTime = s2.targetTimeMs, short075StopTime = s2.stopTimeMs,
             short200TargetTime = s3.targetTimeMs, short100StopTime = s3.stopTimeMs,
-            firstBarrierLong075_050 = l1.first.name, firstBarrierLong100_075 = l2.first.name,
-            firstBarrierLong200_100 = l3.first.name, firstBarrierShort075_050 = s1.first.name,
-            firstBarrierShort100_075 = s2.first.name, firstBarrierShort200_100 = s3.first.name,
+            firstBarrierLong075_050 = l1.first.name,
+            firstBarrierLong100_075 = l2.first.name,
+            firstBarrierLong200_100 = l3.first.name,
+            firstBarrierLong300_100 = l4.first.name,
+            firstBarrierShort075_050 = s1.first.name,
+            firstBarrierShort100_075 = s2.first.name,
+            firstBarrierShort200_100 = s3.first.name,
+            plan3ActivationTime = plan3.activationTimeMs,
+            plan3TargetTime = plan3.targetTimeMs,
+            plan3ExitTime = plan3.exitTimeMs,
+            plan3Result = plan3.result.name,
+            plan3GrossReturnPercent = plan3.grossReturnPercent,
             completed = true
         )
     }
