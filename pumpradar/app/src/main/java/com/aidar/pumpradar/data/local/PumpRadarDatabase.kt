@@ -10,7 +10,7 @@ import androidx.room.RoomDatabase
         SignalTrajectoryEntity::class, ShadowSignalEntity::class,
         SnapshotOutcomeEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class PumpRadarDatabase : RoomDatabase() {
