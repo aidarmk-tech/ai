@@ -23,16 +23,28 @@ data class SignalConfig(
     val minRetestReturn15s: Double = 0.15,
     val maxRetestDistanceFromHighPercent: Double = 2.50,
 
-    // ── Экспериментальный фильтр TRADE_3 ──
-    // На последнем независимом периоде все первичные стопы имели Impulse 55–57,
-    // тогда как группа 60+ не дала отрицательного net-исхода. Порог проверяется
-    // только в paper-режиме и должен быть переоценён после нового датасета.
+    // ── Основной экспериментальный фильтр TRADE_3 ──
     val minTrade3ImpulseScore: Int = 60,
     val maxTrade3EntryRisk: Int = 35,
     val maxTrade3ExhaustionRisk: Int = 20,
     val maxTrade3SpreadBps: Double = 30.0,
     val maxTrade3SlippagePercent: Double = 0.15,
     val trade3SlotMinutes: Int = 15,
+
+    // ── Расширенный контрольный контур TRADE3_SHADOW ──
+    // Не уведомляет о входе и не отправляет ордера. Нужен только для сравнения
+    // со строгим TRADE_3 на новой независимой выборке.
+    val minShadowTrade3ImpulseScore: Int = 60,
+    val minShadowReturn15s: Double = 0.70,
+    val minShadowReturn60s: Double = 0.50,
+    val minShadowReturn5m: Double = 0.50,
+    val maxShadowReturn5m: Double = 2.50,
+    val minShadowTakerBuyRatio30s: Double = 0.72,
+    val maxShadowDistanceFromHighPct: Double = 0.75,
+    val maxShadowEntryRisk: Int = 35,
+    val maxShadowExhaustionRisk: Int = 20,
+    val maxShadowSpreadBps: Double = 30.0,
+    val maxShadowSlippagePercent: Double = 0.15,
 
     // ── План сопровождения до движения +3% ──
     val target3Percent: Double = 3.00,
