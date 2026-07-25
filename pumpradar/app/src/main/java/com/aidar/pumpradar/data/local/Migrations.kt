@@ -3,11 +3,6 @@ package com.aidar.pumpradar.data.local
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-/**
- * v1 → v2 (патч §12/§26): таблица кластеров рыночных событий + новые колонки
- * сигнала (eventId, трёхосевые риски, метка, тир, версия алгоритма). Не
- * destructive — существующая история сигналов и исходов сохраняется.
- */
 val MIGRATION_1_2 = object : Migration(1, 2) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL(
@@ -24,7 +19,6 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
             )
             """.trimIndent()
         )
-        // Новые nullable-колонки сигнала.
         db.execSQL("ALTER TABLE signals ADD COLUMN eventId TEXT")
         db.execSQL("ALTER TABLE signals ADD COLUMN opportunityLabel TEXT")
         db.execSQL("ALTER TABLE signals ADD COLUMN entryRiskScore INTEGER")
@@ -37,10 +31,6 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
     }
 }
 
-/**
- * v2 → v3 (патч §15): таблица training_snapshots для будущего ML. Только новая
- * таблица — существующие данные не затрагиваются.
- */
 val MIGRATION_2_3 = object : Migration(2, 3) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL(
@@ -65,14 +55,6 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
     }
 }
 
-/**
- * v3 → v4 (двусторонний анализ):
- *  - signal_trajectories — секундная траектория best bid/ask после сигнала для
- *    пересчёта исхода по временной последовательности;
- *  - shadow_signals — теневые (SHADOW/PAPER) сигналы двусторонних стратегий с
- *    отдельной разметкой исходов.
- * Только новые таблицы, существующие данные не затронуты.
- */
 val MIGRATION_3_4 = object : Migration(3, 4) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL(
@@ -116,12 +98,6 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
     }
 }
 
-/**
- * v4 → v5 (supervised dataset): таблица snapshot_outcomes — исход ЛЮБОГО снимка
- * (TRIGGERED / NEAR_MISS / RANDOM_NORMAL) с временем достижения барьеров и
- * классификацией порядка (first-barrier). Только новая таблица, существующие
- * данные не затронуты.
- */
 val MIGRATION_4_5 = object : Migration(4, 5) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL(
@@ -147,5 +123,18 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
             )
             """.trimIndent()
         )
+    }
+}
+
+/** v5 → v6: точная оценка цели +3% и защищённого плана после +1%. */
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE snapshot_outcomes ADD COLUMN long300TargetTime INTEGER")
+        db.execSQL("ALTER TABLE snapshot_outcomes ADD COLUMN firstBarrierLong300_100 TEXT")
+        db.execSQL("ALTER TABLE snapshot_outcomes ADD COLUMN plan3ActivationTime INTEGER")
+        db.execSQL("ALTER TABLE snapshot_outcomes ADD COLUMN plan3TargetTime INTEGER")
+        db.execSQL("ALTER TABLE snapshot_outcomes ADD COLUMN plan3ExitTime INTEGER")
+        db.execSQL("ALTER TABLE snapshot_outcomes ADD COLUMN plan3Result TEXT")
+        db.execSQL("ALTER TABLE snapshot_outcomes ADD COLUMN plan3GrossReturnPercent REAL")
     }
 }
