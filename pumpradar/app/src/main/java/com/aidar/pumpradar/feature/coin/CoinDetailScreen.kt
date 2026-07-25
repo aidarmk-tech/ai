@@ -91,7 +91,7 @@ fun CoinDetailScreen(
             }
             if (s.opportunityLabel == "LONG_CONTINUATION") {
                 Text(
-                    "Сигнал означает один из двух сценариев: ранний сильный импульс либо восстановление спроса после контролируемого отката. Цель 5–7% не гарантируется — движение нужно сопровождать вручную.",
+                    "План сигнала: первоначальная защита −0,75%; после движения +1% — защитить позицию и сопровождать остаток до +3%. Не удерживать цель любой ценой при ослаблении CVD и агрессивных покупок.",
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.Bold
                 )
@@ -109,9 +109,8 @@ fun CoinDetailScreen(
     }
 }
 
-/** Человекочитаемая метка возможности. */
 internal fun labelRu(label: String): String = when (label) {
-    "LONG_CONTINUATION" -> "РАННИЙ ИМПУЛЬС / ВОССТАНОВЛЕНИЕ ПОСЛЕ ОТКАТА"
+    "LONG_CONTINUATION" -> "ПЛАН ДО +3%: РАННИЙ ИМПУЛЬС / РЕТЕСТ"
     "CONFIRMED", "CONFIRMED_CONTINUATION" -> "ПОДТВЕРЖДЁННОЕ ПРОДОЛЖЕНИЕ"
     "EARLY_CLEAN" -> "РАННИЙ ЧИСТЫЙ"
     "STRONG_BUT_RISKY" -> "СИЛЬНЫЙ, НО РИСКОВЫЙ"
