@@ -8,8 +8,8 @@ import javax.inject.Singleton
 
 /**
  * Исходы для ЛЮБОГО снимка признаков. Копит контрольные точки и секундную
- * траекторию, считает порядок барьеров и защищённый план сопровождения до +3%.
- * Ордера не отправляются.
+ * bid/ask-траекторию на полном горизонте 15 минут, считает порядок барьеров и
+ * защищённый план сопровождения до +3%. Ордера не отправляются.
  */
 @Singleton
 class SnapshotOutcomeTracker @Inject constructor() {
@@ -141,9 +141,9 @@ class SnapshotOutcomeTracker @Inject constructor() {
     }
 
     private companion object {
-        const val TRAJECTORY_WINDOW_MS = 300_000L
+        const val TRAJECTORY_WINDOW_MS = 900_000L
         const val TRAJECTORY_MIN_STEP_MS = 900L
-        const val TRAJECTORY_MAX_POINTS = 340
+        const val TRAJECTORY_MAX_POINTS = 1_020
         const val TRAJECTORY_MIN_POINTS = 5
     }
 }
