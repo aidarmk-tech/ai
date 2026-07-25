@@ -91,7 +91,7 @@ fun CoinDetailScreen(
             }
             if (s.opportunityLabel == "LONG_CONTINUATION") {
                 Text(
-                    "План сигнала: первоначальная защита −0,75%; после движения +1% — защитить позицию и сопровождать остаток до +3%. Не удерживать цель любой ценой при ослаблении CVD и агрессивных покупок.",
+                    "Эксперимент TRADE_3: Impulse не ниже 60, ограничены риск входа, спред и проскальзывание. Одновременно сопровождается только один paper-слот. План: защита −0,75%; после +1% — защита позиции; цель движения +3%; выход при подтверждённом ослаблении.",
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.Bold
                 )
@@ -110,7 +110,7 @@ fun CoinDetailScreen(
 }
 
 internal fun labelRu(label: String): String = when (label) {
-    "LONG_CONTINUATION" -> "ПЛАН ДО +3%: РАННИЙ ИМПУЛЬС / РЕТЕСТ"
+    "LONG_CONTINUATION" -> "ЭКСПЕРИМЕНТ TRADE_3 — КАНДИДАТ ДО +3%"
     "CONFIRMED", "CONFIRMED_CONTINUATION" -> "ПОДТВЕРЖДЁННОЕ ПРОДОЛЖЕНИЕ"
     "EARLY_CLEAN" -> "РАННИЙ ЧИСТЫЙ"
     "STRONG_BUT_RISKY" -> "СИЛЬНЫЙ, НО РИСКОВЫЙ"
