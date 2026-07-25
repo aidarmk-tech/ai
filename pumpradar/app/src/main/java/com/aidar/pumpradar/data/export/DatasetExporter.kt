@@ -14,11 +14,7 @@ import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * Экспорт ML-датасета в CSV (патч §19). Обучение — вне APK; приложение только
- * отдаёт снимки признаков + фактические исходы (mfe/mae) из outcomes. Целевые
- * метки offline-скрипт считает сам.
- */
+/** Экспорт снимков признаков и фактических исходов в CSV. */
 @Singleton
 class DatasetExporter @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -32,15 +28,27 @@ class DatasetExporter @Inject constructor(
         val sb = StringBuilder()
         sb.append(CsvFormat.encodeRow(DatasetRows.HEADER, DatasetRows.COLUMN_COUNT)).append("\r\n")
         for (s in snaps) {
-            // Исход берём по snapshotId (работает и для NEAR_MISS/RANDOM_NORMAL),
-            // с откатом на legacy-outcome сигнала для старых записей.
             val so = runCatching { snapshotOutcomeDao.get(s.id) }.getOrNull()
             val legacy = if (so == null) {
                 s.signalId?.let { runCatching { outcomeDao.get(it) }.getOrNull() }
             } else null
             val view = when {
-                so != null -> DatasetRows.OutcomeView(so.mfePercent, so.maePercent, so.completed)
-                legacy != null -> DatasetRows.OutcomeView(legacy.mfePercent, legacy.maePercent, legacy.completed)
+                so != null -> DatasetRows.OutcomeView(
+                    mfePercent = so.mfePercent,
+                    maePercent = so.maePercent,
+                    completed = so.completed,
+                    long300TargetTime = so.long300TargetTime,
+                    long100StopTime = so.long100StopTime,
+                    firstBarrierLong300_100 = so.firstBarrierLong300_100,
+                    plan3ActivationTime = so.plan3ActivationTime,
+                    plan3TargetTime = so.plan3TargetTime,
+                    plan3ExitTime = so.plan3ExitTime,
+                    plan3Result = so.plan3Result,
+                    plan3GrossReturnPercent = so.plan3GrossReturnPercent
+                )
+                legacy != null -> DatasetRows.OutcomeView(
+                    legacy.mfePercent, legacy.maePercent, legacy.completed
+                )
                 else -> null
             }
             sb.append(CsvFormat.encodeRow(DatasetRows.buildRow(json, s, view), DatasetRows.COLUMN_COUNT))
