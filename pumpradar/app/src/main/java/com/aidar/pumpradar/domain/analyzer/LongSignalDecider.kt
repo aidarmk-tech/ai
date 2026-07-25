@@ -3,12 +3,12 @@ package com.aidar.pumpradar.domain.analyzer
 import kotlin.math.abs
 
 /**
- * Решение по LONG-сигналу. Поддерживает два качественно разных сценария:
+ * Решение по LONG-сигналу. Поддерживает два сценария входа:
  * 1) раннее продолжение импульса;
  * 2) восстановление после контролируемого отката, пока цена ещё ниже вершины.
  *
- * Оба сценария возвращают LONG_CONTINUATION, поэтому существующий движок и
- * уведомления начинают использовать новую логику без изменения архитектуры.
+ * Качественный вход получает единый план: движение до +3%, защита после +1% и
+ * дальнейшее удержание только при сохранении потока покупателей.
  */
 object LongSignalDecider {
 
@@ -63,7 +63,6 @@ object LongSignalDecider {
         val r60 = i.return60s ?: 0.0
         val r5m = i.return5m ?: 0.0
         val tbr = i.takerBuyRatio30s ?: 0.0
-        val relBtc = i.relativeStrengthVsBtc ?: -1.0
         val volZ = i.volumeZ30s ?: 0.0
         val spread = i.spreadBps ?: Double.MAX_VALUE
         val slip = i.slippagePercent
@@ -96,11 +95,6 @@ object LongSignalDecider {
         val reversalWatch = tbr <= cfg.reversalTakerBuyRatio30s &&
             r60 <= cfg.reversalReturn60s && i.buyerPressureDeclining
 
-        val highPotential = strictGate &&
-            r60 >= cfg.minReturn60sForHighPotential &&
-            r5m <= cfg.maxReturn5mForHighTarget &&
-            relBtc >= cfg.minRelStrengthForHighTarget
-
         val label = when {
             i.repeatBlocked -> NO_TRADE
             exhaustionRisk >= cfg.exhaustionBlock -> EXHAUSTION_RISK
@@ -112,17 +106,14 @@ object LongSignalDecider {
             else -> NO_TRADE
         }
 
-        val maxTarget = when {
-            label != LONG_CONTINUATION -> cfg.primaryTargetPercent
-            highPotential -> {
-                reasons.add("ранняя фаза: потенциал 5–7% только при сохранении потока")
-                cfg.highPotentialTargetPercent
+        val maxTarget = if (label == LONG_CONTINUATION) cfg.target3Percent else cfg.primaryTargetPercent
+        if (label == LONG_CONTINUATION) {
+            if (retestGate) {
+                reasons.add("ретест подтверждён: цена восстанавливается до старой вершины")
+            } else {
+                reasons.add("ранний импульс подтверждён потоком покупателей")
             }
-            retestGate -> {
-                reasons.add("контролируемый откат: цена восстановилась до повторной вершины")
-                5.0
-            }
-            else -> cfg.primaryTargetPercent
+            reasons.add("план: защита после +1%, сопровождение движения до +3%")
         }
 
         return Decision(label, maxTarget, entryRisk, exhaustionRisk, ppe, reasons)
