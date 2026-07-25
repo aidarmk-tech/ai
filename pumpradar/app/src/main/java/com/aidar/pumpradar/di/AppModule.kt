@@ -10,6 +10,7 @@ import com.aidar.pumpradar.data.local.MIGRATION_1_2
 import com.aidar.pumpradar.data.local.MIGRATION_2_3
 import com.aidar.pumpradar.data.local.MIGRATION_3_4
 import com.aidar.pumpradar.data.local.MIGRATION_4_5
+import com.aidar.pumpradar.data.local.MIGRATION_5_6
 import com.aidar.pumpradar.data.local.OutcomeDao
 import com.aidar.pumpradar.data.local.PumpRadarDatabase
 import com.aidar.pumpradar.data.local.ShadowSignalDao
@@ -33,43 +34,25 @@ object AppModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): PumpRadarDatabase =
         Room.databaseBuilder(context, PumpRadarDatabase::class.java, "pumpradar.db")
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)   // не destructive
+            .addMigrations(
+                MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
+                MIGRATION_4_5, MIGRATION_5_6
+            )
             .build()
 
-    @Provides
-    fun provideSignalDao(db: PumpRadarDatabase): SignalDao = db.signalDao()
-
-    @Provides
-    fun provideOutcomeDao(db: PumpRadarDatabase): OutcomeDao = db.outcomeDao()
-
-    @Provides
-    fun provideAppEventDao(db: PumpRadarDatabase): AppEventDao = db.appEventDao()
-
-    @Provides
-    fun provideClusterDao(db: PumpRadarDatabase): ClusterDao = db.clusterDao()
-
-    @Provides
-    fun provideTrainingSnapshotDao(db: PumpRadarDatabase): TrainingSnapshotDao =
-        db.trainingSnapshotDao()
-
-    @Provides
-    fun provideSignalTrajectoryDao(db: PumpRadarDatabase): SignalTrajectoryDao =
-        db.signalTrajectoryDao()
-
-    @Provides
-    fun provideShadowSignalDao(db: PumpRadarDatabase): ShadowSignalDao =
-        db.shadowSignalDao()
-
-    @Provides
-    fun provideSnapshotOutcomeDao(db: PumpRadarDatabase): SnapshotOutcomeDao =
-        db.snapshotOutcomeDao()
+    @Provides fun provideSignalDao(db: PumpRadarDatabase): SignalDao = db.signalDao()
+    @Provides fun provideOutcomeDao(db: PumpRadarDatabase): OutcomeDao = db.outcomeDao()
+    @Provides fun provideAppEventDao(db: PumpRadarDatabase): AppEventDao = db.appEventDao()
+    @Provides fun provideClusterDao(db: PumpRadarDatabase): ClusterDao = db.clusterDao()
+    @Provides fun provideTrainingSnapshotDao(db: PumpRadarDatabase): TrainingSnapshotDao = db.trainingSnapshotDao()
+    @Provides fun provideSignalTrajectoryDao(db: PumpRadarDatabase): SignalTrajectoryDao = db.signalTrajectoryDao()
+    @Provides fun provideShadowSignalDao(db: PumpRadarDatabase): ShadowSignalDao = db.shadowSignalDao()
+    @Provides fun provideSnapshotOutcomeDao(db: PumpRadarDatabase): SnapshotOutcomeDao = db.snapshotOutcomeDao()
 
     @Provides
     @Singleton
-    fun provideDataStore(@ApplicationContext context: Context): DataStore<Preferences> =
-        context.dataStore
+    fun provideDataStore(@ApplicationContext context: Context): DataStore<Preferences> = context.dataStore
 
-    /** Единый источник числовых порогов сигналов (item 11). */
     @Provides
     @Singleton
     fun provideSignalConfig(): com.aidar.pumpradar.domain.analyzer.SignalConfig =
