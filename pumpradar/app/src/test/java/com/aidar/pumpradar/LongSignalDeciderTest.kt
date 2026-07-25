@@ -48,7 +48,56 @@ class LongSignalDeciderTest {
     fun technicalLongBelowTrade3ImpulseStaysNoTrade() {
         val d = LongSignalDecider.decide(good().copy(impulseScore = 59))
         assertEquals(LongSignalDecider.NO_TRADE, d.label)
-        assertTrue(d.reasons.any { it.contains("без TRADE_3") })
+        assertTrue(d.reasons.any { it.contains("без строгого TRADE_3") })
+    }
+
+    @Test
+    fun relaxedCandidateBecomesShadowOnly() {
+        val d = LongSignalDecider.decide(
+            good().copy(
+                impulseScore = 62,
+                takerBuyRatio30s = 0.75,
+                return15s = 0.80,
+                return60s = 0.60,
+                return5m = 1.20,
+                peak = PeakFeatures(distanceFromLocalHighPct = 0.50)
+            )
+        )
+        assertEquals(LongSignalDecider.TRADE3_SHADOW, d.label)
+        assertEquals(3.0, d.maxTargetPercent, 1e-9)
+        assertTrue(d.reasons.any { it.contains("только для paper") })
+    }
+
+    @Test
+    fun shadowDoesNotAdmitFlatFiveMinuteRebound() {
+        val d = LongSignalDecider.decide(
+            good().copy(
+                impulseScore = 62,
+                takerBuyRatio30s = 0.75,
+                return15s = 0.80,
+                return60s = 0.60,
+                return5m = 0.10,
+                peak = PeakFeatures(distanceFromLocalHighPct = 0.50)
+            )
+        )
+        assertEquals(LongSignalDecider.NO_TRADE, d.label)
+    }
+
+    @Test
+    fun shadowKeepsExhaustionLimit() {
+        val d = LongSignalDecider.decide(
+            good().copy(
+                impulseScore = 62,
+                takerBuyRatio30s = 0.75,
+                return15s = 0.80,
+                return60s = 0.60,
+                return5m = 1.20,
+                buyerPressureDeclining = true,
+                peak = PeakFeatures(distanceFromLocalHighPct = 0.50)
+            )
+        )
+        assertEquals(LongSignalDecider.NO_TRADE, d.label)
+        assertTrue(d.exhaustionRisk > 20)
     }
 
     @Test
