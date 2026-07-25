@@ -13,7 +13,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/** Уведомления о сигналах с антиспамом и понятным описанием ручного сценария. */
+/** Уведомления общих категорий. LONG обрабатывает однослотовый TRADE_3 observer. */
 @Singleton
 class SignalNotificationManager @Inject constructor(
     @ApplicationContext private val context: Context
@@ -24,6 +24,10 @@ class SignalNotificationManager @Inject constructor(
 
     @SuppressLint("MissingPermission")
     fun maybeNotify(signal: LiveSignal, cooldownMinutes: Int): Boolean {
+        // Не дублируем LONG: ExperimentalTrade3Observer сам выбирает один лучший
+        // сигнал, открывает paper-слот и отправляет все этапные уведомления.
+        if (signal.opportunityLabel == "LONG_CONTINUATION") return false
+
         val now = System.currentTimeMillis()
         val levelOrd = levelOrdinal(signal.level)
         val last = lastBySymbol[signal.symbol]
@@ -38,7 +42,6 @@ class SignalNotificationManager @Inject constructor(
         lastBySymbol[signal.symbol] = Last(levelOrd, now)
 
         val emoji = when (signal.opportunityLabel) {
-            "LONG_CONTINUATION" -> "🟢"
             "TOO_LATE", "STRONG_BUT_RISKY", "EXHAUSTION", "EXHAUSTION_RISK" -> "🔴"
             "CONFIRMED", "CONFIRMED_CONTINUATION", "RETEST_CONFIRMED" -> "🟣"
             "EARLY_CLEAN" -> "🟠"
@@ -49,17 +52,8 @@ class SignalNotificationManager @Inject constructor(
             append("Импульс %d · Риск %d · Достоверн. %d".format(
                 signal.score, signal.entryRiskScore, signal.confidenceScore))
             signal.return60s?.let { append(" · 1м %+.1f%%".format(it)) }
-            if (signal.opportunityLabel == "LONG_CONTINUATION") {
-                append(" · план до +3%")
-            }
         }.ifBlank { "Рыночная аномалия" }
         val expanded = buildString {
-            if (signal.opportunityLabel == "LONG_CONTINUATION") {
-                append("Сценарий: ранний импульс либо восстановление после отката.\n")
-                append("Первоначальная защита: −0,75%.\n")
-                append("После +1%: защитить позицию; остаток сопровождать до +3%.\n")
-                append("При ослаблении CVD/агрессивных покупок цель не удерживать любой ценой.\n")
-            }
             if (signal.reasons.isNotEmpty()) {
                 append("Причины:\n")
                 signal.reasons.forEach { append("• $it\n") }
