@@ -46,6 +46,7 @@ jobs:
           set -Eeuo pipefail
           python -m compileall -q /tmp/pumpradar/pumpradar_server
           bash -n server-bootstrap/install.sh
+          bash -n server-bootstrap/enable-client.sh
           bash -n /tmp/pumpradar/scripts/*.sh
           PYTHONPATH=/tmp/pumpradar python - <<'PY'
           import os
