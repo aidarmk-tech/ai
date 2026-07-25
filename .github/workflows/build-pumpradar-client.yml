@@ -1,0 +1,51 @@
+name: Build PumpRadar Server Client
+
+on:
+  push:
+    branches:
+      - chatgpt/pumpradar-server-v43
+    paths:
+      - 'pumpradar-client/**'
+      - '.github/workflows/build-pumpradar-client.yml'
+  pull_request:
+    paths:
+      - 'pumpradar-client/**'
+      - '.github/workflows/build-pumpradar-client.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Build debug APK
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          chmod +x pumpradar/gradlew
+          ./pumpradar/gradlew -p pumpradar-client --no-daemon assembleDebug
+
+      - name: Stage APK
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p out
+          cp pumpradar-client/app/build/outputs/apk/debug/app-debug.apk out/PumpRadar-Server-Client.apk
+          sha256sum out/PumpRadar-Server-Client.apk | tee out/SHA256SUMS.txt
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: PumpRadar-Server-Client-${{ github.run_number }}
+          path: out/
+          if-no-files-found: error
+          retention-days: 30
