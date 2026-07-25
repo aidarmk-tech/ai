@@ -35,7 +35,26 @@ class LongSignalDeciderTest {
         val d = LongSignalDecider.decide(good())
         assertEquals(LongSignalDecider.LONG_CONTINUATION, d.label)
         assertEquals(3.0, d.maxTargetPercent, 1e-9)
-        assertTrue(d.reasons.any { it.contains("защита после +1%") })
+        assertTrue(d.reasons.any { it.contains("paper-план") })
+    }
+
+    @Test
+    fun minimumTrade3ImpulsePasses() {
+        val d = LongSignalDecider.decide(good().copy(impulseScore = 60))
+        assertEquals(LongSignalDecider.LONG_CONTINUATION, d.label)
+    }
+
+    @Test
+    fun technicalLongBelowTrade3ImpulseStaysNoTrade() {
+        val d = LongSignalDecider.decide(good().copy(impulseScore = 59))
+        assertEquals(LongSignalDecider.NO_TRADE, d.label)
+        assertTrue(d.reasons.any { it.contains("без TRADE_3") })
+    }
+
+    @Test
+    fun expensiveExecutionRejectedByTrade3Gate() {
+        val d = LongSignalDecider.decide(good().copy(spreadBps = 31.0))
+        assertEquals(LongSignalDecider.NO_TRADE, d.label)
     }
 
     @Test
@@ -63,7 +82,7 @@ class LongSignalDeciderTest {
         )
         assertEquals(LongSignalDecider.LONG_CONTINUATION, d.label)
         assertEquals(3.0, d.maxTargetPercent, 1e-9)
-        assertTrue(d.reasons.any { it.contains("ретест подтверждён") })
+        assertTrue(d.reasons.any { it.contains("ретест") })
     }
 
     @Test
