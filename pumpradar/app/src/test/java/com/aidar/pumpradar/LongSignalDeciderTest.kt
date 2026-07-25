@@ -65,7 +65,28 @@ class LongSignalDeciderTest {
     }
 
     @Test
-    fun controlledPullbackCanSignalBeforeOldHigh() {
+    fun lowRiskControlledPullbackCanSignalBeforeOldHigh() {
+        val d = LongSignalDecider.decide(
+            good().copy(
+                return15s = 0.30,
+                return60s = 0.40,
+                return5m = 0.50,
+                takerBuyRatio30s = 0.70,
+                peak = PeakFeatures(
+                    distanceFromLocalHighPct = 0.30,
+                    pullbackFromHighPct = 0.80,
+                    secondsSinceLocalHigh = 0,
+                    breakoutLevelHeld = true
+                )
+            )
+        )
+        assertEquals(LongSignalDecider.LONG_CONTINUATION, d.label)
+        assertEquals(3.0, d.maxTargetPercent, 1e-9)
+        assertTrue(d.reasons.any { it.contains("ретест") })
+    }
+
+    @Test
+    fun deepRetestWithHighEntryRiskStaysNoTrade() {
         val d = LongSignalDecider.decide(
             good().copy(
                 return15s = 0.30,
@@ -80,9 +101,8 @@ class LongSignalDeciderTest {
                 )
             )
         )
-        assertEquals(LongSignalDecider.LONG_CONTINUATION, d.label)
-        assertEquals(3.0, d.maxTargetPercent, 1e-9)
-        assertTrue(d.reasons.any { it.contains("ретест") })
+        assertEquals(LongSignalDecider.NO_TRADE, d.label)
+        assertTrue(d.entryRisk > 35)
     }
 
     @Test
