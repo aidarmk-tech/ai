@@ -11,34 +11,40 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/** Уведомления о стадиях сопровождения уже выданного LONG-сигнала. */
+/** Уведомления о стадиях одного активного экспериментального TRADE_3-слота. */
 @Singleton
 class PlanNotificationManager @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
     enum class State {
+        SLOT_OPEN,
         PROTECT_AFTER_1,
         TARGET_3_REACHED,
         EXIT_WEAKENING,
         PROTECTED_EXIT,
-        INITIAL_STOP
+        INITIAL_STOP,
+        HORIZON_EXIT
     }
 
     @SuppressLint("MissingPermission")
     fun notify(symbol: String, state: State, returnPercent: Double, reasons: List<String> = emptyList()) {
         val title = when (state) {
+            State.SLOT_OPEN -> "🧪 TRADE_3 paper-слот — $symbol"
             State.PROTECT_AFTER_1 -> "🛡 $symbol достиг +1%"
             State.TARGET_3_REACHED -> "🎯 $symbol достиг +3%"
             State.EXIT_WEAKENING -> "⚠ $symbol: поток ослабевает"
             State.PROTECTED_EXIT -> "🟡 $symbol вернулся к защитному уровню"
             State.INITIAL_STOP -> "🔴 $symbol достиг первоначальной защиты"
+            State.HORIZON_EXIT -> "⏱ $symbol: завершён горизонт 15 минут"
         }
         val action = when (state) {
+            State.SLOT_OPEN -> "Открыт только paper-сценарий. Реальный ордер не отправлен."
             State.PROTECT_AFTER_1 -> "Защитить позицию; остаток сопровождать до +3%."
             State.TARGET_3_REACHED -> "Цель движения +3% достигнута."
             State.EXIT_WEAKENING -> "Не удерживать цель любой ценой: проверить выход вручную."
             State.PROTECTED_EXIT -> "После +1% движение вернулось к защите: проверить закрытие остатка."
             State.INITIAL_STOP -> "Движение не подтвердилось до активации защиты."
+            State.HORIZON_EXIT -> "За 15 минут цель или защита не сработали: проверить выход вручную."
         }
         val body = "Текущее движение %+.2f%%. %s".format(returnPercent, action)
         val expanded = buildString {
