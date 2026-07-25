@@ -68,3 +68,11 @@ jobs:
           storage.finish_run()
           print('smoke ok', settings.config_hash(), exported)
           PY
+
+      - name: Upload verified server source
+        uses: actions/upload-artifact@v4
+        with:
+          name: pumpradar-server-source
+          path: /tmp/pumpradar
+          if-no-files-found: error
+          retention-days: 7
