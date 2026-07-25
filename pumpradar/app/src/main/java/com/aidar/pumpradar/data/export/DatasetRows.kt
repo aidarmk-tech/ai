@@ -40,9 +40,12 @@ object DatasetRows {
         val fv = runCatching {
             json.decodeFromString(FeatureVector.serializer(), s.featureVectorJson)
         }.getOrNull() ?: FeatureVector()
+        // MonitoringEngine исторически пишет 3.0.0. Новые завершённые строки однозначно
+        // распознаются по plan3Result и экспортируются как 4.0.0; legacy остаётся 3.0.0.
+        val effectiveAlgorithmVersion = if (outcome?.plan3Result != null) "4.0.0" else s.algorithmVersion
         return listOf(
             s.snapshotType, s.symbol, s.snapshotTime.toString(), s.eventId ?: "",
-            s.opportunityLabel, s.liquidityTier, s.algorithmVersion,
+            s.opportunityLabel, s.liquidityTier, effectiveAlgorithmVersion,
             CsvFormat.num(fv.return15s), CsvFormat.num(fv.return60s), CsvFormat.num(fv.return5m),
             CsvFormat.num(fv.acceleration), CsvFormat.num(fv.volumeZ30s),
             CsvFormat.num(fv.takerBuyRatio30s), CsvFormat.num(fv.cvd30s), CsvFormat.num(fv.spreadBps),
