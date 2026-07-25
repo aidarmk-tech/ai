@@ -23,13 +23,23 @@ data class SignalConfig(
     val minRetestReturn15s: Double = 0.15,
     val maxRetestDistanceFromHighPercent: Double = 2.50,
 
+    // ── Экспериментальный фильтр TRADE_3 ──
+    // На последнем независимом периоде все первичные стопы имели Impulse 55–57,
+    // тогда как группа 60+ не дала отрицательного net-исхода. Порог проверяется
+    // только в paper-режиме и должен быть переоценён после нового датасета.
+    val minTrade3ImpulseScore: Int = 60,
+    val maxTrade3EntryRisk: Int = 35,
+    val maxTrade3ExhaustionRisk: Int = 20,
+    val maxTrade3SpreadBps: Double = 30.0,
+    val maxTrade3SlippagePercent: Double = 0.15,
+    val trade3SlotMinutes: Int = 15,
+
     // ── План сопровождения до движения +3% ──
     val target3Percent: Double = 3.00,
     val initialStopPercent: Double = 0.75,
     val protectionActivationPercent: Double = 1.00,
     val protectedStopPercent: Double = 0.15,
     val partialFractionAtProtection: Double = 0.20,
-    // Пороговые значения для следующего live-этапа HOLD_FOR_3 / EXIT_WEAKENING.
     val minHoldTakerBuyRatio30s: Double = 0.65,
     val minHoldTakerBuyRatio15s: Double = 0.60,
     val minHoldTakerBuyRatio5s: Double = 0.55,
