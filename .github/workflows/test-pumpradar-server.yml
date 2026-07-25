@@ -1,0 +1,72 @@
+name: Test PumpRadar Server
+
+on:
+  push:
+    branches:
+      - chatgpt/pumpradar-server-v43
+    paths:
+      - 'server-bootstrap/**'
+      - '.github/workflows/test-pumpradar-server.yml'
+  pull_request:
+    paths:
+      - 'server-bootstrap/**'
+      - '.github/workflows/test-pumpradar-server.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct payload
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cat server-bootstrap/chunks/{00..15} > /tmp/payload.b64
+          base64 --decode /tmp/payload.b64 > /tmp/payload.tar.gz
+          echo '5eb688a0b024ceaa53b537885293a7ff3c93ece621cc703b68e81d58f34208fb  /tmp/payload.tar.gz' | sha256sum -c -
+          mkdir /tmp/pumpradar
+          tar -xzf /tmp/payload.tar.gz -C /tmp/pumpradar --strip-components=1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: /tmp/pumpradar/requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r /tmp/pumpradar/requirements.txt
+
+      - name: Verify Python and shell files
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python -m compileall -q /tmp/pumpradar/pumpradar_server
+          bash -n server-bootstrap/install.sh
+          bash -n /tmp/pumpradar/scripts/*.sh
+          PYTHONPATH=/tmp/pumpradar python - <<'PY'
+          import os
+          import tempfile
+          from pathlib import Path
+
+          root = Path(tempfile.mkdtemp())
+          os.environ['PUMPRADAR_DATA_DIR'] = str(root)
+          os.environ['PUMPRADAR_DB_PATH'] = str(root / 'test.sqlite3')
+          os.environ['PUMPRADAR_API_TOKEN'] = 'ci-test-token'
+
+          from pumpradar_server.config import Settings
+          from pumpradar_server.storage import Storage
+
+          settings = Settings()
+          storage = Storage(settings)
+          storage.start_run('github-actions')
+          exported = storage.export_all()
+          assert exported.exists(), exported
+          storage.finish_run()
+          print('smoke ok', settings.config_hash(), exported)
+          PY
