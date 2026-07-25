@@ -37,6 +37,15 @@ jobs:
           chmod +x pumpradar/gradlew
           ./pumpradar/gradlew -p pumpradar-client --no-daemon assembleDebug 2>&1 | tee out/build.log
 
+      - name: Preserve diagnostics
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p out
+          test -f out/build.log || echo 'build.log was not created' > out/build.log
+          tail -n 120 out/build.log > out/build-tail.log
+          find out -maxdepth 1 -type f -printf '%f %s bytes\n' || true
+
       - name: Stage APK
         if: steps.build.outcome == 'success'
         shell: bash
@@ -49,9 +58,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: PumpRadar-Server-Client-${{ github.run_number }}
-          path: out/
-          if-no-files-found: error
+          name: PumpRadar-Server-Client-${{ github.run_id }}
+          path: ${{ github.workspace }}/out
+          if-no-files-found: warn
           retention-days: 30
 
       - name: Fail when build failed
