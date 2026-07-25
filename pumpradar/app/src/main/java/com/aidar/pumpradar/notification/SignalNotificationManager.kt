@@ -50,14 +50,15 @@ class SignalNotificationManager @Inject constructor(
                 signal.score, signal.entryRiskScore, signal.confidenceScore))
             signal.return60s?.let { append(" · 1м %+.1f%%".format(it)) }
             if (signal.opportunityLabel == "LONG_CONTINUATION") {
-                append(" · проверить вход вручную")
+                append(" · план до +3%")
             }
         }.ifBlank { "Рыночная аномалия" }
         val expanded = buildString {
             if (signal.opportunityLabel == "LONG_CONTINUATION") {
                 append("Сценарий: ранний импульс либо восстановление после отката.\n")
-                append("Не входить, если цена уже резко ушла выше уведомления.\n")
-                append("Потенциал 5–7% не является гарантией.\n")
+                append("Первоначальная защита: −0,75%.\n")
+                append("После +1%: защитить позицию; остаток сопровождать до +3%.\n")
+                append("При ослаблении CVD/агрессивных покупок цель не удерживать любой ценой.\n")
             }
             if (signal.reasons.isNotEmpty()) {
                 append("Причины:\n")
