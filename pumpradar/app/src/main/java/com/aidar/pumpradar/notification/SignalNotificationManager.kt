@@ -24,9 +24,11 @@ class SignalNotificationManager @Inject constructor(
 
     @SuppressLint("MissingPermission")
     fun maybeNotify(signal: LiveSignal, cooldownMinutes: Int): Boolean {
-        // Не дублируем LONG: ExperimentalTrade3Observer сам выбирает один лучший
-        // сигнал, открывает paper-слот и отправляет все этапные уведомления.
-        if (signal.opportunityLabel == "LONG_CONTINUATION") return false
+        // LONG сопровождается отдельным однослотовым observer. SHADOW всегда остаётся
+        // без уведомления, даже когда пользователь включил «все категории».
+        if (signal.opportunityLabel == "LONG_CONTINUATION" ||
+            signal.opportunityLabel == "TRADE3_SHADOW"
+        ) return false
 
         val now = System.currentTimeMillis()
         val levelOrd = levelOrdinal(signal.level)
