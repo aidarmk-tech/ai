@@ -17,7 +17,10 @@ if [[ -x "$APP_ROOT/server/scripts/backup.sh" ]]; then
 fi
 
 echo "[PumpRadar 4.3.1] Загрузка проверенного пакета"
-curl -fsSL --retry 4 --retry-delay 2 "$RAW/payload-v431.b64" -o "$TMP_DIR/payload.b64"
+: > "$TMP_DIR/payload.b64"
+for n in $(seq 0 7); do
+  curl -fsSL --retry 4 --retry-delay 2 "$RAW/v431/$n" >> "$TMP_DIR/payload.b64"
+done
 base64 --decode "$TMP_DIR/payload.b64" > "$TMP_DIR/payload.tar.gz"
 ACTUAL="$(sha256sum "$TMP_DIR/payload.tar.gz" | awk '{print $1}')"
 [[ "$ACTUAL" == "$EXPECTED_SHA256" ]] || { echo "Ошибка SHA-256: $ACTUAL" >&2; exit 1; }
@@ -31,7 +34,7 @@ python3 -m compileall -q "$APP_ROOT/server.new/pumpradar_server"
 chmod +x "$APP_ROOT/server.new/scripts/"*.sh
 chown -R root:root "$APP_ROOT/server.new"
 
-# Measurement coverage settings. Trading thresholds are not changed.
+# Расширяем только измерительное покрытие. Пороги стратегии TRADE_3 не меняются.
 for line in \
   'PUMPRADAR_WARM_POOL_SIZE=35' \
   'PUMPRADAR_CONTROL_POOL_SIZE=5' \
