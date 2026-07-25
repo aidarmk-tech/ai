@@ -7,6 +7,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationManagerCompat
+import com.aidar.pumpradar.data.preferences.ExperimentVersionMarker
 import com.aidar.pumpradar.domain.model.MonitoringStats
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -29,6 +30,8 @@ class MonitoringService : Service() {
     @Inject lateinit var controller: MonitoringController
     @Inject lateinit var notificationFactory: ServiceNotificationFactory
     @Inject lateinit var engine: MonitoringEngine
+    @Inject lateinit var trade3Observer: ExperimentalTrade3Observer
+    @Inject lateinit var experimentMarker: ExperimentVersionMarker
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var started = false
@@ -53,6 +56,7 @@ class MonitoringService : Service() {
 
     private fun startMonitoring() {
         started = true
+        experimentMarker.markStarted()
         controller.onStarting()
         val notif = notificationFactory.build(MonitoringStats(), paused = false)
         if (Build.VERSION.SDK_INT >= 34) {
@@ -61,8 +65,9 @@ class MonitoringService : Service() {
             startForeground(NOTIF_ID, notif)
         }
 
-        // Запускаем живой движок (REST universe + WebSocket + сканер).
+        // Живой движок и отдельный однослотовый paper-наблюдатель TRADE_3.
         engine.start(scope)
+        trade3Observer.start(scope)
 
         // Перерисовываем уведомление при изменении статистики/паузы.
         combine(controller.stats, controller.paused) { stats, paused -> stats to paused }
@@ -83,12 +88,14 @@ class MonitoringService : Service() {
 
     private fun stopMonitoring() {
         started = false
+        trade3Observer.stop()
         engine.stop()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
     override fun onDestroy() {
+        trade3Observer.stop()
         engine.stop()
         scope.cancel()
         super.onDestroy()

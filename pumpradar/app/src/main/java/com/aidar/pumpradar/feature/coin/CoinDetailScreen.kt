@@ -91,7 +91,14 @@ fun CoinDetailScreen(
             }
             if (s.opportunityLabel == "LONG_CONTINUATION") {
                 Text(
-                    "Сигнал означает один из двух сценариев: ранний сильный импульс либо восстановление спроса после контролируемого отката. Цель 5–7% не гарантируется — движение нужно сопровождать вручную.",
+                    "Строгий TRADE_3: одновременно сопровождается только один paper-слот. План: защита −0,75%; после +1% — защита позиции; цель движения +3%; выход при подтверждённом ослаблении.",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            if (s.opportunityLabel == "TRADE3_SHADOW") {
+                Text(
+                    "Контрольный SHADOW-кандидат. Он сохраняется только для сравнения статистики, не открывает слот, не даёт торгового уведомления и не отправляет ордера.",
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.Bold
                 )
@@ -109,9 +116,9 @@ fun CoinDetailScreen(
     }
 }
 
-/** Человекочитаемая метка возможности. */
 internal fun labelRu(label: String): String = when (label) {
-    "LONG_CONTINUATION" -> "РАННИЙ ИМПУЛЬС / ВОССТАНОВЛЕНИЕ ПОСЛЕ ОТКАТА"
+    "LONG_CONTINUATION" -> "СТРОГИЙ TRADE_3 — КАНДИДАТ ДО +3%"
+    "TRADE3_SHADOW" -> "TRADE3 SHADOW — ТОЛЬКО PAPER-КОНТРОЛЬ"
     "CONFIRMED", "CONFIRMED_CONTINUATION" -> "ПОДТВЕРЖДЁННОЕ ПРОДОЛЖЕНИЕ"
     "EARLY_CLEAN" -> "РАННИЙ ЧИСТЫЙ"
     "STRONG_BUT_RISKY" -> "СИЛЬНЫЙ, НО РИСКОВЫЙ"

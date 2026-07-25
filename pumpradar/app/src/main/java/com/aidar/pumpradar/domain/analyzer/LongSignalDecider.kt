@@ -3,16 +3,17 @@ package com.aidar.pumpradar.domain.analyzer
 import kotlin.math.abs
 
 /**
- * Решение по LONG-сигналу. Поддерживает два качественно разных сценария:
- * 1) раннее продолжение импульса;
- * 2) восстановление после контролируемого отката, пока цена ещё ниже вершины.
+ * Решение по LONG-сигналу. Поддерживает:
+ * 1) строгий TRADE_3 для пользовательского уведомления;
+ * 2) расширенный TRADE3_SHADOW только для независимой paper-разметки.
  *
- * Оба сценария возвращают LONG_CONTINUATION, поэтому существующий движок и
- * уведомления начинают использовать новую логику без изменения архитектуры.
+ * TRADE3_SHADOW не является торговым сигналом, не уведомляет пользователя и
+ * не отправляет ордера. Он нужен, чтобы проверять ослабление порогов без риска.
  */
 object LongSignalDecider {
 
     const val LONG_CONTINUATION = "LONG_CONTINUATION"
+    const val TRADE3_SHADOW = "TRADE3_SHADOW"
     const val STRONG_BUT_LATE = "STRONG_BUT_LATE"
     const val EXHAUSTION_RISK = "EXHAUSTION_RISK"
     const val REVERSAL_WATCH = "REVERSAL_WATCH"
@@ -63,7 +64,6 @@ object LongSignalDecider {
         val r60 = i.return60s ?: 0.0
         val r5m = i.return5m ?: 0.0
         val tbr = i.takerBuyRatio30s ?: 0.0
-        val relBtc = i.relativeStrengthVsBtc ?: -1.0
         val volZ = i.volumeZ30s ?: 0.0
         val spread = i.spreadBps ?: Double.MAX_VALUE
         val slip = i.slippagePercent
@@ -82,6 +82,14 @@ object LongSignalDecider {
 
         val strictGate = passesStrictGate(i, cfg)
         val retestGate = passesRetestGate(i, cfg)
+        val technicalEntryGate = strictGate || retestGate
+
+        val trade3QualityGate = technicalEntryGate &&
+            i.impulseScore >= cfg.minTrade3ImpulseScore &&
+            entryRisk <= cfg.maxTrade3EntryRisk &&
+            exhaustionRisk <= cfg.maxTrade3ExhaustionRisk &&
+            spread <= cfg.maxTrade3SpreadBps &&
+            slip != null && slip <= cfg.maxTrade3SlippagePercent
 
         val commonHardVeto = i.hardVeto ||
             r5m > cfg.maxReturn5m ||
@@ -93,36 +101,53 @@ object LongSignalDecider {
             !i.peak.breakoutLevelHeld ||
             i.peak.failedHighAttempts >= cfg.maxFailedHighAttempts
 
+        val shadowGate = !commonHardVeto && passesShadowGate(
+            i = i,
+            cfg = cfg,
+            entryRisk = entryRisk,
+            exhaustionRisk = exhaustionRisk
+        )
+
         val reversalWatch = tbr <= cfg.reversalTakerBuyRatio30s &&
             r60 <= cfg.reversalReturn60s && i.buyerPressureDeclining
 
-        val highPotential = strictGate &&
-            r60 >= cfg.minReturn60sForHighPotential &&
-            r5m <= cfg.maxReturn5mForHighTarget &&
-            relBtc >= cfg.minRelStrengthForHighTarget
+        if (technicalEntryGate && !trade3QualityGate) {
+            reasons.add(
+                "технический LONG без строгого TRADE_3: не пройден один из quality-порогов"
+            )
+        }
 
         val label = when {
             i.repeatBlocked -> NO_TRADE
             exhaustionRisk >= cfg.exhaustionBlock -> EXHAUSTION_RISK
             reversalWatch -> REVERSAL_WATCH
             commonHardVeto -> if (i.impulseScore >= 70) STRONG_BUT_LATE else NO_TRADE
-            retestGate -> LONG_CONTINUATION
-            strictGate -> LONG_CONTINUATION
+            trade3QualityGate -> LONG_CONTINUATION
+            shadowGate -> TRADE3_SHADOW
+            technicalEntryGate -> NO_TRADE
             i.impulseScore >= 70 -> STRONG_BUT_LATE
             else -> NO_TRADE
         }
 
-        val maxTarget = when {
-            label != LONG_CONTINUATION -> cfg.primaryTargetPercent
-            highPotential -> {
-                reasons.add("ранняя фаза: потенциал 5–7% только при сохранении потока")
-                cfg.highPotentialTargetPercent
+        val maxTarget = if (label == LONG_CONTINUATION || label == TRADE3_SHADOW) {
+            cfg.target3Percent
+        } else {
+            cfg.primaryTargetPercent
+        }
+
+        when (label) {
+            LONG_CONTINUATION -> {
+                if (retestGate) {
+                    reasons.add("TRADE_3: ретест подтверждён и прошёл строгий фильтр")
+                } else {
+                    reasons.add("TRADE_3: ранний импульс прошёл строгий фильтр")
+                }
+                reasons.add("paper-план: защита после +1%, сопровождение движения до +3%")
             }
-            retestGate -> {
-                reasons.add("контролируемый откат: цена восстановилась до повторной вершины")
-                5.0
+            TRADE3_SHADOW -> {
+                reasons.add("TRADE3_SHADOW: расширенный кандидат только для paper-сравнения")
+                reasons.add("уведомление о входе отключено; реальные ордера не отправляются")
             }
-            else -> cfg.primaryTargetPercent
         }
 
         return Decision(label, maxTarget, entryRisk, exhaustionRisk, ppe, reasons)
@@ -156,10 +181,7 @@ object LongSignalDecider {
             i.peak.failedHighAttempts < cfg.maxFailedHighAttempts
     }
 
-    /**
-     * Ретест: был откат 0.8–3.5%, текущая цена уже отскочила минимум на 0.35 п.п.,
-     * но всё ещё находится ниже старой вершины. Поток покупателей снова положительный.
-     */
+    /** Контролируемый откат с подтверждённым восстановлением спроса. */
     private fun passesRetestGate(i: Input, cfg: SignalConfig): Boolean {
         val r15 = i.return15s ?: return false
         val r5m = i.return5m ?: return false
@@ -188,6 +210,46 @@ object LongSignalDecider {
             !i.hardVeto &&
             !i.buyerPressureDeclining &&
             !i.newHighWithoutCvdHigh &&
+            !i.peak.lowerHighDetected &&
+            i.peak.breakoutLevelHeld &&
+            i.peak.failedHighAttempts < cfg.maxFailedHighAttempts
+    }
+
+    /**
+     * Независимый расширенный контур. Порог ослабляется только по потоку/цене,
+     * но не по истощению, стоимости исполнения или структурным veto.
+     */
+    private fun passesShadowGate(
+        i: Input,
+        cfg: SignalConfig,
+        entryRisk: Int,
+        exhaustionRisk: Int
+    ): Boolean {
+        val r15 = i.return15s ?: return false
+        val r60 = i.return60s ?: return false
+        val r5m = i.return5m ?: return false
+        val tbr = i.takerBuyRatio30s ?: return false
+        val relBtc = i.relativeStrengthVsBtc ?: return false
+        val spread = i.spreadBps ?: return false
+        val slip = i.slippagePercent ?: return false
+
+        return i.impulseScore >= cfg.minShadowTrade3ImpulseScore &&
+            entryRisk <= cfg.maxShadowEntryRisk &&
+            exhaustionRisk <= cfg.maxShadowExhaustionRisk &&
+            r15 >= cfg.minShadowReturn15s &&
+            r60 >= cfg.minShadowReturn60s &&
+            r5m in cfg.minShadowReturn5m..cfg.maxShadowReturn5m &&
+            tbr >= cfg.minShadowTakerBuyRatio30s &&
+            i.cvd30s > 0.0 &&
+            i.cvdSlope > 0.0 &&
+            relBtc > cfg.minRelativeStrengthVsBtc &&
+            i.dataFresh &&
+            spread <= cfg.maxShadowSpreadBps &&
+            slip <= cfg.maxShadowSlippagePercent &&
+            !i.hardVeto &&
+            !i.buyerPressureDeclining &&
+            !i.newHighWithoutCvdHigh &&
+            i.peak.distanceFromLocalHighPct <= cfg.maxShadowDistanceFromHighPct &&
             !i.peak.lowerHighDetected &&
             i.peak.breakoutLevelHeld &&
             i.peak.failedHighAttempts < cfg.maxFailedHighAttempts

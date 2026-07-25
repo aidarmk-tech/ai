@@ -6,6 +6,11 @@ on:
     paths:
       - "pumpradar/**"
       - ".github/workflows/build-pumpradar.yml"
+  pull_request:
+    branches: [ "claude/binance-trading-bot-apk-yaud0x" ]
+    paths:
+      - "pumpradar/**"
+      - ".github/workflows/build-pumpradar.yml"
   workflow_dispatch:
 
 permissions:
@@ -52,6 +57,7 @@ jobs:
           retention-days: 30
 
       - name: Publish rolling release
+        if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: pumpradar

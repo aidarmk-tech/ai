@@ -31,22 +31,111 @@ class LongSignalDeciderTest {
     )
 
     @Test
-    fun earlyHighPotentialLong() {
+    fun earlyLongUsesProtectedThreePercentPlan() {
         val d = LongSignalDecider.decide(good())
         assertEquals(LongSignalDecider.LONG_CONTINUATION, d.label)
-        assertEquals(7.0, d.maxTargetPercent, 1e-9)
-        assertTrue(d.reasons.any { it.contains("5–7") })
+        assertEquals(3.0, d.maxTargetPercent, 1e-9)
+        assertTrue(d.reasons.any { it.contains("paper-план") })
     }
 
     @Test
-    fun ordinaryContinuationKeepsConservativeTarget() {
+    fun minimumTrade3ImpulsePasses() {
+        val d = LongSignalDecider.decide(good().copy(impulseScore = 60))
+        assertEquals(LongSignalDecider.LONG_CONTINUATION, d.label)
+    }
+
+    @Test
+    fun technicalLongBelowTrade3ImpulseStaysNoTrade() {
+        val d = LongSignalDecider.decide(good().copy(impulseScore = 59))
+        assertEquals(LongSignalDecider.NO_TRADE, d.label)
+        assertTrue(d.reasons.any { it.contains("без строгого TRADE_3") })
+    }
+
+    @Test
+    fun relaxedCandidateBecomesShadowOnly() {
+        val d = LongSignalDecider.decide(
+            good().copy(
+                impulseScore = 62,
+                takerBuyRatio30s = 0.75,
+                return15s = 0.80,
+                return60s = 0.60,
+                return5m = 1.20,
+                peak = PeakFeatures(distanceFromLocalHighPct = 0.50)
+            )
+        )
+        assertEquals(LongSignalDecider.TRADE3_SHADOW, d.label)
+        assertEquals(3.0, d.maxTargetPercent, 1e-9)
+        assertTrue(d.reasons.any { it.contains("только для paper") })
+    }
+
+    @Test
+    fun shadowDoesNotAdmitFlatFiveMinuteRebound() {
+        val d = LongSignalDecider.decide(
+            good().copy(
+                impulseScore = 62,
+                takerBuyRatio30s = 0.75,
+                return15s = 0.80,
+                return60s = 0.60,
+                return5m = 0.10,
+                peak = PeakFeatures(distanceFromLocalHighPct = 0.50)
+            )
+        )
+        assertEquals(LongSignalDecider.NO_TRADE, d.label)
+    }
+
+    @Test
+    fun shadowKeepsExhaustionLimit() {
+        val d = LongSignalDecider.decide(
+            good().copy(
+                impulseScore = 62,
+                takerBuyRatio30s = 0.75,
+                return15s = 0.80,
+                return60s = 0.60,
+                return5m = 1.20,
+                buyerPressureDeclining = true,
+                peak = PeakFeatures(distanceFromLocalHighPct = 0.50)
+            )
+        )
+        assertEquals(LongSignalDecider.NO_TRADE, d.label)
+        assertTrue(d.exhaustionRisk > 20)
+    }
+
+    @Test
+    fun expensiveExecutionRejectedByTrade3Gate() {
+        val d = LongSignalDecider.decide(good().copy(spreadBps = 31.0))
+        assertEquals(LongSignalDecider.NO_TRADE, d.label)
+    }
+
+    @Test
+    fun ordinaryContinuationAlsoUsesThreePercentPlan() {
         val d = LongSignalDecider.decide(good().copy(return5m = 2.5))
         assertEquals(LongSignalDecider.LONG_CONTINUATION, d.label)
-        assertEquals(1.0, d.maxTargetPercent, 1e-9)
+        assertEquals(3.0, d.maxTargetPercent, 1e-9)
     }
 
     @Test
-    fun controlledPullbackCanSignalBeforeOldHigh() {
+    fun lowRiskControlledPullbackCanSignalBeforeOldHigh() {
+        val d = LongSignalDecider.decide(
+            good().copy(
+                return15s = 0.30,
+                return60s = 0.40,
+                return5m = 0.50,
+                takerBuyRatio30s = 0.70,
+                peak = PeakFeatures(
+                    distanceFromLocalHighPct = 0.30,
+                    pullbackFromHighPct = 0.80,
+                    secondsSinceLocalHigh = 0,
+                    breakoutLevelHeld = true
+                )
+            )
+        )
+        assertEquals(LongSignalDecider.LONG_CONTINUATION, d.label)
+        assertEquals(3.0, d.maxTargetPercent, 1e-9)
+        assertTrue(d.reasons.any { it.contains("ретест") })
+    }
+
+    @Test
+    fun deepRetestWithHighEntryRiskStaysNoTrade() {
         val d = LongSignalDecider.decide(
             good().copy(
                 return15s = 0.30,
@@ -61,9 +150,8 @@ class LongSignalDeciderTest {
                 )
             )
         )
-        assertEquals(LongSignalDecider.LONG_CONTINUATION, d.label)
-        assertEquals(5.0, d.maxTargetPercent, 1e-9)
-        assertTrue(d.reasons.any { it.contains("контролируемый откат") })
+        assertEquals(LongSignalDecider.NO_TRADE, d.label)
+        assertTrue(d.entryRisk > 35)
     }
 
     @Test
@@ -85,91 +173,75 @@ class LongSignalDeciderTest {
         assertEquals(LongSignalDecider.NO_TRADE, d.label)
     }
 
-    @Test
-    fun weakTakerRatioRejected() {
-        val d = LongSignalDecider.decide(
-            good().copy(takerBuyRatio30s = 0.60, impulseScore = 50)
+    @Test fun weakTakerRatioRejected() {
+        assertEquals(
+            LongSignalDecider.NO_TRADE,
+            LongSignalDecider.decide(good().copy(takerBuyRatio30s = 0.60, impulseScore = 50)).label
         )
-        assertEquals(LongSignalDecider.NO_TRADE, d.label)
     }
 
-    @Test
-    fun weakReturn15sRejectedWithoutPullbackSetup() {
-        val d = LongSignalDecider.decide(good().copy(return15s = 0.5))
-        assertNotEquals(LongSignalDecider.LONG_CONTINUATION, d.label)
-    }
-
-    @Test
-    fun lateReturn5mRejected() {
-        val d = LongSignalDecider.decide(good().copy(return5m = 3.5))
-        assertNotEquals(LongSignalDecider.LONG_CONTINUATION, d.label)
-    }
-
-    @Test
-    fun volumeAbsorptionVeto() {
-        val d = LongSignalDecider.decide(
-            good().copy(volumeZ30s = 30.0, takerBuyRatio30s = 0.79)
+    @Test fun weakReturn15sRejectedWithoutPullbackSetup() {
+        assertNotEquals(
+            LongSignalDecider.LONG_CONTINUATION,
+            LongSignalDecider.decide(good().copy(return15s = 0.5)).label
         )
+    }
+
+    @Test fun lateReturn5mRejected() {
+        assertNotEquals(
+            LongSignalDecider.LONG_CONTINUATION,
+            LongSignalDecider.decide(good().copy(return5m = 3.5)).label
+        )
+    }
+
+    @Test fun volumeAbsorptionVeto() {
+        val d = LongSignalDecider.decide(good().copy(volumeZ30s = 30.0, takerBuyRatio30s = 0.79))
         assertNotEquals(LongSignalDecider.LONG_CONTINUATION, d.label)
         assertTrue(d.reasons.any { it.contains("поглощение") })
     }
 
-    @Test
-    fun fallingCvdRejected() {
-        val d = LongSignalDecider.decide(
-            good().copy(cvdSlope = -10.0, impulseScore = 50)
+    @Test fun fallingCvdRejected() {
+        assertEquals(
+            LongSignalDecider.NO_TRADE,
+            LongSignalDecider.decide(good().copy(cvdSlope = -10.0, impulseScore = 50)).label
         )
-        assertEquals(LongSignalDecider.NO_TRADE, d.label)
     }
 
-    @Test
-    fun lowerHighRejected() {
-        val d = LongSignalDecider.decide(
-            good().copy(peak = PeakFeatures(lowerHighDetected = true))
+    @Test fun lowerHighRejected() {
+        assertNotEquals(
+            LongSignalDecider.LONG_CONTINUATION,
+            LongSignalDecider.decide(good().copy(peak = PeakFeatures(lowerHighDetected = true))).label
         )
-        assertNotEquals(LongSignalDecider.LONG_CONTINUATION, d.label)
     }
 
-    @Test
-    fun exhaustionRiskState() {
+    @Test fun exhaustionRiskState() {
         val d = LongSignalDecider.decide(
             good().copy(
                 buyerPressureDeclining = true,
                 cvdSlope = -5.0,
                 newHighWithoutCvdHigh = true,
-                peak = PeakFeatures(
-                    lowerHighDetected = true,
-                    breakoutLevelHeld = false
-                )
+                peak = PeakFeatures(lowerHighDetected = true, breakoutLevelHeld = false)
             )
         )
         assertEquals(LongSignalDecider.EXHAUSTION_RISK, d.label)
         assertTrue(d.exhaustionRisk >= 70)
     }
 
-    @Test
-    fun reversalWatchState() {
+    @Test fun reversalWatchState() {
         val d = LongSignalDecider.decide(
-            good().copy(
-                takerBuyRatio30s = 0.65,
-                return60s = 0.9,
-                buyerPressureDeclining = true
-            )
+            good().copy(takerBuyRatio30s = 0.65, return60s = 0.9, buyerPressureDeclining = true)
         )
         assertEquals(LongSignalDecider.REVERSAL_WATCH, d.label)
     }
 
-    @Test
-    fun repeatSignalBlocked() {
-        val d = LongSignalDecider.decide(good().copy(repeatBlocked = true))
-        assertEquals(LongSignalDecider.NO_TRADE, d.label)
+    @Test fun repeatSignalBlocked() {
+        assertEquals(LongSignalDecider.NO_TRADE, LongSignalDecider.decide(good().copy(repeatBlocked = true)).label)
     }
 
-    @Test
-    fun distanceFromHighRejectsWhenNoRetestRecovery() {
-        val d = LongSignalDecider.decide(
-            good().copy(peak = PeakFeatures(distanceFromLocalHighPct = 1.0))
+    @Test fun distanceFromHighRejectsWhenNoRetestRecovery() {
+        assertNotEquals(
+            LongSignalDecider.LONG_CONTINUATION,
+            LongSignalDecider.decide(good().copy(peak = PeakFeatures(distanceFromLocalHighPct = 1.0))).label
         )
-        assertNotEquals(LongSignalDecider.LONG_CONTINUATION, d.label)
     }
 }
