@@ -69,6 +69,9 @@ interface TrainingSnapshotDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(snapshot: TrainingSnapshotEntity)
 
+    @Query("SELECT * FROM training_snapshots WHERE id = :id")
+    suspend fun get(id: String): TrainingSnapshotEntity?
+
     @Query("SELECT COUNT(*) FROM training_snapshots")
     suspend fun count(): Int
 
