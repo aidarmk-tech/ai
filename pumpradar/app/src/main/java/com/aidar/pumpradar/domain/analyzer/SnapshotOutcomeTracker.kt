@@ -2,27 +2,39 @@ package com.aidar.pumpradar.domain.analyzer
 
 import com.aidar.pumpradar.data.local.SnapshotOutcomeDao
 import com.aidar.pumpradar.data.local.SnapshotOutcomeEntity
+import com.aidar.pumpradar.data.local.TrainingSnapshotDao
 import com.aidar.pumpradar.domain.model.TrajectoryPoint
+import com.aidar.pumpradar.notification.PlanNotificationManager
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Исходы для ЛЮБОГО снимка признаков. Копит контрольные точки и секундную
- * bid/ask-траекторию на полном горизонте 15 минут, считает порядок барьеров и
- * защищённый план сопровождения до +3%. Ордера не отправляются.
+ * Исходы для ЛЮБОГО снимка признаков. Копит секундную bid/ask-траекторию на
+ * горизонте 15 минут, считает порядок барьеров и защищённый план до +3%.
+ *
+ * Для TRIGGERED-снимков с LONG_CONTINUATION дополнительно выдаёт стадийные
+ * уведомления: защита после +1%, цель +3%, защитный выход и подтверждённое
+ * ослабление потока. Ордера не отправляются.
  */
 @Singleton
-class SnapshotOutcomeTracker @Inject constructor() {
+class SnapshotOutcomeTracker @Inject constructor(
+    private val trainingSnapshotDao: TrainingSnapshotDao,
+    private val analyzer: CandidateAnalyzer,
+    private val signalConfig: SignalConfig,
+    private val planNotifier: PlanNotificationManager
+) {
 
     private class Track(
         val snapshotId: String,
         val symbol: String,
         val snapshotType: String,
         val ref: Double,
-        val start: Long
+        val start: Long,
+        val planLong: Boolean
     ) {
         var maxP: Double = ref
         var minP: Double = ref
+        var timeToMfe: Long = 0
         var p30: Double? = null
         var p1: Double? = null
         var p3: Double? = null
@@ -30,6 +42,10 @@ class SnapshotOutcomeTracker @Inject constructor() {
         var p15: Double? = null
         val points = ArrayList<TrajectoryPoint>(TRAJECTORY_MAX_POINTS)
         var lastSampleAt = Long.MIN_VALUE
+        var planActivated = false
+        var planClosed = false
+        var planWeakTicks = 0
+        var maxReturnPercent = 0.0
     }
 
     private val tracks = ArrayList<Track>()
@@ -41,8 +57,11 @@ class SnapshotOutcomeTracker @Inject constructor() {
         refPrice: Double, now: Long = System.currentTimeMillis()
     ) {
         if (refPrice <= 0.0) return
+        val planLong = runCatching {
+            trainingSnapshotDao.get(snapshotId)?.opportunityLabel == LongSignalDecider.LONG_CONTINUATION
+        }.getOrDefault(false)
         synchronized(lock) {
-            tracks.add(Track(snapshotId, symbol, snapshotType, refPrice, now))
+            tracks.add(Track(snapshotId, symbol, snapshotType, refPrice, now, planLong))
         }
         runCatching {
             dao.upsert(
@@ -67,8 +86,9 @@ class SnapshotOutcomeTracker @Inject constructor() {
         for (t in snapshot) {
             val price = priceOf(t.symbol) ?: continue
             val elapsed = now - t.start
-            if (price > t.maxP) t.maxP = price
+            if (price > t.maxP) { t.maxP = price; t.timeToMfe = elapsed }
             if (price < t.minP) t.minP = price
+            updateLivePlan(t, price)
             if (t.p30 == null && elapsed >= 30_000) t.p30 = price
             if (t.p1 == null && elapsed >= 60_000) t.p1 = price
             if (t.p3 == null && elapsed >= 180_000) t.p3 = price
@@ -88,6 +108,86 @@ class SnapshotOutcomeTracker @Inject constructor() {
         }
         for (t in finished) runCatching { dao.upsert(finalize(t)) }
         if (finished.isNotEmpty()) synchronized(lock) { tracks.removeAll(finished) }
+    }
+
+    private fun updateLivePlan(t: Track, price: Double) {
+        if (!t.planLong || t.planClosed) return
+        val returnPct = (price / t.ref - 1.0) * 100.0
+        if (returnPct > t.maxReturnPercent) t.maxReturnPercent = returnPct
+
+        if (!t.planActivated) {
+            when {
+                returnPct <= -signalConfig.initialStopPercent -> {
+                    t.planClosed = true
+                    planNotifier.notify(
+                        t.symbol,
+                        PlanNotificationManager.State.INITIAL_STOP,
+                        returnPct
+                    )
+                }
+                returnPct >= signalConfig.target3Percent -> {
+                    t.planActivated = true
+                    t.planClosed = true
+                    planNotifier.notify(
+                        t.symbol,
+                        PlanNotificationManager.State.TARGET_3_REACHED,
+                        returnPct
+                    )
+                }
+                returnPct >= signalConfig.protectionActivationPercent -> {
+                    t.planActivated = true
+                    planNotifier.notify(
+                        t.symbol,
+                        PlanNotificationManager.State.PROTECT_AFTER_1,
+                        returnPct
+                    )
+                }
+            }
+            return
+        }
+
+        when {
+            returnPct >= signalConfig.target3Percent -> {
+                t.planClosed = true
+                planNotifier.notify(
+                    t.symbol,
+                    PlanNotificationManager.State.TARGET_3_REACHED,
+                    returnPct
+                )
+            }
+            returnPct <= signalConfig.protectedStopPercent -> {
+                t.planClosed = true
+                planNotifier.notify(
+                    t.symbol,
+                    PlanNotificationManager.State.PROTECTED_EXIT,
+                    returnPct
+                )
+            }
+            else -> {
+                val m = analyzer.metrics(t.symbol)
+                val assessment = ThreePercentLivePolicy.assess(
+                    ThreePercentLivePolicy.Input(
+                        currentReturnPercent = returnPct,
+                        maxReturnPercent = t.maxReturnPercent,
+                        takerBuyRatio5s = m?.takerBuyRatio5s,
+                        takerBuyRatio15s = m?.takerBuyRatio15s,
+                        takerBuyRatio30s = m?.takerBuyRatio30s,
+                        cvdSlope = m?.cvdSlope
+                    ),
+                    signalConfig
+                )
+                t.planWeakTicks = if (assessment.flowWeak) t.planWeakTicks + 1 else 0
+                if (t.planWeakTicks >= signalConfig.weakeningConfirmTicks) {
+                    t.planClosed = true
+                    planNotifier.notify(
+                        t.symbol,
+                        PlanNotificationManager.State.EXIT_WEAKENING,
+                        returnPct,
+                        assessment.reasons
+                    )
+                }
+            }
+        }
     }
 
     private fun finalize(t: Track): SnapshotOutcomeEntity {
