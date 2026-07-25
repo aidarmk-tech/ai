@@ -27,6 +27,11 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
       - name: Build debug APK
         id: build
         continue-on-error: true
@@ -34,8 +39,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p out
-          chmod +x pumpradar/gradlew
-          ./pumpradar/gradlew -p pumpradar-client --no-daemon assembleDebug 2>&1 | tee out/build.log
+          gradle -p pumpradar-client --no-daemon assembleDebug 2>&1 | tee out/build.log
 
       - name: Preserve diagnostics
         if: always()
