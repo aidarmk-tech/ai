@@ -511,7 +511,7 @@ class BinanceFeed:
 
     async def start(self) -> None:
         timeout = aiohttp.ClientTimeout(total=20)
-        self.session = aiohttp.ClientSession(timeout=timeout, headers={"User-Agent": "PumpRadar/4.3.3"})
+        self.session = aiohttp.ClientSession(timeout=timeout, headers={"User-Agent": "PumpRadar/4.3.4"})
         await self.refresh_universe()
 
     async def stop(self) -> None:

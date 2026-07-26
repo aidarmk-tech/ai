@@ -19,7 +19,7 @@ def _env_int(name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class Settings:
-    algorithm_version: str = "4.3.3-server"
+    algorithm_version: str = "4.3.4-server"
     strategy_version: str = "TRADE3-FROZEN-2026-07"
     rest_url: str = os.getenv("BINANCE_REST_URL", "https://api.binance.com")
     ws_url: str = os.getenv("BINANCE_WS_URL", "wss://stream.binance.com:9443")
@@ -32,12 +32,12 @@ class Settings:
     fee_rate: float = _env_float("PUMPRADAR_FEE_RATE", 0.001)
     minimum_24h_quote_volume: float = _env_float("PUMPRADAR_MIN_24H_QUOTE_VOLUME", 5_000_000.0)
     max_candidates: int = _env_int("PUMPRADAR_MAX_CANDIDATES", 20)
-    warm_pool_size: int = _env_int("PUMPRADAR_WARM_POOL_SIZE", 35)
+    warm_pool_size: int = _env_int("PUMPRADAR_WARM_POOL_SIZE", 60)
     control_pool_size: int = _env_int("PUMPRADAR_CONTROL_POOL_SIZE", 5)
     control_rotation_seconds: int = _env_int("PUMPRADAR_CONTROL_ROTATION_SECONDS", 300)
     warm_refresh_seconds: int = _env_int("PUMPRADAR_WARM_REFRESH_SECONDS", 15)
-    deep_candidates: int = _env_int("PUMPRADAR_DEEP_CANDIDATES", 10)
-    depth_candidates: int = _env_int("PUMPRADAR_DEPTH_CANDIDATES", 10)
+    deep_candidates: int = _env_int("PUMPRADAR_DEEP_CANDIDATES", 15)
+    depth_candidates: int = _env_int("PUMPRADAR_DEPTH_CANDIDATES", 20)
     export_interval_minutes: int = _env_int("PUMPRADAR_EXPORT_INTERVAL_MINUTES", 60)
     export_keep_count: int = _env_int("PUMPRADAR_EXPORT_KEEP_COUNT", 48)
     export_max_total_mb: int = _env_int("PUMPRADAR_EXPORT_MAX_TOTAL_MB", 2_048)

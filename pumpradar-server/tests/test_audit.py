@@ -168,6 +168,61 @@ class AuditFlowTest(unittest.TestCase):
         self.assertEqual(9, next_id)
         self.assertEqual(1, state.candidate_subscription_update_count)
 
+    def test_decision_symbols_get_immediate_depth_coverage(self) -> None:
+        fake_web = types.SimpleNamespace(middleware=lambda handler: handler)
+        sys.modules["aiohttp"] = types.SimpleNamespace(web=fake_web)
+        from pumpradar_server.main import Service
+
+        service = Service(self.settings)
+        self.assertTrue(service._ensure_decision_coverage({"BTCUSDT"}))
+        self.assertEqual({"BTCUSDT"}, service.warm_symbols)
+        self.assertEqual({"BTCUSDT"}, service.depth_symbols)
+        self.assertEqual(("BTCUSDT",), service.feed._warm_symbols)
+        self.assertEqual(("BTCUSDT",), service.feed._depth_symbols)
+        self.assertFalse(service._ensure_decision_coverage({"BTCUSDT"}))
+
+    def test_missing_first_depth_snapshot_is_reported_as_warming(self) -> None:
+        from pumpradar_server.models import Candidate, FlowMetrics, BookMetrics, PeakFeatures
+        from pumpradar_server.strategy import assess
+
+        candidate = Candidate(
+            "BTCUSDT", 100.0, 10_000_000.0, 1.0, 1.5, 2.0, 0.5, 1.0, 1.0
+        )
+        flow = FlowMetrics(
+            ready=True,
+            trade_count_30s=10,
+            taker_buy_ratio_30s=0.9,
+            taker_buy_ratio_15s=0.9,
+            taker_buy_ratio_5s=0.9,
+            cvd_30s=100.0,
+            cvd_15s=60.0,
+            cvd_5s=30.0,
+            cvd_slope=1.0,
+            volume_z_30s=5.0,
+        )
+        decision = assess(
+            candidate,
+            flow,
+            BookMetrics(),
+            PeakFeatures(),
+            self.settings,
+            999_999,
+            0.0,
+            0.5,
+            False,
+        )
+        self.assertIn("DEPTH_WARMING", decision.risk.veto_reasons)
+        self.assertNotIn("STALE_FEED", decision.risk.veto_reasons)
+        self.assertFalse(decision.strict_passed)
+
+    def test_v434_expands_observation_without_changing_trade3_thresholds(self) -> None:
+        self.assertEqual("4.3.4-server", self.settings.algorithm_version)
+        self.assertEqual(60, self.settings.warm_pool_size)
+        self.assertEqual(15, self.settings.deep_candidates)
+        self.assertEqual(20, self.settings.depth_candidates)
+        self.assertEqual(0.875, self.settings.min_taker_buy_ratio_30s)
+        self.assertEqual(3.0, self.settings.max_return_5m)
+
     def test_daily_pnl_keeps_alternative_policies_separate(self) -> None:
         from pumpradar_server.storage import Storage
 

@@ -24,13 +24,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Reconstruct v4.3.3 payload
+      - name: Reconstruct v4.3.4 payload
         shell: bash
         run: |
           set -Eeuo pipefail
-          cat server-bootstrap/v433/{00..20} > /tmp/payload.b64
+          cat server-bootstrap/v434/{00..20} > /tmp/payload.b64
           base64 --decode /tmp/payload.b64 > /tmp/payload.tar.gz
-          echo '530939131d7061d28ec8a53063344a8f1422bb009912cb4e1c6441f00556d552  /tmp/payload.tar.gz' | sha256sum -c -
+          echo '0fc461841eac1beda936107bb3cd0b5a2422ce8353d8d369b9d3d184ea60bfb4  /tmp/payload.tar.gz' | sha256sum -c -
           mkdir /tmp/pumpradar
           tar -xzf /tmp/payload.tar.gz -C /tmp/pumpradar --strip-components=1
 
@@ -59,7 +59,10 @@ jobs:
           from pumpradar_server.config import Settings
 
           settings = Settings()
-          assert settings.algorithm_version == '4.3.3-server'
+          assert settings.algorithm_version == '4.3.4-server'
+          assert settings.warm_pool_size == 60
+          assert settings.deep_candidates == 15
+          assert settings.depth_candidates == 20
           assert max(settings.depth_candidates, settings.deep_candidates) >= settings.deep_candidates
           print('smoke ok', settings.algorithm_version, settings.config_hash())
           PY
@@ -67,7 +70,7 @@ jobs:
       - name: Upload verified server source
         uses: actions/upload-artifact@v4
         with:
-          name: pumpradar-server-source-v433
+          name: pumpradar-server-source-v434
           path: /tmp/pumpradar
           if-no-files-found: error
           retention-days: 7

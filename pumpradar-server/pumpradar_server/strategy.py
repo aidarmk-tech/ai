@@ -184,12 +184,15 @@ def assess(
     r15, r60, r5m = c.return_15s, c.return_60s, c.return_5m
     tbr = flow.taker_buy_ratio_30s
     declining = buyer_pressure_declining(flow)
-    data_fresh = feed_age_ms <= settings.max_feed_age_ms
+    depth_warming = book.depth_age_ms is None or book.depth_update_id is None
+    data_fresh = feed_age_ms <= settings.max_feed_age_ms and not depth_warming
     absorption = (flow.volume_z_30s or 0) > settings.extreme_volume_z and (
         (r15 or 0) < settings.min_return_15s or (tbr or 0) < settings.min_taker_buy_for_extreme_volume
     )
     veto_reasons: list[str] = []
-    if not data_fresh:
+    if depth_warming:
+        veto_reasons.append("DEPTH_WARMING")
+    elif not data_fresh:
         veto_reasons.append("STALE_FEED")
     if flow.trade_gap:
         veto_reasons.append("TRADE_GAP")

@@ -2,10 +2,10 @@
 set -Eeuo pipefail
 
 REPO_RAW="https://raw.githubusercontent.com/aidarmk-tech/ai/chatgpt/pumpradar-server-v43/server-bootstrap"
-PAYLOAD_PATH="v433"
+PAYLOAD_PATH="v434"
 CHUNK_LAST=20
-EXPECTED_SHA256="530939131d7061d28ec8a53063344a8f1422bb009912cb4e1c6441f00556d552"
-EXPECTED_VERSION="4.3.3-server"
+EXPECTED_SHA256="0fc461841eac1beda936107bb3cd0b5a2422ce8353d8d369b9d3d184ea60bfb4"
+EXPECTED_VERSION="4.3.4-server"
 APP_ROOT="/opt/pumpradar"
 DATA_DIR="/var/lib/pumpradar"
 ENV_DIR="/etc/pumpradar"
@@ -84,9 +84,9 @@ PUMPRADAR_POSITION_USDT=20
 PUMPRADAR_FEE_RATE=0.001
 PUMPRADAR_MIN_24H_QUOTE_VOLUME=5000000
 PUMPRADAR_MAX_CANDIDATES=20
-PUMPRADAR_DEEP_CANDIDATES=10
-PUMPRADAR_DEPTH_CANDIDATES=10
-PUMPRADAR_WARM_POOL_SIZE=35
+PUMPRADAR_DEEP_CANDIDATES=15
+PUMPRADAR_DEPTH_CANDIDATES=20
+PUMPRADAR_WARM_POOL_SIZE=60
 PUMPRADAR_CONTROL_POOL_SIZE=5
 PUMPRADAR_CONTROL_ROTATION_SECONDS=300
 PUMPRADAR_WARM_REFRESH_SECONDS=15
@@ -102,7 +102,17 @@ ensure_env() {
   local key="$1" value="$2"
   grep -q "^${key}=" "$ENV_FILE" || printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
 }
-ensure_env PUMPRADAR_WARM_POOL_SIZE 35
+migrate_env_default() {
+  local key="$1" old_value="$2" new_value="$3"
+  if grep -q "^${key}=${old_value}$" "$ENV_FILE"; then
+    sed -i "s/^${key}=${old_value}$/${key}=${new_value}/" "$ENV_FILE"
+  else
+    ensure_env "$key" "$new_value"
+  fi
+}
+migrate_env_default PUMPRADAR_WARM_POOL_SIZE 35 60
+migrate_env_default PUMPRADAR_DEEP_CANDIDATES 10 15
+migrate_env_default PUMPRADAR_DEPTH_CANDIDATES 10 20
 ensure_env PUMPRADAR_CONTROL_POOL_SIZE 5
 ensure_env PUMPRADAR_CONTROL_ROTATION_SECONDS 300
 ensure_env PUMPRADAR_WARM_REFRESH_SECONDS 15

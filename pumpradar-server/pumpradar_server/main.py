@@ -113,6 +113,20 @@ class Service:
         self.last_control_rotation_ms = now_ms
         return set(random.sample(eligible, count)) if count else set()
 
+    def _ensure_decision_coverage(self, decision_symbols: set[str]) -> bool:
+        """Subscribe new decision symbols immediately instead of waiting 15 seconds."""
+        missing_warm = decision_symbols - self.warm_symbols
+        missing_depth = decision_symbols - self.depth_symbols
+        if not missing_warm and not missing_depth:
+            return False
+        self.warm_symbols.update(decision_symbols)
+        self.depth_symbols.update(decision_symbols)
+        self.feed.set_candidate_symbols(
+            sorted(self.warm_symbols),
+            sorted(self.depth_symbols),
+        )
+        return True
+
     async def engine_loop(self) -> None:
         while not self.stop_event.is_set():
             now = int(time.time() * 1000)
@@ -120,6 +134,8 @@ class Service:
                 ranked = self.state.rank_universe(self.settings.minimum_24h_quote_volume, now)
                 candidates = [c for c in ranked if self.state.is_pre_candidate(c)][: self.settings.max_candidates]
                 candidate_map = {c.symbol: c for c in ranked}
+                decision_candidates = candidates[: self.settings.deep_candidates]
+                next_decision_symbols = {c.symbol for c in decision_candidates}
                 active = self.storage.baseline_open_slot()
                 active_symbol = str(active["symbol"]) if active else None
 
@@ -130,6 +146,7 @@ class Service:
                         excluded.add(active_symbol)
                     controls = self._rotate_controls(ranked, excluded, now)
                     warm = set(warm_core) | controls
+                    warm.update(next_decision_symbols)
                     if active_symbol:
                         warm.add(active_symbol)
                     # Every symbol that can reach a frozen decision needs an
@@ -140,6 +157,7 @@ class Service:
                         self.settings.deep_candidates,
                     )
                     depth = {c.symbol for c in candidates[:depth_limit]}
+                    depth.update(next_decision_symbols)
                     if active_symbol:
                         depth.add(active_symbol)
                     changed = warm != self.warm_symbols or controls != self.control_symbols or depth != self.depth_symbols
@@ -157,9 +175,16 @@ class Service:
                             f"warm={len(warm)} controls={len(controls)} depth={len(depth)} candidates={len(candidates)}",
                         )
 
+                if self._ensure_decision_coverage(next_decision_symbols):
+                    self.storage.event(
+                        "INFO",
+                        "coverage",
+                        f"immediate decision coverage warm={len(self.warm_symbols)} "
+                        f"depth={len(self.depth_symbols)} decisions={len(next_decision_symbols)}",
+                    )
+
                 median_ret, breadth = self.state.market_context(now)
-                decision_candidates = candidates[: self.settings.deep_candidates]
-                self.decision_symbols = {c.symbol for c in decision_candidates}
+                self.decision_symbols = next_decision_symbols
                 evaluation_symbols = set(self.decision_symbols) | set(self.control_symbols)
                 if active_symbol:
                     evaluation_symbols.add(active_symbol)
