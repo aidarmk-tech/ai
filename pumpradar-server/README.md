@@ -14,4 +14,3 @@ per-policy daily PnL, reproducible SQLite/CSV exports and the 1 GB VPS safeguard
 
 The service uses only public Binance market data. It has no order endpoint and
 does not require Binance API keys.
-
