@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly PumpRadar export/upload
+
+[Timer]
+OnBootSec=20min
+OnUnitActiveSec=1h
+Persistent=true
+RandomizedDelaySec=2min
+
+[Install]
+WantedBy=timers.target
