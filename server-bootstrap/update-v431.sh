@@ -45,7 +45,7 @@ for line in \
 done
 
 rollback() {
-  echo "[PumpRadar 4.3.1] Проверка не пройдена, выполняется откат" >&2
+  echo "[PumpRadar 4.3.1] Проверка запуска не пройдена, выполняется откат" >&2
   systemctl stop pumpradar.service || true
   rm -rf "$APP_ROOT/server"
   if [[ -d "$APP_ROOT/server.previous" ]]; then
@@ -64,23 +64,47 @@ mv "$APP_ROOT/server.new" "$APP_ROOT/server"
 systemctl daemon-reload
 systemctl start pumpradar.service
 
-for _ in $(seq 1 30); do
-  if curl -fsS http://127.0.0.1:8787/healthz > "$TMP_DIR/health.json"; then
-    break
+# Проверяем отдельно запуск процесса и готовность рыночных потоков.
+# Первый тикер может появиться не сразу; это не является ошибкой установки.
+source "$ENV_FILE"
+PORT="${PUMPRADAR_BIND_PORT:-8787}"
+STATUS=""
+VERSION_SEEN=0
+MARKET_READY=0
+
+for _ in $(seq 1 90); do
+  if systemctl is-active --quiet pumpradar.service; then
+    STATUS="$(curl -fsS \
+      -H "Authorization: Bearer $PUMPRADAR_API_TOKEN" \
+      "http://127.0.0.1:${PORT}/api/status" 2>/dev/null || true)"
+
+    if echo "$STATUS" | grep -Eq '"algorithm_version"[[:space:]]*:[[:space:]]*"4\.3\.1-server"'; then
+      VERSION_SEEN=1
+      if echo "$STATUS" | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true'; then
+        MARKET_READY=1
+        break
+      fi
+    fi
   fi
   sleep 2
 done
-curl -fsS http://127.0.0.1:8787/healthz > "$TMP_DIR/health.json"
-cat "$TMP_DIR/health.json"
 
-grep -q '"ok": true' "$TMP_DIR/health.json"
-source "$ENV_FILE"
-STATUS="$(curl -fsS -H "Authorization: Bearer $PUMPRADAR_API_TOKEN" http://127.0.0.1:${PUMPRADAR_BIND_PORT:-8787}/api/status)"
+if [[ "$VERSION_SEEN" -ne 1 ]]; then
+  echo "[PumpRadar 4.3.1] Новая версия не ответила через API" >&2
+  systemctl status pumpradar.service --no-pager || true
+  journalctl -u pumpradar.service -n 80 --no-pager || true
+  false
+fi
+
 echo "$STATUS"
-echo "$STATUS" | grep -q '"algorithm_version": "4.3.1-server"'
 
 trap - ERR
 rm -rf "$APP_ROOT/server.previous"
 echo
 printf 'PumpRadar 4.3.1 установлен. Warm pool: 35, control pool: 5, depth: 8.\n'
+if [[ "$MARKET_READY" -eq 1 ]]; then
+  printf 'Рыночные потоки готовы.\n'
+else
+  printf 'Сервис запущен; рыночные потоки ещё инициализируются. Проверьте клиент через 1–3 минуты.\n'
+fi
 printf 'Google Drive не изменён; локальные экспорты сохранены.\n'
