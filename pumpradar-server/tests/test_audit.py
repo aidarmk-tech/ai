@@ -104,6 +104,85 @@ class AuditFlowTest(unittest.TestCase):
         self.assertFalse(weakening_confirmed(weak, 0.34, self.settings))
         self.assertTrue(weakening_confirmed(weak, 0.35, self.settings))
 
+    def test_protected_floor_covers_fees_and_tracks_half_peak(self) -> None:
+        from pumpradar_server.paper import protected_floor_percent
+
+        self.assertEqual(0.30, protected_floor_percent(0.40, self.settings))
+        self.assertEqual(0.50, protected_floor_percent(1.00, self.settings))
+        self.assertEqual(1.20, protected_floor_percent(2.40, self.settings))
+
+    def test_protected_exit_uses_half_peak_floor(self) -> None:
+        from pumpradar_server.paper import PaperManager
+        from pumpradar_server.storage import Storage
+
+        class FixedMarket:
+            sell_price = 101.1
+
+            def executable_sell_price(self, *args, **kwargs):
+                return self.sell_price
+
+        async def notify(_message):
+            return None
+
+        storage = Storage(self.settings)
+        storage.start_run("protected-floor")
+        opened_at = 1_000_000
+        slot_id = storage.create_slot(
+            None, "BTCUSDT", "event", opened_at, 100.0, 100.0
+        )
+        policy = next(
+            row
+            for row in storage.policies_for_slot(slot_id)
+            if row["policy"] == "B_FULL_PROTECTED"
+        )
+        storage.update_policy(
+            policy["id"],
+            activated_at_ms=opened_at + 1_000,
+            peak_return_percent=2.0,
+        )
+        market = FixedMarket()
+        manager = PaperManager(self.settings, market, storage, notify)
+
+        policy = storage.conn.execute(
+            "SELECT * FROM policy_runs WHERE id=?", (policy["id"],)
+        ).fetchone()
+        asyncio.run(manager._update_policy(
+            storage.conn.execute(
+                "SELECT * FROM paper_slots WHERE id=?", (slot_id,)
+            ).fetchone(),
+            policy,
+            market.sell_price,
+            1.10,
+            None,
+            opened_at + 2_000,
+        ))
+        self.assertEqual(
+            "OPEN",
+            storage.conn.execute(
+                "SELECT state FROM policy_runs WHERE id=?", (policy["id"],)
+            ).fetchone()[0],
+        )
+
+        market.sell_price = 100.9
+        policy = storage.conn.execute(
+            "SELECT * FROM policy_runs WHERE id=?", (policy["id"],)
+        ).fetchone()
+        asyncio.run(manager._update_policy(
+            storage.conn.execute(
+                "SELECT * FROM paper_slots WHERE id=?", (slot_id,)
+            ).fetchone(),
+            policy,
+            market.sell_price,
+            0.90,
+            None,
+            opened_at + 3_000,
+        ))
+        closed = storage.conn.execute(
+            "SELECT state, exit_reason FROM policy_runs WHERE id=?",
+            (policy["id"],),
+        ).fetchone()
+        self.assertEqual(("CLOSED", "PROTECTED_EXIT"), tuple(closed))
+
     def test_stale_symbol_measurement_is_rejected(self) -> None:
         from pumpradar_server.market import MarketState
 
@@ -215,13 +294,15 @@ class AuditFlowTest(unittest.TestCase):
         self.assertNotIn("STALE_FEED", decision.risk.veto_reasons)
         self.assertFalse(decision.strict_passed)
 
-    def test_v434_expands_observation_without_changing_trade3_thresholds(self) -> None:
-        self.assertEqual("4.3.4-server", self.settings.algorithm_version)
+    def test_v435_expands_observation_and_corrects_protected_floor(self) -> None:
+        self.assertEqual("4.3.5-server", self.settings.algorithm_version)
         self.assertEqual(60, self.settings.warm_pool_size)
         self.assertEqual(15, self.settings.deep_candidates)
         self.assertEqual(20, self.settings.depth_candidates)
         self.assertEqual(0.875, self.settings.min_taker_buy_ratio_30s)
         self.assertEqual(3.0, self.settings.max_return_5m)
+        self.assertEqual(0.30, self.settings.protected_stop_percent)
+        self.assertEqual(0.50, self.settings.protected_peak_fraction)
 
     def test_daily_pnl_keeps_alternative_policies_separate(self) -> None:
         from pumpradar_server.storage import Storage

@@ -2,10 +2,10 @@
 set -Eeuo pipefail
 
 REPO_RAW="https://raw.githubusercontent.com/aidarmk-tech/ai/chatgpt/pumpradar-server-v43/server-bootstrap"
-PAYLOAD_PATH="v434"
-CHUNK_LAST=20
-EXPECTED_SHA256="0fc461841eac1beda936107bb3cd0b5a2422ce8353d8d369b9d3d184ea60bfb4"
-EXPECTED_VERSION="4.3.4-server"
+PAYLOAD_PATH="v435"
+CHUNK_LAST=21
+EXPECTED_SHA256="2e899afe07061ee33307603057e7701253e84475c9022118cf10339f39aa2697"
+EXPECTED_VERSION="4.3.5-server"
 APP_ROOT="/opt/pumpradar"
 DATA_DIR="/var/lib/pumpradar"
 ENV_DIR="/etc/pumpradar"

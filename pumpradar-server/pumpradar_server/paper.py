@@ -27,6 +27,14 @@ def weakening_confirmed(flow, drawdown_percent: float, settings: Settings) -> bo
     ])
 
 
+def protected_floor_percent(peak_return_percent: float, settings: Settings) -> float:
+    """Never protect below fees + buffer; retain at least half of the peak."""
+    return max(
+        settings.protected_stop_percent,
+        peak_return_percent * settings.protected_peak_fraction,
+    )
+
+
 class PaperManager:
     def __init__(self, settings: Settings, market: MarketState, storage: Storage, notify) -> None:
         self.settings = settings
@@ -116,7 +124,7 @@ class PaperManager:
             exit_reason = "INITIAL_STOP"
         elif current_return >= self.settings.target_percent:
             exit_reason = "TARGET_3"
-        elif activated and current_return <= self.settings.protected_stop_percent:
+        elif activated and current_return <= protected_floor_percent(peak_return, self.settings):
             exit_reason = "PROTECTED_EXIT"
         elif policy_name == "C_WEAKENING" and flow is not None:
             drawdown = peak_return - current_return

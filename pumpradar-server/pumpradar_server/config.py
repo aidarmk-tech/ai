@@ -19,7 +19,7 @@ def _env_int(name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class Settings:
-    algorithm_version: str = "4.3.4-server"
+    algorithm_version: str = "4.3.5-server"
     strategy_version: str = "TRADE3-FROZEN-2026-07"
     rest_url: str = os.getenv("BINANCE_REST_URL", "https://api.binance.com")
     ws_url: str = os.getenv("BINANCE_WS_URL", "wss://stream.binance.com:9443")
@@ -80,7 +80,9 @@ class Settings:
     target_percent: float = 3.0
     initial_stop_percent: float = 0.75
     protection_activation_percent: float = 1.0
-    protected_stop_percent: float = 0.15
+    # Gross executable floor: 0.20% round-trip fee + 0.10% safety buffer.
+    protected_stop_percent: float = 0.30
+    protected_peak_fraction: float = 0.50
     partial_fraction: float = 0.20
     horizon_seconds: int = 15 * 60
     # Must match the live TRADE_3 observer in PR #10.
