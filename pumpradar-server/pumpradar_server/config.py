@@ -19,7 +19,7 @@ def _env_int(name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class Settings:
-    algorithm_version: str = "4.3.2-server"
+    algorithm_version: str = "4.3.3-server"
     strategy_version: str = "TRADE3-FROZEN-2026-07"
     rest_url: str = os.getenv("BINANCE_REST_URL", "https://api.binance.com")
     ws_url: str = os.getenv("BINANCE_WS_URL", "wss://stream.binance.com:9443")
@@ -37,12 +37,15 @@ class Settings:
     control_rotation_seconds: int = _env_int("PUMPRADAR_CONTROL_ROTATION_SECONDS", 300)
     warm_refresh_seconds: int = _env_int("PUMPRADAR_WARM_REFRESH_SECONDS", 15)
     deep_candidates: int = _env_int("PUMPRADAR_DEEP_CANDIDATES", 10)
-    depth_candidates: int = _env_int("PUMPRADAR_DEPTH_CANDIDATES", 8)
+    depth_candidates: int = _env_int("PUMPRADAR_DEPTH_CANDIDATES", 10)
     export_interval_minutes: int = _env_int("PUMPRADAR_EXPORT_INTERVAL_MINUTES", 60)
     export_keep_count: int = _env_int("PUMPRADAR_EXPORT_KEEP_COUNT", 48)
     export_max_total_mb: int = _env_int("PUMPRADAR_EXPORT_MAX_TOTAL_MB", 2_048)
     snapshot_near_miss_seconds: int = _env_int("PUMPRADAR_NEAR_MISS_SECONDS", 45)
     snapshot_random_seconds: int = _env_int("PUMPRADAR_RANDOM_SECONDS", 30)
+    report_timezone_offset_minutes: int = _env_int(
+        "PUMPRADAR_REPORT_TIMEZONE_OFFSET_MINUTES", 300
+    )
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
 
@@ -102,6 +105,7 @@ class Settings:
             "export_keep_count", "export_max_total_mb",
             "max_candidates", "warm_pool_size", "control_pool_size", "control_rotation_seconds",
             "warm_refresh_seconds", "deep_candidates", "depth_candidates",
+            "report_timezone_offset_minutes",
         }
         payload = {k: v for k, v in asdict(self).items() if k not in excluded}
         payload = {k: str(v) if isinstance(v, Path) else v for k, v in payload.items()}

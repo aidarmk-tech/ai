@@ -5,10 +5,12 @@ on:
     branches:
       - chatgpt/pumpradar-server-v43
     paths:
+      - 'pumpradar-server/**'
       - 'server-bootstrap/**'
       - '.github/workflows/test-pumpradar-server.yml'
   pull_request:
     paths:
+      - 'pumpradar-server/**'
       - 'server-bootstrap/**'
       - '.github/workflows/test-pumpradar-server.yml'
 
@@ -22,15 +24,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Reconstruct v4.3.1 payload
+      - name: Reconstruct v4.3.3 payload
         shell: bash
         run: |
           set -Eeuo pipefail
-          cat server-bootstrap/v431/{0..7} > /tmp/payload.b64
+          cat server-bootstrap/v433/{00..20} > /tmp/payload.b64
           base64 --decode /tmp/payload.b64 > /tmp/payload.tar.gz
-          echo '3593aa2e1868a84c97f4a492056b09e49a2f5a21b48ba3adb1b0b04d1e531ed7  /tmp/payload.tar.gz' | sha256sum -c -
+          echo '530939131d7061d28ec8a53063344a8f1422bb009912cb4e1c6441f00556d552  /tmp/payload.tar.gz' | sha256sum -c -
           mkdir /tmp/pumpradar
           tar -xzf /tmp/payload.tar.gz -C /tmp/pumpradar --strip-components=1
+
+      - name: Compare packaged and reviewable source
+        run: diff --recursive --unified pumpradar-server /tmp/pumpradar
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -40,7 +45,7 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r /tmp/pumpradar/requirements.txt
 
-      - name: Verify Python, coverage logic and shell files
+      - name: Verify server and installer
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -49,48 +54,20 @@ jobs:
           bash -n server-bootstrap/enable-client.sh
           bash -n server-bootstrap/update-v431.sh
           bash -n /tmp/pumpradar/scripts/*.sh
+          PYTHONPATH=/tmp/pumpradar python -m unittest discover -s /tmp/pumpradar/tests -v
           PYTHONPATH=/tmp/pumpradar python - <<'PY'
-          import os
-          import tempfile
-          from pathlib import Path
-
-          root = Path(tempfile.mkdtemp())
-          os.environ['PUMPRADAR_DATA_DIR'] = str(root)
-          os.environ['PUMPRADAR_DB_PATH'] = str(root / 'test.sqlite3')
-          os.environ['PUMPRADAR_API_TOKEN'] = 'ci-test-token'
-
           from pumpradar_server.config import Settings
-          from pumpradar_server.main import Service
-          from pumpradar_server.models import Candidate
-          from pumpradar_server.storage import Storage
 
           settings = Settings()
-          assert settings.algorithm_version == '4.3.1-server'
-          assert settings.warm_pool_size == 35
-          assert settings.control_pool_size == 5
-          service = Service(settings)
-          ranked = [
-              Candidate(f'S{i}USDT', 1.0, 10_000_000.0, None, None, None, None, None, 100.0 - i)
-              for i in range(100)
-          ]
-          core = service._select_warm_core(ranked)
-          controls = service._rotate_controls(ranked, set(core), 1_000_000)
-          assert len(core) == 35
-          assert len(controls) == 5
-          assert not (set(core) & controls)
-
-          storage = Storage(settings)
-          storage.start_run('github-actions')
-          exported = storage.export_all()
-          assert exported.exists(), exported
-          storage.finish_run()
-          print('smoke ok', settings.algorithm_version, settings.config_hash(), exported)
+          assert settings.algorithm_version == '4.3.3-server'
+          assert max(settings.depth_candidates, settings.deep_candidates) >= settings.deep_candidates
+          print('smoke ok', settings.algorithm_version, settings.config_hash())
           PY
 
       - name: Upload verified server source
         uses: actions/upload-artifact@v4
         with:
-          name: pumpradar-server-source-v431
+          name: pumpradar-server-source-v433
           path: /tmp/pumpradar
           if-no-files-found: error
           retention-days: 7

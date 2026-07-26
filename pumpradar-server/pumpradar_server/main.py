@@ -70,6 +70,13 @@ class Service:
             "decision_symbols": len(self.decision_symbols),
             "depth_symbols": len(self.depth_symbols),
             "control_symbols": len(self.control_symbols),
+            "candidate_connection_count": self.state.candidate_connection_count,
+            "candidate_subscription_update_count": self.state.candidate_subscription_update_count,
+            "last_candidate_connect_age_ms": (
+                now - self.state.last_candidate_connect_ms
+                if self.state.last_candidate_connect_ms
+                else None
+            ),
         }
 
     def _select_warm_core(self, ranked) -> list[str]:
@@ -125,7 +132,14 @@ class Service:
                     warm = set(warm_core) | controls
                     if active_symbol:
                         warm.add(active_symbol)
-                    depth = {c.symbol for c in candidates[: self.settings.depth_candidates]}
+                    # Every symbol that can reach a frozen decision needs an
+                    # executable depth book. The configured depth pool may be
+                    # larger, but never smaller than the decision set.
+                    depth_limit = max(
+                        self.settings.depth_candidates,
+                        self.settings.deep_candidates,
+                    )
+                    depth = {c.symbol for c in candidates[:depth_limit]}
                     if active_symbol:
                         depth.add(active_symbol)
                     changed = warm != self.warm_symbols or controls != self.control_symbols or depth != self.depth_symbols
@@ -133,6 +147,7 @@ class Service:
                     self.control_symbols = controls
                     self.depth_symbols = depth
                     self.state.retain_detailed_symbols(warm)
+                    self.state.retain_depth_symbols(depth)
                     self.feed.set_candidate_symbols(sorted(warm), sorted(depth))
                     self.last_candidate_set_ms = now
                     if changed:

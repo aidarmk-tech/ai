@@ -90,6 +90,9 @@ class MarketState:
         self.depth: dict[str, DepthRow] = {}
         self.last_market_message_ms = 0
         self.last_candidate_message_ms = 0
+        self.candidate_connection_count = 0
+        self.candidate_subscription_update_count = 0
+        self.last_candidate_connect_ms = 0
         self._peak_rows: dict[str, deque[tuple[int, float, float]]] = defaultdict(deque)
 
     def set_universe(self, symbols: list[SymbolInfo]) -> None:
@@ -103,6 +106,18 @@ class MarketState:
         self.flows = defaultdict(FlowRow, {k: v for k, v in self.flows.items() if k in keep})
         self.depth = {k: v for k, v in self.depth.items() if k in keep}
         self._peak_rows = defaultdict(deque, {k: v for k, v in self._peak_rows.items() if k in keep})
+
+    def reset_candidate_stream_state(self, symbols: set[str]) -> None:
+        """Discard partial windows after a real candidate websocket reconnect."""
+        for symbol in symbols:
+            self.flows.pop(symbol, None)
+            self.depth.pop(symbol, None)
+            self._peak_rows.pop(symbol, None)
+
+    def retain_depth_symbols(self, symbols: set[str]) -> None:
+        """Never expose a recently unsubscribed depth book as executable."""
+        keep = set(symbols)
+        self.depth = {k: v for k, v in self.depth.items() if k in keep}
 
     def on_mini_tickers(self, data: list[dict[str, Any]], now_ms: int) -> None:
         self.last_market_message_ms = now_ms
@@ -496,7 +511,7 @@ class BinanceFeed:
 
     async def start(self) -> None:
         timeout = aiohttp.ClientTimeout(total=20)
-        self.session = aiohttp.ClientSession(timeout=timeout, headers={"User-Agent": "PumpRadar/4.3.2"})
+        self.session = aiohttp.ClientSession(timeout=timeout, headers={"User-Agent": "PumpRadar/4.3.3"})
         await self.refresh_universe()
 
     async def stop(self) -> None:
@@ -530,6 +545,39 @@ class BinanceFeed:
             self._depth_symbols = depth
             self._candidate_change.set()
 
+    @staticmethod
+    def _streams(
+        warm_symbols: tuple[str, ...],
+        depth_symbols: tuple[str, ...],
+    ) -> set[str]:
+        depth = set(depth_symbols)
+        streams: set[str] = set()
+        for symbol in warm_symbols:
+            low = symbol.lower()
+            streams.update((f"{low}@aggTrade", f"{low}@bookTicker"))
+            if symbol in depth:
+                streams.add(f"{low}@depth20@100ms")
+        return streams
+
+    async def _update_subscriptions(
+        self,
+        ws: aiohttp.ClientWebSocketResponse,
+        current: set[str],
+        desired: set[str],
+        request_id: int,
+    ) -> int:
+        removed = sorted(current - desired)
+        added = sorted(desired - current)
+        if removed:
+            await ws.send_json({"method": "UNSUBSCRIBE", "params": removed, "id": request_id})
+            request_id += 1
+        if added:
+            await ws.send_json({"method": "SUBSCRIBE", "params": added, "id": request_id})
+            request_id += 1
+        if removed or added:
+            self.state.candidate_subscription_update_count += 1
+        return request_id
+
     async def market_loop(self) -> None:
         assert self.session
         url = f"{self.settings.ws_url}/ws/!miniTicker@arr"
@@ -554,7 +602,6 @@ class BinanceFeed:
         assert self.session
         while not self._stopping.is_set():
             symbols = self._warm_symbols
-            depth_symbols = set(self._depth_symbols)
             self._candidate_change.clear()
             if not symbols:
                 try:
@@ -562,19 +609,30 @@ class BinanceFeed:
                 except asyncio.TimeoutError:
                     pass
                 continue
-            streams = []
-            for symbol in symbols:
-                low = symbol.lower()
-                streams.extend([f"{low}@aggTrade", f"{low}@bookTicker"])
-                if symbol in depth_symbols:
-                    streams.append(f"{low}@depth20@100ms")
-            url = f"{self.settings.ws_url}/stream?streams={'/'.join(streams)}"
+            streams = self._streams(symbols, self._depth_symbols)
+            url = f"{self.settings.ws_url}/stream?streams={'/'.join(sorted(streams))}"
             try:
                 async with self.session.ws_connect(url, heartbeat=30, receive_timeout=90) as ws:
-                    LOG.info("Warm websocket connected for %d symbols (%d depth)", len(symbols), len(depth_symbols))
-                    while not self._stopping.is_set() and not self._candidate_change.is_set():
+                    now_ms = int(time.time() * 1000)
+                    self.state.reset_candidate_stream_state(set(symbols))
+                    self.state.candidate_connection_count += 1
+                    self.state.last_candidate_connect_ms = now_ms
+                    request_id = 1
+                    LOG.info(
+                        "Warm websocket connected for %d symbols (%d depth)",
+                        len(symbols),
+                        len(self._depth_symbols),
+                    )
+                    while not self._stopping.is_set():
+                        if self._candidate_change.is_set():
+                            self._candidate_change.clear()
+                            desired = self._streams(self._warm_symbols, self._depth_symbols)
+                            request_id = await self._update_subscriptions(
+                                ws, streams, desired, request_id
+                            )
+                            streams = desired
                         try:
-                            message = await asyncio.wait_for(ws.receive(), timeout=5)
+                            message = await asyncio.wait_for(ws.receive(), timeout=1)
                         except asyncio.TimeoutError:
                             continue
                         if message.type != aiohttp.WSMsgType.TEXT:

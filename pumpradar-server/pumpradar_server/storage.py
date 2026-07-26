@@ -374,7 +374,45 @@ class Storage:
                 "algorithm_version": self.settings.algorithm_version,
                 "strategy_version": self.settings.strategy_version,
                 "config_hash": self.settings.config_hash(),
+                "daily_pnl": self.daily_pnl(),
             }
+
+    def daily_pnl(self, now_ms: Optional[int] = None) -> dict[str, Any]:
+        """Report each counterfactual policy separately for the local day."""
+        now_ms = int(time.time() * 1000) if now_ms is None else now_ms
+        offset_ms = self.settings.report_timezone_offset_minutes * 60_000
+        day_ms = 24 * 60 * 60 * 1000
+        day_start_ms = ((now_ms + offset_ms) // day_ms) * day_ms - offset_ms
+        day_end_ms = day_start_ms + day_ms
+        policies = {
+            name: {"closed_slots": 0, "net_pnl_usdt": 0.0}
+            for name in ("A_PARTIAL_20", "B_FULL_PROTECTED", "C_WEAKENING")
+        }
+        with self.lock:
+            rows = self.conn.execute(
+                """SELECT pr.policy, COUNT(*) AS closed_slots,
+                          COALESCE(SUM(ps.position_usdt * pr.net_return_percent / 100.0), 0)
+                          AS net_pnl_usdt
+                   FROM policy_runs pr
+                   JOIN paper_slots ps ON ps.id=pr.slot_id
+                   WHERE pr.state='CLOSED' AND pr.closed_at_ms>=? AND pr.closed_at_ms<?
+                   GROUP BY pr.policy""",
+                (day_start_ms, day_end_ms),
+            )
+            for row in rows:
+                policies[row["policy"]] = {
+                    "closed_slots": int(row["closed_slots"]),
+                    "net_pnl_usdt": round(float(row["net_pnl_usdt"]), 8),
+                }
+        offset = self.settings.report_timezone_offset_minutes
+        sign = "+" if offset >= 0 else "-"
+        absolute = abs(offset)
+        return {
+            "timezone": f"UTC{sign}{absolute // 60:02d}:{absolute % 60:02d}",
+            "day_start_ms": day_start_ms,
+            "day_end_ms": day_end_ms,
+            "policies": policies,
+        }
 
     def checkpoint(self) -> None:
         with self.lock:
