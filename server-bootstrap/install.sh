@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 REPO_RAW="https://raw.githubusercontent.com/aidarmk-tech/ai/chatgpt/pumpradar-server-v43/server-bootstrap"
 PAYLOAD_PATH="v438payload"
-PAYLOAD_PARTS=(00 01 02 03)
+PAYLOAD_PARTS=(00a 00b 01 02a1 02a2 02b1 02b2 03)
 PAYLOAD_SHA256="f6554bb8b0da08869d465d54ebb946f98487fb72a5434abe5770b437b09edafe"
 EXPECTED_VERSION="4.3.8-server"
 APP_ROOT="/opt/pumpradar"
