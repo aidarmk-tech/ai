@@ -11,6 +11,7 @@ import types
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 
 class AuditFlowTest(unittest.TestCase):
@@ -228,9 +229,17 @@ class AuditFlowTest(unittest.TestCase):
                 False,
             )
 
-        accepted = decide(flow)
+        with patch("pumpradar_server.strategy.impulse_score", return_value=64):
+            accepted = decide(flow)
         self.assertTrue(accepted.strict_passed)
         self.assertEqual("V436_STRICT_TRADE3", accepted.reasons[0])
+
+        with patch("pumpradar_server.strategy.impulse_score", return_value=63):
+            boundary = decide(flow)
+        self.assertFalse(boundary.strict_passed)
+        self.assertTrue(boundary.shadow_passed)
+        self.assertIn("IMPULSE_LE_63", boundary.blockers)
+        self.assertIn("V435_COMPAT_SHADOW", boundary.reasons)
 
         rejected = {
             "TBR15_LOW": replace(
@@ -441,6 +450,7 @@ class AuditFlowTest(unittest.TestCase):
         self.assertEqual(0.875, self.settings.min_taker_buy_ratio_30s)
         self.assertEqual(0.90, self.settings.min_trade3_taker_buy_ratio_15s)
         self.assertEqual(0.75, self.settings.min_trade3_taker_buy_ratio_5s)
+        self.assertEqual(63, self.settings.min_trade3_impulse_score)
         self.assertEqual(0, self.settings.max_trade3_exhaustion_risk)
         self.assertEqual(0, self.settings.max_trade3_artificial_risk)
         self.assertEqual(3.0, self.settings.max_return_5m)

@@ -64,7 +64,8 @@ class Settings:
     min_retest_taker_buy_ratio_30s: float = 0.65
     min_retest_return_15s: float = 0.15
     max_retest_distance_from_high_percent: float = 2.50
-    min_trade3_impulse_score: int = 60
+    # Exclusive strict boundary: impulse must be greater than 63.
+    min_trade3_impulse_score: int = 63
     max_trade3_entry_risk: int = 35
     max_trade3_exhaustion_risk: int = 0
     max_trade3_artificial_risk: int = 0

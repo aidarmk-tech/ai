@@ -246,7 +246,7 @@ def assess(
     technical = strict_gate or retest_gate
 
     quality_checks = {
-        "IMPULSE_LT_60": impulse >= settings.min_trade3_impulse_score,
+        "IMPULSE_LE_63": impulse > settings.min_trade3_impulse_score,
         "ENTRY_RISK_GT_35": entry <= settings.max_trade3_entry_risk,
         "EXHAUSTION_NONZERO": exhaustion <= settings.max_trade3_exhaustion_risk,
         "ARTIFICIAL_NONZERO": artificial <= settings.max_trade3_artificial_risk,
@@ -269,7 +269,7 @@ def assess(
 
     # Preserve every v4.3.5 strict entry as shadow when a new v4.3.6 gate rejects it.
     legacy_strict_passed = technical and all([
-        impulse >= settings.min_trade3_impulse_score,
+        impulse >= settings.min_shadow_impulse_score,
         entry <= settings.max_trade3_entry_risk,
         exhaustion <= settings.max_shadow_exhaustion_risk,
         book.spread_bps is not None,

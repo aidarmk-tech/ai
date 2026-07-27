@@ -30,7 +30,7 @@ jobs:
           set -Eeuo pipefail
           cat server-bootstrap/v436/{00..22} > /tmp/payload.b64
           base64 --decode /tmp/payload.b64 > /tmp/payload.tar.gz
-          echo '3d46991508f105490d29c581016148525e77fb03c48b740afccfd57df57d8239  /tmp/payload.tar.gz' | sha256sum -c -
+          echo 'e15979cb71af5cb8e0da8b6aa1cdbf2d5150a9fab5fbe73821cedff1ae9a1c8c  /tmp/payload.tar.gz' | sha256sum -c -
           mkdir /tmp/pumpradar
           tar -xzf /tmp/payload.tar.gz -C /tmp/pumpradar --strip-components=1
 
@@ -65,6 +65,7 @@ jobs:
           assert settings.deep_candidates == 15
           assert settings.depth_candidates == 20
           assert settings.min_taker_buy_ratio_30s == 0.875
+          assert settings.min_trade3_impulse_score == 63
           assert settings.min_trade3_taker_buy_ratio_15s == 0.90
           assert settings.min_trade3_taker_buy_ratio_5s == 0.75
           assert settings.max_trade3_exhaustion_risk == 0
