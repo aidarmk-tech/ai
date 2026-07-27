@@ -49,10 +49,16 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          rm -rf /tmp/pumpradar-server /tmp/package-check
+          cp -a /tmp/pumpradar /tmp/pumpradar-server
           tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
-            -czf /tmp/pumpradar-v438.tar.gz -C /tmp pumpradar
+            -czf /tmp/pumpradar-v438.tar.gz -C /tmp pumpradar-server
           sha256sum /tmp/pumpradar-v438.tar.gz | tee /tmp/pumpradar-v438.sha256
           base64 -w 0 /tmp/pumpradar-v438.tar.gz > /tmp/pumpradar-v438.tar.gz.b64
+          mkdir /tmp/package-check
+          tar -xzf /tmp/pumpradar-v438.tar.gz -C /tmp/package-check
+          test -d /tmp/package-check/pumpradar-server/pumpradar_server
+          grep -q '4.3.8-server' /tmp/package-check/pumpradar-server/pumpradar_server/config.py
 
       - name: Set up Python
         uses: actions/setup-python@v5
