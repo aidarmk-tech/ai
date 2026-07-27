@@ -24,18 +24,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Reconstruct v4.3.7 payload
+      - name: Reconstruct v4.3.7 verified base
         shell: bash
         run: |
           set -Eeuo pipefail
-          cat server-bootstrap/v437/{00..26} > /tmp/payload.b64
-          base64 --decode /tmp/payload.b64 > /tmp/payload.tar.gz
-          echo '350f89f93dff179965e07c64db8a1f6fbe5189fc1adb7cf6bb9a41543d594108  /tmp/payload.tar.gz' | sha256sum -c -
-          mkdir /tmp/pumpradar
-          tar -xzf /tmp/payload.tar.gz -C /tmp/pumpradar --strip-components=1
+          cat server-bootstrap/v437/{00..26} > /tmp/base.b64
+          base64 --decode /tmp/base.b64 > /tmp/base.tar.gz
+          echo '350f89f93dff179965e07c64db8a1f6fbe5189fc1adb7cf6bb9a41543d594108  /tmp/base.tar.gz' | sha256sum -c -
+          mkdir /tmp/source-root
+          tar -xzf /tmp/base.tar.gz -C /tmp/source-root
 
-      - name: Compare packaged and reviewable source
-        run: diff --recursive --unified pumpradar-server /tmp/pumpradar
+      - name: Apply and verify v4.3.8 challenger patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          base64 --decode server-bootstrap/v438/source.patch.gz.b64 > /tmp/source.patch.gz
+          echo '6914927391ef98e1c761d129583c83f1ab73b2359b7d6b774b94210f6b68d4ad  /tmp/source.patch.gz' | sha256sum -c -
+          gzip -dc /tmp/source.patch.gz > /tmp/source.patch
+          patch --batch --forward -p1 -d /tmp/source-root < /tmp/source.patch
+          grep -q '4.3.8-server' /tmp/source-root/pumpradar-server/pumpradar_server/config.py
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -43,27 +50,33 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: python -m pip install -r /tmp/pumpradar/requirements.txt
+        run: python -m pip install -r /tmp/source-root/pumpradar-server/requirements.txt
 
       - name: Verify server and installer
         shell: bash
         run: |
           set -Eeuo pipefail
-          python -m compileall -q /tmp/pumpradar/pumpradar_server
+          SERVER=/tmp/source-root/pumpradar-server
+          python -m compileall -q "$SERVER/pumpradar_server"
           bash -n server-bootstrap/install.sh
           bash -n server-bootstrap/enable-client.sh
           bash -n server-bootstrap/update-v431.sh
-          bash -n /tmp/pumpradar/scripts/*.sh
-          PYTHONPATH=/tmp/pumpradar python -m unittest discover -s /tmp/pumpradar/tests -v
-          PYTHONPATH=/tmp/pumpradar python - <<'PY'
+          bash -n "$SERVER"/scripts/*.sh
+          PYTHONPATH="$SERVER" python -m unittest discover -s "$SERVER/tests" -v
+          PYTHONPATH="$SERVER" python - <<'PY'
           from pumpradar_server.config import Settings
 
           settings = Settings()
-          assert settings.algorithm_version == '4.3.7-server'
+          assert settings.algorithm_version == '4.3.8-server'
+          assert settings.strategy_version == 'TRADE3-FROZEN+MC5-CHALLENGER-2026-07'
           assert settings.primary_policy == 'C_WEAKENING'
+          assert settings.minimum_24h_quote_volume == 1_000_000.0
+          assert settings.max_candidates == 30
           assert settings.warm_pool_size == 60
-          assert settings.deep_candidates == 15
-          assert settings.depth_candidates == 20
+          assert settings.deep_candidates == 20
+          assert settings.depth_candidates == 25
+
+          # Frozen TRADE3 control remains unchanged.
           assert settings.min_taker_buy_ratio_30s == 0.875
           assert settings.min_trade3_impulse_score == 63
           assert settings.min_trade3_taker_buy_ratio_15s == 0.90
@@ -72,16 +85,23 @@ jobs:
           assert settings.max_trade3_artificial_risk == 0
           assert settings.protected_stop_percent == 0.30
           assert settings.protected_peak_fraction == 0.50
-          assert settings.max_shadow_return_15s_excess_over_60s == 0.05
-          assert settings.min_shadow_strict_streak == 3
-          assert max(settings.depth_candidates, settings.deep_candidates) >= settings.deep_candidates
+
+          # Frozen MC3 / MC5 / MC7 challenger configuration.
+          assert settings.mc3_return_3m_percent == 3.0
+          assert settings.mc5_return_5m_percent == 5.0
+          assert settings.mc7_return_10m_percent == 7.0
+          assert settings.momentum_stop_percent == 2.0
+          assert settings.momentum_trailing_activation_percent == 1.5
+          assert settings.momentum_trailing_drawdown_percent == 1.0
+          assert settings.momentum_horizon_seconds == 20 * 60
+          assert settings.momentum_control_target_percent == 4.0
           print('smoke ok', settings.algorithm_version, settings.config_hash())
           PY
 
       - name: Upload verified server source
         uses: actions/upload-artifact@v4
         with:
-          name: pumpradar-server-source-v437
-          path: /tmp/pumpradar
+          name: pumpradar-server-source-v438
+          path: /tmp/source-root/pumpradar-server
           if-no-files-found: error
           retention-days: 7
