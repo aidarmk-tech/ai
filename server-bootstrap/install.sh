@@ -2,10 +2,12 @@
 set -Eeuo pipefail
 
 REPO_RAW="https://raw.githubusercontent.com/aidarmk-tech/ai/chatgpt/pumpradar-server-v43/server-bootstrap"
-PAYLOAD_PATH="v437"
-CHUNK_LAST=26
-EXPECTED_SHA256="350f89f93dff179965e07c64db8a1f6fbe5189fc1adb7cf6bb9a41543d594108"
-EXPECTED_VERSION="4.3.7-server"
+BASE_PAYLOAD_PATH="v437"
+BASE_CHUNK_LAST=26
+BASE_SHA256="350f89f93dff179965e07c64db8a1f6fbe5189fc1adb7cf6bb9a41543d594108"
+PATCH_PATH="v438/source.patch.gz.b64"
+PATCH_GZ_SHA256="6914927391ef98e1c761d129583c83f1ab73b2359b7d6b774b94210f6b68d4ad"
+EXPECTED_VERSION="4.3.8-server"
 APP_ROOT="/opt/pumpradar"
 DATA_DIR="/var/lib/pumpradar"
 ENV_DIR="/etc/pumpradar"
@@ -16,7 +18,6 @@ log() { printf '\n[PumpRadar] %s\n' "$*"; }
 fail() { printf '\n[PumpRadar] ERROR: %s\n' "$*" >&2; exit 1; }
 
 [[ ${EUID:-$(id -u)} -eq 0 ]] || fail "Запустите установщик от root"
-
 TMP_DIR="$(mktemp -d)"
 cleanup() { rm -rf "$TMP_DIR"; }
 trap cleanup EXIT
@@ -25,7 +26,7 @@ log "Подготовка Ubuntu и системных пакетов"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
-  ca-certificates curl openssh-server python3 python3-venv sqlite3 rclone ufw
+  ca-certificates curl openssh-server python3 python3-venv sqlite3 rclone ufw patch gzip
 systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true
 
 if [[ -x "$APP_ROOT/server/scripts/backup.sh" ]] && systemctl is-active --quiet pumpradar.service; then
@@ -34,17 +35,32 @@ if [[ -x "$APP_ROOT/server/scripts/backup.sh" ]] && systemctl is-active --quiet 
     log "Предупреждение: backup старой версии не выполнен; основная SQLite база не удаляется"
 fi
 
-log "Загрузка проверенного PumpRadar $EXPECTED_VERSION"
-: > "$TMP_DIR/payload.b64"
-for n in $(seq -w 0 "$CHUNK_LAST"); do
+log "Загрузка проверенной основы v4.3.7"
+: > "$TMP_DIR/base.b64"
+for n in $(seq -w 0 "$BASE_CHUNK_LAST"); do
   curl --fail --silent --show-error --retry 4 --retry-delay 2 \
-    "$REPO_RAW/$PAYLOAD_PATH/$n" >> "$TMP_DIR/payload.b64"
+    "$REPO_RAW/$BASE_PAYLOAD_PATH/$n" >> "$TMP_DIR/base.b64"
 done
-base64 --decode "$TMP_DIR/payload.b64" > "$TMP_DIR/payload.tar.gz"
-ACTUAL_SHA256="$(sha256sum "$TMP_DIR/payload.tar.gz" | awk '{print $1}')"
-[[ "$ACTUAL_SHA256" == "$EXPECTED_SHA256" ]] || \
-  fail "Контрольная сумма пакета не совпала: $ACTUAL_SHA256"
-tar -tzf "$TMP_DIR/payload.tar.gz" >/dev/null
+base64 --decode "$TMP_DIR/base.b64" > "$TMP_DIR/base.tar.gz"
+ACTUAL_BASE_SHA256="$(sha256sum "$TMP_DIR/base.tar.gz" | awk '{print $1}')"
+[[ "$ACTUAL_BASE_SHA256" == "$BASE_SHA256" ]] || \
+  fail "Контрольная сумма основы не совпала: $ACTUAL_BASE_SHA256"
+tar -tzf "$TMP_DIR/base.tar.gz" >/dev/null
+mkdir -p "$TMP_DIR/source-root"
+tar -xzf "$TMP_DIR/base.tar.gz" -C "$TMP_DIR/source-root"
+[[ -d "$TMP_DIR/source-root/pumpradar-server" ]] || fail "В основе нет каталога pumpradar-server"
+
+log "Применение проверенного патча Momentum Continuation v4.3.8"
+curl --fail --silent --show-error --retry 4 --retry-delay 2 \
+  "$REPO_RAW/$PATCH_PATH" > "$TMP_DIR/source.patch.gz.b64"
+base64 --decode "$TMP_DIR/source.patch.gz.b64" > "$TMP_DIR/source.patch.gz"
+ACTUAL_PATCH_SHA256="$(sha256sum "$TMP_DIR/source.patch.gz" | awk '{print $1}')"
+[[ "$ACTUAL_PATCH_SHA256" == "$PATCH_GZ_SHA256" ]] || \
+  fail "Контрольная сумма патча не совпала: $ACTUAL_PATCH_SHA256"
+gzip -dc "$TMP_DIR/source.patch.gz" > "$TMP_DIR/source.patch"
+patch --batch --forward -p1 -d "$TMP_DIR/source-root" < "$TMP_DIR/source.patch"
+grep -q '4.3.8-server' "$TMP_DIR/source-root/pumpradar-server/pumpradar_server/config.py" || \
+  fail "Патч не установил ожидаемую версию"
 
 log "Создание пользователя и каталогов"
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
@@ -52,10 +68,9 @@ if ! id "$SERVICE_USER" >/dev/null 2>&1; then
 fi
 install -d -o root -g root -m 0755 "$APP_ROOT" "$ENV_DIR"
 install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0750 "$DATA_DIR" "$DATA_DIR/exports"
-
 rm -rf "$APP_ROOT/server.new"
-mkdir -p "$APP_ROOT/server.new"
-tar -xzf "$TMP_DIR/payload.tar.gz" -C "$APP_ROOT/server.new" --strip-components=1
+cp -a "$TMP_DIR/source-root/pumpradar-server" "$APP_ROOT/server.new"
+find "$APP_ROOT/server.new" -type d -name __pycache__ -prune -exec rm -rf {} +
 python3 -m compileall -q "$APP_ROOT/server.new/pumpradar_server"
 chown -R root:root "$APP_ROOT/server.new"
 chmod +x "$APP_ROOT/server.new/scripts/"*.sh
@@ -82,10 +97,10 @@ PUMPRADAR_BIND_PORT=8787
 PUMPRADAR_API_TOKEN=$API_TOKEN
 PUMPRADAR_POSITION_USDT=20
 PUMPRADAR_FEE_RATE=0.001
-PUMPRADAR_MIN_24H_QUOTE_VOLUME=5000000
-PUMPRADAR_MAX_CANDIDATES=20
-PUMPRADAR_DEEP_CANDIDATES=15
-PUMPRADAR_DEPTH_CANDIDATES=20
+PUMPRADAR_MIN_24H_QUOTE_VOLUME=1000000
+PUMPRADAR_MAX_CANDIDATES=30
+PUMPRADAR_DEEP_CANDIDATES=20
+PUMPRADAR_DEPTH_CANDIDATES=25
 PUMPRADAR_WARM_POOL_SIZE=60
 PUMPRADAR_CONTROL_POOL_SIZE=5
 PUMPRADAR_CONTROL_ROTATION_SECONDS=300
@@ -97,7 +112,6 @@ TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
 ENV
 fi
-
 ensure_env() {
   local key="$1" value="$2"
   grep -q "^${key}=" "$ENV_FILE" || printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
@@ -110,9 +124,11 @@ migrate_env_default() {
     ensure_env "$key" "$new_value"
   fi
 }
+migrate_env_default PUMPRADAR_MIN_24H_QUOTE_VOLUME 5000000 1000000
+migrate_env_default PUMPRADAR_MAX_CANDIDATES 20 30
+migrate_env_default PUMPRADAR_DEEP_CANDIDATES 15 20
+migrate_env_default PUMPRADAR_DEPTH_CANDIDATES 20 25
 migrate_env_default PUMPRADAR_WARM_POOL_SIZE 35 60
-migrate_env_default PUMPRADAR_DEEP_CANDIDATES 10 15
-migrate_env_default PUMPRADAR_DEPTH_CANDIDATES 10 20
 ensure_env PUMPRADAR_CONTROL_POOL_SIZE 5
 ensure_env PUMPRADAR_CONTROL_ROTATION_SECONDS 300
 ensure_env PUMPRADAR_WARM_REFRESH_SECONDS 15
@@ -145,7 +161,6 @@ if [[ -d "$APP_ROOT/server" ]]; then
   mv "$APP_ROOT/server" "$APP_ROOT/server.previous"
 fi
 mv "$APP_ROOT/server.new" "$APP_ROOT/server"
-
 rollback() {
   log "Проверка запуска не пройдена; выполняется откат"
   systemctl stop pumpradar.service 2>/dev/null || true
@@ -160,7 +175,6 @@ trap rollback ERR
 install -m 0644 "$APP_ROOT/server/systemd/pumpradar.service" /etc/systemd/system/pumpradar.service
 install -m 0644 "$APP_ROOT/server/systemd/pumpradar-backup.service" /etc/systemd/system/pumpradar-backup.service
 install -m 0644 "$APP_ROOT/server/systemd/pumpradar-backup.timer" /etc/systemd/system/pumpradar-backup.timer
-
 ufw allow OpenSSH >/dev/null 2>&1 || ufw allow 22/tcp >/dev/null 2>&1 || true
 ufw --force enable >/dev/null 2>&1 || true
 systemctl daemon-reload
