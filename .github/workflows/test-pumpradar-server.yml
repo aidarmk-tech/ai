@@ -143,12 +143,14 @@ jobs:
           PY
 
       - name: Publish verified payload and installer metadata
-        if: github.event_name == 'push' && github.ref == 'refs/heads/chatgpt/pumpradar-server-v43'
+        if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
         shell: bash
         env:
           TARGET_BRANCH: chatgpt/pumpradar-server-v43
         run: |
           set -Eeuo pipefail
+          git fetch origin "${TARGET_BRANCH}"
+          git checkout -B "${TARGET_BRANCH}" "origin/${TARGET_BRANCH}"
           RELEASE_DIR=server-bootstrap/v438release
           rm -rf "$RELEASE_DIR"
           mkdir -p "$RELEASE_DIR"
