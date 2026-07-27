@@ -24,42 +24,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Reconstruct verified v4.3.7 base
+      - name: Reconstruct verified v4.3.8 payload
         shell: bash
         run: |
           set -Eeuo pipefail
-          cat server-bootstrap/v437/{00..26} > /tmp/v437.b64
-          base64 --decode /tmp/v437.b64 > /tmp/v437.tar.gz
-          echo '350f89f93dff179965e07c64db8a1f6fbe5189fc1adb7cf6bb9a41543d594108  /tmp/v437.tar.gz' | sha256sum -c -
+          cat \
+            server-bootstrap/v438payload/00a \
+            server-bootstrap/v438payload/00b \
+            server-bootstrap/v438payload/01 \
+            server-bootstrap/v438payload/02a1 \
+            server-bootstrap/v438payload/02a2 \
+            server-bootstrap/v438payload/02b1 \
+            server-bootstrap/v438payload/02b2 \
+            server-bootstrap/v438payload/03 \
+            > /tmp/payload.b64
+          base64 --decode /tmp/payload.b64 > /tmp/payload.tar.gz
+          echo 'f6554bb8b0da08869d465d54ebb946f98487fb72a5434abe5770b437b09edafe  /tmp/payload.tar.gz' | sha256sum -c -
+          tar -tzf /tmp/payload.tar.gz >/dev/null
           mkdir /tmp/pumpradar
-          tar -xzf /tmp/v437.tar.gz -C /tmp/pumpradar --strip-components=1
-
-      - name: Reconstruct and apply v4.3.8 source patch
-        id: patch
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          cat server-bootstrap/v438/patchparts/{00..03} > /tmp/source.patch.gz.b64
-          echo "base64_bytes=$(wc -c < /tmp/source.patch.gz.b64)"
-          base64 --decode /tmp/source.patch.gz.b64 > /tmp/source.patch.gz
-          echo "gzip_bytes=$(wc -c < /tmp/source.patch.gz)"
-          sha256sum /tmp/source.patch.gz
-          gzip -t /tmp/source.patch.gz
-          gzip -dc /tmp/source.patch.gz > /tmp/source.patch
-          echo "patch_bytes=$(wc -c < /tmp/source.patch)"
-          sed -n '1,30p' /tmp/source.patch
-          cd /tmp/pumpradar
-          git apply --check /tmp/source.patch
-          git apply /tmp/source.patch
-
-      - name: Build deterministic v4.3.8 payload
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
-            -czf /tmp/pumpradar-v438.tar.gz -C /tmp pumpradar
-          sha256sum /tmp/pumpradar-v438.tar.gz | tee /tmp/pumpradar-v438.sha256
-          base64 -w 0 /tmp/pumpradar-v438.tar.gz > /tmp/pumpradar-v438.tar.gz.b64
+          tar -xzf /tmp/payload.tar.gz -C /tmp/pumpradar --strip-components=1
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -81,6 +64,7 @@ jobs:
           PYTHONPATH=/tmp/pumpradar python -m unittest discover -s /tmp/pumpradar/tests -v
           PYTHONPATH=/tmp/pumpradar python - <<'PY'
           from pumpradar_server.config import Settings
+
           settings = Settings()
           assert settings.algorithm_version == '4.3.8-server'
           assert settings.strategy_version == 'TRADE3-FROZEN+MC5-CHALLENGER-2026-07'
@@ -90,6 +74,8 @@ jobs:
           assert settings.warm_pool_size == 60
           assert settings.deep_candidates == 20
           assert settings.depth_candidates == 25
+
+          # Frozen TRADE3 control remains unchanged.
           assert settings.min_taker_buy_ratio_30s == 0.875
           assert settings.min_trade3_impulse_score == 63
           assert settings.min_trade3_taker_buy_ratio_15s == 0.90
@@ -98,6 +84,8 @@ jobs:
           assert settings.max_trade3_artificial_risk == 0
           assert settings.protected_stop_percent == 0.30
           assert settings.protected_peak_fraction == 0.50
+
+          # Frozen Momentum Continuation challenger.
           assert settings.momentum_mc3_return_3m == 3.0
           assert settings.momentum_mc5_return_5m == 5.0
           assert settings.momentum_mc7_return_10m == 7.0
@@ -120,6 +108,7 @@ jobs:
           from pathlib import Path
           from pumpradar_server.config import Settings
           from pumpradar_server.storage import Storage
+
           root = Path(tempfile.mkdtemp())
           db = root / 'pumpradar.sqlite3'
           conn = sqlite3.connect(db)
@@ -143,23 +132,7 @@ jobs:
           print('migration smoke ok')
           PY
 
-      - name: Upload v4.3.8 recovery artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pumpradar-v438-recovery
-          path: |
-            /tmp/source.patch.gz.b64
-            /tmp/source.patch.gz
-            /tmp/source.patch
-            /tmp/pumpradar-v438.tar.gz
-            /tmp/pumpradar-v438.tar.gz.b64
-            /tmp/pumpradar-v438.sha256
-          if-no-files-found: warn
-          retention-days: 7
-
       - name: Upload verified server source
-        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: pumpradar-server-source-v438
