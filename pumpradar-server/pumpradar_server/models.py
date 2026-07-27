@@ -60,6 +60,8 @@ class BookMetrics:
 
 @dataclass
 class PeakFeatures:
+    local_high_price: float = 0.0
+    peak_at_ms: Optional[int] = None
     distance_from_local_high_pct: float = 0.0
     seconds_since_local_high: int = 0
     pullback_from_high_pct: float = 0.0

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import time
-import uuid
 from typing import Optional
 
 from .config import Settings
@@ -47,7 +46,13 @@ class PaperManager:
         previous = self.storage.last_slot_for_symbol(symbol)
         return bool(previous and now_ms - int(previous["opened_at_ms"]) < self.settings.repeat_symbol_minutes * 60_000)
 
-    async def consider(self, item: EvaluatedCandidate, snapshot_id: str, now_ms: int) -> None:
+    async def consider(
+        self,
+        item: EvaluatedCandidate,
+        snapshot_id: str,
+        now_ms: int,
+        episode_id: str,
+    ) -> None:
         if not item.decision.strict_passed:
             return
         active = self.storage.baseline_open_slot()
@@ -57,14 +62,20 @@ class PaperManager:
         if item.book.buy_vwap is None or item.book.best_ask is None:
             self.storage.add_skipped(snapshot_id, item.candidate.symbol, "NO_EXECUTABLE_ENTRY", None, now_ms)
             return
-        event_id = str(uuid.uuid4())
         slot_id = self.storage.create_slot(
-            snapshot_id, item.candidate.symbol, event_id, now_ms, item.book.best_ask, item.book.buy_vwap
+            snapshot_id,
+            item.candidate.symbol,
+            episode_id,
+            now_ms,
+            item.book.best_ask,
+            item.book.buy_vwap,
+            episode_id,
         )
         await self.notify(
             f"🟢 PumpRadar paper slot\n{item.candidate.symbol}\nImpulse {item.decision.risk.impulse} · "
             f"entry {item.book.buy_vwap:.8g} · {self.settings.position_usdt:.2f} USDT\n"
-            f"strict v4.3.6 · primary {self.settings.primary_policy} · "
+            f"strict frozen · {self.settings.algorithm_version} · "
+            f"primary {self.settings.primary_policy} · "
             f"config {self.settings.config_hash()}"
         )
         LOG.info("Opened slot %s %s", slot_id, item.candidate.symbol)

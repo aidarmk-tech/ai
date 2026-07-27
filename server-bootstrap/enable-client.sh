@@ -143,7 +143,7 @@ server {
         proxy_pass http://127.0.0.1:${PORT};
     }
 
-    location ~ ^/api/export/latest/(manifest\\.json|paper_slots\\.csv\\.gz|policy_runs\\.csv\\.gz|snapshots\\.csv\\.gz|experiment_runs\\.csv\\.gz|skipped_candidates\\.csv\\.gz|service_events\\.csv\\.gz|pumpradar\\.sqlite3\\.gz)$ {
+    location ~ ^/api/export/latest/(manifest\\.json|paper_slots\\.csv\\.gz|policy_runs\\.csv\\.gz|snapshots\\.csv\\.gz|snapshot_outcomes\\.csv\\.gz|experiment_runs\\.csv\\.gz|skipped_candidates\\.csv\\.gz|service_events\\.csv\\.gz|pumpradar\\.sqlite3\\.gz)$ {
         limit_req zone=pumpradar_api burst=5 nodelay;
         limit_except GET { deny all; }
         proxy_set_header Host \$host;

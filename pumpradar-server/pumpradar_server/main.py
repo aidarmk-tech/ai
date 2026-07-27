@@ -7,14 +7,12 @@ import random
 import signal
 import socket
 import time
-import uuid
-from pathlib import Path
-from typing import Optional
 
 import aiohttp
 from aiohttp import web
 
 from .config import Settings
+from .episodes import EpisodeTelemetry, EpisodeTracker
 from .market import BinanceFeed, MarketState
 from .models import EvaluatedCandidate
 from .paper import PaperManager
@@ -32,6 +30,7 @@ class Service:
         self.storage = Storage(settings)
         self.feed = BinanceFeed(settings, self.state)
         self.paper = PaperManager(settings, self.state, self.storage, self.notify)
+        self.episodes = EpisodeTracker(settings)
         self.stop_event = asyncio.Event()
         self.last_near_miss_ms = 0
         self.last_random_ms = 0
@@ -138,15 +137,18 @@ class Service:
                 next_decision_symbols = {c.symbol for c in decision_candidates}
                 active = self.storage.baseline_open_slot()
                 active_symbol = str(active["symbol"]) if active else None
+                outcome_symbols = self.storage.pending_snapshot_symbols()
 
                 if now - self.last_candidate_set_ms >= self.settings.warm_refresh_seconds * 1000:
                     warm_core = self._select_warm_core(ranked)
                     excluded = set(warm_core)
+                    excluded.update(outcome_symbols)
                     if active_symbol:
                         excluded.add(active_symbol)
                     controls = self._rotate_controls(ranked, excluded, now)
                     warm = set(warm_core) | controls
                     warm.update(next_decision_symbols)
+                    warm.update(outcome_symbols)
                     if active_symbol:
                         warm.add(active_symbol)
                     # Every symbol that can reach a frozen decision needs an
@@ -158,6 +160,7 @@ class Service:
                     )
                     depth = {c.symbol for c in candidates[:depth_limit]}
                     depth.update(next_decision_symbols)
+                    depth.update(outcome_symbols)
                     if active_symbol:
                         depth.add(active_symbol)
                     changed = warm != self.warm_symbols or controls != self.control_symbols or depth != self.depth_symbols
@@ -172,7 +175,9 @@ class Service:
                         self.storage.event(
                             "INFO",
                             "coverage",
-                            f"warm={len(warm)} controls={len(controls)} depth={len(depth)} candidates={len(candidates)}",
+                            f"warm={len(warm)} controls={len(controls)} "
+                            f"depth={len(depth)} candidates={len(candidates)} "
+                            f"outcomes={len(outcome_symbols)}",
                         )
 
                 if self._ensure_decision_coverage(next_decision_symbols):
@@ -207,6 +212,7 @@ class Service:
                 decision_items = [e for e in evaluated if e.candidate.symbol in self.decision_symbols]
                 control_items = [e for e in evaluated if e.candidate.symbol in self.control_symbols]
                 await self._record_and_select(decision_items, control_items, now)
+                self._update_snapshot_outcomes(now)
                 await self.paper.tick(self.evaluated_by_symbol, now)
             except asyncio.CancelledError:
                 raise
@@ -221,30 +227,62 @@ class Service:
         controls: list[EvaluatedCandidate],
         now_ms: int,
     ) -> None:
+        telemetry_by_symbol: dict[str, EpisodeTelemetry] = {
+            item.candidate.symbol: self.episodes.observe(item, now_ms)
+            for item in evaluated
+        }
+        self.episodes.prune(now_ms)
         strict = sorted(
             [e for e in evaluated if e.decision.strict_passed],
             key=lambda e: (e.decision.risk.impulse, e.decision.risk.confidence, -(e.book.spread_bps or 999)),
             reverse=True,
         )
-        shadow = [e for e in evaluated if e.decision.shadow_passed and not e.decision.strict_passed]
         triggered = [e for e in evaluated if e.decision.label not in ("NO_TRADE",)]
         snapshot_ids: dict[str, str] = {}
         for item in triggered:
-            event_id = str(uuid.uuid4())
-            snapshot_ids[item.candidate.symbol] = self.storage.insert_snapshot(item, "TRIGGERED", event_id, now_ms)
-        if shadow:
-            for item in shadow:
-                if item.candidate.symbol not in snapshot_ids:
-                    snapshot_ids[item.candidate.symbol] = self.storage.insert_snapshot(item, "SHADOW", str(uuid.uuid4()), now_ms)
+            telemetry = telemetry_by_symbol[item.candidate.symbol]
+            snapshot_type = (
+                "TRIGGERED"
+                if item.decision.strict_passed
+                else "SHADOW"
+                if item.decision.shadow_passed
+                else "TRIGGERED"
+            )
+            snapshot_ids[item.candidate.symbol] = self.storage.insert_snapshot(
+                item,
+                snapshot_type,
+                telemetry.episode_id,
+                now_ms,
+                telemetry,
+            )
         if strict:
             best = strict[0]
-            sid = snapshot_ids.get(best.candidate.symbol) or self.storage.insert_snapshot(best, "TRIGGERED", str(uuid.uuid4()), now_ms)
-            await self.paper.consider(best, sid, now_ms)
+            telemetry = telemetry_by_symbol[best.candidate.symbol]
+            sid = snapshot_ids.get(best.candidate.symbol) or self.storage.insert_snapshot(
+                best,
+                "TRIGGERED",
+                telemetry.episode_id,
+                now_ms,
+                telemetry,
+            )
+            await self.paper.consider(
+                best,
+                sid,
+                now_ms,
+                telemetry.episode_id,
+            )
         if now_ms - self.last_near_miss_ms >= self.settings.snapshot_near_miss_seconds * 1000:
             near = [e for e in evaluated if not e.decision.strict_passed and e.decision.risk.impulse >= 40]
             if near:
                 best = max(near, key=lambda e: e.decision.risk.impulse)
-                self.storage.insert_snapshot(best, "NEAR_MISS", None, now_ms)
+                telemetry = telemetry_by_symbol[best.candidate.symbol]
+                self.storage.insert_snapshot(
+                    best,
+                    "NEAR_MISS",
+                    telemetry.episode_id,
+                    now_ms,
+                    telemetry,
+                )
                 self.last_near_miss_ms = now_ms
         if now_ms - self.last_random_ms >= self.settings.snapshot_random_seconds * 1000:
             ready_controls = [e for e in controls if e.flow.trade_count_30s > 0]
@@ -253,6 +291,27 @@ class Service:
                 kind = "CONTROL_NORMAL" if ready_controls else "RANDOM_NORMAL"
                 self.storage.insert_snapshot(random.choice(normal), kind, None, now_ms)
                 self.last_random_ms = now_ms
+
+    def _update_snapshot_outcomes(self, now_ms: int) -> None:
+        observations: list[tuple[str, float]] = []
+        for outcome in self.storage.pending_snapshot_outcomes():
+            entry_vwap = outcome["entry_vwap"]
+            if entry_vwap is None or float(entry_vwap) <= 0:
+                continue
+            quantity = float(outcome["position_usdt"]) / float(entry_vwap)
+            sell_vwap = self.state.executable_sell_price(
+                str(outcome["symbol"]),
+                quantity,
+                now_ms,
+                self.settings.max_feed_age_ms,
+            )
+            if sell_vwap is None:
+                continue
+            current_return = (sell_vwap / float(entry_vwap) - 1) * 100
+            observations.append(
+                (str(outcome["snapshot_id"]), current_return)
+            )
+        self.storage.record_snapshot_observations(observations, now_ms)
 
     async def run(self) -> None:
         self.storage.start_run(socket.gethostname())

@@ -19,8 +19,8 @@ def _env_int(name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class Settings:
-    algorithm_version: str = "4.3.6-server"
-    strategy_version: str = "TRADE3-V436-FILTERED-2026-07"
+    algorithm_version: str = "4.3.7-server"
+    strategy_version: str = "TRADE3-V437-SHADOW-AUDIT-2026-07"
     rest_url: str = os.getenv("BINANCE_REST_URL", "https://api.binance.com")
     ws_url: str = os.getenv("BINANCE_WS_URL", "wss://stream.binance.com:9443")
     data_dir: Path = Path(os.getenv("PUMPRADAR_DATA_DIR", "/var/lib/pumpradar"))
@@ -50,7 +50,7 @@ class Settings:
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
 
-    # v4.3.6 paper candidate: reject weak fast flow and any explicit risk flag.
+    # Frozen v4.3.6 paper gate retained unchanged in v4.3.7.
     min_taker_buy_ratio_30s: float = 0.875
     min_trade3_taker_buy_ratio_15s: float = 0.90
     min_trade3_taker_buy_ratio_5s: float = 0.75
@@ -82,6 +82,13 @@ class Settings:
     max_shadow_exhaustion_risk: int = 20
     max_shadow_spread_bps: float = 30.0
     max_shadow_slippage_percent: float = 0.15
+    # v4.3.7 experimental measurements. These never block the frozen strict gate.
+    max_shadow_return_15s_excess_over_60s: float = 0.05
+    min_shadow_strict_streak: int = 3
+    strict_streak_max_gap_ms: int = 2_500
+    episode_impulse_start_score: int = 40
+    episode_reset_seconds: int = 60
+    episode_retention_seconds: int = 15 * 60
     target_percent: float = 3.0
     initial_stop_percent: float = 0.75
     protection_activation_percent: float = 1.0

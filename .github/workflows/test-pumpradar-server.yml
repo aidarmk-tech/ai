@@ -24,13 +24,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Reconstruct v4.3.6 payload
+      - name: Reconstruct v4.3.7 payload
         shell: bash
         run: |
           set -Eeuo pipefail
-          cat server-bootstrap/v436/{00..22} > /tmp/payload.b64
+          cat server-bootstrap/v437/{00..26} > /tmp/payload.b64
           base64 --decode /tmp/payload.b64 > /tmp/payload.tar.gz
-          echo 'e15979cb71af5cb8e0da8b6aa1cdbf2d5150a9fab5fbe73821cedff1ae9a1c8c  /tmp/payload.tar.gz' | sha256sum -c -
+          echo '350f89f93dff179965e07c64db8a1f6fbe5189fc1adb7cf6bb9a41543d594108  /tmp/payload.tar.gz' | sha256sum -c -
           mkdir /tmp/pumpradar
           tar -xzf /tmp/payload.tar.gz -C /tmp/pumpradar --strip-components=1
 
@@ -59,7 +59,7 @@ jobs:
           from pumpradar_server.config import Settings
 
           settings = Settings()
-          assert settings.algorithm_version == '4.3.6-server'
+          assert settings.algorithm_version == '4.3.7-server'
           assert settings.primary_policy == 'C_WEAKENING'
           assert settings.warm_pool_size == 60
           assert settings.deep_candidates == 15
@@ -72,6 +72,8 @@ jobs:
           assert settings.max_trade3_artificial_risk == 0
           assert settings.protected_stop_percent == 0.30
           assert settings.protected_peak_fraction == 0.50
+          assert settings.max_shadow_return_15s_excess_over_60s == 0.05
+          assert settings.min_shadow_strict_streak == 3
           assert max(settings.depth_candidates, settings.deep_candidates) >= settings.deep_candidates
           print('smoke ok', settings.algorithm_version, settings.config_hash())
           PY
@@ -79,7 +81,7 @@ jobs:
       - name: Upload verified server source
         uses: actions/upload-artifact@v4
         with:
-          name: pumpradar-server-source-v436
+          name: pumpradar-server-source-v437
           path: /tmp/pumpradar
           if-no-files-found: error
           retention-days: 7

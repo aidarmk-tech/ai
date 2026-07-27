@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from .config import Settings
+from .episodes import EpisodeTelemetry
 from .models import EvaluatedCandidate
 
 LOG = logging.getLogger(__name__)
@@ -60,6 +61,17 @@ CREATE TABLE IF NOT EXISTS snapshots (
   price_age_ms INTEGER, trade_age_ms INTEGER, book_ticker_age_ms INTEGER,
   depth_age_ms INTEGER, depth_update_id INTEGER,
   best_bid REAL, best_ask REAL, entry_buy_vwap REAL, executable_sell_vwap REAL,
+  episode_id TEXT,
+  first_pre_candidate_at_ms INTEGER, impulse_started_at_ms INTEGER,
+  strict_first_at_ms INTEGER, impulse_age_ms INTEGER, strict_streak INTEGER,
+  momentum_persistent INTEGER, experimental_shadow_passed INTEGER,
+  experimental_blockers TEXT,
+  episode_start_price REAL, extension_from_episode_start_pct REAL,
+  local_high_price REAL, peak_at_ms INTEGER,
+  distance_from_local_high_pct REAL, seconds_since_local_high INTEGER,
+  pullback_from_high_pct REAL, failed_high_attempts INTEGER,
+  lower_high_detected INTEGER, breakout_level_held INTEGER,
+  new_high_without_cvd_high INTEGER,
   UNIQUE(run_id, snapshot_time_ms, symbol, snapshot_type)
 );
 CREATE INDEX IF NOT EXISTS idx_snapshots_time ON snapshots(snapshot_time_ms);
@@ -87,7 +99,8 @@ CREATE TABLE IF NOT EXISTS paper_slots (
   last_updated_at_ms INTEGER NOT NULL,
   algorithm_version TEXT NOT NULL,
   strategy_version TEXT NOT NULL,
-  config_hash TEXT NOT NULL
+  config_hash TEXT NOT NULL,
+  episode_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_slots_open ON paper_slots(baseline_status, opened_at_ms);
 CREATE TABLE IF NOT EXISTS policy_runs (
@@ -126,6 +139,33 @@ CREATE TABLE IF NOT EXISTS service_events (
   subsystem TEXT NOT NULL,
   message TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS snapshot_outcomes (
+  snapshot_id TEXT PRIMARY KEY REFERENCES snapshots(id) ON DELETE CASCADE,
+  episode_id TEXT,
+  symbol TEXT NOT NULL,
+  snapshot_type TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  entry_vwap REAL,
+  entry_status TEXT NOT NULL,
+  position_usdt REAL NOT NULL,
+  fee_rate REAL NOT NULL,
+  last_observed_at_ms INTEGER,
+  mfe_percent REAL NOT NULL DEFAULT 0,
+  mae_percent REAL NOT NULL DEFAULT 0,
+  return_5s REAL, mfe_5s REAL, mae_5s REAL,
+  return_15s REAL, mfe_15s REAL, mae_15s REAL,
+  return_30s REAL, mfe_30s REAL, mae_30s REAL,
+  return_60s REAL, mfe_60s REAL, mae_60s REAL,
+  return_120s REAL, mfe_120s REAL, mae_120s REAL,
+  return_300s REAL, mfe_300s REAL, mae_300s REAL,
+  first_barrier TEXT, first_barrier_at_ms INTEGER,
+  completed INTEGER NOT NULL DEFAULT 0,
+  completion_reason TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_snapshot_outcomes_pending
+  ON snapshot_outcomes(completed, created_at_ms);
+CREATE INDEX IF NOT EXISTS idx_snapshot_outcomes_episode
+  ON snapshot_outcomes(episode_id);
 """
 
 SNAPSHOT_AUDIT_COLUMNS = {
@@ -138,6 +178,34 @@ SNAPSHOT_AUDIT_COLUMNS = {
     "best_ask": "REAL",
     "entry_buy_vwap": "REAL",
     "executable_sell_vwap": "REAL",
+    "episode_id": "TEXT",
+    "first_pre_candidate_at_ms": "INTEGER",
+    "impulse_started_at_ms": "INTEGER",
+    "strict_first_at_ms": "INTEGER",
+    "impulse_age_ms": "INTEGER",
+    "strict_streak": "INTEGER",
+    "momentum_persistent": "INTEGER",
+    "experimental_shadow_passed": "INTEGER",
+    "experimental_blockers": "TEXT",
+    "episode_start_price": "REAL",
+    "extension_from_episode_start_pct": "REAL",
+    "local_high_price": "REAL",
+    "peak_at_ms": "INTEGER",
+    "distance_from_local_high_pct": "REAL",
+    "seconds_since_local_high": "INTEGER",
+    "pullback_from_high_pct": "REAL",
+    "failed_high_attempts": "INTEGER",
+    "lower_high_detected": "INTEGER",
+    "breakout_level_held": "INTEGER",
+    "new_high_without_cvd_high": "INTEGER",
+}
+
+PAPER_SLOT_AUDIT_COLUMNS = {
+    "episode_id": "TEXT",
+}
+
+SNAPSHOT_OUTCOME_AUDIT_COLUMNS = {
+    "fee_rate": "REAL NOT NULL DEFAULT 0.001",
 }
 
 SNAPSHOT_COLUMNS = (
@@ -154,6 +222,15 @@ SNAPSHOT_COLUMNS = (
     "hard_veto", "blockers", "reasons", "price_age_ms", "trade_age_ms",
     "book_ticker_age_ms", "depth_age_ms", "depth_update_id", "best_bid", "best_ask",
     "entry_buy_vwap", "executable_sell_vwap",
+    "episode_id", "first_pre_candidate_at_ms", "impulse_started_at_ms",
+    "strict_first_at_ms", "impulse_age_ms", "strict_streak",
+    "momentum_persistent", "experimental_shadow_passed",
+    "experimental_blockers", "episode_start_price",
+    "extension_from_episode_start_pct", "local_high_price", "peak_at_ms",
+    "distance_from_local_high_pct", "seconds_since_local_high",
+    "pullback_from_high_pct", "failed_high_attempts",
+    "lower_high_detected", "breakout_level_held",
+    "new_high_without_cvd_high",
 )
 
 
@@ -172,6 +249,29 @@ class Storage:
             for name, data_type in SNAPSHOT_AUDIT_COLUMNS.items():
                 if name not in existing:
                     self.conn.execute(f"ALTER TABLE snapshots ADD COLUMN {name} {data_type}")
+            existing_slot_columns = {
+                row["name"] for row in self.conn.execute("PRAGMA table_info(paper_slots)")
+            }
+            for name, data_type in PAPER_SLOT_AUDIT_COLUMNS.items():
+                if name not in existing_slot_columns:
+                    self.conn.execute(
+                        f"ALTER TABLE paper_slots ADD COLUMN {name} {data_type}"
+                    )
+            existing_outcome_columns = {
+                row["name"]
+                for row in self.conn.execute(
+                    "PRAGMA table_info(snapshot_outcomes)"
+                )
+            }
+            for name, data_type in SNAPSHOT_OUTCOME_AUDIT_COLUMNS.items():
+                if name not in existing_outcome_columns:
+                    self.conn.execute(
+                        "ALTER TABLE snapshot_outcomes "
+                        f"ADD COLUMN {name} {data_type}"
+                    )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_snapshots_episode ON snapshots(episode_id)"
+            )
             self.conn.commit()
         self.run_id = ""
 
@@ -243,11 +343,26 @@ class Storage:
             )
             self.conn.commit()
 
-    def insert_snapshot(self, item: EvaluatedCandidate, snapshot_type: str, event_id: Optional[str], now_ms: int) -> str:
+    def insert_snapshot(
+        self,
+        item: EvaluatedCandidate,
+        snapshot_type: str,
+        event_id: Optional[str],
+        now_ms: int,
+        telemetry: Optional[EpisodeTelemetry] = None,
+    ) -> str:
         snapshot_id = str(uuid.uuid4())
-        c, f, b, d = item.candidate, item.flow, item.book, item.decision
+        c, f, b, p, d = (
+            item.candidate,
+            item.flow,
+            item.book,
+            item.peak,
+            item.decision,
+        )
+        episode_id = telemetry.episode_id if telemetry else None
+        stable_event_id = event_id or episode_id
         values = (
-            snapshot_id, self.run_id, now_ms, snapshot_type, event_id, c.symbol, d.label, d.liquidity_tier,
+            snapshot_id, self.run_id, now_ms, snapshot_type, stable_event_id, c.symbol, d.label, d.liquidity_tier,
             self.settings.algorithm_version, self.settings.strategy_version, self.settings.config_hash(),
             c.return_15s, c.return_60s, c.return_5m, c.acceleration,
             f.volume_z_30s, f.quote_volume_30s, f.taker_buy_ratio_30s, f.taker_buy_ratio_15s, f.taker_buy_ratio_5s,
@@ -267,18 +382,90 @@ class Storage:
             b.best_ask,
             b.buy_vwap,
             b.sell_vwap_for_position,
+            episode_id,
+            telemetry.first_pre_candidate_at_ms if telemetry else None,
+            telemetry.impulse_started_at_ms if telemetry else None,
+            telemetry.strict_first_at_ms if telemetry else None,
+            telemetry.impulse_age_ms if telemetry else None,
+            telemetry.strict_streak if telemetry else None,
+            int(telemetry.momentum_persistent) if telemetry else None,
+            int(telemetry.experimental_shadow_passed) if telemetry else None,
+            (
+                json.dumps(telemetry.experimental_blockers, ensure_ascii=False)
+                if telemetry
+                else None
+            ),
+            telemetry.episode_start_price if telemetry else None,
+            telemetry.extension_from_episode_start_pct if telemetry else None,
+            p.local_high_price,
+            p.peak_at_ms,
+            p.distance_from_local_high_pct,
+            p.seconds_since_local_high,
+            p.pullback_from_high_pct,
+            p.failed_high_attempts,
+            int(p.lower_high_detected),
+            int(p.breakout_level_held),
+            int(p.new_high_without_cvd_high),
         )
         placeholders = ",".join("?" for _ in values)
         columns = ",".join(SNAPSHOT_COLUMNS)
         with self.lock:
-            self.conn.execute(
+            cursor = self.conn.execute(
                 f"INSERT OR IGNORE INTO snapshots ({columns}) VALUES ({placeholders})",
                 values,
             )
+            if cursor.rowcount == 0:
+                existing = self.conn.execute(
+                    """SELECT id FROM snapshots
+                       WHERE run_id=? AND snapshot_time_ms=?
+                         AND symbol=? AND snapshot_type=?""",
+                    (self.run_id, now_ms, c.symbol, snapshot_type),
+                ).fetchone()
+                if existing:
+                    snapshot_id = str(existing["id"])
+            elif snapshot_type in {"TRIGGERED", "SHADOW", "NEAR_MISS"}:
+                entry_status = (
+                    "EXECUTABLE"
+                    if b.buy_vwap is not None
+                    else "NO_EXECUTABLE_ENTRY"
+                )
+                self.conn.execute(
+                    """INSERT OR IGNORE INTO snapshot_outcomes(
+                         snapshot_id,episode_id,symbol,snapshot_type,created_at_ms,
+                         entry_vwap,entry_status,position_usdt,fee_rate,completed,
+                         completion_reason
+                       ) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        snapshot_id,
+                        episode_id,
+                        c.symbol,
+                        snapshot_type,
+                        now_ms,
+                        b.buy_vwap,
+                        entry_status,
+                        self.settings.position_usdt,
+                        self.settings.fee_rate,
+                        int(b.buy_vwap is None),
+                        (
+                            "NO_EXECUTABLE_ENTRY"
+                            if b.buy_vwap is None
+                            else None
+                        ),
+                    ),
+                )
             self.conn.commit()
         return snapshot_id
 
-    def create_slot(self, source_snapshot_id: str, symbol: str, event_id: str, now_ms: int, best_ask: float, entry_vwap: float) -> str:
+    def create_slot(
+        self,
+        source_snapshot_id: str,
+        symbol: str,
+        event_id: str,
+        now_ms: int,
+        best_ask: float,
+        entry_vwap: float,
+        episode_id: Optional[str] = None,
+    ) -> str:
         slot_id = str(uuid.uuid4())
         quantity = self.settings.position_usdt / entry_vwap
         entry_fee = self.settings.position_usdt * self.settings.fee_rate
@@ -287,11 +474,12 @@ class Storage:
                 """INSERT INTO paper_slots(
                   id,run_id,source_snapshot_id,event_id,symbol,opened_at_ms,entry_best_ask,entry_vwap,
                   position_usdt,quantity,entry_fee_usdt,baseline_status,last_updated_at_ms,
-                  algorithm_version,strategy_version,config_hash
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,'OPEN',?,?,?,?)""",
+                  algorithm_version,strategy_version,config_hash,episode_id
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,'OPEN',?,?,?,?,?)""",
                 (slot_id, self.run_id, source_snapshot_id, event_id, symbol, now_ms, best_ask, entry_vwap,
                  self.settings.position_usdt, quantity, entry_fee, now_ms, self.settings.algorithm_version,
-                 self.settings.strategy_version, self.settings.config_hash()),
+                 self.settings.strategy_version, self.settings.config_hash(),
+                 episode_id or event_id),
             )
             for policy in ("A_PARTIAL_20", "B_FULL_PROTECTED", "C_WEAKENING"):
                 self.conn.execute(
@@ -306,6 +494,90 @@ class Storage:
             return list(self.conn.execute(
                 "SELECT * FROM paper_slots WHERE id IN (SELECT DISTINCT slot_id FROM policy_runs WHERE state='OPEN') ORDER BY opened_at_ms"
             ))
+
+    def pending_snapshot_outcomes(self) -> list[sqlite3.Row]:
+        with self.lock:
+            return list(
+                self.conn.execute(
+                    """SELECT * FROM snapshot_outcomes
+                       WHERE completed=0
+                       ORDER BY created_at_ms"""
+                )
+            )
+
+    def pending_snapshot_symbols(self) -> set[str]:
+        with self.lock:
+            return {
+                str(row["symbol"])
+                for row in self.conn.execute(
+                    "SELECT DISTINCT symbol FROM snapshot_outcomes WHERE completed=0"
+                )
+            }
+
+    def record_snapshot_observation(
+        self,
+        snapshot_id: str,
+        current_return: float,
+        now_ms: int,
+    ) -> None:
+        self.record_snapshot_observations(
+            [(snapshot_id, current_return)],
+            now_ms,
+        )
+
+    def record_snapshot_observations(
+        self,
+        observations: list[tuple[str, float]],
+        now_ms: int,
+    ) -> None:
+        horizons = (5, 15, 30, 60, 120, 300)
+        with self.lock:
+            for snapshot_id, current_return in observations:
+                row = self.conn.execute(
+                    "SELECT * FROM snapshot_outcomes WHERE snapshot_id=?",
+                    (snapshot_id,),
+                ).fetchone()
+                if row is None or row["completed"]:
+                    continue
+                mfe = max(float(row["mfe_percent"]), current_return)
+                mae = min(float(row["mae_percent"]), current_return)
+                age_ms = max(0, now_ms - int(row["created_at_ms"]))
+                updates: dict[str, Any] = {
+                    "last_observed_at_ms": now_ms,
+                    "mfe_percent": mfe,
+                    "mae_percent": mae,
+                }
+                for seconds in horizons:
+                    return_column = f"return_{seconds}s"
+                    if (
+                        age_ms >= seconds * 1_000
+                        and row[return_column] is None
+                    ):
+                        updates[return_column] = current_return
+                        updates[f"mfe_{seconds}s"] = mfe
+                        updates[f"mae_{seconds}s"] = mae
+                if row["first_barrier"] is None:
+                    if current_return >= 1.0:
+                        updates["first_barrier"] = "TARGET_1"
+                        updates["first_barrier_at_ms"] = now_ms
+                    elif current_return <= -self.settings.initial_stop_percent:
+                        updates["first_barrier"] = "STOP_0_75"
+                        updates["first_barrier_at_ms"] = now_ms
+                if age_ms >= 300_000 and (
+                    row["return_300s"] is not None
+                    or "return_300s" in updates
+                ):
+                    updates["completed"] = 1
+                    updates["completion_reason"] = "HORIZON_300S"
+                assignments = ",".join(f"{name}=?" for name in updates)
+                self.conn.execute(
+                    f"""UPDATE snapshot_outcomes
+                        SET {assignments}
+                        WHERE snapshot_id=?""",
+                    (*updates.values(), snapshot_id),
+                )
+            if observations:
+                self.conn.commit()
 
     def policies_for_slot(self, slot_id: str) -> list[sqlite3.Row]:
         with self.lock:
@@ -364,6 +636,26 @@ class Storage:
         with self.lock:
             row = self.conn.execute("SELECT COUNT(*) n FROM snapshots WHERE run_id=?", (self.run_id,)).fetchone()
             slots = self.conn.execute("SELECT COUNT(*) n FROM paper_slots WHERE run_id=?", (self.run_id,)).fetchone()
+            shadow_audit = self.conn.execute(
+                """SELECT
+                     COUNT(DISTINCT episode_id) AS episodes,
+                     COALESCE(SUM(momentum_persistent=1), 0)
+                       AS momentum_persistent_ticks,
+                     COALESCE(SUM(experimental_shadow_passed=1), 0)
+                       AS experimental_pass_ticks
+                   FROM snapshots
+                   WHERE run_id=? AND episode_id IS NOT NULL""",
+                (self.run_id,),
+            ).fetchone()
+            outcome_counts = self.conn.execute(
+                """SELECT
+                     COALESCE(SUM(so.completed=0), 0) AS pending,
+                     COALESCE(SUM(so.completed=1), 0) AS completed
+                   FROM snapshot_outcomes so
+                   JOIN snapshots s ON s.id=so.snapshot_id
+                   WHERE s.run_id=?""",
+                (self.run_id,),
+            ).fetchone()
             open_slot = self.baseline_open_slot()
             return {
                 "run_id": self.run_id,
@@ -376,6 +668,17 @@ class Storage:
                 "primary_policy": self.settings.primary_policy,
                 "config_hash": self.settings.config_hash(),
                 "daily_pnl": self.daily_pnl(),
+                "shadow_audit": {
+                    "episodes": int(shadow_audit["episodes"] or 0),
+                    "momentum_persistent_ticks": int(
+                        shadow_audit["momentum_persistent_ticks"] or 0
+                    ),
+                    "experimental_pass_ticks": int(
+                        shadow_audit["experimental_pass_ticks"] or 0
+                    ),
+                    "outcomes_pending": int(outcome_counts["pending"] or 0),
+                    "outcomes_completed": int(outcome_counts["completed"] or 0),
+                },
             }
 
     def daily_pnl(self, now_ms: Optional[int] = None) -> dict[str, Any]:
@@ -468,6 +771,7 @@ class Storage:
             "snapshots",
             "paper_slots",
             "policy_runs",
+            "snapshot_outcomes",
             "skipped_candidates",
             "service_events",
         ]
@@ -510,7 +814,7 @@ class Storage:
             "sha256": self._sha256(sqlite_gz),
         }
         manifest = {
-            "schema_version": 2,
+            "schema_version": 3,
             "exported_at_ms": now_ms,
             "run_id": self.run_id,
             "algorithm_version": self.settings.algorithm_version,

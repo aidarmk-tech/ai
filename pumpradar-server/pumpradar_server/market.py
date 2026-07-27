@@ -489,6 +489,8 @@ class MarketState:
                 in_zone = False
         new_high_no_cvd = price >= max_price - 0.0005 * max_price and max_cvd > 0 and cvd < max_cvd * 0.98
         return PeakFeatures(
+            local_high_price=max_price,
+            peak_at_ms=high_sample[0],
             distance_from_local_high_pct=max(0.0, distance),
             seconds_since_local_high=max(0, (now_ms - high_sample[0]) // 1000),
             pullback_from_high_pct=max(0.0, pullback),
@@ -511,7 +513,10 @@ class BinanceFeed:
 
     async def start(self) -> None:
         timeout = aiohttp.ClientTimeout(total=20)
-        self.session = aiohttp.ClientSession(timeout=timeout, headers={"User-Agent": "PumpRadar/4.3.6"})
+        self.session = aiohttp.ClientSession(
+            timeout=timeout,
+            headers={"User-Agent": f"PumpRadar/{self.settings.algorithm_version}"},
+        )
         await self.refresh_universe()
 
     async def stop(self) -> None:

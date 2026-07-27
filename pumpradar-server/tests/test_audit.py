@@ -441,8 +441,8 @@ class AuditFlowTest(unittest.TestCase):
         self.assertNotIn("STALE_FEED", decision.risk.veto_reasons)
         self.assertFalse(decision.strict_passed)
 
-    def test_v436_filters_entries_and_keeps_protected_floor(self) -> None:
-        self.assertEqual("4.3.6-server", self.settings.algorithm_version)
+    def test_v437_keeps_v436_entries_and_adds_shadow_audit_settings(self) -> None:
+        self.assertEqual("4.3.7-server", self.settings.algorithm_version)
         self.assertEqual("C_WEAKENING", self.settings.primary_policy)
         self.assertEqual(60, self.settings.warm_pool_size)
         self.assertEqual(15, self.settings.deep_candidates)
@@ -456,6 +456,241 @@ class AuditFlowTest(unittest.TestCase):
         self.assertEqual(3.0, self.settings.max_return_5m)
         self.assertEqual(0.30, self.settings.protected_stop_percent)
         self.assertEqual(0.50, self.settings.protected_peak_fraction)
+        self.assertEqual(
+            0.05,
+            self.settings.max_shadow_return_15s_excess_over_60s,
+        )
+        self.assertEqual(3, self.settings.min_shadow_strict_streak)
+
+    def test_episode_tracker_measures_persistence_and_three_tick_streak(self) -> None:
+        from pumpradar_server.episodes import EpisodeTracker
+        from pumpradar_server.models import (
+            BookMetrics,
+            Candidate,
+            EvaluatedCandidate,
+            FlowMetrics,
+            PeakFeatures,
+        )
+        from pumpradar_server.strategy import assess
+
+        flow = FlowMetrics(
+            ready=True,
+            quote_volume_30s=200_000.0,
+            trade_count_30s=60,
+            trades_per_second=3.0,
+            taker_buy_ratio_30s=0.90,
+            taker_buy_ratio_15s=0.95,
+            taker_buy_ratio_5s=0.95,
+            cvd_30s=100.0,
+            cvd_15s=60.0,
+            cvd_5s=30.0,
+            cvd_slope=1.0,
+            volume_z_30s=6.0,
+        )
+        book = BookMetrics(
+            spread_bps=10.0,
+            obi_10=0.6,
+            buy_slippage_percent=0.05,
+            sell_slippage_percent=0.05,
+            buy_vwap=100.1,
+            best_ask=100.0,
+            depth_age_ms=0,
+            depth_update_id=1,
+        )
+
+        def item(r15: float, r60: float) -> EvaluatedCandidate:
+            candidate = Candidate(
+                "BTCUSDT",
+                100.0,
+                10_000_000.0,
+                r15,
+                r60,
+                2.0,
+                0.5,
+                1.0,
+                1.0,
+            )
+            with patch(
+                "pumpradar_server.strategy.impulse_score",
+                return_value=64,
+            ):
+                decision = assess(
+                    candidate,
+                    flow,
+                    book,
+                    PeakFeatures(),
+                    self.settings,
+                    100,
+                    0.0,
+                    0.5,
+                    False,
+                )
+            self.assertTrue(decision.strict_passed)
+            return EvaluatedCandidate(
+                candidate,
+                flow,
+                book,
+                PeakFeatures(),
+                decision,
+            )
+
+        tracker = EpisodeTracker(self.settings)
+        first = tracker.observe(item(1.0, 1.0), 1_000)
+        second = tracker.observe(item(1.0, 1.0), 2_000)
+        third = tracker.observe(item(1.0, 1.0), 3_000)
+        self.assertEqual(first.episode_id, third.episode_id)
+        self.assertEqual((1, 2, 3), (
+            first.strict_streak,
+            second.strict_streak,
+            third.strict_streak,
+        ))
+        self.assertFalse(first.experimental_shadow_passed)
+        self.assertTrue(third.experimental_shadow_passed)
+
+        fading = tracker.observe(item(1.50, 1.00), 4_000)
+        self.assertFalse(fading.momentum_persistent)
+        self.assertFalse(fading.experimental_shadow_passed)
+        self.assertIn(
+            "MOMENTUM_NOT_PERSISTENT",
+            fading.experimental_blockers,
+        )
+
+        restarted = tracker.observe(item(1.0, 1.0), 65_001)
+        self.assertNotEqual(first.episode_id, restarted.episode_id)
+        self.assertEqual(1, restarted.strict_streak)
+
+    def test_snapshot_audit_links_episode_and_tracks_counterfactual_outcome(self) -> None:
+        from pumpradar_server.episodes import EpisodeTracker
+        from pumpradar_server.models import (
+            BookMetrics,
+            Candidate,
+            EvaluatedCandidate,
+            FlowMetrics,
+            PeakFeatures,
+        )
+        from pumpradar_server.storage import Storage
+        from pumpradar_server.strategy import assess
+
+        candidate = Candidate(
+            "BTCUSDT",
+            100.0,
+            10_000_000.0,
+            1.0,
+            1.0,
+            2.0,
+            0.5,
+            1.0,
+            1.0,
+        )
+        flow = FlowMetrics(
+            ready=True,
+            quote_volume_30s=200_000.0,
+            trade_count_30s=60,
+            trades_per_second=3.0,
+            taker_buy_ratio_30s=0.90,
+            taker_buy_ratio_15s=0.95,
+            taker_buy_ratio_5s=0.95,
+            cvd_30s=100.0,
+            cvd_15s=60.0,
+            cvd_5s=30.0,
+            cvd_slope=1.0,
+            volume_z_30s=6.0,
+        )
+        book = BookMetrics(
+            spread_bps=10.0,
+            obi_10=0.6,
+            buy_slippage_percent=0.05,
+            sell_slippage_percent=0.05,
+            buy_vwap=100.1,
+            best_ask=100.0,
+            depth_age_ms=0,
+            depth_update_id=1,
+        )
+        peak = PeakFeatures(
+            local_high_price=101.0,
+            peak_at_ms=900,
+            distance_from_local_high_pct=0.2,
+            seconds_since_local_high=1,
+            pullback_from_high_pct=0.3,
+            failed_high_attempts=1,
+            breakout_level_held=True,
+        )
+        with patch(
+            "pumpradar_server.strategy.impulse_score",
+            return_value=64,
+        ):
+            decision = assess(
+                candidate,
+                flow,
+                book,
+                PeakFeatures(),
+                self.settings,
+                100,
+                0.0,
+                0.5,
+                False,
+            )
+        item = EvaluatedCandidate(candidate, flow, book, peak, decision)
+        telemetry = EpisodeTracker(self.settings).observe(item, 1_000)
+
+        storage = Storage(self.settings)
+        storage.start_run("episode-audit")
+        snapshot_id = storage.insert_snapshot(
+            item,
+            "TRIGGERED",
+            telemetry.episode_id,
+            1_000,
+            telemetry,
+        )
+        slot_id = storage.create_slot(
+            snapshot_id,
+            candidate.symbol,
+            telemetry.episode_id,
+            1_000,
+            100.0,
+            100.1,
+            telemetry.episode_id,
+        )
+        snapshot = storage.conn.execute(
+            """SELECT event_id,episode_id,peak_at_ms,local_high_price,
+                      distance_from_local_high_pct
+               FROM snapshots WHERE id=?""",
+            (snapshot_id,),
+        ).fetchone()
+        slot = storage.conn.execute(
+            "SELECT event_id,episode_id FROM paper_slots WHERE id=?",
+            (slot_id,),
+        ).fetchone()
+        self.assertEqual(telemetry.episode_id, snapshot["event_id"])
+        self.assertEqual(telemetry.episode_id, snapshot["episode_id"])
+        self.assertEqual(tuple(snapshot[:2]), tuple(slot))
+        self.assertEqual(900, snapshot["peak_at_ms"])
+        self.assertEqual(101.0, snapshot["local_high_price"])
+        self.assertEqual(0.2, snapshot["distance_from_local_high_pct"])
+        self.assertEqual({"BTCUSDT"}, storage.pending_snapshot_symbols())
+
+        storage.record_snapshot_observation(snapshot_id, 0.50, 6_000)
+        storage.record_snapshot_observation(snapshot_id, -0.80, 16_000)
+        storage.record_snapshot_observation(snapshot_id, 1.20, 301_000)
+        outcome = storage.conn.execute(
+            """SELECT fee_rate,return_5s,mfe_5s,mae_5s,return_15s,
+                      first_barrier,return_300s,mfe_300s,mae_300s,
+                      completed,completion_reason
+               FROM snapshot_outcomes WHERE snapshot_id=?""",
+            (snapshot_id,),
+        ).fetchone()
+        self.assertEqual(self.settings.fee_rate, outcome["fee_rate"])
+        self.assertEqual(0.50, outcome["return_5s"])
+        self.assertEqual(0.50, outcome["mfe_5s"])
+        self.assertEqual(0.0, outcome["mae_5s"])
+        self.assertEqual(-0.80, outcome["return_15s"])
+        self.assertEqual("STOP_0_75", outcome["first_barrier"])
+        self.assertEqual(1.20, outcome["return_300s"])
+        self.assertEqual(1.20, outcome["mfe_300s"])
+        self.assertEqual(-0.80, outcome["mae_300s"])
+        self.assertEqual(1, outcome["completed"])
+        self.assertEqual("HORIZON_300S", outcome["completion_reason"])
+        self.assertEqual(set(), storage.pending_snapshot_symbols())
 
     def test_daily_pnl_keeps_alternative_policies_separate(self) -> None:
         from pumpradar_server.storage import Storage
@@ -489,8 +724,9 @@ class AuditFlowTest(unittest.TestCase):
         storage.start_run("export")
         output = storage.export_all()
         manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(2, manifest["schema_version"])
+        self.assertEqual(3, manifest["schema_version"])
         self.assertEqual(1, manifest["row_counts"]["experiment_runs"])
+        self.assertEqual(0, manifest["row_counts"]["snapshot_outcomes"])
 
         restored = self.root / "restored.sqlite3"
         with gzip.open(output / "pumpradar.sqlite3.gz", "rb") as source:
