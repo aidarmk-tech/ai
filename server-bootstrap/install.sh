@@ -5,7 +5,8 @@ REPO_RAW="https://raw.githubusercontent.com/aidarmk-tech/ai/chatgpt/pumpradar-se
 BASE_PAYLOAD_PATH="v437"
 BASE_CHUNK_LAST=26
 BASE_SHA256="350f89f93dff179965e07c64db8a1f6fbe5189fc1adb7cf6bb9a41543d594108"
-PATCH_PATH="v438/source.patch.gz.b64"
+PATCH_ROOT="v438"
+PATCH_PART_LAST=3
 PATCH_GZ_SHA256="6914927391ef98e1c761d129583c83f1ab73b2359b7d6b774b94210f6b68d4ad"
 EXPECTED_VERSION="4.3.8-server"
 APP_ROOT="/opt/pumpradar"
@@ -51,8 +52,13 @@ tar -xzf "$TMP_DIR/base.tar.gz" -C "$TMP_DIR/source-root"
 [[ -d "$TMP_DIR/source-root/pumpradar-server" ]] || fail "В основе нет каталога pumpradar-server"
 
 log "Применение проверенного патча Momentum Continuation v4.3.8"
+: > "$TMP_DIR/source.patch.gz.b64"
 curl --fail --silent --show-error --retry 4 --retry-delay 2 \
-  "$REPO_RAW/$PATCH_PATH" > "$TMP_DIR/source.patch.gz.b64"
+  "$REPO_RAW/$PATCH_ROOT/source.patch.gz.b64" >> "$TMP_DIR/source.patch.gz.b64"
+for n in $(seq -w 1 "$PATCH_PART_LAST"); do
+  curl --fail --silent --show-error --retry 4 --retry-delay 2 \
+    "$REPO_RAW/$PATCH_ROOT/patchparts/$n" >> "$TMP_DIR/source.patch.gz.b64"
+done
 base64 --decode "$TMP_DIR/source.patch.gz.b64" > "$TMP_DIR/source.patch.gz"
 ACTUAL_PATCH_SHA256="$(sha256sum "$TMP_DIR/source.patch.gz" | awk '{print $1}')"
 [[ "$ACTUAL_PATCH_SHA256" == "$PATCH_GZ_SHA256" ]] || \
