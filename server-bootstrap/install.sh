@@ -2,12 +2,9 @@
 set -Eeuo pipefail
 
 REPO_RAW="https://raw.githubusercontent.com/aidarmk-tech/ai/chatgpt/pumpradar-server-v43/server-bootstrap"
-BASE_PAYLOAD_PATH="v437"
-BASE_CHUNK_LAST=26
-BASE_SHA256="350f89f93dff179965e07c64db8a1f6fbe5189fc1adb7cf6bb9a41543d594108"
-PATCH_ROOT="v438"
-PATCH_PART_LAST=3
-PATCH_GZ_SHA256="6914927391ef98e1c761d129583c83f1ab73b2359b7d6b774b94210f6b68d4ad"
+PAYLOAD_PATH="v438payload"
+PAYLOAD_PARTS=(00 01 02 03)
+PAYLOAD_SHA256="f6554bb8b0da08869d465d54ebb946f98487fb72a5434abe5770b437b09edafe"
 EXPECTED_VERSION="4.3.8-server"
 APP_ROOT="/opt/pumpradar"
 DATA_DIR="/var/lib/pumpradar"
@@ -27,46 +24,32 @@ log "Подготовка Ubuntu и системных пакетов"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
-  ca-certificates curl openssh-server python3 python3-venv sqlite3 rclone ufw patch gzip
+  ca-certificates curl openssh-server python3 python3-venv sqlite3 rclone ufw gzip
 systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null || true
 
 if [[ -x "$APP_ROOT/server/scripts/backup.sh" ]] && systemctl is-active --quiet pumpradar.service; then
   log "Создание SQLite/CSV backup перед обновлением"
   "$APP_ROOT/server/scripts/backup.sh" || \
-    log "Предупреждение: backup старой версии не выполнен; основная SQLite база не удаляется"
+    log "Предупреждение: backup не выполнен; основная SQLite база не удаляется"
 fi
 
-log "Загрузка проверенной основы v4.3.7"
-: > "$TMP_DIR/base.b64"
-for n in $(seq -w 0 "$BASE_CHUNK_LAST"); do
+log "Загрузка проверенного PumpRadar $EXPECTED_VERSION"
+: > "$TMP_DIR/payload.b64"
+for n in "${PAYLOAD_PARTS[@]}"; do
   curl --fail --silent --show-error --retry 4 --retry-delay 2 \
-    "$REPO_RAW/$BASE_PAYLOAD_PATH/$n" >> "$TMP_DIR/base.b64"
+    "$REPO_RAW/$PAYLOAD_PATH/$n" >> "$TMP_DIR/payload.b64"
 done
-base64 --decode "$TMP_DIR/base.b64" > "$TMP_DIR/base.tar.gz"
-ACTUAL_BASE_SHA256="$(sha256sum "$TMP_DIR/base.tar.gz" | awk '{print $1}')"
-[[ "$ACTUAL_BASE_SHA256" == "$BASE_SHA256" ]] || \
-  fail "Контрольная сумма основы не совпала: $ACTUAL_BASE_SHA256"
-tar -tzf "$TMP_DIR/base.tar.gz" >/dev/null
+base64 --decode "$TMP_DIR/payload.b64" > "$TMP_DIR/payload.tar.gz"
+ACTUAL_SHA256="$(sha256sum "$TMP_DIR/payload.tar.gz" | awk '{print $1}')"
+[[ "$ACTUAL_SHA256" == "$PAYLOAD_SHA256" ]] || \
+  fail "Контрольная сумма пакета не совпала: $ACTUAL_SHA256"
+tar -tzf "$TMP_DIR/payload.tar.gz" >/dev/null
 mkdir -p "$TMP_DIR/source-root"
-tar -xzf "$TMP_DIR/base.tar.gz" -C "$TMP_DIR/source-root"
-[[ -d "$TMP_DIR/source-root/pumpradar-server" ]] || fail "В основе нет каталога pumpradar-server"
-
-log "Применение проверенного патча Momentum Continuation v4.3.8"
-: > "$TMP_DIR/source.patch.gz.b64"
-curl --fail --silent --show-error --retry 4 --retry-delay 2 \
-  "$REPO_RAW/$PATCH_ROOT/source.patch.gz.b64" >> "$TMP_DIR/source.patch.gz.b64"
-for n in $(seq -w 1 "$PATCH_PART_LAST"); do
-  curl --fail --silent --show-error --retry 4 --retry-delay 2 \
-    "$REPO_RAW/$PATCH_ROOT/patchparts/$n" >> "$TMP_DIR/source.patch.gz.b64"
-done
-base64 --decode "$TMP_DIR/source.patch.gz.b64" > "$TMP_DIR/source.patch.gz"
-ACTUAL_PATCH_SHA256="$(sha256sum "$TMP_DIR/source.patch.gz" | awk '{print $1}')"
-[[ "$ACTUAL_PATCH_SHA256" == "$PATCH_GZ_SHA256" ]] || \
-  fail "Контрольная сумма патча не совпала: $ACTUAL_PATCH_SHA256"
-gzip -dc "$TMP_DIR/source.patch.gz" > "$TMP_DIR/source.patch"
-patch --batch --forward -p1 -d "$TMP_DIR/source-root" < "$TMP_DIR/source.patch"
-grep -q '4.3.8-server' "$TMP_DIR/source-root/pumpradar-server/pumpradar_server/config.py" || \
-  fail "Патч не установил ожидаемую версию"
+tar -xzf "$TMP_DIR/payload.tar.gz" -C "$TMP_DIR/source-root"
+SERVER_SOURCE="$TMP_DIR/source-root/pumpradar-server"
+[[ -d "$SERVER_SOURCE/pumpradar_server" ]] || fail "В пакете нет серверного приложения"
+grep -q '4.3.8-server' "$SERVER_SOURCE/pumpradar_server/config.py" || \
+  fail "Пакет не содержит ожидаемую версию"
 
 log "Создание пользователя и каталогов"
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
@@ -75,7 +58,7 @@ fi
 install -d -o root -g root -m 0755 "$APP_ROOT" "$ENV_DIR"
 install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0750 "$DATA_DIR" "$DATA_DIR/exports"
 rm -rf "$APP_ROOT/server.new"
-cp -a "$TMP_DIR/source-root/pumpradar-server" "$APP_ROOT/server.new"
+cp -a "$SERVER_SOURCE" "$APP_ROOT/server.new"
 find "$APP_ROOT/server.new" -type d -name __pycache__ -prune -exec rm -rf {} +
 python3 -m compileall -q "$APP_ROOT/server.new/pumpradar_server"
 chown -R root:root "$APP_ROOT/server.new"
@@ -160,7 +143,7 @@ vm.vfs_cache_pressure=80
 SYSCTL
 sysctl --system >/dev/null || true
 
-log "Переключение на новую версию с возможностью отката"
+log "Переключение на новую версию с автоматическим откатом"
 systemctl stop pumpradar.service 2>/dev/null || true
 rm -rf "$APP_ROOT/server.previous"
 if [[ -d "$APP_ROOT/server" ]]; then
