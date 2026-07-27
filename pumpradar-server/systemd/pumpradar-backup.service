@@ -1,0 +1,14 @@
+[Unit]
+Description=Export and upload PumpRadar data
+After=pumpradar.service network-online.target
+
+[Service]
+Type=oneshot
+User=pumpradar
+Group=pumpradar
+EnvironmentFile=/etc/pumpradar/server.env
+ExecStart=/opt/pumpradar/server/scripts/backup.sh
+TimeoutStartSec=35min
+MemoryMax=256M
+MemorySwapMax=128M
+TasksMax=64

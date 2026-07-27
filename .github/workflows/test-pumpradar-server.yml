@@ -1,0 +1,210 @@
+name: Test PumpRadar Server
+
+on:
+  push:
+    branches:
+      - chatgpt/pumpradar-server-v43
+    paths:
+      - 'pumpradar-server/**'
+      - 'server-bootstrap/**'
+      - '.github/workflows/test-pumpradar-server.yml'
+  pull_request:
+    paths:
+      - 'pumpradar-server/**'
+      - 'server-bootstrap/**'
+      - '.github/workflows/test-pumpradar-server.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct verified v4.3.7 base
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cat server-bootstrap/v437/{00..26} > /tmp/v437.b64
+          base64 --decode /tmp/v437.b64 > /tmp/v437.tar.gz
+          echo '350f89f93dff179965e07c64db8a1f6fbe5189fc1adb7cf6bb9a41543d594108  /tmp/v437.tar.gz' | sha256sum -c -
+          mkdir /tmp/pumpradar
+          tar -xzf /tmp/v437.tar.gz -C /tmp/pumpradar --strip-components=1
+
+      - name: Reconstruct and apply v4.3.8 source patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cat server-bootstrap/v438/patchparts/{00..03} > /tmp/source.patch.gz.b64
+          base64 --decode /tmp/source.patch.gz.b64 > /tmp/source.patch.gz
+          gzip -t /tmp/source.patch.gz
+          gzip -dc /tmp/source.patch.gz > /tmp/source.patch
+          cd /tmp/pumpradar
+          patch --batch --forward -p2 < /tmp/source.patch
+
+      - name: Build deterministic v4.3.8 payload
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf /tmp/pumpradar-server /tmp/package-check
+          cp -a /tmp/pumpradar /tmp/pumpradar-server
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+            -czf /tmp/pumpradar-v438.tar.gz -C /tmp pumpradar-server
+          sha256sum /tmp/pumpradar-v438.tar.gz | tee /tmp/pumpradar-v438.sha256
+          base64 -w 0 /tmp/pumpradar-v438.tar.gz > /tmp/pumpradar-v438.tar.gz.b64
+          mkdir /tmp/package-check
+          tar -xzf /tmp/pumpradar-v438.tar.gz -C /tmp/package-check
+          test -d /tmp/package-check/pumpradar-server/pumpradar_server
+          grep -q '4.3.8-server' /tmp/package-check/pumpradar-server/pumpradar_server/config.py
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: python -m pip install -r /tmp/pumpradar/requirements.txt
+
+      - name: Verify server and installer
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python -m compileall -q /tmp/pumpradar/pumpradar_server
+          bash -n server-bootstrap/install.sh
+          bash -n server-bootstrap/enable-client.sh
+          bash -n server-bootstrap/update-v431.sh
+          bash -n /tmp/pumpradar/scripts/*.sh
+          PYTHONPATH=/tmp/pumpradar python -m unittest discover -s /tmp/pumpradar/tests -v
+          PYTHONPATH=/tmp/pumpradar python - <<'PY'
+          from pumpradar_server.config import Settings
+          settings = Settings()
+          assert settings.algorithm_version == '4.3.8-server'
+          assert settings.strategy_version == 'TRADE3-FROZEN+MC5-CHALLENGER-2026-07'
+          assert settings.primary_policy == 'C_WEAKENING'
+          assert settings.minimum_24h_quote_volume == 1_000_000.0
+          assert settings.max_candidates == 30
+          assert settings.warm_pool_size == 60
+          assert settings.deep_candidates == 20
+          assert settings.depth_candidates == 25
+          assert settings.min_taker_buy_ratio_30s == 0.875
+          assert settings.min_trade3_impulse_score == 63
+          assert settings.min_trade3_taker_buy_ratio_15s == 0.90
+          assert settings.min_trade3_taker_buy_ratio_5s == 0.75
+          assert settings.max_trade3_exhaustion_risk == 0
+          assert settings.max_trade3_artificial_risk == 0
+          assert settings.protected_stop_percent == 0.30
+          assert settings.protected_peak_fraction == 0.50
+          assert settings.momentum_mc3_return_3m == 3.0
+          assert settings.momentum_mc5_return_5m == 5.0
+          assert settings.momentum_mc7_return_10m == 7.0
+          assert settings.momentum_stop_percent == 2.0
+          assert settings.momentum_trail_activation_percent == 1.5
+          assert settings.momentum_trail_drawdown_percent == 1.0
+          assert settings.momentum_horizon_seconds == 20 * 60
+          assert settings.momentum_fixed_target_percent == 4.0
+          print('smoke ok', settings.algorithm_version, settings.config_hash())
+          PY
+
+      - name: Migration smoke test
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          PYTHONPATH=/tmp/pumpradar python - <<'PY'
+          import sqlite3
+          import tempfile
+          from dataclasses import replace
+          from pathlib import Path
+          from pumpradar_server.config import Settings
+          from pumpradar_server.storage import Storage
+          root = Path(tempfile.mkdtemp())
+          db = root / 'pumpradar.sqlite3'
+          conn = sqlite3.connect(db)
+          conn.executescript('''
+          PRAGMA journal_mode=WAL;
+          CREATE TABLE experiment_runs (
+            id TEXT PRIMARY KEY, started_at_ms INTEGER NOT NULL, ended_at_ms INTEGER,
+            algorithm_version TEXT NOT NULL, strategy_version TEXT NOT NULL,
+            config_hash TEXT NOT NULL, host TEXT, status TEXT NOT NULL
+          );
+          ''')
+          conn.commit()
+          conn.close()
+          settings = replace(Settings(), data_dir=root, db_path=db)
+          storage = Storage(settings)
+          assert storage.conn.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
+          assert storage.conn.execute("SELECT name FROM sqlite_master WHERE name='momentum_slots'").fetchone()
+          assert storage.conn.execute("SELECT name FROM sqlite_master WHERE name='momentum_policy_runs'").fetchone()
+          assert not list(storage.conn.execute('PRAGMA foreign_key_check'))
+          storage.conn.close()
+          print('migration smoke ok')
+          PY
+
+      - name: Publish verified payload and installer metadata
+        if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+        shell: bash
+        env:
+          TARGET_BRANCH: chatgpt/pumpradar-server-v43
+        run: |
+          set -Eeuo pipefail
+          git fetch origin "${TARGET_BRANCH}"
+          git checkout -B "${TARGET_BRANCH}" "origin/${TARGET_BRANCH}"
+          RELEASE_DIR=server-bootstrap/v438release
+          rm -rf "$RELEASE_DIR"
+          mkdir -p "$RELEASE_DIR"
+          split -b 14000 -d -a 2 /tmp/pumpradar-v438.tar.gz.b64 "$RELEASE_DIR/"
+          mapfile -t PARTS < <(find "$RELEASE_DIR" -maxdepth 1 -type f -printf '%f\n' | sort)
+          [[ "${PARTS[*]}" == '00 01 02 03' ]]
+          HASH="$(sha256sum /tmp/pumpradar-v438.tar.gz | awk '{print $1}')"
+          python3 - "$HASH" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+          path = Path('server-bootstrap/install.sh')
+          text = path.read_text()
+          text = re.sub(r'^PAYLOAD_PATH=.*$', 'PAYLOAD_PATH="v438release"', text, flags=re.M)
+          text = re.sub(r'^PAYLOAD_PARTS=.*$', 'PAYLOAD_PARTS=(00 01 02 03)', text, flags=re.M)
+          text = re.sub(r'^PAYLOAD_SHA256=.*$', f'PAYLOAD_SHA256="{sys.argv[1]}"', text, flags=re.M)
+          text = re.sub(r'^EXPECTED_VERSION=.*$', 'EXPECTED_VERSION="4.3.8-server"', text, flags=re.M)
+          path.write_text(text)
+          PY
+          cat "$RELEASE_DIR"/{00..03} > /tmp/release.b64
+          base64 --decode /tmp/release.b64 > /tmp/release.tar.gz
+          echo "$HASH  /tmp/release.tar.gz" | sha256sum -c -
+          tar -tzf /tmp/release.tar.gz >/dev/null
+          rm -rf /tmp/release-check
+          mkdir /tmp/release-check
+          tar -xzf /tmp/release.tar.gz -C /tmp/release-check
+          test -d /tmp/release-check/pumpradar-server/pumpradar_server
+          grep -q '4.3.8-server' /tmp/release-check/pumpradar-server/pumpradar_server/config.py
+          bash -n server-bootstrap/install.sh
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add "$RELEASE_DIR" server-bootstrap/install.sh
+          if git diff --cached --quiet; then
+            echo 'Verified payload already published.'
+            exit 0
+          fi
+          git commit -m 'Publish verified PumpRadar v4.3.8 payload'
+          git push origin "HEAD:${TARGET_BRANCH}"
+
+      - name: Upload verified v4.3.8 payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: pumpradar-v438-payload
+          path: |
+            /tmp/pumpradar-v438.tar.gz
+            /tmp/pumpradar-v438.tar.gz.b64
+            /tmp/pumpradar-v438.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload verified server source
+        uses: actions/upload-artifact@v4
+        with:
+          name: pumpradar-server-source-v438
+          path: /tmp/pumpradar
+          if-no-files-found: error
+          retention-days: 7

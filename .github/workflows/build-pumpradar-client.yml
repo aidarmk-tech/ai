@@ -1,0 +1,58 @@
+name: Build PumpRadar Server Client
+
+on:
+  push:
+    branches:
+      - chatgpt/pumpradar-server-v43
+    paths:
+      - 'pumpradar-client/**'
+      - '.github/workflows/build-pumpradar-client.yml'
+  pull_request:
+    paths:
+      - 'pumpradar-client/**'
+      - '.github/workflows/build-pumpradar-client.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build standalone client APK
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          cd "$GITHUB_WORKSPACE/pumpradar-client"
+          gradle --no-daemon assembleDebug 2>&1 | tee "$GITHUB_WORKSPACE/out/build.log"
+
+      - name: Stage APK
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          APK="$GITHUB_WORKSPACE/pumpradar-client/app/build/outputs/apk/debug/app-debug.apk"
+          test -f "$APK"
+          cp "$APK" "$GITHUB_WORKSPACE/out/PumpRadar-Server-Client.apk"
+          sha256sum "$GITHUB_WORKSPACE/out/PumpRadar-Server-Client.apk" | tee "$GITHUB_WORKSPACE/out/SHA256SUMS.txt"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: PumpRadar-Server-Client-${{ github.run_number }}
+          path: out/
+          if-no-files-found: error
+          retention-days: 30
