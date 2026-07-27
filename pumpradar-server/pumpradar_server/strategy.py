@@ -248,7 +248,16 @@ def assess(
     quality_checks = {
         "IMPULSE_LT_60": impulse >= settings.min_trade3_impulse_score,
         "ENTRY_RISK_GT_35": entry <= settings.max_trade3_entry_risk,
-        "EXHAUSTION_GT_20": exhaustion <= settings.max_trade3_exhaustion_risk,
+        "EXHAUSTION_NONZERO": exhaustion <= settings.max_trade3_exhaustion_risk,
+        "ARTIFICIAL_NONZERO": artificial <= settings.max_trade3_artificial_risk,
+        "TBR15_LOW": (
+            flow.taker_buy_ratio_15s is not None
+            and flow.taker_buy_ratio_15s >= settings.min_trade3_taker_buy_ratio_15s
+        ),
+        "TBR5_LOW": (
+            flow.taker_buy_ratio_5s is not None
+            and flow.taker_buy_ratio_5s >= settings.min_trade3_taker_buy_ratio_5s
+        ),
         "SPREAD_MISSING": book.spread_bps is not None,
         "SPREAD_GT_30": book.spread_bps is not None and book.spread_bps <= settings.max_trade3_spread_bps,
         "SLIPPAGE_MISSING": book.buy_slippage_percent is not None,
@@ -258,7 +267,20 @@ def assess(
     blockers.extend(veto_reasons)
     strict_passed = technical and all(quality_checks.values()) and not hard_veto and not repeat_blocked
 
-    shadow_passed = all([
+    # Preserve every v4.3.5 strict entry as shadow when a new v4.3.6 gate rejects it.
+    legacy_strict_passed = technical and all([
+        impulse >= settings.min_trade3_impulse_score,
+        entry <= settings.max_trade3_entry_risk,
+        exhaustion <= settings.max_shadow_exhaustion_risk,
+        book.spread_bps is not None,
+        book.spread_bps is not None and book.spread_bps <= settings.max_trade3_spread_bps,
+        book.buy_slippage_percent is not None,
+        book.buy_slippage_percent is not None
+        and book.buy_slippage_percent <= settings.max_trade3_slippage_percent,
+        not hard_veto,
+        not repeat_blocked,
+    ])
+    shadow_passed = legacy_strict_passed or all([
         not hard_veto,
         not repeat_blocked,
         impulse >= settings.min_shadow_impulse_score,
@@ -283,10 +305,12 @@ def assess(
     ])
     if strict_passed:
         label = "LONG_CONTINUATION"
-        reasons.append("FROZEN_STRICT_TRADE3")
+        reasons.append("V436_STRICT_TRADE3")
     elif shadow_passed:
         label = "TRADE3_SHADOW"
-        reasons.append("FROZEN_SHADOW_ONLY")
+        reasons.append(
+            "V435_COMPAT_SHADOW" if legacy_strict_passed else "V436_SHADOW_ONLY"
+        )
     elif exhaustion >= 70:
         label = "EXHAUSTION_RISK"
     elif impulse >= 70:

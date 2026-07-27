@@ -373,6 +373,7 @@ class Storage:
                 "active_slot_run_id": open_slot["run_id"] if open_slot else None,
                 "algorithm_version": self.settings.algorithm_version,
                 "strategy_version": self.settings.strategy_version,
+                "primary_policy": self.settings.primary_policy,
                 "config_hash": self.settings.config_hash(),
                 "daily_pnl": self.daily_pnl(),
             }
@@ -411,6 +412,7 @@ class Storage:
             "timezone": f"UTC{sign}{absolute // 60:02d}:{absolute % 60:02d}",
             "day_start_ms": day_start_ms,
             "day_end_ms": day_end_ms,
+            "primary_policy": self.settings.primary_policy,
             "policies": policies,
         }
 

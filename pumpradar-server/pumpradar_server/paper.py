@@ -64,7 +64,8 @@ class PaperManager:
         await self.notify(
             f"🟢 PumpRadar paper slot\n{item.candidate.symbol}\nImpulse {item.decision.risk.impulse} · "
             f"entry {item.book.buy_vwap:.8g} · {self.settings.position_usdt:.2f} USDT\n"
-            f"strict frozen config {self.settings.config_hash()}"
+            f"strict v4.3.6 · primary {self.settings.primary_policy} · "
+            f"config {self.settings.config_hash()}"
         )
         LOG.info("Opened slot %s %s", slot_id, item.candidate.symbol)
 
@@ -173,6 +174,17 @@ class PaperManager:
                 gross_return_percent=gross,
                 net_return_percent=net,
             )
+            LOG.info(
+                "Closed slot %s policy %s: %s net %+.3f%%",
+                slot["id"],
+                policy_name,
+                exit_reason,
+                net,
+            )
             if policy_name == "A_PARTIAL_20":
                 self.storage.close_baseline(slot["id"], now_ms, exit_reason, remaining_price, gross, net)
-                await self.notify(f"⚪ {slot['symbol']} {exit_reason}: net {net:+.3f}%")
+            if policy_name == self.settings.primary_policy:
+                await self.notify(
+                    f"🟣 {slot['symbol']} {policy_name} primary\n"
+                    f"{exit_reason}: net {net:+.3f}%"
+                )

@@ -9,6 +9,7 @@ import sys
 import tempfile
 import types
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 
@@ -183,6 +184,143 @@ class AuditFlowTest(unittest.TestCase):
         ).fetchone()
         self.assertEqual(("CLOSED", "PROTECTED_EXIT"), tuple(closed))
 
+    def test_v436_strict_filters_preserve_v435_entries_as_shadow(self) -> None:
+        from pumpradar_server.models import Candidate, FlowMetrics, BookMetrics, PeakFeatures
+        from pumpradar_server.strategy import assess
+
+        candidate = Candidate(
+            "BTCUSDT", 100.0, 10_000_000.0, 1.0, 1.5, 2.0, 0.5, 1.0, 1.0
+        )
+        flow = FlowMetrics(
+            ready=True,
+            quote_volume_30s=200_000.0,
+            trade_count_30s=60,
+            trades_per_second=3.0,
+            taker_buy_ratio_30s=0.90,
+            taker_buy_ratio_15s=0.95,
+            taker_buy_ratio_5s=0.95,
+            cvd_30s=100.0,
+            cvd_15s=60.0,
+            cvd_5s=30.0,
+            cvd_slope=1.0,
+            volume_z_30s=6.0,
+        )
+        book = BookMetrics(
+            spread_bps=10.0,
+            obi_10=0.6,
+            buy_slippage_percent=0.05,
+            sell_slippage_percent=0.05,
+            depth_age_ms=0,
+            depth_update_id=1,
+        )
+        peak = PeakFeatures()
+
+        def decide(candidate_flow: FlowMetrics):
+            return assess(
+                candidate,
+                candidate_flow,
+                book,
+                peak,
+                self.settings,
+                100,
+                0.0,
+                0.5,
+                False,
+            )
+
+        accepted = decide(flow)
+        self.assertTrue(accepted.strict_passed)
+        self.assertEqual("V436_STRICT_TRADE3", accepted.reasons[0])
+
+        rejected = {
+            "TBR15_LOW": replace(
+                flow, taker_buy_ratio_15s=0.89, taker_buy_ratio_5s=0.90
+            ),
+            "TBR5_LOW": replace(
+                flow, taker_buy_ratio_15s=0.90, taker_buy_ratio_5s=0.74
+            ),
+            "ARTIFICIAL_NONZERO": replace(flow, largest_trade_share=0.45),
+            "EXHAUSTION_NONZERO": replace(flow, spread_bps=61.0),
+        }
+        for blocker, candidate_flow in rejected.items():
+            with self.subTest(blocker=blocker):
+                decision = decide(candidate_flow)
+                self.assertFalse(decision.strict_passed)
+                self.assertTrue(decision.shadow_passed)
+                self.assertEqual("TRADE3_SHADOW", decision.label)
+                self.assertIn("V435_COMPAT_SHADOW", decision.reasons)
+                self.assertIn(blocker, decision.blockers)
+
+    def test_c_weakening_is_primary_without_closing_a_or_b(self) -> None:
+        from pumpradar_server.models import FlowMetrics
+        from pumpradar_server.paper import PaperManager
+        from pumpradar_server.storage import Storage
+
+        class FixedMarket:
+            sell_price = 100.45
+
+            def executable_sell_price(self, *args, **kwargs):
+                return self.sell_price
+
+        messages = []
+
+        async def notify(message):
+            messages.append(message)
+
+        storage = Storage(self.settings)
+        storage.start_run("primary-c")
+        opened_at = 1_000_000
+        slot_id = storage.create_slot(
+            None, "BTCUSDT", "event", opened_at, 100.0, 100.0
+        )
+        policy = next(
+            row
+            for row in storage.policies_for_slot(slot_id)
+            if row["policy"] == "C_WEAKENING"
+        )
+        storage.update_policy(policy["id"], peak_return_percent=0.80)
+        market = FixedMarket()
+        manager = PaperManager(self.settings, market, storage, notify)
+        weak_flow = FlowMetrics(
+            taker_buy_ratio_30s=0.90,
+            taker_buy_ratio_15s=0.90,
+            taker_buy_ratio_5s=0.50,
+            cvd_slope=1.0,
+        )
+
+        for step, current_return in enumerate((0.45, 0.44), start=1):
+            market.sell_price = 100.0 + current_return
+            policy = storage.conn.execute(
+                "SELECT * FROM policy_runs WHERE id=?", (policy["id"],)
+            ).fetchone()
+            asyncio.run(manager._update_policy(
+                storage.conn.execute(
+                    "SELECT * FROM paper_slots WHERE id=?", (slot_id,)
+                ).fetchone(),
+                policy,
+                market.sell_price,
+                current_return,
+                weak_flow,
+                opened_at + step * 1_000,
+            ))
+
+        policies = {
+            row["policy"]: row["state"]
+            for row in storage.policies_for_slot(slot_id)
+        }
+        self.assertEqual("CLOSED", policies["C_WEAKENING"])
+        self.assertEqual("OPEN", policies["A_PARTIAL_20"])
+        self.assertEqual("OPEN", policies["B_FULL_PROTECTED"])
+        self.assertEqual(
+            "OPEN",
+            storage.conn.execute(
+                "SELECT baseline_status FROM paper_slots WHERE id=?", (slot_id,)
+            ).fetchone()[0],
+        )
+        self.assertTrue(
+            any("C_WEAKENING primary" in message for message in messages)
+        )
+
     def test_stale_symbol_measurement_is_rejected(self) -> None:
         from pumpradar_server.market import MarketState
 
@@ -294,12 +432,17 @@ class AuditFlowTest(unittest.TestCase):
         self.assertNotIn("STALE_FEED", decision.risk.veto_reasons)
         self.assertFalse(decision.strict_passed)
 
-    def test_v435_expands_observation_and_corrects_protected_floor(self) -> None:
-        self.assertEqual("4.3.5-server", self.settings.algorithm_version)
+    def test_v436_filters_entries_and_keeps_protected_floor(self) -> None:
+        self.assertEqual("4.3.6-server", self.settings.algorithm_version)
+        self.assertEqual("C_WEAKENING", self.settings.primary_policy)
         self.assertEqual(60, self.settings.warm_pool_size)
         self.assertEqual(15, self.settings.deep_candidates)
         self.assertEqual(20, self.settings.depth_candidates)
         self.assertEqual(0.875, self.settings.min_taker_buy_ratio_30s)
+        self.assertEqual(0.90, self.settings.min_trade3_taker_buy_ratio_15s)
+        self.assertEqual(0.75, self.settings.min_trade3_taker_buy_ratio_5s)
+        self.assertEqual(0, self.settings.max_trade3_exhaustion_risk)
+        self.assertEqual(0, self.settings.max_trade3_artificial_risk)
         self.assertEqual(3.0, self.settings.max_return_5m)
         self.assertEqual(0.30, self.settings.protected_stop_percent)
         self.assertEqual(0.50, self.settings.protected_peak_fraction)
@@ -324,6 +467,7 @@ class AuditFlowTest(unittest.TestCase):
                 net_return_percent=net_by_policy[policy["policy"]],
             )
         result = storage.daily_pnl(now_ms)
+        self.assertEqual("C_WEAKENING", result["primary_policy"])
         self.assertEqual(0.2, result["policies"]["A_PARTIAL_20"]["net_pnl_usdt"])
         self.assertEqual(0.4, result["policies"]["B_FULL_PROTECTED"]["net_pnl_usdt"])
         self.assertEqual(-0.1, result["policies"]["C_WEAKENING"]["net_pnl_usdt"])

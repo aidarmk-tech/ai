@@ -19,8 +19,8 @@ def _env_int(name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class Settings:
-    algorithm_version: str = "4.3.5-server"
-    strategy_version: str = "TRADE3-FROZEN-2026-07"
+    algorithm_version: str = "4.3.6-server"
+    strategy_version: str = "TRADE3-V436-FILTERED-2026-07"
     rest_url: str = os.getenv("BINANCE_REST_URL", "https://api.binance.com")
     ws_url: str = os.getenv("BINANCE_WS_URL", "wss://stream.binance.com:9443")
     data_dir: Path = Path(os.getenv("PUMPRADAR_DATA_DIR", "/var/lib/pumpradar"))
@@ -30,6 +30,7 @@ class Settings:
     api_token: str = os.getenv("PUMPRADAR_API_TOKEN", "")
     position_usdt: float = _env_float("PUMPRADAR_POSITION_USDT", 20.0)
     fee_rate: float = _env_float("PUMPRADAR_FEE_RATE", 0.001)
+    primary_policy: str = "C_WEAKENING"
     minimum_24h_quote_volume: float = _env_float("PUMPRADAR_MIN_24H_QUOTE_VOLUME", 5_000_000.0)
     max_candidates: int = _env_int("PUMPRADAR_MAX_CANDIDATES", 20)
     warm_pool_size: int = _env_int("PUMPRADAR_WARM_POOL_SIZE", 60)
@@ -49,8 +50,10 @@ class Settings:
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
 
-    # Frozen TRADE_3 thresholds. Do not tune during the 14-day measurement block.
+    # v4.3.6 paper candidate: reject weak fast flow and any explicit risk flag.
     min_taker_buy_ratio_30s: float = 0.875
+    min_trade3_taker_buy_ratio_15s: float = 0.90
+    min_trade3_taker_buy_ratio_5s: float = 0.75
     min_return_15s: float = 0.70
     min_return_60s: float = 0.80
     max_return_5m: float = 3.00
@@ -63,7 +66,8 @@ class Settings:
     max_retest_distance_from_high_percent: float = 2.50
     min_trade3_impulse_score: int = 60
     max_trade3_entry_risk: int = 35
-    max_trade3_exhaustion_risk: int = 20
+    max_trade3_exhaustion_risk: int = 0
+    max_trade3_artificial_risk: int = 0
     max_trade3_spread_bps: float = 30.0
     max_trade3_slippage_percent: float = 0.15
     min_shadow_impulse_score: int = 60
