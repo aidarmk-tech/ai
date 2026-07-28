@@ -242,6 +242,9 @@ class MarketState:
         return (
             (candidate.return_15s is not None and candidate.return_15s >= 0.35)
             or (candidate.return_60s is not None and candidate.return_60s >= 0.80)
+            or (candidate.return_3m is not None and candidate.return_3m >= 2.50)
+            or (candidate.return_5m is not None and candidate.return_5m >= 4.50)
+            or (candidate.return_10m is not None and candidate.return_10m >= 6.50)
             or (candidate.acceleration is not None and candidate.acceleration >= 0.30)
         )
 
@@ -260,29 +263,38 @@ class MarketState:
                 continue
             r15 = self._return(symbol, 15_000, now_ms)
             r60 = self._return(symbol, 60_000, now_ms)
+            r3m = self._return(symbol, 180_000, now_ms)
             r5m = self._return(symbol, 300_000, now_ms)
+            r10m = self._return(symbol, 600_000, now_ms)
             accel = self._acceleration(symbol, now_ms)
             rel = None if r60 is None or btc_ret is None else r60 - btc_ret
             liquidity = max(0.0, min(1.0, __import__("math").log10(max(0.1, row.quote_volume_24h / 1_000_000)) / 2))
             clamp = lambda v, d, lo, hi: max(lo, min(hi, (v or 0.0) / d))
             pre = (
                 clamp(r15, 0.5, 0, 3) * 20
-                + clamp(r60, 1.0, 0, 3) * 25
-                + clamp(accel, 0.3, 0, 3) * 20
+                + clamp(r60, 1.0, 0, 3) * 20
+                + clamp(r3m, 3.0, 0, 3) * 10
+                + clamp(r5m, 5.0, 0, 3) * 10
+                + clamp(r10m, 7.0, 0, 3) * 5
+                + clamp(accel, 0.3, 0, 3) * 15
                 + clamp(rel, 0.5, -2, 3) * 15
                 + liquidity * 20
             )
             out.append(Candidate(
-                symbol,
-                row.price,
-                row.quote_volume_24h,
-                r15,
-                r60,
-                r5m,
-                accel,
-                rel,
-                pre,
-                now_ms - row.last_update_ms if row.last_update_ms else None,
+                symbol=symbol,
+                price=row.price,
+                quote_volume_24h=row.quote_volume_24h,
+                return_15s=r15,
+                return_60s=r60,
+                return_5m=r5m,
+                acceleration=accel,
+                relative_strength_vs_btc=rel,
+                pre_score=pre,
+                price_age_ms=(
+                    now_ms - row.last_update_ms if row.last_update_ms else None
+                ),
+                return_3m=r3m,
+                return_10m=r10m,
             ))
         out.sort(key=lambda c: c.pre_score, reverse=True)
         return out

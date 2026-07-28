@@ -15,9 +15,9 @@ from .config import Settings
 from .episodes import EpisodeTelemetry, EpisodeTracker
 from .market import BinanceFeed, MarketState
 from .models import EvaluatedCandidate
-from .paper import PaperManager
+from .paper import MomentumPaperManager, PaperManager
 from .storage import Storage
-from .strategy import assess
+from .strategy import assess, momentum_continuation_arms
 from .webapp import WebApp
 
 LOG = logging.getLogger(__name__)
@@ -30,6 +30,7 @@ class Service:
         self.storage = Storage(settings)
         self.feed = BinanceFeed(settings, self.state)
         self.paper = PaperManager(settings, self.state, self.storage, self.notify)
+        self.momentum = MomentumPaperManager(settings, self.state, self.storage, self.notify)
         self.episodes = EpisodeTracker(settings)
         self.stop_event = asyncio.Event()
         self.last_near_miss_ms = 0
@@ -41,6 +42,7 @@ class Service:
         self.decision_symbols: set[str] = set()
         self.depth_symbols: set[str] = set()
         self.evaluated_by_symbol: dict[str, EvaluatedCandidate] = {}
+        self.momentum_emitted: set[tuple[str, str]] = set()
         self.started_at_ms = int(time.time() * 1000)
 
     async def notify(self, message: str) -> None:
@@ -131,13 +133,38 @@ class Service:
             now = int(time.time() * 1000)
             try:
                 ranked = self.state.rank_universe(self.settings.minimum_24h_quote_volume, now)
-                candidates = [c for c in ranked if self.state.is_pre_candidate(c)][: self.settings.max_candidates]
+                candidates = [
+                    c for c in ranked if self.state.is_pre_candidate(c)
+                ][: self.settings.max_candidates]
                 candidate_map = {c.symbol: c for c in ranked}
-                decision_candidates = candidates[: self.settings.deep_candidates]
+                decision_candidates = list(
+                    candidates[: self.settings.deep_candidates]
+                )
+                decision_seen = {c.symbol for c in decision_candidates}
+                forced_momentum = [
+                    c
+                    for c in ranked
+                    if (
+                        (c.return_3m is not None and c.return_3m >= self.settings.momentum_mc3_return_3m)
+                        or (c.return_5m is not None and c.return_5m >= self.settings.momentum_mc5_return_5m)
+                        or (c.return_10m is not None and c.return_10m >= self.settings.momentum_mc7_return_10m)
+                    )
+                ]
+                for candidate in forced_momentum:
+                    if candidate.symbol not in decision_seen:
+                        decision_candidates.append(candidate)
+                        decision_seen.add(candidate.symbol)
+                    if len(decision_candidates) >= self.settings.max_candidates:
+                        break
                 next_decision_symbols = {c.symbol for c in decision_candidates}
                 active = self.storage.baseline_open_slot()
                 active_symbol = str(active["symbol"]) if active else None
+                active_momentum = self.storage.momentum_primary_open_slot()
+                active_momentum_symbol = (
+                    str(active_momentum["symbol"]) if active_momentum else None
+                )
                 outcome_symbols = self.storage.pending_snapshot_symbols()
+                outcome_symbols.update(self.storage.pending_momentum_symbols())
 
                 if now - self.last_candidate_set_ms >= self.settings.warm_refresh_seconds * 1000:
                     warm_core = self._select_warm_core(ranked)
@@ -145,12 +172,16 @@ class Service:
                     excluded.update(outcome_symbols)
                     if active_symbol:
                         excluded.add(active_symbol)
+                    if active_momentum_symbol:
+                        excluded.add(active_momentum_symbol)
                     controls = self._rotate_controls(ranked, excluded, now)
                     warm = set(warm_core) | controls
                     warm.update(next_decision_symbols)
                     warm.update(outcome_symbols)
                     if active_symbol:
                         warm.add(active_symbol)
+                    if active_momentum_symbol:
+                        warm.add(active_momentum_symbol)
                     # Every symbol that can reach a frozen decision needs an
                     # executable depth book. The configured depth pool may be
                     # larger, but never smaller than the decision set.
@@ -163,6 +194,8 @@ class Service:
                     depth.update(outcome_symbols)
                     if active_symbol:
                         depth.add(active_symbol)
+                    if active_momentum_symbol:
+                        depth.add(active_momentum_symbol)
                     changed = warm != self.warm_symbols or controls != self.control_symbols or depth != self.depth_symbols
                     self.warm_symbols = warm
                     self.control_symbols = controls
@@ -193,6 +226,8 @@ class Service:
                 evaluation_symbols = set(self.decision_symbols) | set(self.control_symbols)
                 if active_symbol:
                     evaluation_symbols.add(active_symbol)
+                if active_momentum_symbol:
+                    evaluation_symbols.add(active_momentum_symbol)
 
                 evaluated: list[EvaluatedCandidate] = []
                 for symbol in evaluation_symbols:
@@ -213,13 +248,27 @@ class Service:
                 control_items = [e for e in evaluated if e.candidate.symbol in self.control_symbols]
                 await self._record_and_select(decision_items, control_items, now)
                 self._update_snapshot_outcomes(now)
-                await self.paper.tick(self.evaluated_by_symbol, now)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 LOG.exception("Engine tick failed: %s", exc)
                 self.storage.event("ERROR", "engine", repr(exc))
             await asyncio.sleep(1)
+
+    async def position_loop(self) -> None:
+        """Watch executable exits independently from the heavier scan loop."""
+        interval = max(0.1, self.settings.stop_watch_interval_ms / 1000)
+        while not self.stop_event.is_set():
+            now = int(time.time() * 1000)
+            try:
+                await self.paper.tick(self.evaluated_by_symbol, now)
+                await self.momentum.tick(now)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                LOG.exception("Position watcher failed: %s", exc)
+                self.storage.event("ERROR", "position_watcher", repr(exc))
+            await asyncio.sleep(interval)
 
     async def _record_and_select(
         self,
@@ -232,6 +281,24 @@ class Service:
             for item in evaluated
         }
         self.episodes.prune(now_ms)
+
+        momentum_events: list[tuple[str, EvaluatedCandidate, EpisodeTelemetry]] = []
+        for item in evaluated:
+            telemetry = telemetry_by_symbol[item.candidate.symbol]
+            feed_age = self.state.measurement_age_ms(item.candidate.symbol, now_ms)
+            arms, _momentum_blockers = momentum_continuation_arms(
+                item.candidate,
+                item.flow,
+                item.book,
+                self.settings,
+                feed_age,
+            )
+            for arm, passed in arms.items():
+                key = (telemetry.episode_id, arm)
+                if passed and key not in self.momentum_emitted:
+                    self.momentum_emitted.add(key)
+                    momentum_events.append((arm, item, telemetry))
+
         strict = sorted(
             [e for e in evaluated if e.decision.strict_passed],
             key=lambda e: (e.decision.risk.impulse, e.decision.risk.confidence, -(e.book.spread_bps or 999)),
@@ -255,6 +322,27 @@ class Service:
                 now_ms,
                 telemetry,
             )
+        for arm, item, telemetry in momentum_events:
+            snapshot_type = {
+                "MC3": "MC3_SHADOW",
+                "MC5": "MC5_CHALLENGER",
+                "MC7": "MC7_SHADOW",
+            }[arm]
+            sid = self.storage.insert_snapshot(
+                item,
+                snapshot_type,
+                telemetry.episode_id,
+                now_ms,
+                telemetry,
+            )
+            if arm == "MC5":
+                await self.momentum.consider(
+                    item,
+                    sid,
+                    now_ms,
+                    telemetry.episode_id,
+                )
+
         if strict:
             best = strict[0]
             telemetry = telemetry_by_symbol[best.candidate.symbol]
@@ -326,6 +414,7 @@ class Service:
             asyncio.create_task(self.feed.market_loop(), name="market-ws"),
             asyncio.create_task(self.feed.candidate_loop(), name="candidate-ws"),
             asyncio.create_task(self.engine_loop(), name="engine"),
+            asyncio.create_task(self.position_loop(), name="position-watcher"),
         ]
         LOG.info("PumpRadar server started; config=%s", self.settings.config_hash())
         await self.stop_event.wait()

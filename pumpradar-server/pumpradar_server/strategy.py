@@ -162,6 +162,40 @@ def confidence_score(c: Candidate, flow: FlowMetrics, book: BookMetrics, feed_ag
     return clamp_score(price + trades + depth + freshness + no_gaps + confirms / 3 * 10 + 3)
 
 
+def trade3_entry_quality(
+    flow: FlowMetrics,
+    book: BookMetrics,
+    settings: Settings,
+) -> tuple[bool, bool]:
+    """Return (thin_stale_defer, thin_flow_veto) for the TRADE3 gate.
+
+    Absolute flow is deliberately combined with freshness and book quality.
+    No single microstructure feature is trusted as a standalone veto.
+    """
+    thin = flow.quote_volume_30s < settings.trade3_thin_quote_volume_30s
+    very_thin = (
+        flow.quote_volume_30s < settings.trade3_very_thin_quote_volume_30s
+    )
+    weak_money = (
+        flow.cvd_30s < settings.trade3_weak_cvd_30s
+        or flow.cvd_slope < settings.trade3_weak_cvd_slope
+    )
+    stale = (
+        flow.book_ticker_age_ms is not None
+        and flow.book_ticker_age_ms > settings.trade3_stale_book_defer_ms
+    ) or (
+        flow.trade_age_ms is not None
+        and flow.trade_age_ms > settings.trade3_stale_trade_defer_ms
+    )
+    bad_book = (
+        book.obi_10 is not None and book.obi_10 <= 0
+    ) or (
+        book.spread_bps is not None
+        and book.spread_bps > settings.trade3_bad_book_spread_bps
+    )
+    return thin and stale, very_thin and weak_money and bad_book
+
+
 def assess(
     c: Candidate,
     flow: FlowMetrics,
@@ -189,6 +223,13 @@ def assess(
     absorption = (flow.volume_z_30s or 0) > settings.extreme_volume_z and (
         (r15 or 0) < settings.min_return_15s or (tbr or 0) < settings.min_taker_buy_for_extreme_volume
     )
+    thin_stale_defer, thin_flow_veto = trade3_entry_quality(
+        flow, book, settings
+    )
+    if thin_stale_defer:
+        reasons.append("V439_THIN_STALE_DEFER")
+    if thin_flow_veto:
+        reasons.append("V439_THIN_FLOW_VETO")
     veto_reasons: list[str] = []
     if depth_warming:
         veto_reasons.append("DEPTH_WARMING")
@@ -196,6 +237,16 @@ def assess(
         veto_reasons.append("STALE_FEED")
     if flow.trade_gap:
         veto_reasons.append("TRADE_GAP")
+    if (
+        flow.book_ticker_age_ms is not None
+        and flow.book_ticker_age_ms > settings.trade3_stale_book_veto_ms
+    ):
+        veto_reasons.append("STALE_BOOK_GT_500MS")
+    if (
+        flow.trade_age_ms is not None
+        and flow.trade_age_ms > settings.trade3_stale_trade_veto_ms
+    ):
+        veto_reasons.append("STALE_TRADE_GT_1500MS")
     if artificial >= 70:
         veto_reasons.append("ARTIFICIAL_RISK_GE_70")
     if market_risk >= 70:
@@ -262,6 +313,8 @@ def assess(
         "SPREAD_GT_30": book.spread_bps is not None and book.spread_bps <= settings.max_trade3_spread_bps,
         "SLIPPAGE_MISSING": book.buy_slippage_percent is not None,
         "SLIPPAGE_GT_0_15": book.buy_slippage_percent is not None and book.buy_slippage_percent <= settings.max_trade3_slippage_percent,
+        "THIN_STALE_DEFER": not thin_stale_defer,
+        "THIN_FLOW_VETO": not thin_flow_veto,
     }
     blockers.extend([name for name, passed in quality_checks.items() if not passed])
     blockers.extend(veto_reasons)
@@ -319,3 +372,57 @@ def assess(
         label = "NO_TRADE"
     risk = RiskAssessment(impulse, entry, exhaustion, confidence, artificial, market_risk, hard_veto, veto_reasons)
     return Decision(label, strict_passed, shadow_passed, technical, sorted(set(blockers)), reasons, risk, liquidity_tier(c.quote_volume_24h))
+
+
+def momentum_continuation_arms(
+    c: Candidate,
+    flow: FlowMetrics,
+    book: BookMetrics,
+    settings: Settings,
+    feed_age_ms: int,
+) -> tuple[dict[str, bool], tuple[str, ...]]:
+    """Independent v4.3.8 challenger gates.
+
+    Only execution/data safety is shared with the frozen strategy.  Entry risk,
+    exhaustion and STRONG_BUT_LATE are deliberately not vetoes because the
+    challenger hypothesis is confirmed continuation after a large move.
+    """
+    blockers: list[str] = []
+    if feed_age_ms > settings.max_feed_age_ms:
+        blockers.append("STALE_FEED")
+    if flow.trade_gap:
+        blockers.append("TRADE_GAP")
+    if book.depth_age_ms is None or book.depth_update_id is None:
+        blockers.append("DEPTH_WARMING")
+    if book.best_bid is None or book.best_ask is None:
+        blockers.append("BOOK_TICKER_MISSING")
+    if book.buy_vwap is None:
+        blockers.append("BUY_VWAP_MISSING")
+    if book.sell_vwap_for_position is None:
+        blockers.append("SELL_VWAP_MISSING")
+    if book.spread_bps is None:
+        blockers.append("SPREAD_MISSING")
+    elif book.spread_bps > settings.momentum_max_spread_bps:
+        blockers.append("SPREAD_GT_30")
+    if book.buy_slippage_percent is None:
+        blockers.append("BUY_SLIPPAGE_MISSING")
+    elif book.buy_slippage_percent > settings.momentum_max_buy_slippage_percent:
+        blockers.append("BUY_SLIPPAGE_GT_0_15")
+    if book.sell_slippage_percent is None:
+        blockers.append("SELL_SLIPPAGE_MISSING")
+    elif book.sell_slippage_percent > settings.momentum_max_sell_slippage_percent:
+        blockers.append("SELL_SLIPPAGE_GT_0_35")
+
+    technical = not blockers
+    arms = {
+        "MC3": technical
+        and c.return_3m is not None
+        and c.return_3m >= settings.momentum_mc3_return_3m,
+        "MC5": technical
+        and c.return_5m is not None
+        and c.return_5m >= settings.momentum_mc5_return_5m,
+        "MC7": technical
+        and c.return_10m is not None
+        and c.return_10m >= settings.momentum_mc7_return_10m,
+    }
+    return arms, tuple(blockers)
