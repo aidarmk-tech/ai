@@ -1,0 +1,169 @@
+name: Build PumpRadar v4.3.9
+
+on:
+  push:
+    branches:
+      - chatgpt/pumpradar-v439-profit
+    paths:
+      - '.github/workflows/build-pumpradar-v439.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pumpradar-v439-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download verified v4.3.8 source artifact
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          curl -L --fail --silent --show-error \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/8669359895/zip" \
+            -o /tmp/v438-source.zip
+          rm -rf /tmp/pumpradar
+          mkdir -p /tmp/pumpradar
+          unzip -q /tmp/v438-source.zip -d /tmp/pumpradar
+          test -f /tmp/pumpradar/pumpradar_server/config.py
+          grep -q '4.3.8-server' /tmp/pumpradar/pumpradar_server/config.py
+
+      - name: Apply reviewed v4.3.9 profit patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cat > /tmp/v439.patch.gz.b64 <<'PATCH_B64'
+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
+PATCH_B64
+          base64 --decode /tmp/v439.patch.gz.b64 > /tmp/v439.patch.gz
+          gzip -t /tmp/v439.patch.gz
+          gzip -dc /tmp/v439.patch.gz > /tmp/v439.patch
+          cd /tmp/pumpradar
+          patch --batch --forward -p1 < /tmp/v439.patch
+          grep -q '4.3.9-server' pumpradar_server/config.py
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate code, policies and migration
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python -m pip install -r /tmp/pumpradar/requirements.txt
+          python -m compileall -q /tmp/pumpradar/pumpradar_server /tmp/pumpradar/tests
+          PYTHONPATH=/tmp/pumpradar python -m unittest discover -s /tmp/pumpradar/tests -v
+          PYTHONPATH=/tmp/pumpradar python - <<'PYCODE'
+          import sqlite3
+          import tempfile
+          from dataclasses import replace
+          from pathlib import Path
+          from pumpradar_server.config import Settings
+          from pumpradar_server.storage import Storage
+
+          root = Path(tempfile.mkdtemp())
+          db = root / 'pumpradar.sqlite3'
+          sqlite3.connect(db).close()
+          settings = replace(Settings(), data_dir=root, db_path=db, api_token='test')
+          storage = Storage(settings)
+          assert settings.algorithm_version == '4.3.9-server'
+          assert settings.momentum_primary_policy == 'MC_HOLD_120'
+          assert settings.momentum_hold_seconds == 120
+          assert settings.trade3_target1_hold_seconds == 300
+          assert settings.stop_watch_interval_ms == 500
+          assert storage.conn.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
+          assert not list(storage.conn.execute('PRAGMA foreign_key_check'))
+          columns = {row['name'] for row in storage.conn.execute('PRAGMA table_info(snapshot_outcomes)')}
+          assert {'return_90s', 'return_150s', 'return_180s', 'return_240s'} <= columns
+          storage.conn.close()
+          print('v4.3.9 migration smoke ok')
+          PYCODE
+
+      - name: Build deterministic v4.3.9 payload
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          find /tmp/pumpradar -type d -name __pycache__ -prune -exec rm -rf {} +
+          rm -rf /tmp/pumpradar-server
+          cp -a /tmp/pumpradar /tmp/pumpradar-server
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+            -czf /tmp/pumpradar-v439.tar.gz -C /tmp pumpradar-server
+          sha256sum /tmp/pumpradar-v439.tar.gz | tee /tmp/pumpradar-v439.sha256
+          base64 -w 0 /tmp/pumpradar-v439.tar.gz > /tmp/pumpradar-v439.tar.gz.b64
+
+      - name: Publish source, payload and installer to branch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -rf pumpradar-server
+          mkdir -p pumpradar-server
+          cp -a /tmp/pumpradar/. pumpradar-server/
+          RELEASE_DIR=server-bootstrap/v439release
+          rm -rf "$RELEASE_DIR"
+          mkdir -p "$RELEASE_DIR"
+          split -b 14000 -d -a 2 /tmp/pumpradar-v439.tar.gz.b64 "$RELEASE_DIR/"
+          mapfile -t PARTS < <(find "$RELEASE_DIR" -maxdepth 1 -type f -printf '%f\n' | sort)
+          [[ "${PARTS[*]}" == '00 01 02 03' ]]
+          HASH="$(sha256sum /tmp/pumpradar-v439.tar.gz | awk '{print $1}')"
+          python3 - "$HASH" <<'PYCODE'
+          import re
+          import sys
+          from pathlib import Path
+
+          path = Path('server-bootstrap/install.sh')
+          text = path.read_text()
+          text = re.sub(
+              r'^REPO_RAW=.*$',
+              'REPO_RAW="https://raw.githubusercontent.com/aidarmk-tech/ai/chatgpt/pumpradar-v439-profit/server-bootstrap"',
+              text,
+              flags=re.M,
+          )
+          text = re.sub(r'^PAYLOAD_PATH=.*$', 'PAYLOAD_PATH="v439release"', text, flags=re.M)
+          text = re.sub(r'^PAYLOAD_PARTS=.*$', 'PAYLOAD_PARTS=(00 01 02 03)', text, flags=re.M)
+          text = re.sub(r'^PAYLOAD_SHA256=.*$', f'PAYLOAD_SHA256="{sys.argv[1]}"', text, flags=re.M)
+          text = re.sub(r'^EXPECTED_VERSION=.*$', 'EXPECTED_VERSION="4.3.9-server"', text, flags=re.M)
+          text = text.replace("grep -q '4.3.8-server'", "grep -q '4.3.9-server'")
+          marker = 'ensure_env PUMPRADAR_REPORT_TIMEZONE_OFFSET_MINUTES 300\n'
+          addition = marker + 'ensure_env PUMPRADAR_STOP_WATCH_INTERVAL_MS 500\n'
+          if 'ensure_env PUMPRADAR_STOP_WATCH_INTERVAL_MS 500' not in text:
+              text = text.replace(marker, addition)
+          path.write_text(text)
+          PYCODE
+          cat "$RELEASE_DIR"/{00..03} > /tmp/release.b64
+          base64 --decode /tmp/release.b64 > /tmp/release.tar.gz
+          echo "$HASH  /tmp/release.tar.gz" | sha256sum -c -
+          tar -tzf /tmp/release.tar.gz >/dev/null
+          rm -rf /tmp/release-check
+          mkdir -p /tmp/release-check
+          tar -xzf /tmp/release.tar.gz -C /tmp/release-check
+          grep -q '4.3.9-server' /tmp/release-check/pumpradar-server/pumpradar_server/config.py
+          bash -n server-bootstrap/install.sh
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add pumpradar-server "$RELEASE_DIR" server-bootstrap/install.sh
+          if git diff --cached --quiet; then
+            echo 'v4.3.9 files already published.'
+            exit 0
+          fi
+          git commit -m 'Publish PumpRadar v4.3.9 profit challengers'
+          git push origin "HEAD:${{ github.ref_name }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pumpradar-v439-payload
+          path: |
+            /tmp/pumpradar-v439.tar.gz
+            /tmp/pumpradar-v439.tar.gz.b64
+            /tmp/pumpradar-v439.sha256
+          retention-days: 14
