@@ -34,6 +34,16 @@ config.write_text(text)
 init = Path("pumpradar-server/pumpradar_server/__init__.py")
 init.write_text(init.read_text().replace("4.3.9", "4.4.0"))
 
+tests = Path("pumpradar-server/tests/test_audit.py")
+test_text = tests.read_text()
+test_text = replace_once(
+    test_text,
+    'self.assertEqual("4.3.9-server", self.settings.algorithm_version)',
+    'self.assertEqual("4.4.0-server", self.settings.algorithm_version)',
+    "version test assertion",
+)
+tests.write_text(test_text)
+
 main = Path("pumpradar-server/pumpradar_server/main.py")
 text = main.read_text()
 text = replace_once(
