@@ -14,5 +14,5 @@ permissions:
 
 jobs:
   build-v440:
-    uses: aidarmk-tech/ai/.github/workflows/build-v440-mc7.yml@chatgpt/pumpradar-v440-mc7-freeze100
+    uses: ./.github/workflows/build-v440-mc7.yml
     secrets: inherit
