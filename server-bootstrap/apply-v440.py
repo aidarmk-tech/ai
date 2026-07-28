@@ -175,3 +175,11 @@ replace_once(
     '__version__ = "4.3.9"',
     '__version__ = "4.4.0"',
 )
+
+# The inherited audit remains useful, but its release-version assertion must
+# follow the release under test rather than remain pinned to v4.3.9.
+replace_once(
+    "pumpradar-server/tests/test_audit.py",
+    '        self.assertEqual("4.3.9-server", self.settings.algorithm_version)',
+    '        self.assertEqual("4.4.0-server", self.settings.algorithm_version)',
+)
