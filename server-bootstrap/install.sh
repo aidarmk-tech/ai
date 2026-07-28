@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-REPO_RAW="https://raw.githubusercontent.com/aidarmk-tech/ai/chatgpt/pumpradar-v440-mc7-freeze100/server-bootstrap"
+REPO_RAW="https://raw.githubusercontent.com/aidarmk-tech/ai/chatgpt/pumpradar-v440-mc7-final/server-bootstrap"
 PAYLOAD_PATH="v440release"
 PAYLOAD_PARTS=(00 01 02 03)
 PAYLOAD_SHA256="0251ce9551371b4eed8499b2a5b2d49526834901cbde266a6779db22c3430709"
