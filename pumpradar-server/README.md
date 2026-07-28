@@ -62,3 +62,13 @@ compressed CSV, including the new `momentum_slots` and
 - A dedicated 500 ms position watcher separates stop/exit execution from the
   one-second universe scan.
 - Forward outcomes add 90, 150, 180 and 240 second checkpoints.
+
+
+## v4.4.0 frozen experiment
+
+- MC5 remains unchanged.
+- MC7 is promoted from shadow to a second momentum signal channel.
+- MC5 and MC7 share one momentum execution slot to avoid doubled correlated exposure.
+- TRADE3 thresholds, TBR gates, stop logic, and MC_HOLD_120 remain unchanged.
+- No strategy upgrade is allowed until 100 primary paper trades close under 4.4.0.
+- Real orders remain disabled.

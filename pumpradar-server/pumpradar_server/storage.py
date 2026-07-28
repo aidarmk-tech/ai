@@ -527,7 +527,7 @@ class Storage:
                 ).fetchone()
                 if existing:
                     snapshot_id = str(existing["id"])
-            elif snapshot_type in {"TRIGGERED", "SHADOW", "NEAR_MISS", "MC3_SHADOW", "MC5_CHALLENGER", "MC7_SHADOW"}:
+            elif snapshot_type in {"TRIGGERED", "SHADOW", "NEAR_MISS", "MC3_SHADOW", "MC5_CHALLENGER", "MC7_SHADOW", "MC7_CHALLENGER"}:
                 entry_status = (
                     "EXECUTABLE"
                     if b.buy_vwap is not None
@@ -1116,3 +1116,25 @@ class Storage:
         os.replace(temporary_link, latest)
         self._prune_exports(latest.parent, output_dir)
         return output_dir
+
+
+    def frozen_primary_trade_progress(self) -> dict[str, int]:
+        """Count closed primary paper trades for the current frozen version."""
+        with self.lock:
+            trade3 = int(self.conn.execute(
+                "SELECT COUNT(*) FROM paper_slots "
+                "WHERE baseline_status='CLOSED' AND algorithm_version=?",
+                (self.settings.algorithm_version,),
+            ).fetchone()[0])
+            momentum = int(self.conn.execute(
+                "SELECT COUNT(*) FROM momentum_slots "
+                "WHERE primary_status='CLOSED' AND algorithm_version=?",
+                (self.settings.algorithm_version,),
+            ).fetchone()[0])
+        closed = trade3 + momentum
+        target = int(self.settings.freeze_primary_trade_target)
+        return {
+            "closed": closed,
+            "target": target,
+            "remaining": max(0, target - closed),
+        }

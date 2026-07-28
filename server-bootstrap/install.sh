@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-REPO_RAW="https://raw.githubusercontent.com/aidarmk-tech/ai/chatgpt/pumpradar-v439-profit/server-bootstrap"
-PAYLOAD_PATH="v439release"
+REPO_RAW="https://raw.githubusercontent.com/aidarmk-tech/ai/chatgpt/pumpradar-v440-mc7-freeze100/server-bootstrap"
+PAYLOAD_PATH="v440release"
 PAYLOAD_PARTS=(00 01 02 03)
-PAYLOAD_SHA256="f38a8b4cb8ae3a3797111bf48f34f05f91ee3e9e01567090fda49156da93d80c"
-EXPECTED_VERSION="4.3.9-server"
+PAYLOAD_SHA256="0251ce9551371b4eed8499b2a5b2d49526834901cbde266a6779db22c3430709"
+EXPECTED_VERSION="4.4.0-server"
 APP_ROOT="/opt/pumpradar"
 DATA_DIR="/var/lib/pumpradar"
 ENV_DIR="/etc/pumpradar"
@@ -48,7 +48,7 @@ mkdir -p "$TMP_DIR/source-root"
 tar -xzf "$TMP_DIR/payload.tar.gz" -C "$TMP_DIR/source-root"
 SERVER_SOURCE="$TMP_DIR/source-root/pumpradar-server"
 [[ -d "$SERVER_SOURCE/pumpradar_server" ]] || fail "В пакете нет серверного приложения"
-grep -q '4.3.9-server' "$SERVER_SOURCE/pumpradar_server/config.py" || \
+grep -q '4.4.0-server' "$SERVER_SOURCE/pumpradar_server/config.py" || \
   fail "Пакет не содержит ожидаемую версию"
 
 log "Создание пользователя и каталогов"
