@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 DB_PATH="${PUMPRADAR_DB_PATH:-/var/lib/pumpradar/pumpradar.sqlite3}"
-INSTALL_URL="https://raw.githubusercontent.com/aidarmk-tech/ai/chatgpt/pumpradar-v440-mc7-freeze100/server-bootstrap/install.sh"
+INSTALL_URL="https://raw.githubusercontent.com/aidarmk-tech/ai/chatgpt/pumpradar-v440-mc7-final/server-bootstrap/install.sh"
 
 fail() { printf '\n[PumpRadar] ERROR: %s\n' "$*" >&2; exit 1; }
 
