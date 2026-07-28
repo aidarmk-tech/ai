@@ -20,6 +20,8 @@ Futures calculations use their own aggTrades, bookTicker, depth, mark price, fun
 
 Do not change trading thresholds until 100 primary spot+futures momentum paper slots are closed. The API status reports the target, completed count and remaining count.
 
-## Safe installation
+## Verified prebuilt installation
 
-`install-v440-safe.sh` pins the v4.3.9 payload and v4.4.0 patch to immutable Git commit SHAs. Before touching the active service it compiles the code, runs all tests, rejects real-order code, and migrates a copy of the live SQLite database. The service is switched only with zero open paper/policy records and rolls back automatically if v4.4.0 does not start.
+`install-v440-ready.sh` downloads only the prebuilt `v440release` payload. It does not build or patch source code on the VPS. The payload passed 23 unit tests, Python compilation, a local API startup check, static real-order-code scanning, and SQLite migration against a copy of the latest production database (`integrity_check=ok`, no foreign-key violations).
+
+The installer verifies payload SHA-256 `0f7c2aa771c5466fa433a933766cc55bb4741f4f0dd49a7428b6d43aaa863a87`, refuses to switch while any spot/futures paper record is open, preserves SQLite and environment settings, creates a backup, and automatically rolls back if v4.4.0 does not start.
