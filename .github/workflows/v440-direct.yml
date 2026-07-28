@@ -18,16 +18,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: chatgpt/pumpradar-v440-mc7-freeze100
-          fetch-depth: 1
-          show-progress: false
-      - name: Build, test and publish v4.4.0
+      - name: Quiet checkout, build, test and publish v4.4.0
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          set -e
+          git init -q
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch -q --depth=1 origin chatgpt/pumpradar-v440-mc7-freeze100
+          git checkout -q -B chatgpt/pumpradar-v440-mc7-freeze100 FETCH_HEAD
           set +e
           bash server-bootstrap/build-v440.sh > /tmp/v440-build.log 2>&1
           code=$?
-          tail -n 60 /tmp/v440-build.log
+          tail -n 80 /tmp/v440-build.log
           exit "$code"
