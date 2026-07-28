@@ -1,0 +1,158 @@
+usdt REAL NOT NULL DEFAULT 0,
+  funding_usdt REAL NOT NULL DEFAULT 0,
+  gross_return_percent REAL,
+  net_return_percent REAL,
+  UNIQUE(slot_id, policy)
+);
+CREATE INDEX IF NOT EXISTS idx_futures_policy_open
+  ON futures_momentum_policy_runs(state);
+"""
+
+
+class FuturesPaperStore:
+    def __init__(self, settings: Settings, storage: Storage) -> None:
+        self.settings = settings
+        self.storage = storage
+        self.conn = storage.conn
+        self.lock = storage.lock
+        with self.lock:
+            self.conn.executescript(FUTURES_SCHEMA)
+            self.conn.commit()
+
+    def recover_incompatible(self, now_ms: int) -> None:
+        with self.lock:
+            rows = list(
+                self.conn.execute(
+                    """SELECT id FROM futures_momentum_slots
+                       WHERE primary_status='OPEN' AND
+                       (algorithm_version<>? OR strategy_version<>? OR config_hash<>?)""",
+                    (
+                        self.settings.algorithm_version,
+                        self.settings.strategy_version,
+                        self.settings.config_hash(),
+                    ),
+                )
+            )
+            for row in rows:
+                self.conn.execute(
+                    """UPDATE futures_momentum_slots SET primary_status='CLOSED',
+                       primary_closed_at_ms=?, primary_exit_reason='CONFIG_CHANGED',
+                       last_updated_at_ms=? WHERE id=?""",
+                    (now_ms, now_ms, row["id"]),
+                )
+                self.conn.execute(
+                    """UPDATE futures_momentum_policy_runs SET state='CLOSED',
+                       closed_at_ms=?, exit_reason='CONFIG_CHANGED'
+                       WHERE slot_id=? AND state='OPEN'""",
+                    (now_ms, row["id"]),
+                )
+            self.conn.commit()
+
+    def insert_signal(
+        self,
+        channel: str,
+        item: EvaluatedCandidate,
+        episode_id: str,
+        now_ms: int,
+        mark: MarkRow,
+    ) -> str:
+        signal_id = str(uuid.uuid4())
+        with self.lock:
+            existing = self.conn.execute(
+                """SELECT id FROM futures_signals
+                   WHERE run_id=? AND episode_id=? AND signal_channel=?""",
+                (self.storage.run_id, episode_id, channel),
+            ).fetchone()
+            if existing:
+                return str(existing["id"])
+            self.conn.execute(
+                """INSERT INTO futures_signals VALUES(
+                   ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    signal_id,
+                    self.storage.run_id,
+                    channel,
+                    item.candidate.symbol,
+                    episode_id,
+                    now_ms,
+                    item.candidate.return_5m,
+                    item.candidate.return_10m,
+                    item.candidate.quote_volume_24h,
+                    item.flow.quote_volume_30s,
+                    item.flow.taker_buy_ratio_30s,
+                    item.flow.taker_buy_ratio_15s,
+                    item.flow.taker_buy_ratio_5s,
+                    item.flow.cvd_30s,
+                    item.flow.cvd_slope,
+                    item.book.spread_bps,
+                    item.book.buy_slippage_percent,
+                    item.book.sell_slippage_percent,
+                    item.book.buy_vwap,
+                    mark.mark_price or None,
+                    mark.funding_rate,
+                    mark.next_funding_time_ms or None,
+                    self.settings.algorithm_version,
+                    self.settings.strategy_version,
+                    self.settings.config_hash(),
+                ),
+            )
+            self.conn.commit()
+        return signal_id
+
+    def create_slot(
+        self,
+        source_signal_id: str,
+        channel: str,
+        symbol: str,
+        episode_id: str,
+        now_ms: int,
+        best_ask: float,
+        entry_vwap: float,
+        mark: MarkRow,
+    ) -> str:
+        slot_id = str(uuid.uuid4())
+        quantity = self.settings.position_usdt / entry_vwap
+        entry_fee = self.settings.position_usdt * self.settings.futures_fee_rate
+        with self.lock:
+            self.conn.execute(
+                """INSERT INTO futures_momentum_slots(
+                   id,run_id,source_signal_id,signal_channel,episode_id,symbol,
+                   opened_at_ms,entry_best_ask,entry_vwap,position_usdt,quantity,
+                   entry_fee_usdt,entry_mark_price,funding_rate,next_funding_time_ms,
+                   primary_status,last_updated_at_ms,algorithm_version,
+                   strategy_version,config_hash
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'OPEN',?,?,?,?)""",
+                (
+                    slot_id,
+                    self.storage.run_id,
+                    source_signal_id,
+                    channel,
+                    episode_id,
+                    symbol,
+                    now_ms,
+                    best_ask,
+                    entry_vwap,
+                    self.settings.position_usdt,
+                    quantity,
+                    entry_fee,
+                    mark.mark_price or None,
+                    mark.funding_rate,
+                    mark.next_funding_time_ms,
+                    now_ms,
+                    self.settings.algorithm_version,
+                    self.settings.strategy_version,
+                    self.settings.config_hash(),
+                ),
+            )
+            for policy in ("MC_HOLD_120", "MC_TRAIL_1P0", "MC_FIXED_TP4"):
+                self.conn.execute(
+                    """INSERT INTO futures_momentum_policy_runs
+                       (id,slot_id,policy,state) VALUES(?,?,?,'OPEN')""",
+                    (str(uuid.uuid4()), slot_id, policy),
+                )
+            self.conn.commit()
+        return slot_id
+
+    def open_slot(self):
+        with self.lock:
+            return self.conn.exe
