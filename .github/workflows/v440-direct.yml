@@ -1,6 +1,14 @@
 name: Validate and publish PumpRadar v4.4.0
 
 on:
+  push:
+    branches:
+      - chatgpt/pumpradar-v440-mc7-freeze100
+    paths:
+      - 'server-bootstrap/apply-v440.py'
+      - 'server-bootstrap/build-v440.sh'
+      - 'server-bootstrap/v440/TRIGGER'
+      - '.github/workflows/v440-direct.yml'
   pull_request:
     branches:
       - chatgpt/pumpradar-v439-profit
@@ -8,6 +16,7 @@ on:
       - 'server-bootstrap/apply-v440.py'
       - 'server-bootstrap/build-v440.sh'
       - 'server-bootstrap/v440/TRIGGER'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -16,20 +25,13 @@ jobs:
   validate-publish:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
-      - name: Quiet checkout, build, test and publish v4.4.0
+      - name: Checkout working branch
+        uses: actions/checkout@v4
+        with:
+          ref: chatgpt/pumpradar-v440-mc7-freeze100
+          fetch-depth: 0
+      - name: Build, test and publish v4.4.0
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -e
-          git init -q
-          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git fetch -q --depth=1 origin chatgpt/pumpradar-v440-mc7-freeze100
-          git checkout -q -B chatgpt/pumpradar-v440-mc7-freeze100 FETCH_HEAD
-          set +e
-          bash server-bootstrap/build-v440.sh > /tmp/v440-build.log 2>&1
-          code=$?
-          tail -n 80 /tmp/v440-build.log
-          exit "$code"
+        run: bash server-bootstrap/build-v440.sh
