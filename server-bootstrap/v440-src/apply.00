@@ -1,0 +1,125 @@
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def replace_once(path: str, old: str, new: str) -> None:
+    p = ROOT / path
+    text = p.read_text()
+    if new in text:
+        return
+    if old not in text:
+        raise SystemExit(f"missing patch anchor in {path}: {old[:100]!r}")
+    p.write_text(text.replace(old, new, 1))
+
+
+def insert_before_once(path: str, anchor: str, block: str, marker: str) -> None:
+    p = ROOT / path
+    text = p.read_text()
+    if marker in text:
+        return
+    if anchor not in text:
+        raise SystemExit(f"missing insert anchor in {path}: {anchor[:100]!r}")
+    p.write_text(text.replace(anchor, block + anchor, 1))
+
+
+def write_text(path: str, content: str) -> None:
+    p = ROOT / path
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content)
+
+
+replace_once(
+    "pumpradar-server/pumpradar_server/config.py",
+    'algorithm_version: str = "4.3.9-server"\n    strategy_version: str = "TRADE3-QUALITY+TARGET1-HOLD+MC5-HOLD120-2026-07"',
+    'algorithm_version: str = "4.4.0-server"\n    strategy_version: str = "FROZEN100+SPOT-MC5-MC7+FUTURES-MIRROR-2026-07"',
+)
+replace_once(
+    "pumpradar-server/pumpradar_server/config.py",
+    '    ws_url: str = os.getenv("BINANCE_WS_URL", "wss://stream.binance.com:9443")\n',
+    '    ws_url: str = os.getenv("BINANCE_WS_URL", "wss://stream.binance.com:9443")\n'
+    '    futures_rest_url: str = os.getenv("BINANCE_FUTURES_REST_URL", "https://fapi.binance.com")\n'
+    '    futures_ws_url: str = os.getenv("BINANCE_FUTURES_WS_URL", "wss://fstream.binance.com")\n',
+)
+replace_once(
+    "pumpradar-server/pumpradar_server/config.py",
+    '    fee_rate: float = _env_float("PUMPRADAR_FEE_RATE", 0.001)\n',
+    '    fee_rate: float = _env_float("PUMPRADAR_FEE_RATE", 0.001)\n'
+    '    futures_fee_rate: float = _env_float("PUMPRADAR_FUTURES_FEE_RATE", 0.0005)\n',
+)
+replace_once(
+    "pumpradar-server/pumpradar_server/config.py",
+    '    depth_candidates: int = _env_int("PUMPRADAR_DEPTH_CANDIDATES", 25)\n',
+    '    depth_candidates: int = _env_int("PUMPRADAR_DEPTH_CANDIDATES", 25)\n'
+    '    futures_minimum_24h_quote_volume: float = _env_float("PUMPRADAR_FUTURES_MIN_24H_QUOTE_VOLUME", 1_000_000.0)\n'
+    '    futures_max_candidates: int = _env_int("PUMPRADAR_FUTURES_MAX_CANDIDATES", 30)\n'
+    '    futures_warm_pool_size: int = _env_int("PUMPRADAR_FUTURES_WARM_POOL_SIZE", 80)\n'
+    '    futures_deep_candidates: int = _env_int("PUMPRADAR_FUTURES_DEEP_CANDIDATES", 25)\n'
+    '    futures_depth_candidates: int = _env_int("PUMPRADAR_FUTURES_DEPTH_CANDIDATES", 30)\n'
+    '    freeze_target_primary_trades: int = _env_int("PUMPRADAR_FREEZE_TARGET_PRIMARY_TRADES", 100)\n',
+)
+replace_once(
+    "pumpradar-server/pumpradar_server/config.py",
+    '    momentum_max_sell_slippage_percent: float = 0.35\n',
+    '    momentum_max_sell_slippage_percent: float = 0.35\n'
+    '    futures_momentum_max_spread_bps: float = _env_float("PUMPRADAR_FUTURES_MAX_SPREAD_BPS", 30.0)\n'
+    '    futures_momentum_max_buy_slippage_percent: float = _env_float("PUMPRADAR_FUTURES_MAX_BUY_SLIPPAGE_PERCENT", 0.15)\n'
+    '    futures_momentum_max_sell_slippage_percent: float = _env_float("PUMPRADAR_FUTURES_MAX_SELL_SLIPPAGE_PERCENT", 0.35)\n',
+)
+replace_once(
+    "pumpradar-server/pumpradar_server/config.py",
+    '            "rest_url", "ws_url", "data_dir", "db_path", "bind_host", "bind_port",',
+    '            "rest_url", "ws_url", "futures_rest_url", "futures_ws_url", "data_dir", "db_path", "bind_host", "bind_port",',
+)
+replace_once(
+    "pumpradar-server/pumpradar_server/config.py",
+    '            "warm_refresh_seconds", "deep_candidates", "depth_candidates",\n',
+    '            "warm_refresh_seconds", "deep_candidates", "depth_candidates",\n'
+    '            "futures_max_candidates", "futures_warm_pool_size",\n'
+    '            "futures_deep_candidates", "futures_depth_candidates",\n',
+)
+
+write_text(
+    "pumpradar-server/pumpradar_server/futures.py",
+    (ROOT / "server-bootstrap/v440-src/futures.py").read_text(),
+)
+write_text(
+    "pumpradar-server/tests/test_futures.py",
+    (ROOT / "server-bootstrap/v440-src/test_futures.py").read_text(),
+)
+
+replace_once(
+    "pumpradar-server/pumpradar_server/main.py",
+    'import time\n',
+    'import time\nfrom dataclasses import replace\n',
+)
+replace_once(
+    "pumpradar-server/pumpradar_server/main.py",
+    'from .episodes import EpisodeTelemetry, EpisodeTracker\n',
+    'from .episodes import EpisodeTelemetry, EpisodeTracker\n'
+    'from .futures import (\n'
+    '    FuturesFeed, FuturesMarketState, FuturesPaperManager, FuturesPaperStore,\n'
+    ')\n',
+)
+replace_once(
+    "pumpradar-server/pumpradar_server/main.py",
+    '        self.momentum = MomentumPaperManager(settings, self.state, self.storage, self.notify)\n        self.episodes = EpisodeTracker(settings)\n',
+    '        self.momentum = MomentumPaperManager(settings, self.state, self.storage, self.notify)\n'
+    '        self.episodes = EpisodeTracker(settings)\n'
+    '        self.futures_state = FuturesMarketState()\n'
+    '        self.futures_feed = FuturesFeed(settings, self.futures_state)\n'
+    '        self.futures_store = FuturesPaperStore(settings, self.storage)\n'
+    '        self.futures_paper = FuturesPaperManager(\n'
+    '            settings, self.futures_state, self.futures_store, self.notify\n'
+    '        )\n'
+    '        self.futures_gate_settings = replace(\n'
+    '            settings,\n'
+    '            momentum_max_spread_bps=settings.futures_momentum_max_spread_bps,\n'
+    '            momentum_max_buy_slippage_percent=settings.futures_momentum_max_buy_slippage_percent,\n'
+    '            momentum_max_sell_slippage_percent=settings.futures_momentum_max_sell_slippage_percent,\n'
+    '        )\n'
+    '        self.futures_episodes = EpisodeTracker(self.futures_gate_settings)\n',
+)
+replace_once(
+    "pumpradar-server/pumpradar_server/main.py",
+    '        self.momentum_emitted: set[tuple[str, str]
