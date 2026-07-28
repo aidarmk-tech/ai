@@ -21,6 +21,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: chatgpt/pumpradar-v440-mc7-freeze100
-          fetch-depth: 0
+          fetch-depth: 1
+          show-progress: false
       - name: Build, test and publish v4.4.0
-        run: bash server-bootstrap/build-v440.sh
+        shell: bash
+        run: |
+          set +e
+          bash server-bootstrap/build-v440.sh > /tmp/v440-build.log 2>&1
+          code=$?
+          tail -n 60 /tmp/v440-build.log
+          exit "$code"
