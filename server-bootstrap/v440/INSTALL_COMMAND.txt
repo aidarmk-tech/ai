@@ -1,1 +1,1 @@
-curl -fsSL https://raw.githubusercontent.com/aidarmk-tech/ai/chatgpt/pumpradar-v440-mc7-freeze100/server-bootstrap/install-v440-safe.sh | bash
+curl -fsSL https://raw.githubusercontent.com/aidarmk-tech/ai/chatgpt/pumpradar-v440-mc7-final/server-bootstrap/install-v440-safe.sh | bash
