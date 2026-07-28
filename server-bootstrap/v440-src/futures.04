@@ -1,0 +1,155 @@
+self.settings.momentum_repeat_symbol_minutes * 60_000
+        )
+
+    async def consider(
+        self,
+        item: EvaluatedCandidate,
+        signal_id: str,
+        now_ms: int,
+        episode_id: str,
+        channel: str,
+    ) -> None:
+        active = self.store.open_slot()
+        if active:
+            return
+        if self.repeat_blocked(item.candidate.symbol, now_ms):
+            return
+        if item.book.buy_vwap is None or item.book.best_ask is None:
+            return
+        mark = self.state.mark_info(item.candidate.symbol)
+        slot_id = self.store.create_slot(
+            signal_id,
+            channel,
+            item.candidate.symbol,
+            episode_id,
+            now_ms,
+            item.book.best_ask,
+            item.book.buy_vwap,
+            mark,
+        )
+        signal_value = (
+            item.candidate.return_5m if channel == "MC5" else item.candidate.return_10m
+        )
+        await self.notify(
+            f"🟠 FUTURES {channel} paper\n{item.candidate.symbol}\n"
+            f"signal {signal_value:+.3f}% · entry {item.book.buy_vwap:.8g}\n"
+            f"fee {self.settings.futures_fee_rate * 100:.3f}%/side · 1x paper · "
+            f"stop -{self.settings.momentum_stop_percent:.1f}% · hold {self.settings.momentum_hold_seconds}s"
+        )
+        LOG.info("Opened futures %s slot %s %s", channel, slot_id, item.candidate.symbol)
+
+    async def tick(self, now_ms: int) -> None:
+        for slot in self.store.policy_slots():
+            sell_price = self.state.executable_sell_price(
+                slot["symbol"],
+                float(slot["quantity"]),
+                now_ms,
+                self.settings.max_feed_age_ms,
+            )
+            if sell_price is None:
+                continue
+            entry = float(slot["entry_vwap"])
+            current_return = (sell_price / entry - 1) * 100
+            self.store.update_extremes(slot["id"], current_return, now_ms)
+            for policy in self.store.policies(slot["id"]):
+                if policy["state"] != "OPEN":
+                    continue
+                await self._update_policy(slot, policy, sell_price, current_return, now_ms)
+
+    async def _update_policy(
+        self,
+        slot,
+        policy,
+        sell_price: float,
+        current_return: float,
+        now_ms: int,
+    ) -> None:
+        policy_name = str(policy["policy"])
+        age_seconds = (now_ms - int(slot["opened_at_ms"])) / 1000
+        peak_return = max(float(policy["peak_return_percent"] or 0), current_return)
+        activated = policy["activated_at_ms"] is not None
+        updates: dict[str, Any] = {"peak_return_percent": peak_return}
+        if (
+            policy_name == "MC_TRAIL_1P0"
+            and not activated
+            and current_return >= self.settings.momentum_trail_activation_percent
+        ):
+            updates["activated_at_ms"] = now_ms
+            activated = True
+
+        exit_reason: Optional[str] = None
+        if current_return <= -self.settings.momentum_stop_percent:
+            exit_reason = "MC_STOP_2"
+        elif (
+            policy_name == "MC_FIXED_TP4"
+            and current_return >= self.settings.momentum_fixed_target_percent
+        ):
+            exit_reason = "MC_TARGET_4"
+        elif (
+            policy_name == "MC_TRAIL_1P0"
+            and activated
+            and peak_return - current_return
+            >= self.settings.momentum_trail_drawdown_percent
+        ):
+            exit_reason = "MC_TRAIL_EXIT_1"
+        elif (
+            policy_name == "MC_HOLD_120"
+            and age_seconds >= self.settings.momentum_hold_seconds
+        ):
+            exit_reason = "MC_HOLD_120_EXIT"
+        elif age_seconds >= self.settings.momentum_horizon_seconds:
+            exit_reason = "MC_HORIZON_20M"
+
+        self.store.update_policy(policy["id"], **updates)
+        if exit_reason is None:
+            return
+
+        quantity = float(slot["quantity"])
+        exit_quote = quantity * sell_price
+        exit_fee = exit_quote * self.settings.futures_fee_rate
+        entry_cost = float(slot["position_usdt"])
+        entry_fee = float(slot["entry_fee_usdt"])
+        funding_usdt = 0.0
+        funding_time = int(slot["next_funding_time_ms"] or 0)
+        if (
+            funding_time > int(slot["opened_at_ms"])
+            and now_ms >= funding_time
+        ):
+            # Positive funding is paid by a paper long; negative funding is received.
+            funding_usdt = entry_cost * float(slot["funding_rate"] or 0.0)
+        gross = (exit_quote / entry_cost - 1) * 100
+        net = (
+            (exit_quote - entry_fee - exit_fee - funding_usdt) / entry_cost - 1
+        ) * 100
+        self.store.update_policy(
+            policy["id"],
+            state="CLOSED",
+            closed_at_ms=now_ms,
+            exit_reason=exit_reason,
+            exit_vwap=sell_price,
+            exit_fee_usdt=exit_fee,
+            funding_usdt=funding_usdt,
+            gross_return_percent=gross,
+            net_return_percent=net,
+        )
+        if policy_name == self.settings.momentum_primary_policy:
+            self.store.close_primary(
+                slot["id"],
+                now_ms,
+                exit_reason,
+                sell_price,
+                gross,
+                net,
+                funding_usdt,
+            )
+            await self.notify(
+                f"🟧 FUTURES {slot['signal_channel']} {slot['symbol']} "
+                f"{exit_reason}: net {net:+.3f}%"
+            )
+        LOG.info(
+            "Closed futures slot %s policy %s: %s net %+.3f%%",
+            slot["id"],
+            policy_name,
+            exit_reason,
+            net,
+        )

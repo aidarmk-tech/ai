@@ -1,0 +1,170 @@
+from __future__ import annotations
+
+import asyncio
+import heapq
+import json
+import logging
+import time
+import uuid
+from dataclasses import dataclass
+from typing import Any, Optional
+
+import aiohttp
+
+from .config import Settings
+from .market import MarketState, SymbolInfo
+from .models import BookMetrics, Candidate, EvaluatedCandidate, FlowMetrics
+from .storage import Storage
+
+LOG = logging.getLogger(__name__)
+
+
+@dataclass
+class MarkRow:
+    mark_price: float = 0.0
+    funding_rate: float = 0.0
+    next_funding_time_ms: int = 0
+    updated_at_ms: int = 0
+
+
+class FuturesMarketState(MarketState):
+    """Independent USDⓈ-M market state using the same metrics as spot."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.marks: dict[str, MarkRow] = {}
+
+    def set_universe(self, symbols: list[SymbolInfo]) -> None:
+        super().set_universe(symbols)
+        keep = set(self.universe)
+        self.marks = {k: v for k, v in self.marks.items() if k in keep}
+
+    def retain_detailed_symbols(self, symbols: set[str]) -> None:
+        super().retain_detailed_symbols(symbols)
+        keep = set(symbols)
+        self.marks = {k: v for k, v in self.marks.items() if k in keep}
+
+    def reset_candidate_stream_state(self, symbols: set[str]) -> None:
+        super().reset_candidate_stream_state(symbols)
+        for symbol in symbols:
+            self.marks.pop(symbol, None)
+
+    def on_mark_price(self, symbol: str, data: dict[str, Any], now_ms: int) -> None:
+        try:
+            mark_price = float(data.get("p", 0.0))
+            funding_rate = float(data.get("r", 0.0))
+            next_funding = int(data.get("T", 0))
+        except (TypeError, ValueError):
+            return
+        if mark_price <= 0:
+            return
+        self.marks[symbol] = MarkRow(mark_price, funding_rate, next_funding, now_ms)
+        self.last_candidate_message_ms = now_ms
+
+    def mark_info(self, symbol: str) -> MarkRow:
+        return self.marks.get(symbol, MarkRow())
+
+
+class FuturesFeed:
+    """Public market-data-only Binance USDⓈ-M feed; no API keys or orders."""
+
+    def __init__(self, settings: Settings, state: FuturesMarketState) -> None:
+        self.settings = settings
+        self.state = state
+        self.session: Optional[aiohttp.ClientSession] = None
+        self._warm_symbols: tuple[str, ...] = ()
+        self._depth_symbols: tuple[str, ...] = ()
+        self._candidate_change = asyncio.Event()
+        self._stopping = asyncio.Event()
+
+    async def start(self) -> None:
+        self.session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=20),
+            headers={"User-Agent": f"PumpRadar/{self.settings.algorithm_version}"},
+        )
+        await self.refresh_universe()
+
+    async def stop(self) -> None:
+        self._stopping.set()
+        self._candidate_change.set()
+        if self.session:
+            await self.session.close()
+
+    async def refresh_universe(self) -> None:
+        assert self.session
+        url = f"{self.settings.futures_rest_url}/fapi/v1/exchangeInfo"
+        async with self.session.get(url) as response:
+            response.raise_for_status()
+            payload = await response.json()
+        symbols: list[SymbolInfo] = []
+        for raw in payload.get("symbols", []):
+            symbol = str(raw.get("symbol", ""))
+            if raw.get("quoteAsset") != "USDT" or raw.get("status") != "TRADING":
+                continue
+            if raw.get("contractType") != "PERPETUAL" or not symbol.endswith("USDT"):
+                continue
+            symbols.append(SymbolInfo(symbol, "USDT", "TRADING", True))
+        self.state.set_universe(symbols)
+        LOG.info("Loaded %d USD-M perpetual symbols", len(symbols))
+
+    def set_candidate_symbols(
+        self,
+        warm_symbols: list[str],
+        depth_symbols: Optional[list[str]] = None,
+    ) -> None:
+        warm = tuple(sorted(set(warm_symbols) & set(self.state.universe)))
+        depth = tuple(sorted(set(depth_symbols or ()) & set(warm)))
+        if warm != self._warm_symbols or depth != self._depth_symbols:
+            self._warm_symbols = warm
+            self._depth_symbols = depth
+            self._candidate_change.set()
+
+    @staticmethod
+    def _streams(
+        warm_symbols: tuple[str, ...],
+        depth_symbols: tuple[str, ...],
+    ) -> set[str]:
+        depth = set(depth_symbols)
+        streams: set[str] = set()
+        for symbol in warm_symbols:
+            low = symbol.lower()
+            streams.update(
+                (
+                    f"{low}@aggTrade",
+                    f"{low}@bookTicker",
+                    f"{low}@markPrice@1s",
+                )
+            )
+            if symbol in depth:
+                streams.add(f"{low}@depth20@100ms")
+        return streams
+
+    async def _update_subscriptions(
+        self,
+        ws: aiohttp.ClientWebSocketResponse,
+        current: set[str],
+        desired: set[str],
+        request_id: int,
+    ) -> int:
+        removed = sorted(current - desired)
+        added = sorted(desired - current)
+        if removed:
+            await ws.send_json({"method": "UNSUBSCRIBE", "params": removed, "id": request_id})
+            request_id += 1
+        if added:
+            await ws.send_json({"method": "SUBSCRIBE", "params": added, "id": request_id})
+            request_id += 1
+        if removed or added:
+            self.state.candidate_subscription_update_count += 1
+        return request_id
+
+    async def market_loop(self) -> None:
+        assert self.session
+        url = f"{self.settings.futures_ws_url}/ws/!miniTicker@arr"
+        while not self._stopping.is_set():
+            try:
+                async with self.session.ws_connect(url, heartbeat=30, receive_timeout=90) as ws:
+                    LOG.info("Futures market websocket connected")
+                    async for message in ws:
+                        if message.type == aiohttp.WSMsgType.TEXT:
+                            payload = json.loads(message.data)

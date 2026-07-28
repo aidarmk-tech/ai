@@ -1,0 +1,161 @@
+cute(
+                """SELECT * FROM futures_momentum_slots
+                   WHERE primary_status='OPEN' ORDER BY opened_at_ms LIMIT 1"""
+            ).fetchone()
+
+    def last_slot_for_symbol(self, symbol: str):
+        with self.lock:
+            return self.conn.execute(
+                """SELECT * FROM futures_momentum_slots
+                   WHERE symbol=? ORDER BY opened_at_ms DESC LIMIT 1""",
+                (symbol,),
+            ).fetchone()
+
+    def policy_slots(self):
+        with self.lock:
+            return list(
+                self.conn.execute(
+                    """SELECT * FROM futures_momentum_slots
+                       WHERE id IN (
+                         SELECT DISTINCT slot_id FROM futures_momentum_policy_runs
+                         WHERE state='OPEN'
+                       ) ORDER BY opened_at_ms"""
+                )
+            )
+
+    def policies(self, slot_id: str):
+        with self.lock:
+            return list(
+                self.conn.execute(
+                    """SELECT * FROM futures_momentum_policy_runs
+                       WHERE slot_id=? ORDER BY policy""",
+                    (slot_id,),
+                )
+            )
+
+    def update_extremes(self, slot_id: str, current_return: float, now_ms: int) -> None:
+        with self.lock:
+            self.conn.execute(
+                """UPDATE futures_momentum_slots SET
+                   max_executable_return_percent=MAX(max_executable_return_percent,?),
+                   min_executable_return_percent=MIN(min_executable_return_percent,?),
+                   last_updated_at_ms=? WHERE id=?""",
+                (current_return, current_return, now_ms, slot_id),
+            )
+            self.conn.commit()
+
+    def update_policy(self, policy_id: str, **fields: Any) -> None:
+        if not fields:
+            return
+        assignments = ",".join(f"{name}=?" for name in fields)
+        with self.lock:
+            self.conn.execute(
+                f"UPDATE futures_momentum_policy_runs SET {assignments} WHERE id=?",
+                (*fields.values(), policy_id),
+            )
+            self.conn.commit()
+
+    def close_primary(
+        self,
+        slot_id: str,
+        now_ms: int,
+        reason: str,
+        exit_vwap: float,
+        gross: float,
+        net: float,
+        funding_usdt: float,
+    ) -> None:
+        with self.lock:
+            self.conn.execute(
+                """UPDATE futures_momentum_slots SET primary_status='CLOSED',
+                   primary_closed_at_ms=?, primary_exit_reason=?,
+                   primary_exit_vwap=?, primary_gross_return_percent=?,
+                   primary_net_return_percent=?, funding_usdt=?, last_updated_at_ms=?
+                   WHERE id=?""",
+                (now_ms, reason, exit_vwap, gross, net, funding_usdt, now_ms, slot_id),
+            )
+            self.conn.commit()
+
+    def pending_symbols(self) -> set[str]:
+        with self.lock:
+            return {
+                str(row["symbol"])
+                for row in self.conn.execute(
+                    """SELECT DISTINCT symbol FROM futures_momentum_slots
+                       WHERE id IN (
+                         SELECT DISTINCT slot_id FROM futures_momentum_policy_runs
+                         WHERE state='OPEN'
+                       )"""
+                )
+            }
+
+    def status(self) -> dict[str, Any]:
+        with self.lock:
+            total = int(
+                self.conn.execute("SELECT COUNT(*) n FROM futures_momentum_slots").fetchone()["n"]
+            )
+            open_count = int(
+                self.conn.execute(
+                    """SELECT COUNT(*) n FROM futures_momentum_slots
+                       WHERE primary_status='OPEN'"""
+                ).fetchone()["n"]
+            )
+            futures_closed = int(
+                self.conn.execute(
+                    """SELECT COUNT(*) n FROM futures_momentum_slots
+                       WHERE primary_status='CLOSED' AND algorithm_version=?""",
+                    (self.settings.algorithm_version,),
+                ).fetchone()["n"]
+            )
+            spot_closed = int(
+                self.conn.execute(
+                    """SELECT COUNT(*) n FROM momentum_slots
+                       WHERE primary_status='CLOSED' AND algorithm_version=?""",
+                    (self.settings.algorithm_version,),
+                ).fetchone()["n"]
+            )
+            by_channel = {
+                str(row["signal_channel"]): {
+                    "n": int(row["n"]),
+                    "avg_net": float(row["avg_net"] or 0.0),
+                }
+                for row in self.conn.execute(
+                    """SELECT signal_channel, COUNT(*) n,
+                              AVG(primary_net_return_percent) avg_net
+                       FROM futures_momentum_slots
+                       WHERE primary_status='CLOSED'
+                       GROUP BY signal_channel"""
+                )
+            }
+        closed = spot_closed + futures_closed
+        return {
+            "futures_paper_slots": total,
+            "futures_paper_open": open_count,
+            "futures_closed_by_channel": by_channel,
+            "freeze_target_primary_trades": self.settings.freeze_target_primary_trades,
+            "freeze_closed_primary_trades": closed,
+            "freeze_remaining_primary_trades": max(
+                0, self.settings.freeze_target_primary_trades - closed
+            ),
+        }
+
+
+class FuturesPaperManager:
+    def __init__(
+        self,
+        settings: Settings,
+        state: FuturesMarketState,
+        store: FuturesPaperStore,
+        notify,
+    ) -> None:
+        self.settings = settings
+        self.state = state
+        self.store = store
+        self.notify = notify
+
+    def repeat_blocked(self, symbol: str, now_ms: int) -> bool:
+        previous = self.store.last_slot_for_symbol(symbol)
+        return bool(
+            previous
+            and now_ms - int(previous["opened_at_ms"])
+            < 

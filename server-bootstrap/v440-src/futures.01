@@ -1,0 +1,146 @@
+)
+                            if isinstance(payload, list):
+                                self.state.on_mini_tickers(payload, int(time.time() * 1000))
+                        elif message.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                            break
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                LOG.warning("Futures market websocket error: %s", exc)
+            await asyncio.sleep(3)
+
+    async def candidate_loop(self) -> None:
+        assert self.session
+        while not self._stopping.is_set():
+            symbols = self._warm_symbols
+            self._candidate_change.clear()
+            if not symbols:
+                try:
+                    await asyncio.wait_for(self._candidate_change.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    pass
+                continue
+            streams = self._streams(symbols, self._depth_symbols)
+            url = f"{self.settings.futures_ws_url}/stream?streams={'/'.join(sorted(streams))}"
+            try:
+                async with self.session.ws_connect(url, heartbeat=30, receive_timeout=90) as ws:
+                    now_ms = int(time.time() * 1000)
+                    self.state.reset_candidate_stream_state(set(symbols))
+                    self.state.candidate_connection_count += 1
+                    self.state.last_candidate_connect_ms = now_ms
+                    request_id = 1
+                    LOG.info(
+                        "Futures warm websocket connected for %d symbols (%d depth)",
+                        len(symbols),
+                        len(self._depth_symbols),
+                    )
+                    while not self._stopping.is_set():
+                        if self._candidate_change.is_set():
+                            self._candidate_change.clear()
+                            desired = self._streams(self._warm_symbols, self._depth_symbols)
+                            request_id = await self._update_subscriptions(
+                                ws, streams, desired, request_id
+                            )
+                            streams = desired
+                        try:
+                            message = await asyncio.wait_for(ws.receive(), timeout=1)
+                        except asyncio.TimeoutError:
+                            continue
+                        if message.type != aiohttp.WSMsgType.TEXT:
+                            if message.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                                break
+                            continue
+                        payload = json.loads(message.data)
+                        stream = str(payload.get("stream", ""))
+                        data = payload.get("data", {})
+                        symbol = stream.split("@", 1)[0].upper()
+                        now_ms = int(time.time() * 1000)
+                        if "@aggTrade" in stream:
+                            self.state.on_agg_trade(symbol, data, now_ms)
+                        elif "@bookTicker" in stream:
+                            self.state.on_book_ticker(symbol, data, now_ms)
+                        elif "@depth" in stream:
+                            self.state.on_depth(symbol, data, now_ms)
+                        elif "@markPrice" in stream:
+                            self.state.on_mark_price(symbol, data, now_ms)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                LOG.warning("Futures candidate websocket error: %s", exc)
+            await asyncio.sleep(2)
+
+
+FUTURES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS futures_signals (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  signal_channel TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  episode_id TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  return_5m REAL,
+  return_10m REAL,
+  quote_volume_24h REAL NOT NULL,
+  quote_volume_30s REAL NOT NULL,
+  taker_buy_ratio_30s REAL,
+  taker_buy_ratio_15s REAL,
+  taker_buy_ratio_5s REAL,
+  cvd_30s REAL NOT NULL,
+  cvd_slope REAL NOT NULL,
+  spread_bps REAL,
+  buy_slippage_percent REAL,
+  sell_slippage_percent REAL,
+  entry_vwap REAL,
+  mark_price REAL,
+  funding_rate REAL,
+  next_funding_time_ms INTEGER,
+  algorithm_version TEXT NOT NULL,
+  strategy_version TEXT NOT NULL,
+  config_hash TEXT NOT NULL,
+  UNIQUE(run_id, episode_id, signal_channel)
+);
+CREATE INDEX IF NOT EXISTS idx_futures_signals_time
+  ON futures_signals(created_at_ms);
+CREATE TABLE IF NOT EXISTS futures_momentum_slots (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  source_signal_id TEXT REFERENCES futures_signals(id),
+  signal_channel TEXT NOT NULL,
+  episode_id TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  opened_at_ms INTEGER NOT NULL,
+  entry_best_ask REAL NOT NULL,
+  entry_vwap REAL NOT NULL,
+  position_usdt REAL NOT NULL,
+  quantity REAL NOT NULL,
+  entry_fee_usdt REAL NOT NULL,
+  entry_mark_price REAL,
+  funding_rate REAL NOT NULL DEFAULT 0,
+  next_funding_time_ms INTEGER NOT NULL DEFAULT 0,
+  funding_usdt REAL NOT NULL DEFAULT 0,
+  primary_status TEXT NOT NULL,
+  primary_closed_at_ms INTEGER,
+  primary_exit_reason TEXT,
+  primary_exit_vwap REAL,
+  primary_gross_return_percent REAL,
+  primary_net_return_percent REAL,
+  max_executable_return_percent REAL NOT NULL DEFAULT 0,
+  min_executable_return_percent REAL NOT NULL DEFAULT 0,
+  last_updated_at_ms INTEGER NOT NULL,
+  algorithm_version TEXT NOT NULL,
+  strategy_version TEXT NOT NULL,
+  config_hash TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_futures_slots_open
+  ON futures_momentum_slots(primary_status, opened_at_ms);
+CREATE TABLE IF NOT EXISTS futures_momentum_policy_runs (
+  id TEXT PRIMARY KEY,
+  slot_id TEXT NOT NULL REFERENCES futures_momentum_slots(id),
+  policy TEXT NOT NULL,
+  state TEXT NOT NULL,
+  activated_at_ms INTEGER,
+  peak_return_percent REAL NOT NULL DEFAULT 0,
+  closed_at_ms INTEGER,
+  exit_reason TEXT,
+  exit_vwap REAL,
+  exit_fee_
