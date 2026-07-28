@@ -1,0 +1,48 @@
+] = set()\n        self.started_at_ms = int(time.time() * 1000)\n',
+    '        self.momentum_emitted: set[tuple[str, str]] = set()\n'
+    '        self.futures_last_candidate_set_ms = 0\n'
+    '        self.futures_warm_symbols: set[str] = set()\n'
+    '        self.futures_depth_symbols: set[str] = set()\n'
+    '        self.futures_decision_symbols: set[str] = set()\n'
+    '        self.futures_momentum_emitted: set[tuple[str, str]] = set()\n'
+    '        self.started_at_ms = int(time.time() * 1000)\n',
+)
+replace_once(
+    "pumpradar-server/pumpradar_server/main.py",
+    '        now = int(time.time() * 1000)\n        return {\n            "ok": now - self.state.last_market_message_ms < 15_000,\n',
+    '        now = int(time.time() * 1000)\n'
+    '        spot_ok = now - self.state.last_market_message_ms < 15_000\n'
+    '        futures_ok = now - self.futures_state.last_market_message_ms < 15_000\n'
+    '        return {\n'
+    '            "ok": spot_ok and futures_ok,\n'
+    '            "spot_ok": spot_ok,\n'
+    '            "futures_ok": futures_ok,\n',
+)
+replace_once(
+    "pumpradar-server/pumpradar_server/main.py",
+    '            "candidate_connection_count": self.state.candidate_connection_count,\n',
+    '            "candidate_connection_count": self.state.candidate_connection_count,\n'
+    '            "futures_market_feed_age_ms": (\n'
+    '                now - self.futures_state.last_market_message_ms\n'
+    '                if self.futures_state.last_market_message_ms else None\n'
+    '            ),\n'
+    '            "futures_candidate_feed_age_ms": (\n'
+    '                now - self.futures_state.last_candidate_message_ms\n'
+    '                if self.futures_state.last_candidate_message_ms else None\n'
+    '            ),\n'
+    '            "futures_universe_symbols": len(self.futures_state.universe),\n'
+    '            "futures_warm_pool_symbols": len(self.futures_warm_symbols),\n'
+    '            "futures_depth_symbols": len(self.futures_depth_symbols),\n'
+    '            **self.futures_store.status(),\n',
+)
+
+replace_once(
+    "pumpradar-server/pumpradar_server/main.py",
+    '            if arm == "MC5":\n                await self.momentum.consider(\n                    item,\n                    sid,\n                    now_ms,\n                    telemetry.episode_id,\n                )',
+    '            if arm in ("MC5", "MC7"):\n                await self.momentum.consider(\n                    item,\n                    sid,\n                    now_ms,\n                    telemetry.episode_id,\n                    arm,\n                )',
+)
+
+insert_before_once(
+    "pumpradar-server/pumpradar_server/main.py",
+    '    async def position_loop(self) -> None:\n',
+    '    async def futures_engine_loop(self) -> None:\n        """Evaluate the same MC5/MC7 gates on an independent USD-M feed."""\n        while not self.stop_event.is_set():\n            now = int(time.time() * 1000)\n            try:\n                ranked = self.futures_state.rank_universe(\n                    self.settings.futures_minimum_24h_quote_volume,\n                    now,\n                )\n                candidates = [\n                    c for c in ranked if self.futures_state.is_pre_candidate(c)\n                ][: self.settings.futures_max_candidates]\n                candidate_map = {c.symbol: c for c in ranked}\n                decision_candidates = list(\n                    candidates[: self.settings.futures_deep_candidates]\n                )\n                decision_seen = {c.symbol for c in decision_candidates}\n                forced = [\n                    c\n                    for c in ranked\n                    if (\n                        c.return_5m is not None\n                        and c.return_5m >= self.settings.momentum_mc5_return_5m\n                    )\n                    or (\n                        c.return_10m is not None\n                        and c.return_10m >= self.settings.momentum_mc7_return_10m\n                    )\n                ]\n                for candidate in forced:\n                    if candidate.symbol not in decision_seen:\n                        decision_candidates.append(candidate)\n                        decision_seen.add(candidate.symbol)\n                    if len(decision_candidates) >= self.settings.futures_max_candidates:\n                        break\n                next_decisions = {c.symbol for c in decision_candidates}\n                active = self.futures_store.open_slot()\n                active_symbol = str(active["symbol"]) if active else None\n                pending = self.futures_store.pending_symbols()\n\n                refresh_due = (\n                    now - self.futures_last_candidate_set_ms\n                    >= self.settings.warm_refresh_seconds * 1000\n                )\n                if refresh_due:\n                    warm = {\n                        c.symbol\n                        for c in ranked[: self.settings.futures_warm_pool_size]\n                    }\n                    warm.update(next_decisions)\n                    warm.update(pending)\n                    if active_symbol:\n                        warm.add(active_symbol)\n                    depth = {\n                        c.symbol\n                        for c in ranked[: self.settings.futures_depth_candidates]\n                    }\n                    depth.update(next_decisions)\n                    depth.update(pending)\n                    if active_symbol:\n                        depth.add(active_symbol)\n                    self.futures_warm_symbols = warm\n                    self.futures_depth_symbols = depth\n                    self.futures_state.retain_detailed_symbols(warm)\n                    self.futures_state.retain_depth_symbols(depth)\n                    self.futures_feed.set_candidate_symbols(\n                        sorted(warm), sorted(depth)\n                   
