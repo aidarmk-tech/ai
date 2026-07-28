@@ -1,0 +1,40 @@
+  )\n                    self.futures_last_candidate_set_ms = now\n\n                missing = next_decisions - self.futures_warm_symbols\n                missing_depth = next_decisions - self.futures_depth_symbols\n                if missing or missing_depth:\n                    self.futures_warm_symbols.update(next_decisions)\n                    self.futures_depth_symbols.update(next_decisions)\n                    self.futures_feed.set_candidate_symbols(\n                        sorted(self.futures_warm_symbols),\n                        sorted(self.futures_depth_symbols),\n                    )\n\n                self.futures_decision_symbols = next_decisions\n                median_ret, breadth = self.futures_state.market_context(now)\n                evaluated: list[EvaluatedCandidate] = []\n                for symbol in next_decisions:\n                    candidate = candidate_map.get(symbol)\n                    if candidate is None:\n                        continue\n                    flow = self.futures_state.flow_metrics(symbol, now)\n                    book = self.futures_state.book_metrics(\n                        symbol, self.settings.position_usdt, now\n                    )\n                    peak = self.futures_state.update_peak(\n                        symbol, candidate.price, flow.cvd_30s, now\n                    )\n                    feed_age = self.futures_state.measurement_age_ms(symbol, now)\n                    decision = assess(\n                        candidate,\n                        flow,\n                        book,\n                        peak,\n                        self.futures_gate_settings,\n                        feed_age,\n                        median_ret,\n                        breadth,\n                        self.futures_paper.repeat_blocked(symbol, now),\n                    )\n                    evaluated.append(\n                        EvaluatedCandidate(candidate, flow, book, peak, decision)\n                    )\n\n                for item in evaluated:\n                    telemetry = self.futures_episodes.observe(item, now)\n                    feed_age = self.futures_state.measurement_age_ms(\n                        item.candidate.symbol, now\n                    )\n                    arms, _ = momentum_continuation_arms(\n                        item.candidate,\n                        item.flow,\n                        item.book,\n                        self.futures_gate_settings,\n                        feed_age,\n                    )\n                    for arm in ("MC5", "MC7"):\n                        key = (telemetry.episode_id, arm)\n                        if not arms.get(arm) or key in self.futures_momentum_emitted:\n                            continue\n                        self.futures_momentum_emitted.add(key)\n                        mark = self.futures_state.mark_info(item.candidate.symbol)\n                        signal_id = self.futures_store.insert_signal(\n                            arm, item, telemetry.episode_id, now, mark\n                        )\n                        await self.futures_paper.consider(\n                            item,\n                            signal_id,\n                            now,\n                            telemetry.episode_id,\n                            arm,\n                        )\n                self.futures_episodes.prune(now)\n            except asyncio.CancelledError:\n                raise\n            except Exception as exc:\n                LOG.exception("Futures engine tick failed: %s", exc)\n                self.storage.event("ERROR", "futures_engine", repr(exc))\n            await asyncio.sleep(1)\n\n',
+    'async def futures_engine_loop',
+)
+replace_once(
+    "pumpradar-server/pumpradar_server/main.py",
+    '                await self.momentum.tick(now)\n',
+    '                await self.momentum.tick(now)\n                await self.futures_paper.tick(now)\n',
+)
+replace_once(
+    "pumpradar-server/pumpradar_server/main.py",
+    '        await self.feed.start()\n',
+    '        await self.feed.start()\n        await self.futures_feed.start()\n        self.futures_store.recover_incompatible(int(time.time() * 1000))\n',
+)
+replace_once(
+    "pumpradar-server/pumpradar_server/main.py",
+    '            asyncio.create_task(self.feed.candidate_loop(), name="candidate-ws"),\n            asyncio.create_task(self.engine_loop(), name="engine"),\n',
+    '            asyncio.create_task(self.feed.candidate_loop(), name="candidate-ws"),\n'
+    '            asyncio.create_task(self.futures_feed.market_loop(), name="futures-market-ws"),\n'
+    '            asyncio.create_task(self.futures_feed.candidate_loop(), name="futures-candidate-ws"),\n'
+    '            asyncio.create_task(self.engine_loop(), name="engine"),\n'
+    '            asyncio.create_task(self.futures_engine_loop(), name="futures-engine"),\n',
+)
+replace_once(
+    "pumpradar-server/pumpradar_server/main.py",
+    '        await self.feed.stop()\n',
+    '        await self.feed.stop()\n        await self.futures_feed.stop()\n',
+)
+
+replace_once(
+    "pumpradar-server/pumpradar_server/paper.py",
+    '        episode_id: str,\n    ) -> None:\n        active = self.storage.momentum_primary_open_slot()',
+    '        episode_id: str,\n        channel: str = "MC5",\n    ) -> None:\n        active = self.storage.momentum_primary_open_slot()',
+)
+replace_once("pumpradar-server/pumpradar_server/paper.py", '"MC5_SLOT_BUSY"', 'f"{channel}_SLOT_BUSY"')
+replace_once("pumpradar-server/pumpradar_server/paper.py", '"MC5_REPEAT_SYMBOL_20M"', 'f"{channel}_REPEAT_SYMBOL_20M"')
+replace_once("pumpradar-server/pumpradar_server/paper.py", '"MC5_NO_EXECUTABLE_ENTRY"', 'f"{channel}_NO_EXECUTABLE_ENTRY"')
+replace_once(
+    "pumpradar-server/pumpradar_server/paper.py",
+    """            f"🔵 PumpRadar MC5 challenger\n{item.candidate.symbol}\n"
+            f"return5m {item.candidate.return_5m:+.3f}% 
