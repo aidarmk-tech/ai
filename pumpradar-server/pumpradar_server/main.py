@@ -58,9 +58,13 @@ class Service:
 
     def health(self) -> dict:
         now = int(time.time() * 1000)
+        progress = self.storage.frozen_primary_trade_progress()
         return {
             "ok": now - self.state.last_market_message_ms < 15_000,
             "uptime_seconds": (now - self.started_at_ms) // 1000,
+            "freeze_closed_primary_trades": progress["closed"],
+            "freeze_target_primary_trades": progress["target"],
+            "freeze_remaining_primary_trades": progress["remaining"],
             "market_feed_age_ms": now - self.state.last_market_message_ms if self.state.last_market_message_ms else None,
             "candidate_feed_age_ms": now - self.state.last_candidate_message_ms if self.state.last_candidate_message_ms else None,
             "universe_symbols": len(self.state.universe),
@@ -326,7 +330,7 @@ class Service:
             snapshot_type = {
                 "MC3": "MC3_SHADOW",
                 "MC5": "MC5_CHALLENGER",
-                "MC7": "MC7_SHADOW",
+                "MC7": "MC7_CHALLENGER",
             }[arm]
             sid = self.storage.insert_snapshot(
                 item,
@@ -335,12 +339,13 @@ class Service:
                 now_ms,
                 telemetry,
             )
-            if arm == "MC5":
+            if arm in ("MC5", "MC7"):
                 await self.momentum.consider(
                     item,
                     sid,
                     now_ms,
                     telemetry.episode_id,
+                    channel=arm,
                 )
 
         if strict:

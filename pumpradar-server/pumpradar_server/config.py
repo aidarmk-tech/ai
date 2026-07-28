@@ -19,8 +19,8 @@ def _env_int(name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class Settings:
-    algorithm_version: str = "4.3.9-server"
-    strategy_version: str = "TRADE3-QUALITY+TARGET1-HOLD+MC5-HOLD120-2026-07"
+    algorithm_version: str = "4.4.0-server"
+    strategy_version: str = "TRADE3-QUALITY+TARGET1-HOLD+MC5-MC7-HOLD120-FROZEN100-2026-07"
     rest_url: str = os.getenv("BINANCE_REST_URL", "https://api.binance.com")
     ws_url: str = os.getenv("BINANCE_WS_URL", "wss://stream.binance.com:9443")
     data_dir: Path = Path(os.getenv("PUMPRADAR_DATA_DIR", "/var/lib/pumpradar"))
@@ -119,6 +119,7 @@ class Settings:
     momentum_hold_seconds: int = 120
     momentum_repeat_symbol_minutes: int = 20
     momentum_primary_policy: str = "MC_HOLD_120"
+    freeze_primary_trade_target: int = 100
     target_percent: float = 3.0
     initial_stop_percent: float = 0.75
     protection_activation_percent: float = 1.0

@@ -442,7 +442,7 @@ class AuditFlowTest(unittest.TestCase):
         self.assertFalse(decision.strict_passed)
 
     def test_v439_adds_quality_and_exit_challengers(self) -> None:
-        self.assertEqual("4.3.9-server", self.settings.algorithm_version)
+        self.assertEqual("4.4.0-server", self.settings.algorithm_version)
         self.assertEqual("C_WEAKENING", self.settings.primary_policy)
         self.assertEqual(60, self.settings.warm_pool_size)
         self.assertEqual(20, self.settings.deep_candidates)
