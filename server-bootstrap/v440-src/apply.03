@@ -1,0 +1,23 @@
+· entry {item.book.buy_vwap:.8g}\n""""",
+    """            f"🔵 PumpRadar {channel} spot paper\n{item.candidate.symbol}\n"
+            f"signal {item.candidate.return_5m if channel == 'MC5' else item.candidate.return_10m:+.3f}% · entry {item.book.buy_vwap:.8g}\n""""",
+)
+replace_once(
+    "pumpradar-server/pumpradar_server/paper.py",
+    '        LOG.info("Opened momentum slot %s %s", slot_id, item.candidate.symbol)',
+    '        LOG.info("Opened %s spot momentum slot %s %s", channel, slot_id, item.candidate.symbol)',
+)
+
+readme = ROOT / "pumpradar-server/README.md"
+marker = "## v4.4.0 freeze and futures mirror"
+if marker not in readme.read_text():
+    readme.write_text(
+        readme.read_text()
+        + "\n\n## v4.4.0 freeze and futures mirror\n"
+        + "MC5 remains unchanged. MC7 can open the same spot paper policy set. "
+        + "Binance USD-M perpetual futures run as an independent public-data-only "
+        + "paper mirror with their own book, TBR/CVD, configurable fee and liquidity "
+        + "thresholds. No Binance order endpoint or API key is used. The trading "
+        + "configuration is frozen until 100 closed primary spot+futures momentum "
+        + "slots are collected.\n"
+    )
