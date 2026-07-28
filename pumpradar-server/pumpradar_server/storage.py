@@ -156,7 +156,11 @@ CREATE TABLE IF NOT EXISTS snapshot_outcomes (
   return_15s REAL, mfe_15s REAL, mae_15s REAL,
   return_30s REAL, mfe_30s REAL, mae_30s REAL,
   return_60s REAL, mfe_60s REAL, mae_60s REAL,
+  return_90s REAL, mfe_90s REAL, mae_90s REAL,
   return_120s REAL, mfe_120s REAL, mae_120s REAL,
+  return_150s REAL, mfe_150s REAL, mae_150s REAL,
+  return_180s REAL, mfe_180s REAL, mae_180s REAL,
+  return_240s REAL, mfe_240s REAL, mae_240s REAL,
   return_300s REAL, mfe_300s REAL, mae_300s REAL,
   first_barrier TEXT, first_barrier_at_ms INTEGER,
   completed INTEGER NOT NULL DEFAULT 0,
@@ -166,9 +170,55 @@ CREATE INDEX IF NOT EXISTS idx_snapshot_outcomes_pending
   ON snapshot_outcomes(completed, created_at_ms);
 CREATE INDEX IF NOT EXISTS idx_snapshot_outcomes_episode
   ON snapshot_outcomes(episode_id);
+CREATE TABLE IF NOT EXISTS momentum_slots (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES experiment_runs(id),
+  source_snapshot_id TEXT REFERENCES snapshots(id),
+  episode_id TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  opened_at_ms INTEGER NOT NULL,
+  entry_best_ask REAL NOT NULL,
+  entry_vwap REAL NOT NULL,
+  position_usdt REAL NOT NULL,
+  quantity REAL NOT NULL,
+  entry_fee_usdt REAL NOT NULL,
+  primary_status TEXT NOT NULL,
+  primary_closed_at_ms INTEGER,
+  primary_exit_reason TEXT,
+  primary_exit_vwap REAL,
+  primary_gross_return_percent REAL,
+  primary_net_return_percent REAL,
+  max_executable_return_percent REAL NOT NULL DEFAULT 0,
+  min_executable_return_percent REAL NOT NULL DEFAULT 0,
+  last_updated_at_ms INTEGER NOT NULL,
+  algorithm_version TEXT NOT NULL,
+  strategy_version TEXT NOT NULL,
+  config_hash TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_momentum_slots_open
+  ON momentum_slots(primary_status, opened_at_ms);
+CREATE TABLE IF NOT EXISTS momentum_policy_runs (
+  id TEXT PRIMARY KEY,
+  slot_id TEXT NOT NULL REFERENCES momentum_slots(id),
+  policy TEXT NOT NULL,
+  state TEXT NOT NULL,
+  activated_at_ms INTEGER,
+  peak_return_percent REAL NOT NULL DEFAULT 0,
+  closed_at_ms INTEGER,
+  exit_reason TEXT,
+  exit_vwap REAL,
+  exit_fee_usdt REAL NOT NULL DEFAULT 0,
+  gross_return_percent REAL,
+  net_return_percent REAL,
+  UNIQUE(slot_id, policy)
+);
+CREATE INDEX IF NOT EXISTS idx_momentum_policy_open
+  ON momentum_policy_runs(state);
 """
 
 SNAPSHOT_AUDIT_COLUMNS = {
+    "return_3m": "REAL",
+    "return_10m": "REAL",
     "price_age_ms": "INTEGER",
     "trade_age_ms": "INTEGER",
     "book_ticker_age_ms": "INTEGER",
@@ -206,6 +256,24 @@ PAPER_SLOT_AUDIT_COLUMNS = {
 
 SNAPSHOT_OUTCOME_AUDIT_COLUMNS = {
     "fee_rate": "REAL NOT NULL DEFAULT 0.001",
+    "return_90s": "REAL",
+    "mfe_90s": "REAL",
+    "mae_90s": "REAL",
+    "return_150s": "REAL",
+    "mfe_150s": "REAL",
+    "mae_150s": "REAL",
+    "return_180s": "REAL",
+    "mfe_180s": "REAL",
+    "mae_180s": "REAL",
+    "return_240s": "REAL",
+    "mfe_240s": "REAL",
+    "mae_240s": "REAL",
+    "return_600s": "REAL",
+    "mfe_600s": "REAL",
+    "mae_600s": "REAL",
+    "return_1200s": "REAL",
+    "mfe_1200s": "REAL",
+    "mae_1200s": "REAL",
 }
 
 SNAPSHOT_COLUMNS = (
@@ -231,6 +299,7 @@ SNAPSHOT_COLUMNS = (
     "pullback_from_high_pct", "failed_high_attempts",
     "lower_high_detected", "breakout_level_held",
     "new_high_without_cvd_high",
+    "return_3m", "return_10m",
 )
 
 
@@ -321,6 +390,39 @@ class Storage:
                         f"Closed {len(incompatible)} open slot(s) after config/version change",
                     ),
                 )
+            incompatible_momentum = list(self.conn.execute(
+                """SELECT id FROM momentum_slots
+                   WHERE primary_status='OPEN' AND
+                   (algorithm_version<>? OR strategy_version<>? OR config_hash<>?)""",
+                (
+                    self.settings.algorithm_version,
+                    self.settings.strategy_version,
+                    self.settings.config_hash(),
+                ),
+            ))
+            for row in incompatible_momentum:
+                self.conn.execute(
+                    """UPDATE momentum_slots SET primary_status='CLOSED',
+                       primary_closed_at_ms=?, primary_exit_reason='CONFIG_CHANGED',
+                       last_updated_at_ms=? WHERE id=?""",
+                    (now, now, row["id"]),
+                )
+                self.conn.execute(
+                    """UPDATE momentum_policy_runs SET state='CLOSED',
+                       closed_at_ms=?, exit_reason='CONFIG_CHANGED'
+                       WHERE slot_id=? AND state='OPEN'""",
+                    (now, row["id"]),
+                )
+            if incompatible_momentum:
+                self.conn.execute(
+                    "INSERT INTO service_events(timestamp_ms,severity,subsystem,message) VALUES(?,?,?,?)",
+                    (
+                        now,
+                        "WARNING",
+                        "recovery",
+                        f"Closed {len(incompatible_momentum)} momentum slot(s) after config/version change",
+                    ),
+                )
             self.conn.commit()
         self.run_id = run_id
         return run_id
@@ -406,6 +508,8 @@ class Storage:
             int(p.lower_high_detected),
             int(p.breakout_level_held),
             int(p.new_high_without_cvd_high),
+            c.return_3m,
+            c.return_10m,
         )
         placeholders = ",".join("?" for _ in values)
         columns = ",".join(SNAPSHOT_COLUMNS)
@@ -423,7 +527,7 @@ class Storage:
                 ).fetchone()
                 if existing:
                     snapshot_id = str(existing["id"])
-            elif snapshot_type in {"TRIGGERED", "SHADOW", "NEAR_MISS"}:
+            elif snapshot_type in {"TRIGGERED", "SHADOW", "NEAR_MISS", "MC3_SHADOW", "MC5_CHALLENGER", "MC7_SHADOW"}:
                 entry_status = (
                     "EXECUTABLE"
                     if b.buy_vwap is not None
@@ -481,7 +585,12 @@ class Storage:
                  self.settings.strategy_version, self.settings.config_hash(),
                  episode_id or event_id),
             )
-            for policy in ("A_PARTIAL_20", "B_FULL_PROTECTED", "C_WEAKENING"):
+            for policy in (
+                "A_PARTIAL_20",
+                "B_FULL_PROTECTED",
+                "C_WEAKENING",
+                "D_TARGET1_HOLD_300",
+            ):
                 self.conn.execute(
                     "INSERT INTO policy_runs(id,slot_id,policy,state) VALUES(?,?,?,'OPEN')",
                     (str(uuid.uuid4()), slot_id, policy),
@@ -530,7 +639,7 @@ class Storage:
         observations: list[tuple[str, float]],
         now_ms: int,
     ) -> None:
-        horizons = (5, 15, 30, 60, 120, 300)
+        horizons = (5, 15, 30, 60, 90, 120, 150, 180, 240, 300, 600, 1200)
         with self.lock:
             for snapshot_id, current_return in observations:
                 row = self.conn.execute(
@@ -563,12 +672,12 @@ class Storage:
                     elif current_return <= -self.settings.initial_stop_percent:
                         updates["first_barrier"] = "STOP_0_75"
                         updates["first_barrier_at_ms"] = now_ms
-                if age_ms >= 300_000 and (
-                    row["return_300s"] is not None
-                    or "return_300s" in updates
+                if age_ms >= 1_200_000 and (
+                    row["return_1200s"] is not None
+                    or "return_1200s" in updates
                 ):
                     updates["completed"] = 1
-                    updates["completion_reason"] = "HORIZON_300S"
+                    updates["completion_reason"] = "HORIZON_1200S"
                 assignments = ",".join(f"{name}=?" for name in updates)
                 self.conn.execute(
                     f"""UPDATE snapshot_outcomes
@@ -620,6 +729,147 @@ class Storage:
             )
             self.conn.commit()
 
+    def create_momentum_slot(
+        self,
+        source_snapshot_id: str,
+        symbol: str,
+        episode_id: str,
+        now_ms: int,
+        best_ask: float,
+        entry_vwap: float,
+    ) -> str:
+        slot_id = str(uuid.uuid4())
+        quantity = self.settings.position_usdt / entry_vwap
+        entry_fee = self.settings.position_usdt * self.settings.fee_rate
+        with self.lock:
+            self.conn.execute(
+                """INSERT INTO momentum_slots(
+                  id,run_id,source_snapshot_id,episode_id,symbol,opened_at_ms,
+                  entry_best_ask,entry_vwap,position_usdt,quantity,entry_fee_usdt,
+                  primary_status,last_updated_at_ms,algorithm_version,
+                  strategy_version,config_hash
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,'OPEN',?,?,?,?)""",
+                (
+                    slot_id,
+                    self.run_id,
+                    source_snapshot_id,
+                    episode_id,
+                    symbol,
+                    now_ms,
+                    best_ask,
+                    entry_vwap,
+                    self.settings.position_usdt,
+                    quantity,
+                    entry_fee,
+                    now_ms,
+                    self.settings.algorithm_version,
+                    self.settings.strategy_version,
+                    self.settings.config_hash(),
+                ),
+            )
+            for policy in ("MC_HOLD_120", "MC_TRAIL_1P0", "MC_FIXED_TP4"):
+                self.conn.execute(
+                    "INSERT INTO momentum_policy_runs(id,slot_id,policy,state) VALUES(?,?,?,'OPEN')",
+                    (str(uuid.uuid4()), slot_id, policy),
+                )
+            self.conn.commit()
+        return slot_id
+
+    def momentum_policy_slots(self) -> list[sqlite3.Row]:
+        with self.lock:
+            return list(
+                self.conn.execute(
+                    """SELECT * FROM momentum_slots
+                       WHERE id IN (
+                         SELECT DISTINCT slot_id FROM momentum_policy_runs
+                         WHERE state='OPEN'
+                       )
+                       ORDER BY opened_at_ms"""
+                )
+            )
+
+    def momentum_primary_open_slot(self) -> Optional[sqlite3.Row]:
+        with self.lock:
+            return self.conn.execute(
+                """SELECT * FROM momentum_slots
+                   WHERE primary_status='OPEN'
+                   ORDER BY opened_at_ms LIMIT 1"""
+            ).fetchone()
+
+    def pending_momentum_symbols(self) -> set[str]:
+        with self.lock:
+            return {
+                str(row["symbol"])
+                for row in self.conn.execute(
+                    """SELECT DISTINCT ms.symbol
+                       FROM momentum_slots ms
+                       JOIN momentum_policy_runs mp ON mp.slot_id=ms.id
+                       WHERE mp.state='OPEN'"""
+                )
+            }
+
+    def last_momentum_slot_for_symbol(self, symbol: str) -> Optional[sqlite3.Row]:
+        with self.lock:
+            return self.conn.execute(
+                """SELECT * FROM momentum_slots
+                   WHERE symbol=? ORDER BY opened_at_ms DESC LIMIT 1""",
+                (symbol,),
+            ).fetchone()
+
+    def momentum_policies_for_slot(self, slot_id: str) -> list[sqlite3.Row]:
+        with self.lock:
+            return list(
+                self.conn.execute(
+                    """SELECT * FROM momentum_policy_runs
+                       WHERE slot_id=? ORDER BY policy""",
+                    (slot_id,),
+                )
+            )
+
+    def update_momentum_slot_extremes(
+        self, slot_id: str, current_return: float, now_ms: int
+    ) -> None:
+        with self.lock:
+            self.conn.execute(
+                """UPDATE momentum_slots SET
+                   max_executable_return_percent=MAX(max_executable_return_percent,?),
+                   min_executable_return_percent=MIN(min_executable_return_percent,?),
+                   last_updated_at_ms=? WHERE id=?""",
+                (current_return, current_return, now_ms, slot_id),
+            )
+            self.conn.commit()
+
+    def update_momentum_policy(self, policy_id: str, **fields: Any) -> None:
+        if not fields:
+            return
+        assignments = ",".join(f"{name}=?" for name in fields)
+        with self.lock:
+            self.conn.execute(
+                f"UPDATE momentum_policy_runs SET {assignments} WHERE id=?",
+                (*fields.values(), policy_id),
+            )
+            self.conn.commit()
+
+    def close_momentum_primary(
+        self,
+        slot_id: str,
+        now_ms: int,
+        reason: str,
+        exit_vwap: float,
+        gross: float,
+        net: float,
+    ) -> None:
+        with self.lock:
+            self.conn.execute(
+                """UPDATE momentum_slots SET primary_status='CLOSED',
+                   primary_closed_at_ms=?, primary_exit_reason=?,
+                   primary_exit_vwap=?, primary_gross_return_percent=?,
+                   primary_net_return_percent=?, last_updated_at_ms=?
+                   WHERE id=?""",
+                (now_ms, reason, exit_vwap, gross, net, now_ms, slot_id),
+            )
+            self.conn.commit()
+
     def baseline_open_slot(self) -> Optional[sqlite3.Row]:
         with self.lock:
             return self.conn.execute(
@@ -657,12 +907,42 @@ class Storage:
                 (self.run_id,),
             ).fetchone()
             open_slot = self.baseline_open_slot()
+            momentum_slots = self.conn.execute(
+                "SELECT COUNT(*) n FROM momentum_slots WHERE run_id=?",
+                (self.run_id,),
+            ).fetchone()
+            open_momentum = self.momentum_primary_open_slot()
+            momentum_closed = self.conn.execute(
+                """SELECT policy, COUNT(*) AS n,
+                          COALESCE(AVG(net_return_percent), 0) AS avg_net
+                   FROM momentum_policy_runs
+                   WHERE state='CLOSED' GROUP BY policy"""
+            ).fetchall()
             return {
                 "run_id": self.run_id,
                 "snapshots": row["n"] if row else 0,
                 "slots": slots["n"] if slots else 0,
                 "active_slot": dict(open_slot) if open_slot else None,
                 "active_slot_run_id": open_slot["run_id"] if open_slot else None,
+                "momentum_slots": int(momentum_slots["n"] if momentum_slots else 0),
+                "active_momentum_slot": dict(open_momentum) if open_momentum else None,
+                "momentum_challenger": {
+                    "primary_policy": self.settings.momentum_primary_policy,
+                    "mc3_return_3m": self.settings.momentum_mc3_return_3m,
+                    "mc5_return_5m": self.settings.momentum_mc5_return_5m,
+                    "mc7_return_10m": self.settings.momentum_mc7_return_10m,
+                    "stop_percent": self.settings.momentum_stop_percent,
+                    "trail_activation_percent": self.settings.momentum_trail_activation_percent,
+                    "trail_drawdown_percent": self.settings.momentum_trail_drawdown_percent,
+                    "horizon_seconds": self.settings.momentum_horizon_seconds,
+                    "closed_policies": {
+                        str(row["policy"]): {
+                            "count": int(row["n"]),
+                            "avg_net_percent": round(float(row["avg_net"]), 6),
+                        }
+                        for row in momentum_closed
+                    },
+                },
                 "algorithm_version": self.settings.algorithm_version,
                 "strategy_version": self.settings.strategy_version,
                 "primary_policy": self.settings.primary_policy,
@@ -771,6 +1051,8 @@ class Storage:
             "snapshots",
             "paper_slots",
             "policy_runs",
+            "momentum_slots",
+            "momentum_policy_runs",
             "snapshot_outcomes",
             "skipped_candidates",
             "service_events",
@@ -814,7 +1096,7 @@ class Storage:
             "sha256": self._sha256(sqlite_gz),
         }
         manifest = {
-            "schema_version": 3,
+            "schema_version": 5,
             "exported_at_ms": now_ms,
             "run_id": self.run_id,
             "algorithm_version": self.settings.algorithm_version,

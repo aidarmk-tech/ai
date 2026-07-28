@@ -16,6 +16,8 @@ class Candidate:
     relative_strength_vs_btc: Optional[float]
     pre_score: float
     price_age_ms: Optional[int] = None
+    return_3m: Optional[float] = None
+    return_10m: Optional[float] = None
 
 
 @dataclass

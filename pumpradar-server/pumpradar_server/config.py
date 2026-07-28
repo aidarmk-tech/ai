@@ -19,8 +19,8 @@ def _env_int(name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class Settings:
-    algorithm_version: str = "4.3.7-server"
-    strategy_version: str = "TRADE3-V437-SHADOW-AUDIT-2026-07"
+    algorithm_version: str = "4.3.9-server"
+    strategy_version: str = "TRADE3-QUALITY+TARGET1-HOLD+MC5-HOLD120-2026-07"
     rest_url: str = os.getenv("BINANCE_REST_URL", "https://api.binance.com")
     ws_url: str = os.getenv("BINANCE_WS_URL", "wss://stream.binance.com:9443")
     data_dir: Path = Path(os.getenv("PUMPRADAR_DATA_DIR", "/var/lib/pumpradar"))
@@ -31,14 +31,14 @@ class Settings:
     position_usdt: float = _env_float("PUMPRADAR_POSITION_USDT", 20.0)
     fee_rate: float = _env_float("PUMPRADAR_FEE_RATE", 0.001)
     primary_policy: str = "C_WEAKENING"
-    minimum_24h_quote_volume: float = _env_float("PUMPRADAR_MIN_24H_QUOTE_VOLUME", 5_000_000.0)
-    max_candidates: int = _env_int("PUMPRADAR_MAX_CANDIDATES", 20)
+    minimum_24h_quote_volume: float = _env_float("PUMPRADAR_MIN_24H_QUOTE_VOLUME", 1_000_000.0)
+    max_candidates: int = _env_int("PUMPRADAR_MAX_CANDIDATES", 30)
     warm_pool_size: int = _env_int("PUMPRADAR_WARM_POOL_SIZE", 60)
     control_pool_size: int = _env_int("PUMPRADAR_CONTROL_POOL_SIZE", 5)
     control_rotation_seconds: int = _env_int("PUMPRADAR_CONTROL_ROTATION_SECONDS", 300)
     warm_refresh_seconds: int = _env_int("PUMPRADAR_WARM_REFRESH_SECONDS", 15)
-    deep_candidates: int = _env_int("PUMPRADAR_DEEP_CANDIDATES", 15)
-    depth_candidates: int = _env_int("PUMPRADAR_DEPTH_CANDIDATES", 20)
+    deep_candidates: int = _env_int("PUMPRADAR_DEEP_CANDIDATES", 20)
+    depth_candidates: int = _env_int("PUMPRADAR_DEPTH_CANDIDATES", 25)
     export_interval_minutes: int = _env_int("PUMPRADAR_EXPORT_INTERVAL_MINUTES", 60)
     export_keep_count: int = _env_int("PUMPRADAR_EXPORT_KEEP_COUNT", 48)
     export_max_total_mb: int = _env_int("PUMPRADAR_EXPORT_MAX_TOTAL_MB", 2_048)
@@ -87,8 +87,38 @@ class Settings:
     min_shadow_strict_streak: int = 3
     strict_streak_max_gap_ms: int = 2_500
     episode_impulse_start_score: int = 40
-    episode_reset_seconds: int = 60
-    episode_retention_seconds: int = 15 * 60
+    episode_reset_seconds: int = 20 * 60
+    episode_retention_seconds: int = 30 * 60
+
+    # v4.3.9 TRADE3 entry-quality gate.  Deferred/blocked candidates remain
+    # observable as shadow snapshots so the filter can be validated forward.
+    trade3_thin_quote_volume_30s: float = 20_000.0
+    trade3_very_thin_quote_volume_30s: float = 10_000.0
+    trade3_weak_cvd_30s: float = 10_000.0
+    trade3_weak_cvd_slope: float = 10_000.0
+    trade3_bad_book_spread_bps: float = 15.0
+    trade3_stale_book_defer_ms: int = 200
+    trade3_stale_trade_defer_ms: int = 750
+    trade3_stale_book_veto_ms: int = 500
+    trade3_stale_trade_veto_ms: int = 1_500
+    trade3_target1_hold_seconds: int = 300
+    stop_watch_interval_ms: int = _env_int("PUMPRADAR_STOP_WATCH_INTERVAL_MS", 500)
+
+    # v4.3.8 independent momentum-continuation challenger.
+    momentum_mc3_return_3m: float = 3.0
+    momentum_mc5_return_5m: float = 5.0
+    momentum_mc7_return_10m: float = 7.0
+    momentum_max_spread_bps: float = 30.0
+    momentum_max_buy_slippage_percent: float = 0.15
+    momentum_max_sell_slippage_percent: float = 0.35
+    momentum_stop_percent: float = 2.0
+    momentum_trail_activation_percent: float = 1.5
+    momentum_trail_drawdown_percent: float = 1.0
+    momentum_fixed_target_percent: float = 4.0
+    momentum_horizon_seconds: int = 20 * 60
+    momentum_hold_seconds: int = 120
+    momentum_repeat_symbol_minutes: int = 20
+    momentum_primary_policy: str = "MC_HOLD_120"
     target_percent: float = 3.0
     initial_stop_percent: float = 0.75
     protection_activation_percent: float = 1.0
@@ -119,7 +149,7 @@ class Settings:
             "export_keep_count", "export_max_total_mb",
             "max_candidates", "warm_pool_size", "control_pool_size", "control_rotation_seconds",
             "warm_refresh_seconds", "deep_candidates", "depth_candidates",
-            "report_timezone_offset_minutes",
+            "report_timezone_offset_minutes", "stop_watch_interval_ms",
         }
         payload = {k: v for k, v in asdict(self).items() if k not in excluded}
         payload = {k: str(v) if isinstance(v, Path) else v for k, v in payload.items()}
