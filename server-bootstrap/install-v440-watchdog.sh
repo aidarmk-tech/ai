@@ -3,7 +3,7 @@ set -euo pipefail
 
 RAW_BASE="https://raw.githubusercontent.com/aidarmk-tech/ai/chatgpt/pumpradar-v440-mc7-freeze100/server-bootstrap/watchdog"
 WATCHDOG_URL="${RAW_BASE}/pumpradar-watchdog"
-WATCHDOG_SHA256="9a78e61d5c062129f013de9ba6b7219646e078f7aef969d366a2463d66820618"
+WATCHDOG_GIT_BLOB_SHA1="009de8c8f11eb5067951c7b035d87112c90449ea"
 WATCHDOG_BIN="/usr/local/sbin/pumpradar-watchdog"
 SERVICE_FILE="/etc/systemd/system/pumpradar-watchdog.service"
 TIMER_FILE="/etc/systemd/system/pumpradar-watchdog.timer"
@@ -19,9 +19,17 @@ trap 'rm -f "$tmp"' EXIT
 curl -fL --retry 4 --retry-delay 2 --connect-timeout 15 \
   "$WATCHDOG_URL" -o "$tmp"
 
-actual_sha="$(sha256sum "$tmp" | awk '{print $1}')"
-if [[ "$actual_sha" != "$WATCHDOG_SHA256" ]]; then
-  echo "Ошибка SHA-256 watchdog: ожидался $WATCHDOG_SHA256, получен $actual_sha"
+actual_blob_sha="$(python3 - "$tmp" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+data = pathlib.Path(sys.argv[1]).read_bytes()
+print(hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest())
+PY
+)"
+if [[ "$actual_blob_sha" != "$WATCHDOG_GIT_BLOB_SHA1" ]]; then
+  echo "Ошибка целостности watchdog: ожидался Git blob $WATCHDOG_GIT_BLOB_SHA1, получен $actual_blob_sha"
   exit 1
 fi
 
