@@ -72,6 +72,7 @@ class PlayerActivity : AppCompatActivity() {
     private var detailsExpanded = false
     private var tracksWasVisible = false
     private var infoWasVisible = false
+    private var autoNextWasVisible = false
 
     // IPTV channel card (slides up on switch) + which channel it last showed.
     private var lastChannelKey: String? = null
@@ -382,6 +383,10 @@ class PlayerActivity : AppCompatActivity() {
                 binding.autoNextOverlay.isVisible = showNext
                 if (showNext) binding.tvAutoNextCountdown.text =
                     getString(R.string.autonext_countdown, s.autoNextCountdown)
+                // Focus the Cancel button when the overlay appears so the remote's OK
+                // activates it (a visible-but-unfocused TV button can't be clicked).
+                if (showNext && !autoNextWasVisible) binding.btnCancelAutoNext.requestFocus()
+                autoNextWasVisible = showNext
 
                 // TMDB splash overlay
                 s.metadata?.let { meta ->
@@ -812,6 +817,21 @@ class PlayerActivity : AppCompatActivity() {
                 return true
             }
             // any other key: just dismiss the card and handle the key normally
+        }
+
+        // Auto-next countdown: the overlay only offers "Cancel", so route OK / BACK /
+        // any D-pad key to it. Without this the playback handler swallows the keys and
+        // the visible-but-unfocused button never fires.
+        if (s.autoNextCountdown >= 0) {
+            when (keyCode) {
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER,
+                KeyEvent.KEYCODE_BACK,
+                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
+                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    vm.cancelAutoNext()
+                    return true
+                }
+            }
         }
 
         // Diagnostic overlay: any key dismisses it first.

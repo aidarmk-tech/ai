@@ -7,6 +7,10 @@ class AutoNextManager @Inject constructor() {
 
     private var countdownJob: Job? = null
     private var remainingSeconds = 0
+    // Once the user cancels, stay off for this episode — otherwise the next
+    // position tick re-enters checkAndStart and restarts the countdown, making
+    // "Cancel" look broken. Reset() (called on each new episode) re-arms it.
+    private var suppressed = false
 
     fun checkAndStart(
         durationSec: Double,
@@ -16,6 +20,7 @@ class AutoNextManager @Inject constructor() {
         onTick: (Int) -> Unit,
         onNext: () -> Unit,
     ) {
+        if (suppressed) return
         val remaining = durationSec - currentTimeSec
         if (remaining > delaySeconds || durationSec <= 0) return
         if (countdownJob?.isActive == true) return
@@ -35,6 +40,18 @@ class AutoNextManager @Inject constructor() {
         countdownJob?.cancel()
         countdownJob = null
         remainingSeconds = 0
+    }
+
+    /** User cancelled: stop and stay suppressed until the next episode re-arms it. */
+    fun suppress() {
+        cancel()
+        suppressed = true
+    }
+
+    /** New episode/media: clear suppression so auto-next can arm again. */
+    fun reset() {
+        cancel()
+        suppressed = false
     }
 
     fun isActive() = countdownJob?.isActive == true

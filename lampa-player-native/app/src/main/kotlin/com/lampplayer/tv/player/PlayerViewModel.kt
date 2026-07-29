@@ -1239,7 +1239,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun selectEpisode(episode: EpisodeItem) {
-        autoNextManager.cancel()
+        autoNextManager.reset()   // new episode re-arms auto-next (clears user suppression)
         programmeJob?.cancel()
         errorRecovery.reset(); vlcRetries = 0   // new media → fresh retry budget
         lastVlcPositionMs = 0L   // don't reopen the new media at the old stream's offset
@@ -1545,7 +1545,7 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    fun cancelAutoNext() { autoNextManager.cancel(); _uiState.update { it.copy(autoNextCountdown = -1) } }
+    fun cancelAutoNext() { autoNextManager.suppress(); _uiState.update { it.copy(autoNextCountdown = -1) } }
 
     // Sleep timer: pause playback and surface the exit dialog when it elapses.
     private fun restartSleepTimer(minutes: Int) {
