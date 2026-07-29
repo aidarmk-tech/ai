@@ -243,6 +243,10 @@
         if (obj.params && obj.params.object) [obj.params.object, obj.params.object.movie, obj.params.object.card].forEach(function(x){ all.push(x); });
         all.forEach(function(c) {
             if (!c || typeof c !== 'object') return;
+            if (c.lmnp_preferred) {
+                _savedCard = c;
+                return;
+            }
             var s = cardScore(c);
             if (s < 0) return;
             var cid = c.id || c.tmdb_id;
@@ -336,7 +340,27 @@
     }
 
     // ── Поиск TMDB-карточки ───────────────────────────────────────────────
+    function explicitPreferredCard(data, file) {
+        var candidates = [
+            data && data.lmnp_card,
+            data && data.card,
+            data && data.movie,
+            file && file.lmnp_card,
+            file && file.card,
+            file && file.movie
+        ];
+        for (var i = 0; i < candidates.length; i++) {
+            var card = candidates[i];
+            if (card && typeof card === 'object' && card.lmnp_preferred) return card;
+        }
+        return null;
+    }
+
     function findCard(data, file) {
+        // Прямая очищенная карточка источника важнее сохранённой TMDB-карточки.
+        var preferred = explicitPreferredCard(data, file);
+        if (preferred) return preferred;
+
         // 1. Предсохранённая TMDB-карточка (из hookActivity или сканирования на старте)
         if (_savedCard && isTmdbCard(_savedCard)) return _savedCard;
 
@@ -894,7 +918,7 @@
         var card = {
             title:          rawTitle,
             original_title: c.original_title || c.original_name || null,
-            tmdb_id:        c.id || c.tmdb_id || 0,
+            tmdb_id:        c.vk_video ? 0 : (c.id || c.tmdb_id || 0),
             imdb_id:        c.imdb_id || null,
             // prefer per-episode values from the play element over the card defaults
             season_number:  file.season  || c.season_number || c.season  || 0,
@@ -1104,6 +1128,8 @@
                     video && typeof video === 'object' && video.url && !alreadyPacked) {
 
                     var origTitle = (typeof video.title === 'string') ? video.title : '';
+                    var forcePlainTitle = !!video.lmnp_plain_title || !!video.vk_video;
+                    var displayTitle = String(origTitle || video.lmnp_title || 'VK Видео').trim().slice(0, 140);
                     var g = getPlaylist();
                     var list = null, pos = 0;
                     if (g.list && g.list.length > 1)                      { list = g.list; pos = g.pos || 0; }
@@ -1148,8 +1174,11 @@
                                     if (cpl) meta.pl = cpl;
                                 }
                                 cleanMeta(meta);
-                                if (meta.title || meta.tmdb_id || meta.iptv)
+                                if (forcePlainTitle) {
+                                    video.title = displayTitle || meta.title || 'VK Видео';
+                                } else if (meta.title || meta.tmdb_id || meta.iptv) {
                                     video.title = 'lmpmeta://' + b64utf8(JSON.stringify(meta));
+                                }
 
                                 // Полный плейлист — через заголовок (без лимита title).
                                 var hdr = {};
@@ -1197,8 +1226,11 @@
                         var meta = iptv ? { title: origTitle || 'IPTV', iptv: true } : compactMeta(cardData);
                         if (iptv) addArchive(meta, video);
                         cleanMeta(meta);
-                        if (meta.title || meta.tmdb_id || meta.iptv)
+                        if (forcePlainTitle) {
+                            video.title = displayTitle || meta.title || 'VK Видео';
+                        } else if (meta.title || meta.tmdb_id || meta.iptv) {
                             video.title = 'lmpmeta://' + b64utf8(JSON.stringify(meta));
+                        }
                         // Фильм/одиночная серия: тот же мост возврата таймкода (бета).
                         if (!iptv && video && video.url &&
                             launchWithTimelineResult(video.url, video.title, cardData, video)) {
