@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import fcntl
+import json
+import subprocess
+import time
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+LOCK_PATH = Path("/run/pumpradar-watchdog.lock")
+STATE_DIR = Path("/run/pumpradar-watchdog")
+FAIL_FILE = STATE_DIR / "failures"
+LAST_RESTART_FILE = STATE_DIR / "last_restart_epoch"
+ENV_FILE = Path("/etc/pumpradar/server.env")
+
+STARTUP_GRACE_SECONDS = 120
+MAX_FEED_AGE_MS = 30_000
+FAILURES_BEFORE_RESTART = 2
+RESTART_COOLDOWN_SECONDS = 10 * 60
+HTTP_TIMEOUT_SECONDS = 8
+
+
+def log(message: str) -> None:
+    print(f"pumpradar-watchdog: {message}", flush=True)
+
+
+def read_bind_port() -> int:
+    if ENV_FILE.exists():
+        for raw in ENV_FILE.read_text(errors="replace").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            if key.strip() == "PUMPRADAR_BIND_PORT":
+                value = value.strip().strip('"').strip("'")
+                try:
+                    return int(value)
+                except ValueError:
+                    break
+    return 8787
+
+
+def read_int(path: Path, default: int = 0) -> int:
+    try:
+        return int(path.read_text().strip())
+    except (OSError, ValueError):
+        return default
+
+
+def write_int(path: Path, value: int) -> None:
+    path.write_text(f"{value}\n")
+
+
+def reset_failures() -> None:
+    write_int(FAIL_FILE, 0)
+
+
+def restart_service(reason: str) -> None:
+    now = int(time.time())
+    last_restart = read_int(LAST_RESTART_FILE)
+    remaining = RESTART_COOLDOWN_SECONDS - (now - last_restart)
+    if last_restart and remaining > 0:
+        log(f"restart suppressed by cooldown ({remaining}s remaining); reason={reason}")
+        return
+
+    log(f"restarting pumpradar.service; reason={reason}")
+    subprocess.run(
+        ["systemctl", "restart", "pumpradar.service"],
+        check=True,
+        timeout=25,
+    )
+    write_int(LAST_RESTART_FILE, now)
+    reset_failures()
+    time.sleep(5)
+    active = subprocess.run(
+        ["systemctl", "is-active", "--quiet", "pumpradar.service"],
+        check=False,
+    ).returncode == 0
+    log("restart completed; service active" if active else "restart completed; service is not active")
+
+
+def fetch_health() -> dict[str, Any]:
+    port = read_bind_port()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/healthz",
+        headers={"User-Agent": "PumpRadar-Watchdog/1.0"},
+    )
+    with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+        if response.status != 200:
+            raise RuntimeError(f"HTTP {response.status}")
+        payload = json.loads(response.read().decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise RuntimeError("health response is not an object")
+    return payload
+
+
+def health_problem(payload: dict[str, Any]) -> str | None:
+    uptime = payload.get("uptime_seconds")
+    try:
+        uptime_seconds = int(uptime)
+    except (TypeError, ValueError):
+        return "invalid uptime_seconds"
+
+    if uptime_seconds < STARTUP_GRACE_SECONDS:
+        return None
+
+    problems: list[str] = []
+    for field in ("spot_ok", "futures_ok"):
+        if payload.get(field) is not True:
+            problems.append(f"{field}={payload.get(field)!r}")
+
+    for field in (
+        "market_feed_age_ms",
+        "candidate_feed_age_ms",
+        "futures_market_feed_age_ms",
+        "futures_candidate_feed_age_ms",
+    ):
+        value = payload.get(field)
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            problems.append(f"{field}={value!r}")
+        elif value < 0 or value > MAX_FEED_AGE_MS:
+            problems.append(f"{field}={value}")
+
+    return ", ".join(problems) if problems else None
+
+
+def main() -> int:
+    LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+
+    with LOCK_PATH.open("w") as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            log("another check is already running")
+            return 0
+
+        active = subprocess.run(
+            ["systemctl", "is-active", "--quiet", "pumpradar.service"],
+            check=False,
+        ).returncode == 0
+        if not active:
+            restart_service("service is not active")
+            return 0
+
+        try:
+            payload = fetch_health()
+            problem = health_problem(payload)
+        except Exception as exc:
+            problem = f"health request failed: {type(exc).__name__}: {exc}"
+
+        if problem is None:
+            if read_int(FAIL_FILE) != 0:
+                log("health recovered; failure counter reset")
+            reset_failures()
+            return 0
+
+        failures = read_int(FAIL_FILE) + 1
+        write_int(FAIL_FILE, failures)
+        log(f"unhealthy check {failures}/{FAILURES_BEFORE_RESTART}: {problem}")
+
+        if failures >= FAILURES_BEFORE_RESTART:
+            restart_service(problem)
+        return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
