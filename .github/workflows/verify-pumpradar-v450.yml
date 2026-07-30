@@ -1,0 +1,83 @@
+name: Verify PumpRadar v4.5 regime
+
+on:
+  push:
+    branches:
+      - chatgpt/pumpradar-v450-regime-paper
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct and verify v4.5 patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat \
+            server-bootstrap/v450payload/00 \
+            server-bootstrap/v450payload/01 \
+            server-bootstrap/v450payload/02 \
+            server-bootstrap/v450payload/07 \
+            server-bootstrap/v450payload/08 \
+            server-bootstrap/v450payload/09 \
+            server-bootstrap/v450payload/10 \
+            server-bootstrap/v450payload/11 \
+            server-bootstrap/v450payload/12 \
+            server-bootstrap/v450payload/13 \
+            server-bootstrap/v450payload/14 \
+            server-bootstrap/v450payload/15 \
+            server-bootstrap/v450payload/16 \
+            server-bootstrap/v450payload/17 | base64 -d > /tmp/apply-v450.py
+          echo '70f123b9ae3b009dbe0664832e54bee2d7d25ee5cf9b484119ecde36ce7e8241  /tmp/apply-v450.py' | sha256sum -c -
+          python3 -m py_compile /tmp/apply-v450.py
+          bash -n server-bootstrap/install-v450-regime.sh
+
+      - name: Build v4.4 then apply v4.5
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 server-bootstrap/apply-v440.py
+          python3 /tmp/apply-v450.py pumpradar-server
+          python3 -m compileall -q pumpradar-server/pumpradar_server pumpradar-server/tests
+          if grep -RInE --exclude-dir='__pycache__' '(/fapi/v1/order|/fapi/v1/batchOrders|/api/v3/order|X-MBX-APIKEY|signature=)' pumpradar-server/pumpradar_server; then
+            echo 'Forbidden real-order code found' >&2
+            exit 1
+          fi
+
+      - name: Run unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH=pumpradar-server python3 -m unittest discover -s pumpradar-server/tests -v
+
+      - name: Smoke-test regime schema and math
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PUMPRADAR_DB_PATH="$RUNNER_TEMP/pumpradar.sqlite3"
+          export PUMPRADAR_DATA_DIR="$RUNNER_TEMP/data"
+          PYTHONPATH=pumpradar-server python3 - <<'PY'
+          from pumpradar_server.config import Settings
+          from pumpradar_server.storage import Storage
+          from pumpradar_server.futures import FuturesMarketState
+          from pumpradar_server.regime import RegimePaperManager, trade_pnl
+          s=Settings()
+          st=Storage(s)
+          async def notify(_: str): pass
+          manager=RegimePaperManager(s, FuturesMarketState(), st, notify)
+          assert manager.status()['regime_primary_channel'] == 'REV_MC5_SHORT_600_2X'
+          gross, net, gross_pct, net_pct = trade_pnl('SHORT',100,98,0.4,0.02,0.0196,0,20)
+          assert round(gross,4) == 0.8
+          assert round(net,4) == 0.7604
+          assert round(gross_pct,3) == 4.0
+          assert round(net_pct,3) == 3.802
+          assert st.conn.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'
+          st.conn.close()
+          PY
