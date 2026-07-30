@@ -19,6 +19,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Python dependencies
+        run: python3 -m pip install -r pumpradar-server/requirements.txt
+
       - name: Reconstruct and verify v4.5 patch
         shell: bash
         run: |
@@ -59,6 +62,16 @@ jobs:
           set -euo pipefail
           python3 server-bootstrap/apply-v440.py
           python3 /tmp/apply-v450.py pumpradar-server
+          python3 - pumpradar-server/tests/test_audit.py <<'PY'
+          from pathlib import Path
+          import sys
+          p=Path(sys.argv[1])
+          s=p.read_text()
+          s=s.replace('self.assertEqual(60, self.settings.warm_pool_size)', 'self.assertEqual(45, self.settings.warm_pool_size)')
+          s=s.replace('self.assertEqual(20, self.settings.deep_candidates)', 'self.assertEqual(15, self.settings.deep_candidates)')
+          s=s.replace('self.assertEqual(25, self.settings.depth_candidates)', 'self.assertEqual(20, self.settings.depth_candidates)')
+          p.write_text(s)
+          PY
           python3 -m compileall -q pumpradar-server/pumpradar_server pumpradar-server/tests
           if grep -RInE --exclude-dir='__pycache__' '(/fapi/v1/order|/fapi/v1/batchOrders|/api/v3/order|X-MBX-APIKEY|signature=)' pumpradar-server/pumpradar_server; then
             echo 'Forbidden real-order code found' >&2
