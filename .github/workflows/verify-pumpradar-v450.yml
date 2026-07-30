@@ -23,7 +23,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          parts=(00 01 02 07 08 09 10 11 12 13 14 15 16 17)
+          parts=(00 01 02 07 08 09 10 11 12 13 14a 14b 14c 14d 15 16 17)
           for part in "${parts[@]}"; do
             printf '%s ' "$part"
             git hash-object "server-bootstrap/v450payload/$part"
@@ -39,7 +39,10 @@ jobs:
             server-bootstrap/v450payload/11 \
             server-bootstrap/v450payload/12 \
             server-bootstrap/v450payload/13 \
-            server-bootstrap/v450payload/14 \
+            server-bootstrap/v450payload/14a \
+            server-bootstrap/v450payload/14b \
+            server-bootstrap/v450payload/14c \
+            server-bootstrap/v450payload/14d \
             server-bootstrap/v450payload/15 \
             server-bootstrap/v450payload/16 \
             server-bootstrap/v450payload/17 | base64 -d > /tmp/apply-v450.py
@@ -47,6 +50,7 @@ jobs:
           echo '70f123b9ae3b009dbe0664832e54bee2d7d25ee5cf9b484119ecde36ce7e8241  /tmp/apply-v450.py' | sha256sum -c -
           python3 -m py_compile /tmp/apply-v450.py
           bash -n server-bootstrap/install-v450-regime.sh
+          bash -n server-bootstrap/install-v450-regime-ready.sh
 
       - name: Build v4.4 then apply v4.5
         shell: bash
