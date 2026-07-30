@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - chatgpt/pumpradar-v450-regime-paper
+  pull_request:
+    branches:
+      - chatgpt/pumpradar-v440-mc7-freeze100
   workflow_dispatch:
 
 permissions:
