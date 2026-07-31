@@ -11,7 +11,7 @@ trap 'rm -rf "$TMP"' EXIT
 curl -fsSL "$BASE/install-pumpradar-v453.py" -o "$TMP/install.py"
 echo "$INSTALLER_SHA256  $TMP/install.py" | sha256sum -c -
 : > "$TMP/payload.b64"
-for part in 00 01 02 ; do
+for part in 00 01 02 03 04 05 06 07 ; do
   curl -fsSL "$BASE/v453payload/$part" >> "$TMP/payload.b64"
 done
 echo "$PAYLOAD_B64_SHA256  $TMP/payload.b64" | sha256sum -c -
