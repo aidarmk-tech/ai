@@ -1,0 +1,48 @@
+name: Verify PumpRadar v4.5.2 research
+
+on:
+  pull_request:
+    paths:
+      - server-bootstrap/install-v452-research.sh
+      - server-bootstrap/v452payload/**
+      - server-bootstrap/PUMPRADAR_V452_RESEARCH.md
+      - .github/workflows/verify-pumpradar-v452-research.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install --disable-pip-version-check aiohttp
+      - name: Reconstruct and verify installer
+        run: |
+          cat server-bootstrap/v452payload/{00,01,02,03,04,05,06} > /tmp/installer.payload.b64
+          echo "91ecfc787c8d341dbbb6903b12b7b5ced859297578af6fefa81cd8ce673808c4  /tmp/installer.payload.b64" | sha256sum -c -
+          base64 -d /tmp/installer.payload.b64 | gzip -dc > /tmp/install-pumpradar-v452-research-v2.py
+          echo "7c6555b058e1a67e7559e625e70cb0a16e2a72e07e420fcaa6ad4551ebb0855e  /tmp/install-pumpradar-v452-research-v2.py" | sha256sum -c -
+          python -m py_compile /tmp/install-pumpradar-v452-research-v2.py
+      - name: Validate embedded source and tests
+        run: |
+          python - <<'PY'
+          import importlib.util
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          installer_path = Path('/tmp/install-pumpradar-v452-research-v2.py')
+          spec = importlib.util.spec_from_file_location('v452_installer', installer_path)
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          module.PYTHON = Path(sys.executable)
+          with tempfile.TemporaryDirectory() as temp_name:
+              candidate = Path(temp_name)
+              module.materialize(candidate)
+              module.validate_candidate(candidate)
+          PY
