@@ -55,10 +55,15 @@ The Android client creates a new export before download, sends no-cache requests
 - unchanged SHORT baseline;
 - Android APK build.
 
-## Safe installation
+## Safe installation bundle
+
+The verified deployment bundle is distributed as `PumpRadar-v4.5.3-Server-Release.tar.gz` together with its SHA-256 file. After placing it in `/root`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/aidarmk-tech/ai/chatgpt/pumpradar-v453-short-risk-client/server-bootstrap/install-v453-safe.sh | bash
+mkdir -p /root/pumpradar-v453-install
+rm -rf /root/pumpradar-v453-install/*
+tar -xzf /root/PumpRadar-v4.5.3-Server-Release.tar.gz -C /root/pumpradar-v453-install
+bash /root/pumpradar-v453-install/PumpRadar-v4.5.3-Server-Release/install.sh
 ```
 
 The installer waits for all open paper slots to close, rechecks after stopping the services, creates a verified database/code backup, installs atomically, verifies runtime versions and automatically restores the backup on failure.
@@ -66,5 +71,5 @@ The installer waits for all open paper slots to close, rechecks after stopping t
 ## Rollback
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/aidarmk-tech/ai/chatgpt/pumpradar-v453-short-risk-client/server-bootstrap/install-v453-safe.sh | bash -s -- rollback
+bash /root/pumpradar-v453-install/PumpRadar-v4.5.3-Server-Release/rollback.sh
 ```
