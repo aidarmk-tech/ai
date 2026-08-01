@@ -1,0 +1,205 @@
+uring migration: {before} -> {after}")
+        connection = sqlite3.connect(migrated)
+        try:
+            integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
+            foreign_keys = list(connection.execute("PRAGMA foreign_key_check"))
+        finally:
+            connection.close()
+        if integrity != "ok" or foreign_keys:
+            raise RuntimeError(f"migration invalid: integrity={integrity}, foreign_keys={len(foreign_keys)}")
+        return {
+            "tests": 46,
+            "integrity": integrity,
+            "foreign_keys": len(foreign_keys),
+            "historical_channels": before,
+        }
+
+
+def open_slot_count() -> int:
+    connection = sqlite3.connect(db_path(), timeout=30)
+    try:
+        return int(connection.execute(
+            "SELECT COUNT(*) FROM regime_slots WHERE status='OPEN'"
+        ).fetchone()[0])
+    finally:
+        connection.close()
+
+
+def wait_for_no_open_slots() -> None:
+    timeout = int(os.environ.get("PUMPRADAR_INSTALL_WAIT_SECONDS", "1800"))
+    deadline = time.monotonic() + timeout
+    while True:
+        count = open_slot_count()
+        if count == 0:
+            print("No open paper slots; proceeding.")
+            return
+        remaining = max(0, int(deadline - time.monotonic()))
+        if remaining <= 0:
+            raise RuntimeError(f"timed out waiting for {count} open paper slot(s)")
+        print(f"Waiting for {count} open paper slot(s) to close; {remaining}s remaining...", flush=True)
+        time.sleep(min(20, remaining))
+
+
+def sqlite_backup(src: Path, dst: Path) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    source = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=30)
+    target = sqlite3.connect(dst)
+    try:
+        source.backup(target)
+        target.commit()
+        integrity = target.execute("PRAGMA integrity_check").fetchone()[0]
+        foreign_keys = list(target.execute("PRAGMA foreign_key_check"))
+        if integrity != "ok" or foreign_keys:
+            raise RuntimeError(f"backup invalid: integrity={integrity}, foreign_keys={len(foreign_keys)}")
+    finally:
+        target.close()
+        source.close()
+
+
+def backup_current() -> Path:
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime())
+    backup = BACKUP_ROOT / stamp
+    backup.mkdir(parents=True, exist_ok=False)
+    shutil.copytree(server_root(), backup / "server", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    sqlite_backup(db_path(), backup / "pumpradar.sqlite3")
+    latest = BACKUP_ROOT / "latest"
+    temporary = BACKUP_ROOT / f".latest-{stamp}"
+    temporary.symlink_to(backup.name)
+    os.replace(temporary, latest)
+    return backup
+
+
+def restore_backup(backup: Path) -> None:
+    print(f"Restoring {backup}")
+    systemctl("stop", SERVER_SERVICE, check=False)
+    systemctl("stop", RECORDER_SERVICE, check=False)
+    live = server_root()
+    replacement = live.with_name(live.name + ".rollback-v4531-tmp")
+    failed = live.with_name(live.name + ".failed-v4531")
+    shutil.rmtree(replacement, ignore_errors=True)
+    shutil.rmtree(failed, ignore_errors=True)
+    shutil.copytree(backup / "server", replacement)
+    if live.exists():
+        os.replace(live, failed)
+    os.replace(replacement, live)
+    sqlite_backup(backup / "pumpradar.sqlite3", db_path())
+    systemctl("start", RECORDER_SERVICE, check=False)
+    systemctl("start", SERVER_SERVICE, check=False)
+
+
+def install_files(manifest: dict[str, Any], extracted: Path) -> None:
+    for entry in manifest["entries"]:
+        src = extracted / str(entry["payload"])
+        dst = resolve_destination(entry)
+        atomic_copy(src, dst, int(str(entry["mode"]), 8))
+        if sha256(dst) != str(entry["final_sha256"]):
+            raise RuntimeError(f"post-write hash mismatch: {dst}")
+
+
+def verify_runtime() -> None:
+    systemctl("is-active", "--quiet", SERVER_SERVICE)
+    systemctl("is-active", "--quiet", RECORDER_SERVICE)
+    deadline = time.monotonic() + 120
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:8787/healthz", timeout=5) as response:
+                payload = json.load(response)
+            if payload.get("algorithm_version") == ALGORITHM_VERSION:
+                break
+            last_error = RuntimeError(f"unexpected health version: {payload.get('algorithm_version')}")
+        except Exception as exc:
+            last_error = exc
+        time.sleep(3)
+    else:
+        raise RuntimeError(f"server health verification failed: {last_error}")
+    connection = sqlite3.connect(db_path())
+    try:
+        if connection.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise RuntimeError("live database integrity check failed")
+        if list(connection.execute("PRAGMA foreign_key_check")):
+            raise RuntimeError("live database foreign key check failed")
+        for name in ("exit_window_samples", "exit_window_challengers", "regime_channel_health"):
+            if not connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+            ).fetchone():
+                raise RuntimeError(f"missing live table: {name}")
+    finally:
+        connection.close()
+
+
+def install() -> None:
+    if os.geteuid() != 0:
+        raise RuntimeError("installer must run as root")
+    with tempfile.TemporaryDirectory(prefix="pumpradar-v4531-") as temp_name:
+        extracted, manifest = materialize_payload(Path(temp_name))
+        verify_live_inputs(manifest)
+        result = validate_candidate(extracted)
+        print("Validation:", json.dumps(result, sort_keys=True))
+        wait_for_no_open_slots()
+        server_was_active = is_active(SERVER_SERVICE)
+        recorder_was_active = is_active(RECORDER_SERVICE)
+        systemctl("stop", SERVER_SERVICE)
+        systemctl("stop", RECORDER_SERVICE)
+        if open_slot_count() != 0:
+            if recorder_was_active:
+                systemctl("start", RECORDER_SERVICE, check=False)
+            if server_was_active:
+                systemctl("start", SERVER_SERVICE, check=False)
+            raise RuntimeError("a paper slot opened during the install boundary; retry later")
+        backup: Path | None = None
+        try:
+            backup = backup_current()
+            install_files(manifest, extracted)
+            systemctl("start", RECORDER_SERVICE)
+            systemctl("start", SERVER_SERVICE)
+            verify_runtime()
+            print(f"PumpRadar {RELEASE} installed successfully. Backup: {backup}")
+        except Exception:
+            if backup is not None:
+                with contextlib.suppress(Exception):
+                    restore_backup(backup)
+            else:
+                if recorder_was_active:
+                    systemctl("start", RECORDER_SERVICE, check=False)
+                if server_was_active:
+                    systemctl("start", SERVER_SERVICE, check=False)
+            raise
+
+
+def validate() -> None:
+    with tempfile.TemporaryDirectory(prefix="pumpradar-v4531-check-") as temp_name:
+        extracted, manifest = materialize_payload(Path(temp_name))
+        verify_live_inputs(manifest)
+        print(json.dumps(validate_candidate(extracted), indent=2, sort_keys=True))
+
+
+def rollback() -> None:
+    if os.geteuid() != 0:
+        raise RuntimeError("rollback must run as root")
+    latest = BACKUP_ROOT / "latest"
+    if not latest.exists():
+        raise RuntimeError("no v4.5.3.1 backup found")
+    restore_backup(latest.resolve())
+    print("PumpRadar v4.5.3.1 rollback completed")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="PumpRadar v4.5.3.1 safe installer")
+    parser.add_argument("action", choices=("install", "validate", "rollback"), nargs="?", default="install")
+    args = parser.parse_args()
+    if args.action == "install":
+        install()
+    elif args.action == "validate":
+        validate()
+    else:
+        rollback()
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise SystemExit(1)
