@@ -1,0 +1,197 @@
+I6/7laJxVieRNksxOYwmlYzllaj2MK2sINlR5G2is49ENnilBhIWmG3eKj2QCfjGIK7m5qAneFv9ReN5m2awADYBwxd2Yf9eslxaV8fo1pLUxXtYY7ZvR97wS0J2xY9/zxjvz6x3T0Uc39tCxlXpWdXQWjmNzlw/hOS9m5+5dXN8uR+P6/GY5z7IqhzCzrPBugf2Wz0C2OZndLmFQjD0EzDxrEwEvdJOLlH3NaZAqBTJYAAyTcpcIV/n6t69vvh5ufv3666OvIVgrfr5CDpca+BOOSaPS7WT4jB8YaMIcOJmHnqGoiFldYX9fVj5gaz5ufhBVfI1V7DS2h0ZiXY15lTz2EHn6doZp6u3WsTbMbm9m83SYMq2OH4pXbEFeuDJ5buRGjQBgJLWHn4x/qkZ7QssVB6kaeIIVcA1TynLkQ3AKAwY4txdtJ+WQq19oE7+72Gt12fukFW73k2MuD33NwXB5y5atDKKLw1WW4Of8ijyonAq9A0MXYJ5dQfDnQIPkV6oZ8luIxs73YAvYR0gQxC/3sH5l6XxwTQOhy402/wdQQdB1CJGPyV88GMTxfjQBA88iBcNILkhObaKD4j5Scp2l46XfcO/KpQdhZXwyvmo5y8UKwwLLnRWlxza24B5HL21zaD/agMwiwl5jwMkhKjuxJTzENU/AgDOd3xlle9P3euLO72wxw2rPrubigqLE4+rCCohrxBXzvPW8Ya8/bLXPGO+whZNtCubzKcaj5yEcQujNIqICIumebCdTpyrTtxUQ/H5dRHisdMQ2Wj1GdcYcHQAKBfU4/Y9DRi8xuBBPHvgDss3xrAE7ug27H9SfH+NAOvfLitG6xS4mvfPbWyNyutt9T9+x2tEHVwnd8A2HRsHVBncE6B20MNegMYm7OSAnMZVqAbn4uJUCw8w/wjY9Kr5K4DYIy0GTeKf8YYMcFAgDyjUojg4ZVgwPpqfeOZZ/I5QXEotHpkvPiQHJ8gFRfcydDj4xRHMW1IS7dHzbVA0eBibdRK6Hc9C9WbWWig4V1IfZYjAfoU7nN2qweEfqK0xP4pXWGUT96g9/bFFrufpjNOPbT4mITYT3ywqEmh1MwVq+W7ldXm6+qIAf5ntwK9mthLepCvcc9l4QJItVzn9UOTxtvOMgAnL6virIUgp4AVOGALWl+7nsXx3mQ47V6uJuidYKBW/voEIHvbi5l6YRaR+QOHItU5cjtkKPHXmuWMrT2cQkvvqjWEO1hh2H21h3HKPDYj6IDW5QtQA7CJDhwomjJfYog+nsDmg8vfjPKqJhgKROXb+d4Kb6ZrRYwI0xT/92hkw1IjBmaqw0YN5gBQZJFa6Zhin51006GV1yQ45T+YKtcTepcd753NN3RG/y4viVcKu5/wntfU9n1z1ZrWh5zb2BxA9X84bRZgD28OeNBr1Fk1/rkPipQhfiYiNZZr87q4aRLEoWoLJCgaI3BEfTLaevnrwkbDxjUFR9I3Rgq1vh4LojkOhoOgdTK0wj0McQoA5TO4EpwhaeOn+3+cG8/gyWPHP1sRHVhbErWU6rxr4ZEBr7drSVQ/aeql06Fq1wku86ZkLRUr4LN60Vnu1Rf9r46svz5fnyfHm+PF+eL8+X58vz5fnyfHm+PF+eL8+X58vz5fnyfHm+PF+eL8+X58vz5fnyfHm+PF+eL8+X58vz5fnyfHm+PGs8/z8t6CPIAOgDAA=="
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def run(args: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None,
+        check: bool = True, capture: bool = False) -> subprocess.CompletedProcess[str]:
+    print("+", " ".join(str(value) for value in args), flush=True)
+    return subprocess.run(
+        [str(value) for value in args], cwd=cwd, env=env, check=check,
+        text=True, stdout=subprocess.PIPE if capture else None,
+        stderr=subprocess.STDOUT if capture else None,
+    )
+
+
+def systemctl(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    return run(["systemctl", *args], check=check, capture=not check)
+
+
+def is_active(service: str) -> bool:
+    return subprocess.run(["systemctl", "is-active", "--quiet", service]).returncode == 0
+
+
+def server_root() -> Path:
+    return Path(os.environ.get("PUMPRADAR_SERVER_ROOT", "/opt/pumpradar/server"))
+
+
+def db_path() -> Path:
+    return Path(os.environ.get("PUMPRADAR_DB", "/var/lib/pumpradar/pumpradar.sqlite3"))
+
+
+def python_path() -> Path:
+    return Path(os.environ.get("PUMPRADAR_PYTHON", "/opt/pumpradar/venv/bin/python"))
+
+
+def resolve_destination(entry: dict[str, Any]) -> Path:
+    original = str(entry["destination"])
+    prefix = "/opt/pumpradar/server/"
+    if original.startswith(prefix):
+        return server_root() / original.removeprefix(prefix)
+    override = os.environ.get("PUMPRADAR_DEST_PREFIX")
+    return Path(override + original) if override else Path(original)
+
+
+def atomic_copy(src: Path, dst: Path, mode: int) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=dst.name + ".", dir=dst.parent)
+    temp = Path(temp_name)
+    try:
+        with os.fdopen(fd, "wb") as out, src.open("rb") as inp:
+            shutil.copyfileobj(inp, out)
+            out.flush()
+            os.fsync(out.fileno())
+        os.chmod(temp, mode)
+        os.replace(temp, dst)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def safe_extract(payload: Path, target: Path) -> None:
+    with tarfile.open(payload, "r:gz") as archive:
+        root = target.resolve()
+        for member in archive.getmembers():
+            destination = (target / member.name).resolve()
+            if root not in destination.parents and destination != root:
+                raise RuntimeError(f"unsafe payload member: {member.name}")
+            if member.issym() or member.islnk() or not (member.isfile() or member.isdir()):
+                raise RuntimeError(f"unexpected payload member: {member.name}")
+        archive.extractall(target)
+
+
+def materialize_payload(root: Path) -> tuple[Path, dict[str, Any]]:
+    payload = root / "pumpradar-v4531-payload.tar.gz"
+    payload.write_bytes(base64.b64decode(PAYLOAD_B64.encode("ascii"), validate=True))
+    actual = sha256(payload)
+    if actual != EXPECTED_PAYLOAD_SHA256:
+        raise RuntimeError(f"embedded payload SHA-256 mismatch: {actual}")
+    extracted = root / "payload"
+    extracted.mkdir()
+    safe_extract(payload, extracted)
+    manifest = json.loads((extracted / "manifest.json").read_text(encoding="utf-8"))
+    if manifest.get("release") != RELEASE or manifest.get("algorithm_version") != ALGORITHM_VERSION:
+        raise RuntimeError("unexpected release manifest")
+    expected = {"manifest.json"}
+    for entry in manifest["entries"]:
+        relative = str(entry["payload"])
+        expected.add(relative)
+        member = extracted / relative
+        if not member.is_file() or sha256(member) != str(entry["final_sha256"]):
+            raise RuntimeError(f"payload member mismatch: {relative}")
+    actual_files = {str(path.relative_to(extracted)) for path in extracted.rglob("*") if path.is_file()}
+    if actual_files != expected:
+        raise RuntimeError(f"unexpected payload members: {sorted(actual_files - expected)}")
+    return extracted, manifest
+
+
+def verify_live_inputs(manifest: dict[str, Any]) -> None:
+    for entry in manifest["entries"]:
+        destination = resolve_destination(entry)
+        final_hash = str(entry["final_sha256"])
+        base_hash = entry.get("base_sha256")
+        if destination.is_file():
+            actual = sha256(destination)
+            permitted = {final_hash}
+            if base_hash:
+                permitted.add(str(base_hash))
+            if actual not in permitted:
+                raise RuntimeError(f"unexpected live file SHA-256: {destination}: {actual}")
+        elif base_hash:
+            raise RuntimeError(f"required live file missing: {destination}")
+
+
+def safety_scan(candidate: Path) -> None:
+    source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (candidate / "pumpradar_server").glob("*.py")
+    )
+    forbidden = ("/fapi/v1/order", "/api/v3/order", "create_order", "newOrder", "API_SECRET")
+    found = [token for token in forbidden if token in source]
+    if found:
+        raise RuntimeError(f"real-order marker(s) found: {found}")
+
+
+def baseline(db: Path) -> dict[str, tuple[int, float]]:
+    connection = sqlite3.connect(db)
+    try:
+        rows = connection.execute(
+            """SELECT channel,COUNT(*),COALESCE(SUM(net_pnl_usdt),0)
+               FROM regime_slots WHERE status='CLOSED' GROUP BY channel"""
+        ).fetchall()
+        return {str(row[0]): (int(row[1]), float(row[2])) for row in rows}
+    finally:
+        connection.close()
+
+
+def validate_candidate(extracted: Path) -> dict[str, Any]:
+    live_server = server_root()
+    live_db = db_path()
+    py = python_path()
+    if not live_server.is_dir() or not live_db.is_file() or not py.is_file():
+        raise RuntimeError("server root, database, or virtualenv Python is missing")
+    with tempfile.TemporaryDirectory(prefix="pumpradar-v4531-validate-") as temp_name:
+        temp = Path(temp_name)
+        candidate = temp / "server"
+        shutil.copytree(live_server, candidate, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        for src in (extracted / "server").rglob("*"):
+            if src.is_file():
+                dst = candidate / src.relative_to(extracted / "server")
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+        safety_scan(candidate)
+        env = dict(os.environ)
+        env["PYTHONPATH"] = str(candidate)
+        run([str(py), "-m", "compileall", "-q", "pumpradar_server", "tests"], cwd=candidate, env=env)
+        tests = run(
+            [str(py), "-m", "unittest", "discover", "-s", "tests", "-v"],
+            cwd=candidate, env=env, capture=True,
+        )
+        print(tests.stdout or "", end="")
+        output = tests.stdout or ""
+        if "Ran 46 tests" not in output or "OK" not in output:
+            raise RuntimeError("unexpected server test result")
+
+        before = baseline(live_db)
+        migrated = temp / "migration.sqlite3"
+        shutil.copy2(live_db, migrated)
+        migration_code = r'''
+import os
+from dataclasses import replace
+from pathlib import Path
+from pumpradar_server.config import Settings
+from pumpradar_server.futures import FuturesMarketState
+from pumpradar_server.regime import RegimePaperManager
+from pumpradar_server.storage import Storage
+p=Path(os.environ["PUMPRADAR_MIGRATION_DB"])
+s=replace(Settings(),data_dir=p.parent,db_path=p,btc_regime_path=p.parent/"btc.json",research_status_path=p.parent/"status.json")
+st=Storage(s)
+async def notify(_): return None
+manager=RegimePaperManager(s,FuturesMarketState(),st,notify)
+assert st.conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+assert not list(st.conn.execute("PRAGMA foreign_key_check"))
+for name in ("exit_window_samples","exit_window_challengers","regime_channel_health"):
+    assert st.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(name,)).fetchone()
+st.conn.close()
+'''
+        migration_env = dict(env)
+        migration_env["PUMPRADAR_MIGRATION_DB"] = str(migrated)
+        run([str(py), "-c", migration_code], cwd=candidate, env=migration_env)
+        after = baseline(migrated)
+        if before != after:
+            raise RuntimeError(f"historical regime baseline changed d
