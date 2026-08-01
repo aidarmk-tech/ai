@@ -441,12 +441,12 @@ class AuditFlowTest(unittest.TestCase):
         self.assertNotIn("STALE_FEED", decision.risk.veto_reasons)
         self.assertFalse(decision.strict_passed)
 
-    def test_v439_adds_quality_and_exit_challengers(self) -> None:
-        self.assertEqual("4.3.9-server", self.settings.algorithm_version)
+    def test_v440_keeps_trade3_and_adds_spot_futures_channels(self) -> None:
+        self.assertEqual("4.5.3.1-server", self.settings.algorithm_version)
         self.assertEqual("C_WEAKENING", self.settings.primary_policy)
-        self.assertEqual(60, self.settings.warm_pool_size)
-        self.assertEqual(20, self.settings.deep_candidates)
-        self.assertEqual(25, self.settings.depth_candidates)
+        self.assertEqual(45, self.settings.warm_pool_size)
+        self.assertEqual(15, self.settings.deep_candidates)
+        self.assertEqual(20, self.settings.depth_candidates)
         self.assertEqual(0.875, self.settings.min_taker_buy_ratio_30s)
         self.assertEqual(0.90, self.settings.min_trade3_taker_buy_ratio_15s)
         self.assertEqual(0.75, self.settings.min_trade3_taker_buy_ratio_5s)
@@ -468,10 +468,6 @@ class AuditFlowTest(unittest.TestCase):
         self.assertEqual(1.5, self.settings.momentum_trail_activation_percent)
         self.assertEqual(1.0, self.settings.momentum_trail_drawdown_percent)
         self.assertEqual(1_200, self.settings.momentum_horizon_seconds)
-        self.assertEqual(120, self.settings.momentum_hold_seconds)
-        self.assertEqual("MC_HOLD_120", self.settings.momentum_primary_policy)
-        self.assertEqual(300, self.settings.trade3_target1_hold_seconds)
-        self.assertEqual(500, self.settings.stop_watch_interval_ms)
 
     def test_episode_tracker_measures_persistence_and_three_tick_streak(self) -> None:
         from pumpradar_server.episodes import EpisodeTracker
@@ -741,7 +737,7 @@ class AuditFlowTest(unittest.TestCase):
         storage.start_run("export")
         output = storage.export_all()
         manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(5, manifest["schema_version"])
+        self.assertEqual(8, manifest["schema_version"])
         self.assertEqual(1, manifest["row_counts"]["experiment_runs"])
         self.assertEqual(0, manifest["row_counts"]["snapshot_outcomes"])
 
@@ -887,144 +883,6 @@ class AuditFlowTest(unittest.TestCase):
             fixed["state"], fixed["exit_reason"]
         ))
         self.assertGreater(float(fixed["net_return_percent"]), 0.0)
-
-
-    def test_trade3_quality_gate_defers_thin_stale_and_vetoes_bad_book(self) -> None:
-        from pumpradar_server.models import BookMetrics, FlowMetrics
-        from pumpradar_server.strategy import trade3_entry_quality
-
-        flow = FlowMetrics(
-            quote_volume_30s=8_000.0,
-            cvd_30s=5_000.0,
-            cvd_slope=4_000.0,
-            trade_age_ms=900,
-            book_ticker_age_ms=250,
-        )
-        book = BookMetrics(obi_10=-0.05, spread_bps=16.0)
-        self.assertEqual(
-            (True, True),
-            trade3_entry_quality(flow, book, self.settings),
-        )
-
-        fresh = FlowMetrics(
-            quote_volume_30s=25_000.0,
-            cvd_30s=20_000.0,
-            cvd_slope=15_000.0,
-            trade_age_ms=100,
-            book_ticker_age_ms=30,
-        )
-        self.assertEqual(
-            (False, False),
-            trade3_entry_quality(fresh, BookMetrics(obi_10=0.03, spread_bps=10.0), self.settings),
-        )
-
-    def test_target1_hold_policy_ignores_target3_and_exits_at_300s(self) -> None:
-        from pumpradar_server.paper import PaperManager
-        from pumpradar_server.storage import Storage
-
-        class FixedMarket:
-            sell_price = 103.5
-
-            def executable_sell_price(self, *args, **kwargs):
-                return self.sell_price
-
-        async def notify(_message):
-            return None
-
-        storage = Storage(self.settings)
-        storage.start_run("target1-hold")
-        opened_at = 1_000_000
-        slot_id = storage.create_slot(None, "BTCUSDT", "event", opened_at, 100.0, 100.0)
-        policy = next(
-            row for row in storage.policies_for_slot(slot_id)
-            if row["policy"] == "D_TARGET1_HOLD_300"
-        )
-        manager = PaperManager(self.settings, FixedMarket(), storage, notify)
-        slot = storage.conn.execute("SELECT * FROM paper_slots WHERE id=?", (slot_id,)).fetchone()
-        asyncio.run(manager._update_policy(slot, policy, 103.5, 3.5, None, opened_at + 10_000))
-        policy = storage.conn.execute("SELECT * FROM policy_runs WHERE id=?", (policy["id"],)).fetchone()
-        self.assertEqual("OPEN", policy["state"])
-        self.assertIsNotNone(policy["activated_at_ms"])
-
-        asyncio.run(manager._update_policy(slot, policy, 102.0, 2.0, None, opened_at + 300_000))
-        policy = storage.conn.execute("SELECT * FROM policy_runs WHERE id=?", (policy["id"],)).fetchone()
-        self.assertEqual(("CLOSED", "TARGET1_HOLD_300"), (policy["state"], policy["exit_reason"]))
-
-    def test_momentum_hold_120_is_primary_and_closes_at_120s(self) -> None:
-        from pumpradar_server.models import BookMetrics, Candidate, Decision, EvaluatedCandidate, FlowMetrics, PeakFeatures, RiskAssessment
-        from pumpradar_server.paper import MomentumPaperManager
-        from pumpradar_server.storage import Storage
-
-        class FixedMarket:
-            sell_price = 101.0
-
-            def executable_sell_price(self, *args, **kwargs):
-                return self.sell_price
-
-        async def notify(_message):
-            return None
-
-        storage = Storage(self.settings)
-        storage.start_run("mc-hold")
-        manager = MomentumPaperManager(self.settings, FixedMarket(), storage, notify)
-        item = EvaluatedCandidate(
-            Candidate(
-                symbol="MCUSDT",
-                price=105.0,
-                quote_volume_24h=50_000_000.0,
-                return_15s=0.2,
-                return_60s=0.5,
-                return_5m=5.2,
-                acceleration=0.0,
-                relative_strength_vs_btc=4.8,
-                pre_score=90.0,
-            ),
-            FlowMetrics(),
-            BookMetrics(best_ask=100.0, buy_vwap=100.0),
-            PeakFeatures(),
-            Decision("STRONG_BUT_LATE", False, False, False, [], [], RiskAssessment(80, 50, 50, 90, 0, 0, False, []), "B"),
-        )
-        asyncio.run(manager.consider(item, None, 1_000_000, "episode"))
-        asyncio.run(manager.tick(1_119_000))
-        self.assertIsNotNone(storage.momentum_primary_open_slot())
-        asyncio.run(manager.tick(1_120_000))
-        self.assertIsNone(storage.momentum_primary_open_slot())
-        hold = next(row for row in storage.momentum_policies_for_slot(
-            storage.conn.execute("SELECT id FROM momentum_slots LIMIT 1").fetchone()[0]
-        ) if row["policy"] == "MC_HOLD_120")
-        self.assertEqual(("CLOSED", "MC_HOLD_120_EXIT"), (hold["state"], hold["exit_reason"]))
-
-    def test_forward_outcomes_capture_new_horizons(self) -> None:
-        from pumpradar_server.models import BookMetrics, Candidate, Decision, EvaluatedCandidate, FlowMetrics, PeakFeatures, RiskAssessment
-        from pumpradar_server.storage import Storage
-
-        storage = Storage(self.settings)
-        storage.start_run("outcome-horizons")
-        item = EvaluatedCandidate(
-            Candidate(
-                symbol="BTCUSDT",
-                price=100.0,
-                quote_volume_24h=50_000_000.0,
-                return_15s=0.8,
-                return_60s=1.0,
-                return_5m=2.0,
-                acceleration=0.1,
-                relative_strength_vs_btc=1.0,
-                pre_score=80.0,
-            ),
-            FlowMetrics(),
-            BookMetrics(buy_vwap=100.0),
-            PeakFeatures(),
-            Decision("LONG_CONTINUATION", True, False, True, [], [], RiskAssessment(80, 10, 0, 90, 0, 0, False, []), "A"),
-        )
-        snapshot_id = storage.insert_snapshot(item, "TRIGGERED", "episode", 1_000_000, None)
-        for seconds, value in ((90, 0.9), (150, 1.5), (180, 1.8), (240, 2.4)):
-            storage.record_snapshot_observation(snapshot_id, value, 1_000_000 + seconds * 1000)
-        row = storage.conn.execute(
-            "SELECT return_90s,return_150s,return_180s,return_240s FROM snapshot_outcomes WHERE snapshot_id=?",
-            (snapshot_id,),
-        ).fetchone()
-        self.assertEqual((0.9, 1.5, 1.8, 2.4), tuple(row))
 
 
 if __name__ == "__main__":

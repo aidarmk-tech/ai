@@ -237,13 +237,14 @@ class MomentumPaperManager:
         snapshot_id: str,
         now_ms: int,
         episode_id: str,
+        channel: str = "MC5",
     ) -> None:
         active = self.storage.momentum_primary_open_slot()
         if active:
             self.storage.add_skipped(
                 snapshot_id,
                 item.candidate.symbol,
-                "MC5_SLOT_BUSY",
+                f"{channel}_SLOT_BUSY",
                 active["id"],
                 now_ms,
             )
@@ -252,7 +253,7 @@ class MomentumPaperManager:
             self.storage.add_skipped(
                 snapshot_id,
                 item.candidate.symbol,
-                "MC5_REPEAT_SYMBOL_20M",
+                f"{channel}_REPEAT_SYMBOL_20M",
                 None,
                 now_ms,
             )
@@ -261,7 +262,7 @@ class MomentumPaperManager:
             self.storage.add_skipped(
                 snapshot_id,
                 item.candidate.symbol,
-                "MC5_NO_EXECUTABLE_ENTRY",
+                f"{channel}_NO_EXECUTABLE_ENTRY",
                 None,
                 now_ms,
             )
@@ -273,15 +274,17 @@ class MomentumPaperManager:
             now_ms,
             item.book.best_ask,
             item.book.buy_vwap,
+            channel,
         )
         await self.notify(
-            f"🔵 PumpRadar MC5 challenger\n{item.candidate.symbol}\n"
-            f"return5m {item.candidate.return_5m:+.3f}% · entry {item.book.buy_vwap:.8g}\n"
+            f"🔵 PumpRadar {channel} spot paper\n{item.candidate.symbol}\n"
+            f"signal {item.candidate.return_5m if channel == 'MC5' else item.candidate.return_10m:+.3f}% · entry {item.book.buy_vwap:.8g}\n"
             f"stop -{self.settings.momentum_stop_percent:.1f}% · "
-            f"primary hold {self.settings.momentum_hold_seconds}s · "
-            f"trail/fixed controls · {self.settings.algorithm_version}"
+            f"trail +{self.settings.momentum_trail_activation_percent:.1f}%/"
+            f"-{self.settings.momentum_trail_drawdown_percent:.1f}% · "
+            f"20m · {self.settings.algorithm_version}"
         )
-        LOG.info("Opened momentum slot %s %s", slot_id, item.candidate.symbol)
+        LOG.info("Opened %s spot momentum slot %s %s", channel, slot_id, item.candidate.symbol)
 
     async def tick(self, now_ms: int) -> None:
         for slot in self.storage.momentum_policy_slots():
@@ -375,7 +378,7 @@ class MomentumPaperManager:
                 slot["id"], now_ms, exit_reason, sell_price, gross, net
             )
             await self.notify(
-                f"🔷 {slot['symbol']} MC5 {exit_reason}: net {net:+.3f}%"
+                f"🔷 {slot['symbol']} {slot['signal_channel']} {exit_reason}: net {net:+.3f}%"
             )
         LOG.info(
             "Closed momentum slot %s policy %s: %s net %+.3f%%",

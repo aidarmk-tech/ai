@@ -174,6 +174,7 @@ CREATE TABLE IF NOT EXISTS momentum_slots (
   id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL REFERENCES experiment_runs(id),
   source_snapshot_id TEXT REFERENCES snapshots(id),
+  signal_channel TEXT NOT NULL DEFAULT 'MC5',
   episode_id TEXT NOT NULL,
   symbol TEXT NOT NULL,
   opened_at_ms INTEGER NOT NULL,
@@ -254,6 +255,10 @@ PAPER_SLOT_AUDIT_COLUMNS = {
     "episode_id": "TEXT",
 }
 
+MOMENTUM_SLOT_AUDIT_COLUMNS = {
+    "signal_channel": "TEXT NOT NULL DEFAULT 'MC5'",
+}
+
 SNAPSHOT_OUTCOME_AUDIT_COLUMNS = {
     "fee_rate": "REAL NOT NULL DEFAULT 0.001",
     "return_90s": "REAL",
@@ -326,6 +331,12 @@ class Storage:
                     self.conn.execute(
                         f"ALTER TABLE paper_slots ADD COLUMN {name} {data_type}"
                     )
+            existing_momentum_columns = {
+                row["name"] for row in self.conn.execute("PRAGMA table_info(momentum_slots)")
+            }
+            for name, data_type in MOMENTUM_SLOT_AUDIT_COLUMNS.items():
+                if name not in existing_momentum_columns:
+                    self.conn.execute(f"ALTER TABLE momentum_slots ADD COLUMN {name} {data_type}")
             existing_outcome_columns = {
                 row["name"]
                 for row in self.conn.execute(
@@ -585,12 +596,7 @@ class Storage:
                  self.settings.strategy_version, self.settings.config_hash(),
                  episode_id or event_id),
             )
-            for policy in (
-                "A_PARTIAL_20",
-                "B_FULL_PROTECTED",
-                "C_WEAKENING",
-                "D_TARGET1_HOLD_300",
-            ):
+            for policy in ("A_PARTIAL_20", "B_FULL_PROTECTED", "C_WEAKENING", "D_TARGET1_HOLD_300"):
                 self.conn.execute(
                     "INSERT INTO policy_runs(id,slot_id,policy,state) VALUES(?,?,?,'OPEN')",
                     (str(uuid.uuid4()), slot_id, policy),
@@ -737,6 +743,7 @@ class Storage:
         now_ms: int,
         best_ask: float,
         entry_vwap: float,
+        signal_channel: str = "MC5",
     ) -> str:
         slot_id = str(uuid.uuid4())
         quantity = self.settings.position_usdt / entry_vwap
@@ -744,15 +751,16 @@ class Storage:
         with self.lock:
             self.conn.execute(
                 """INSERT INTO momentum_slots(
-                  id,run_id,source_snapshot_id,episode_id,symbol,opened_at_ms,
+                  id,run_id,source_snapshot_id,signal_channel,episode_id,symbol,opened_at_ms,
                   entry_best_ask,entry_vwap,position_usdt,quantity,entry_fee_usdt,
                   primary_status,last_updated_at_ms,algorithm_version,
                   strategy_version,config_hash
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,'OPEN',?,?,?,?)""",
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'OPEN',?,?,?,?)""",
                 (
                     slot_id,
                     self.run_id,
                     source_snapshot_id,
+                    signal_channel,
                     episode_id,
                     symbol,
                     now_ms,
@@ -1053,7 +1061,20 @@ class Storage:
             "policy_runs",
             "momentum_slots",
             "momentum_policy_runs",
+            "futures_signals",
+            "futures_momentum_slots",
+            "futures_momentum_policy_runs",
             "snapshot_outcomes",
+            "regime_signals",
+            "regime_slots",
+            "regime_snapshots",
+            "regime_snapshot_outcomes",
+            "short_signal_research",
+            "short_exit_challengers",
+            "short_failure_labels",
+            "exit_window_samples",
+            "exit_policy_outcomes",
+            "dump_health_diagnostics",
             "skipped_candidates",
             "service_events",
         ]
@@ -1069,7 +1090,15 @@ class Storage:
                     f"SQLite export validation failed: integrity={integrity}, "
                     f"foreign_keys={len(foreign_key_errors)}"
                 )
+            available_tables = {
+                str(row[0])
+                for row in snapshot.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
             for table in tables:
+                if table not in available_tables:
+                    continue
                 row_counts[table] = int(
                     snapshot.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
                 )
@@ -1096,7 +1125,7 @@ class Storage:
             "sha256": self._sha256(sqlite_gz),
         }
         manifest = {
-            "schema_version": 5,
+            "schema_version": 8,
             "exported_at_ms": now_ms,
             "run_id": self.run_id,
             "algorithm_version": self.settings.algorithm_version,
@@ -1112,7 +1141,13 @@ class Storage:
         )
         latest = self.settings.data_dir / "exports" / "latest"
         temporary_link = latest.with_name(f".latest-{uuid.uuid4().hex}")
-        temporary_link.symlink_to(output_dir.name)
-        os.replace(temporary_link, latest)
+        try:
+            temporary_link.symlink_to(output_dir.name)
+            os.replace(temporary_link, latest)
+        except OSError:
+            # Windows validation environments may not grant symlink rights.
+            # The export itself remains complete; Linux deployments retain the
+            # atomic `latest` symlink behavior above.
+            temporary_link.unlink(missing_ok=True)
         self._prune_exports(latest.parent, output_dir)
         return output_dir

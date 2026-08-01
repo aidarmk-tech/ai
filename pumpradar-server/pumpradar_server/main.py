@@ -1,21 +1,25 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import random
 import signal
 import socket
 import time
+from dataclasses import replace
 
 import aiohttp
 from aiohttp import web
 
 from .config import Settings
 from .episodes import EpisodeTelemetry, EpisodeTracker
+from .futures import FuturesFeed, FuturesMarketState, FuturesPaperManager, FuturesPaperStore
 from .market import BinanceFeed, MarketState
 from .models import EvaluatedCandidate
 from .paper import MomentumPaperManager, PaperManager
+from .regime import RegimePaperManager
 from .storage import Storage
 from .strategy import assess, momentum_continuation_arms
 from .webapp import WebApp
@@ -32,6 +36,22 @@ class Service:
         self.paper = PaperManager(settings, self.state, self.storage, self.notify)
         self.momentum = MomentumPaperManager(settings, self.state, self.storage, self.notify)
         self.episodes = EpisodeTracker(settings)
+        self.futures_state = FuturesMarketState()
+        self.futures_feed = FuturesFeed(settings, self.futures_state)
+        self.futures_store = FuturesPaperStore(settings, self.storage)
+        self.futures_paper = FuturesPaperManager(
+            settings, self.futures_state, self.futures_store, self.notify
+        )
+        self.futures_gate_settings = replace(
+            settings,
+            momentum_max_spread_bps=settings.futures_momentum_max_spread_bps,
+            momentum_max_buy_slippage_percent=settings.futures_momentum_max_buy_slippage_percent,
+            momentum_max_sell_slippage_percent=settings.futures_momentum_max_sell_slippage_percent,
+        )
+        self.futures_episodes = EpisodeTracker(self.futures_gate_settings)
+        self.regime = RegimePaperManager(
+            settings, self.futures_state, self.storage, self.notify
+        )
         self.stop_event = asyncio.Event()
         self.last_near_miss_ms = 0
         self.last_random_ms = 0
@@ -43,7 +63,29 @@ class Service:
         self.depth_symbols: set[str] = set()
         self.evaluated_by_symbol: dict[str, EvaluatedCandidate] = {}
         self.momentum_emitted: set[tuple[str, str]] = set()
+        self.futures_momentum_emitted: set[tuple[str, str]] = set()
+        self.futures_last_candidate_set_ms = 0
+        self.futures_warm_symbols: set[str] = set()
+        self.futures_depth_symbols: set[str] = set()
+        self.futures_decision_symbols: set[str] = set()
         self.started_at_ms = int(time.time() * 1000)
+        self.last_regime_engine_success_ms = 0
+        self.last_regime_position_success_ms = 0
+        self.regime_engine_error_count = 0
+        self.regime_position_error_count = 0
+        self.last_regime_engine_error: str | None = None
+        self.last_regime_position_error: str | None = None
+        self.last_coverage_event_ms = 0
+        self.last_coverage_message: str | None = None
+
+    def _coverage_event(self, message: str, now_ms: int, *, state_changed: bool = False) -> bool:
+        interval_ms = max(30, self.settings.coverage_log_interval_seconds) * 1000
+        if not state_changed and now_ms - self.last_coverage_event_ms < interval_ms:
+            return False
+        self.storage.event("INFO", "coverage", message)
+        self.last_coverage_event_ms = now_ms
+        self.last_coverage_message = message
+        return True
 
     async def notify(self, message: str) -> None:
         LOG.info("NOTIFY %s", message.replace("\n", " | "))
@@ -58,26 +100,86 @@ class Service:
 
     def health(self) -> dict:
         now = int(time.time() * 1000)
+        uptime_ms = now - self.started_at_ms
+        spot_ok = bool(
+            self.state.last_market_message_ms
+            and now - self.state.last_market_message_ms < 15_000
+        )
+        futures_ok = bool(
+            self.futures_state.last_market_message_ms
+            and now - self.futures_state.last_market_message_ms < 15_000
+        )
+        engine_age = (
+            now - self.last_regime_engine_success_ms
+            if self.last_regime_engine_success_ms
+            else None
+        )
+        position_age = (
+            now - self.last_regime_position_success_ms
+            if self.last_regime_position_success_ms
+            else None
+        )
+        startup_grace = uptime_ms < 30_000
+        regime_engine_ok = startup_grace or (
+            engine_age is not None and engine_age < 10_000
+        )
+        regime_position_ok = startup_grace or (
+            position_age is not None and position_age < 10_000
+        )
+        regime_status = self.regime.status()
+        recorder_status = None
+        try:
+            if self.settings.research_status_path.is_file():
+                recorder_status = json.loads(
+                    self.settings.research_status_path.read_text(encoding="utf-8")
+                )
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            recorder_status = {"ok": False, "error": "INVALID_STATUS_JSON"}
         return {
-            "ok": now - self.state.last_market_message_ms < 15_000,
-            "uptime_seconds": (now - self.started_at_ms) // 1000,
+            "ok": spot_ok and futures_ok and regime_engine_ok and regime_position_ok,
+            "algorithm_version": self.settings.algorithm_version,
+            "strategy_version": self.settings.strategy_version,
+            "config_hash": self.settings.config_hash(),
+            "spot_ok": spot_ok,
+            "futures_ok": futures_ok,
+            "regime_engine_ok": regime_engine_ok,
+            "regime_position_ok": regime_position_ok,
+            "regime_engine_age_ms": engine_age,
+            "regime_position_age_ms": position_age,
+            "regime_engine_error_count": self.regime_engine_error_count,
+            "regime_position_error_count": self.regime_position_error_count,
+            "last_regime_engine_error": self.last_regime_engine_error,
+            "last_regime_position_error": self.last_regime_position_error,
+            "uptime_seconds": uptime_ms // 1000,
             "market_feed_age_ms": now - self.state.last_market_message_ms if self.state.last_market_message_ms else None,
             "candidate_feed_age_ms": now - self.state.last_candidate_message_ms if self.state.last_candidate_message_ms else None,
             "universe_symbols": len(self.state.universe),
-            # Backward-compatible field used by client 1.0: warm symbols receive
-            # continuous aggTrade + bookTicker analysis, not merely miniTicker.
             "evaluated_symbols": len(self.warm_symbols),
             "warm_pool_symbols": len(self.warm_symbols),
             "decision_symbols": len(self.decision_symbols),
             "depth_symbols": len(self.depth_symbols),
             "control_symbols": len(self.control_symbols),
+            "research_recorder": recorder_status,
             "candidate_connection_count": self.state.candidate_connection_count,
             "candidate_subscription_update_count": self.state.candidate_subscription_update_count,
             "last_candidate_connect_age_ms": (
                 now - self.state.last_candidate_connect_ms
-                if self.state.last_candidate_connect_ms
-                else None
+                if self.state.last_candidate_connect_ms else None
             ),
+            "futures_market_feed_age_ms": (
+                now - self.futures_state.last_market_message_ms
+                if self.futures_state.last_market_message_ms else None
+            ),
+            "futures_candidate_feed_age_ms": (
+                now - self.futures_state.last_candidate_message_ms
+                if self.futures_state.last_candidate_message_ms else None
+            ),
+            "futures_universe_symbols": len(self.futures_state.universe),
+            "futures_warm_pool_symbols": len(self.futures_warm_symbols),
+            "futures_decision_symbols": len(self.futures_decision_symbols),
+            "futures_depth_symbols": len(self.futures_depth_symbols),
+            **self.futures_store.status(),
+            **regime_status,
         }
 
     def _select_warm_core(self, ranked) -> list[str]:
@@ -141,14 +243,12 @@ class Service:
                     candidates[: self.settings.deep_candidates]
                 )
                 decision_seen = {c.symbol for c in decision_candidates}
+                # v4.5: only MC5 is retained as the spot exhaustion trigger.
                 forced_momentum = [
                     c
                     for c in ranked
-                    if (
-                        (c.return_3m is not None and c.return_3m >= self.settings.momentum_mc3_return_3m)
-                        or (c.return_5m is not None and c.return_5m >= self.settings.momentum_mc5_return_5m)
-                        or (c.return_10m is not None and c.return_10m >= self.settings.momentum_mc7_return_10m)
-                    )
+                    if c.return_5m is not None
+                    and c.return_5m >= self.settings.momentum_mc5_return_5m
                 ]
                 for candidate in forced_momentum:
                     if candidate.symbol not in decision_seen:
@@ -204,21 +304,20 @@ class Service:
                     self.state.retain_depth_symbols(depth)
                     self.feed.set_candidate_symbols(sorted(warm), sorted(depth))
                     self.last_candidate_set_ms = now
-                    if changed:
-                        self.storage.event(
-                            "INFO",
-                            "coverage",
-                            f"warm={len(warm)} controls={len(controls)} "
-                            f"depth={len(depth)} candidates={len(candidates)} "
-                            f"outcomes={len(outcome_symbols)}",
-                        )
+                    self._coverage_event(
+                        f"warm={len(warm)} controls={len(controls)} "
+                        f"depth={len(depth)} candidates={len(candidates)} "
+                        f"outcomes={len(outcome_symbols)}",
+                        now,
+                        state_changed=False,
+                    )
 
                 if self._ensure_decision_coverage(next_decision_symbols):
-                    self.storage.event(
-                        "INFO",
-                        "coverage",
+                    self._coverage_event(
                         f"immediate decision coverage warm={len(self.warm_symbols)} "
                         f"depth={len(self.depth_symbols)} decisions={len(next_decision_symbols)}",
+                        now,
+                        state_changed=False,
                     )
 
                 median_ret, breadth = self.state.market_context(now)
@@ -247,7 +346,7 @@ class Service:
                 decision_items = [e for e in evaluated if e.candidate.symbol in self.decision_symbols]
                 control_items = [e for e in evaluated if e.candidate.symbol in self.control_symbols]
                 await self._record_and_select(decision_items, control_items, now)
-                self._update_snapshot_outcomes(now)
+                pass  # Legacy snapshot-outcome writes are disabled in v4.5.
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -255,19 +354,131 @@ class Service:
                 self.storage.event("ERROR", "engine", repr(exc))
             await asyncio.sleep(1)
 
+    async def futures_engine_loop(self) -> None:
+        """Balanced positive/negative warm pool for the v4.5 regime model."""
+        while not self.stop_event.is_set():
+            now = int(time.time() * 1000)
+            try:
+                ranked = self.futures_state.rank_universe(
+                    self.settings.futures_minimum_24h_quote_volume,
+                    now,
+                )
+                candidate_map = {c.symbol: c for c in ranked}
+                negative_ranked = sorted(
+                    ranked,
+                    key=lambda c: (
+                        3.0 * (c.return_15s or 0.0)
+                        + 2.0 * (c.return_60s or 0.0)
+                        + (c.return_5m or 0.0)
+                    ),
+                )
+                side_size = self.settings.regime_decision_side_size
+                onset = [
+                    c for c in ranked if self.regime.pre_onset_candidate(c)
+                ][:side_size]
+                dumps = [
+                    c for c in negative_ranked if self.regime.pre_dump_candidate(c)
+                ][:side_size]
+                decision_symbols = {c.symbol for c in onset}
+                decision_symbols.update(c.symbol for c in dumps)
+                decision_symbols.update(self.regime.pending_symbols())
+                decision_symbols.intersection_update(self.futures_state.universe)
+
+                refresh_due = (
+                    now - self.futures_last_candidate_set_ms
+                    >= self.settings.warm_refresh_seconds * 1000
+                )
+                if refresh_due:
+                    half = max(1, self.settings.regime_warm_pool_size // 2)
+                    warm = {c.symbol for c in ranked[:half]}
+                    warm.update(c.symbol for c in negative_ranked[:half])
+                    warm.update(decision_symbols)
+                    depth_half = max(1, self.settings.regime_depth_pool_size // 2)
+                    depth = {c.symbol for c in ranked[:depth_half]}
+                    depth.update(c.symbol for c in negative_ranked[:depth_half])
+                    depth.update(decision_symbols)
+                    self.futures_warm_symbols = warm
+                    self.futures_depth_symbols = depth
+                    self.futures_state.retain_detailed_symbols(warm)
+                    self.futures_state.retain_depth_symbols(depth)
+                    self.futures_feed.set_candidate_symbols(
+                        sorted(warm), sorted(depth)
+                    )
+                    self.futures_last_candidate_set_ms = now
+
+                missing = decision_symbols - self.futures_warm_symbols
+                missing_depth = decision_symbols - self.futures_depth_symbols
+                if missing or missing_depth:
+                    self.futures_warm_symbols.update(decision_symbols)
+                    self.futures_depth_symbols.update(decision_symbols)
+                    self.futures_feed.set_candidate_symbols(
+                        sorted(self.futures_warm_symbols),
+                        sorted(self.futures_depth_symbols),
+                    )
+
+                self.futures_decision_symbols = decision_symbols
+                median_ret, breadth = self.futures_state.market_context(now)
+                for symbol in decision_symbols:
+                    candidate = candidate_map.get(symbol)
+                    if candidate is None:
+                        continue
+                    flow = self.futures_state.flow_metrics(symbol, now)
+                    book = self.futures_state.book_metrics(
+                        symbol,
+                        self.settings.regime_margin_usdt
+                        * self.settings.regime_short_leverage,
+                        now,
+                    )
+                    peak = self.futures_state.update_peak(
+                        symbol, candidate.price, flow.cvd_30s, now
+                    )
+                    feed_age = self.futures_state.measurement_age_ms(symbol, now)
+                    decision = assess(
+                        candidate,
+                        flow,
+                        book,
+                        peak,
+                        self.futures_gate_settings,
+                        feed_age,
+                        median_ret,
+                        breadth,
+                        False,
+                    )
+                    item = EvaluatedCandidate(candidate, flow, book, peak, decision)
+                    telemetry = self.futures_episodes.observe(item, now)
+                    await self.regime.observe_futures(
+                        item,
+                        now,
+                        telemetry.episode_id,
+                    )
+                self.futures_episodes.prune(now)
+                self.last_regime_engine_success_ms = int(time.time() * 1000)
+                self.last_regime_engine_error = None
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.regime_engine_error_count += 1
+                self.last_regime_engine_error = f"{type(exc).__name__}: {exc}"[:500]
+                LOG.exception("Regime futures engine tick failed: %s", exc)
+                self.storage.event("ERROR", "regime_futures_engine", repr(exc))
+            await asyncio.sleep(1)
+
     async def position_loop(self) -> None:
-        """Watch executable exits independently from the heavier scan loop."""
+        """Watch only the three v4.5 regime paper slots."""
         interval = max(0.1, self.settings.stop_watch_interval_ms / 1000)
         while not self.stop_event.is_set():
             now = int(time.time() * 1000)
             try:
-                await self.paper.tick(self.evaluated_by_symbol, now)
-                await self.momentum.tick(now)
+                await self.regime.tick(now)
+                self.last_regime_position_success_ms = int(time.time() * 1000)
+                self.last_regime_position_error = None
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                LOG.exception("Position watcher failed: %s", exc)
-                self.storage.event("ERROR", "position_watcher", repr(exc))
+                self.regime_position_error_count += 1
+                self.last_regime_position_error = f"{type(exc).__name__}: {exc}"[:500]
+                LOG.exception("Regime position watcher failed: %s", exc)
+                self.storage.event("ERROR", "regime_position_watcher", repr(exc))
             await asyncio.sleep(interval)
 
     async def _record_and_select(
@@ -276,109 +487,36 @@ class Service:
         controls: list[EvaluatedCandidate],
         now_ms: int,
     ) -> None:
-        telemetry_by_symbol: dict[str, EpisodeTelemetry] = {
-            item.candidate.symbol: self.episodes.observe(item, now_ms)
-            for item in evaluated
-        }
-        self.episodes.prune(now_ms)
-
-        momentum_events: list[tuple[str, EvaluatedCandidate, EpisodeTelemetry]] = []
+        """Only the historically supported spot MC5 exhaustion signal remains active."""
+        del controls
         for item in evaluated:
-            telemetry = telemetry_by_symbol[item.candidate.symbol]
+            telemetry = self.episodes.observe(item, now_ms)
             feed_age = self.state.measurement_age_ms(item.candidate.symbol, now_ms)
-            arms, _momentum_blockers = momentum_continuation_arms(
+            arms, _ = momentum_continuation_arms(
                 item.candidate,
                 item.flow,
                 item.book,
                 self.settings,
                 feed_age,
             )
-            for arm, passed in arms.items():
-                key = (telemetry.episode_id, arm)
-                if passed and key not in self.momentum_emitted:
-                    self.momentum_emitted.add(key)
-                    momentum_events.append((arm, item, telemetry))
-
-        strict = sorted(
-            [e for e in evaluated if e.decision.strict_passed],
-            key=lambda e: (e.decision.risk.impulse, e.decision.risk.confidence, -(e.book.spread_bps or 999)),
-            reverse=True,
-        )
-        triggered = [e for e in evaluated if e.decision.label not in ("NO_TRADE",)]
-        snapshot_ids: dict[str, str] = {}
-        for item in triggered:
-            telemetry = telemetry_by_symbol[item.candidate.symbol]
-            snapshot_type = (
-                "TRIGGERED"
-                if item.decision.strict_passed
-                else "SHADOW"
-                if item.decision.shadow_passed
-                else "TRIGGERED"
-            )
-            snapshot_ids[item.candidate.symbol] = self.storage.insert_snapshot(
-                item,
-                snapshot_type,
-                telemetry.episode_id,
-                now_ms,
-                telemetry,
-            )
-        for arm, item, telemetry in momentum_events:
-            snapshot_type = {
-                "MC3": "MC3_SHADOW",
-                "MC5": "MC5_CHALLENGER",
-                "MC7": "MC7_SHADOW",
-            }[arm]
-            sid = self.storage.insert_snapshot(
-                item,
-                snapshot_type,
-                telemetry.episode_id,
-                now_ms,
-                telemetry,
-            )
-            if arm == "MC5":
-                await self.momentum.consider(
-                    item,
-                    sid,
-                    now_ms,
-                    telemetry.episode_id,
+            key = (telemetry.episode_id, "MC5")
+            if not arms.get("MC5") or key in self.momentum_emitted:
+                continue
+            self.momentum_emitted.add(key)
+            symbol = item.candidate.symbol
+            if symbol in self.futures_state.universe:
+                self.futures_warm_symbols.add(symbol)
+                self.futures_depth_symbols.add(symbol)
+                self.futures_feed.set_candidate_symbols(
+                    sorted(self.futures_warm_symbols),
+                    sorted(self.futures_depth_symbols),
                 )
-
-        if strict:
-            best = strict[0]
-            telemetry = telemetry_by_symbol[best.candidate.symbol]
-            sid = snapshot_ids.get(best.candidate.symbol) or self.storage.insert_snapshot(
-                best,
-                "TRIGGERED",
+            self.regime.signal_short_from_spot(
+                item,
                 telemetry.episode_id,
                 now_ms,
-                telemetry,
             )
-            await self.paper.consider(
-                best,
-                sid,
-                now_ms,
-                telemetry.episode_id,
-            )
-        if now_ms - self.last_near_miss_ms >= self.settings.snapshot_near_miss_seconds * 1000:
-            near = [e for e in evaluated if not e.decision.strict_passed and e.decision.risk.impulse >= 40]
-            if near:
-                best = max(near, key=lambda e: e.decision.risk.impulse)
-                telemetry = telemetry_by_symbol[best.candidate.symbol]
-                self.storage.insert_snapshot(
-                    best,
-                    "NEAR_MISS",
-                    telemetry.episode_id,
-                    now_ms,
-                    telemetry,
-                )
-                self.last_near_miss_ms = now_ms
-        if now_ms - self.last_random_ms >= self.settings.snapshot_random_seconds * 1000:
-            ready_controls = [e for e in controls if e.flow.trade_count_30s > 0]
-            normal = ready_controls or [e for e in evaluated if e.decision.risk.impulse < 40]
-            if normal:
-                kind = "CONTROL_NORMAL" if ready_controls else "RANDOM_NORMAL"
-                self.storage.insert_snapshot(random.choice(normal), kind, None, now_ms)
-                self.last_random_ms = now_ms
+        self.episodes.prune(now_ms)
 
     def _update_snapshot_outcomes(self, now_ms: int) -> None:
         observations: list[tuple[str, float]] = []
@@ -405,6 +543,9 @@ class Service:
         self.storage.start_run(socket.gethostname())
         self.storage.event("INFO", "service", "PumpRadar server starting")
         await self.feed.start()
+        await self.futures_feed.start()
+        self.futures_store.recover_incompatible(int(time.time() * 1000))
+        self.regime.recover_incompatible(int(time.time() * 1000))
         web_app = WebApp(self.settings, self.storage, self.health).make()
         runner = web.AppRunner(web_app)
         await runner.setup()
@@ -413,7 +554,10 @@ class Service:
         tasks = [
             asyncio.create_task(self.feed.market_loop(), name="market-ws"),
             asyncio.create_task(self.feed.candidate_loop(), name="candidate-ws"),
+            asyncio.create_task(self.futures_feed.market_loop(), name="futures-market-ws"),
+            asyncio.create_task(self.futures_feed.candidate_loop(), name="futures-candidate-ws"),
             asyncio.create_task(self.engine_loop(), name="engine"),
+            asyncio.create_task(self.futures_engine_loop(), name="futures-engine"),
             asyncio.create_task(self.position_loop(), name="position-watcher"),
         ]
         LOG.info("PumpRadar server started; config=%s", self.settings.config_hash())
@@ -422,6 +566,7 @@ class Service:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         await self.feed.stop()
+        await self.futures_feed.stop()
         self.storage.finish_run()
         self.storage.checkpoint()
         await runner.cleanup()

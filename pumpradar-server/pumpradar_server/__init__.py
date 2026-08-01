@@ -1,3 +1,3 @@
-"""PumpRadar measurement server v4.3.9."""
+"""PumpRadar measurement server v4.5.3.1."""
 
-__version__ = "4.3.9"
+__version__ = "4.5.3.1"

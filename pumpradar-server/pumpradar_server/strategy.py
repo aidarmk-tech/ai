@@ -162,37 +162,12 @@ def confidence_score(c: Candidate, flow: FlowMetrics, book: BookMetrics, feed_ag
     return clamp_score(price + trades + depth + freshness + no_gaps + confirms / 3 * 10 + 3)
 
 
-def trade3_entry_quality(
-    flow: FlowMetrics,
-    book: BookMetrics,
-    settings: Settings,
-) -> tuple[bool, bool]:
-    """Return (thin_stale_defer, thin_flow_veto) for the TRADE3 gate.
-
-    Absolute flow is deliberately combined with freshness and book quality.
-    No single microstructure feature is trusted as a standalone veto.
-    """
+def trade3_entry_quality(flow: FlowMetrics, book: BookMetrics, settings: Settings) -> tuple[bool, bool]:
     thin = flow.quote_volume_30s < settings.trade3_thin_quote_volume_30s
-    very_thin = (
-        flow.quote_volume_30s < settings.trade3_very_thin_quote_volume_30s
-    )
-    weak_money = (
-        flow.cvd_30s < settings.trade3_weak_cvd_30s
-        or flow.cvd_slope < settings.trade3_weak_cvd_slope
-    )
-    stale = (
-        flow.book_ticker_age_ms is not None
-        and flow.book_ticker_age_ms > settings.trade3_stale_book_defer_ms
-    ) or (
-        flow.trade_age_ms is not None
-        and flow.trade_age_ms > settings.trade3_stale_trade_defer_ms
-    )
-    bad_book = (
-        book.obi_10 is not None and book.obi_10 <= 0
-    ) or (
-        book.spread_bps is not None
-        and book.spread_bps > settings.trade3_bad_book_spread_bps
-    )
+    very_thin = flow.quote_volume_30s < settings.trade3_very_thin_quote_volume_30s
+    weak_money = flow.cvd_30s < settings.trade3_weak_cvd_30s or flow.cvd_slope < settings.trade3_weak_cvd_slope
+    stale = (flow.book_ticker_age_ms is not None and flow.book_ticker_age_ms > settings.trade3_stale_book_defer_ms) or (flow.trade_age_ms is not None and flow.trade_age_ms > settings.trade3_stale_trade_defer_ms)
+    bad_book = (book.obi_10 is not None and book.obi_10 <= 0) or (book.spread_bps is not None and book.spread_bps > settings.trade3_bad_book_spread_bps)
     return thin and stale, very_thin and weak_money and bad_book
 
 
@@ -223,9 +198,7 @@ def assess(
     absorption = (flow.volume_z_30s or 0) > settings.extreme_volume_z and (
         (r15 or 0) < settings.min_return_15s or (tbr or 0) < settings.min_taker_buy_for_extreme_volume
     )
-    thin_stale_defer, thin_flow_veto = trade3_entry_quality(
-        flow, book, settings
-    )
+    thin_stale_defer, thin_flow_veto = trade3_entry_quality(flow, book, settings)
     if thin_stale_defer:
         reasons.append("V439_THIN_STALE_DEFER")
     if thin_flow_veto:
@@ -237,15 +210,9 @@ def assess(
         veto_reasons.append("STALE_FEED")
     if flow.trade_gap:
         veto_reasons.append("TRADE_GAP")
-    if (
-        flow.book_ticker_age_ms is not None
-        and flow.book_ticker_age_ms > settings.trade3_stale_book_veto_ms
-    ):
+    if flow.book_ticker_age_ms is not None and flow.book_ticker_age_ms > settings.trade3_stale_book_veto_ms:
         veto_reasons.append("STALE_BOOK_GT_500MS")
-    if (
-        flow.trade_age_ms is not None
-        and flow.trade_age_ms > settings.trade3_stale_trade_veto_ms
-    ):
+    if flow.trade_age_ms is not None and flow.trade_age_ms > settings.trade3_stale_trade_veto_ms:
         veto_reasons.append("STALE_TRADE_GT_1500MS")
     if artificial >= 70:
         veto_reasons.append("ARTIFICIAL_RISK_GE_70")
