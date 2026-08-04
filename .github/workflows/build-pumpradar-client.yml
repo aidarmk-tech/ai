@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - chatgpt/pumpradar-v453-short-risk-client
+      - agent/pumpradar-client-v120-compatible
     paths:
       - 'pumpradar-client/**'
       - '.github/workflows/build-pumpradar-client.yml'
@@ -47,13 +47,13 @@ jobs:
           set -Eeuo pipefail
           APK="$GITHUB_WORKSPACE/pumpradar-client/app/build/outputs/apk/debug/app-debug.apk"
           test -f "$APK"
-          cp "$APK" "$GITHUB_WORKSPACE/out/PumpRadar-Server-Client-v1.1.0.apk"
-          sha256sum "$GITHUB_WORKSPACE/out/PumpRadar-Server-Client-v1.1.0.apk" | tee "$GITHUB_WORKSPACE/out/SHA256SUMS.txt"
+          cp "$APK" "$GITHUB_WORKSPACE/out/PumpRadar-Server-Client-v1.2.0.apk"
+          sha256sum "$GITHUB_WORKSPACE/out/PumpRadar-Server-Client-v1.2.0.apk" | tee "$GITHUB_WORKSPACE/out/SHA256SUMS.txt"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: PumpRadar-Server-Client-v1.1.0-${{ github.run_number }}
+          name: PumpRadar-Server-Client-v1.2.0-${{ github.run_number }}
           path: out/
           if-no-files-found: error
           retention-days: 30
