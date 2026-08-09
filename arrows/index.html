@@ -321,50 +321,60 @@ function portalTarget(level, x, y) {
 }
 
 /**
- * Траектория фигуры: двигаем её по dir, пока она целиком не выйдет за поле.
- * Занятость поля здесь НЕ учитывается — путь зависит только от геометрии и порталов,
- * поэтому его можно посчитать один раз и потом лишь проверять пересечения.
- *   seq  — клетки пути по возрастанию шага (первое вхождение каждой клетки),
- *   set  — те же клетки для быстрых проверок «мешает ли эта стрелка вон той»,
- *   segs — участки со смещением от порталов, нужны для анимации:
- *          позиция на прогрессе p = клетка + dir*p + seg.off.
+ * Траектория стрелки. Стрелка ползёт КАК ЗМЕЙКА: голова уходит по своему
+ * направлению строго прямо, а тело тянется за ней по её же следу и потому
+ * само огибает все свои углы. Значит форма тела на её собственный ход не влияет
+ * вообще — важен только луч перед головой. Форма важна другим: она занимает
+ * клетки и перекрывает лучи соседей.
+ *
+ * cells — клетки от хвоста к голове (последняя и есть голова).
+ * Возвращает:
+ *   spine — «рельсы»: тело от хвоста к голове плюс след головы дальше за поле.
+ *           На прогрессе p клетка тела i стоит в spine[i + p], поэтому анимация
+ *           получается сама собой, вместе с прохождением углов.
+ *   seq   — клетки следа внутри поля (по возрастанию прогресса) для проверки помех,
+ *   set   — они же для быстрой проверки «перекрывает ли эта стрелка вон ту»,
+ *   P     — прогресс, на котором последняя клетка тела покидает поле.
  */
-function tracePath(level, cells0, headIdx, dir) {
-  const cols = level.cols, rows = level.rows, d = DIRS[dir];
-  const maxSteps = (cols + rows) * 4 + 8;
-  const cells = cells0.map(c => [c[0], c[1]]);
-  const segs = [{ s: 0, off: [0, 0] }];
+function tracePath(level, cells, dir) {
+  const cols = level.cols, rows = level.rows, L = cells.length;
+  const inside = (x, y) => x >= 0 && y >= 0 && x < cols && y < rows;
+  const spine = cells.map(c => [c[0], c[1]]);
+  const body = new Map();                       // клетка тела → её индекс
+  cells.forEach((c, i) => body.set(c[1] * cols + c[0], i));
   const seq = [], seen = new Set();
-  let ox = 0, oy = 0;
-  const note = step => {
-    let allOut = true;
-    for (const c of cells) {
-      if (c[0] < 0 || c[1] < 0 || c[0] >= cols || c[1] >= rows) continue;
-      allOut = false;
-      const k = c[1] * cols + c[0];
-      if (!seen.has(k)) { seen.add(k); seq.push({ k, x: c[0], y: c[1], step }); }
+  const maxSteps = (cols + rows) * 4 + 8;
+  let x = cells[L - 1][0], y = cells[L - 1][1];
+  let exited = false, tailFree = 0;
+
+  for (let s = 0; s < maxSteps; s++) {
+    x += DIRS[dir][0]; y += DIRS[dir][1];
+    let cellsToAdd = [[x, y]];
+    if (!exited && inside(x, y)) {
+      const t = portalTarget(level, x, y);       // голова ныряет в портал и выходит из парного
+      if (t) { cellsToAdd.push([t[0], t[1]]); x = t[0]; y = t[1]; }
     }
-    return allOut;
-  };
-  for (let step = 1; step <= maxSteps; step++) {
-    for (const c of cells) { c[0] += d[0]; c[1] += d[1]; }
-    if (note(step)) return { ok: true, seq, set: seen, steps: step, segs };
-    if (level.portals.length) {
-      const h = cells[headIdx];
-      const t = portalTarget(level, h[0], h[1]);
-      if (t) {
-        const dx = t[0] - h[0], dy = t[1] - h[1];
-        for (const c of cells) { c[0] += dx; c[1] += dy; }
-        ox += dx; oy += dy;
-        note(step);
-        segs.push({ s: step, off: [ox, oy] });
+    for (const c of cellsToAdd) {
+      const j = spine.length;                    // индекс в рельсах
+      spine.push(c);
+      if (!inside(c[0], c[1])) { exited = true; continue; }
+      const k = c[1] * cols + c[0];
+      // след прошёл по собственному телу: законно, только если хвост успел уйти
+      if (body.has(k) && j - L < body.get(k)) return { ok: false, spine, seq, set: seen, P: 0, L };
+      if (!seen.has(k) && !body.has(k)) { seen.add(k); seq.push({ k, x: c[0], y: c[1], step: j - L + 1 }); }
+    }
+    if (exited && ++tailFree > L + 1) {          // хвосту ещё нужно доехать до края
+      let lastIn = 0;
+      for (let j = spine.length - 1; j >= 0; j--) {
+        if (inside(spine[j][0], spine[j][1])) { lastIn = j; break; }
       }
+      return { ok: true, spine, seq, set: seen, P: lastIn + 1, L };
     }
   }
-  return { ok: false, seq, set: seen, steps: maxSteps, segs };   // петля порталов
+  return { ok: false, spine, seq, set: seen, P: 0, L };            // петля порталов
 }
 
-/** Первая клетка пути, занятая кем-то посторонним. */
+/** Первая клетка следа, занятая кем-то посторонним. */
 function firstHit(occ, seq, ig1, ig2) {
   for (let i = 0; i < seq.length; i++) {
     const v = occ[seq[i].k];
@@ -372,16 +382,18 @@ function firstHit(occ, seq, ig1, ig2) {
   }
   return null;
 }
-/** Голова и направление для выбранной стороны двухголовой стрелки. */
+/** Индекс клетки-головы для выбранной стороны двухголовой стрелки. */
 function headFor(a, dir) { return dir === a.dir ? a.cells.length - 1 : 0; }
+/** Рельсы для выбранной стороны. */
+function pathFor(a, dir) { return (dir === a.dir || !a.path2) ? a.path : a.path2; }
 
 /** Свободен ли путь стрелки: сама и партнёр по связке помехами не считаются. */
 function sweepArrow(level, occ, a, dir) {
-  const P = (dir === a.dir || !a.path2) ? a.path : a.path2;
-  if (!P.ok) return { ok: false, hit: null, steps: P.steps, segs: P.segs };
+  const P = pathFor(a, dir);
+  if (!P.ok) return { ok: false, hit: null, hitP: 0, path: P };
   const h = firstHit(occ, P.seq, a.id, a.link == null ? -999 : a.link);
-  if (h) return { ok: false, hit: [h.x, h.y], steps: h.step, segs: P.segs };
-  return { ok: true, hit: null, steps: P.steps, segs: P.segs };
+  if (h) return { ok: false, hit: [h.x, h.y], hitP: Math.max(0, h.step - 1), path: P };
+  return { ok: true, hit: null, hitP: 0, path: P };
 }
 
 /** Случайная ломаная: старт, длина, до maxTurns поворотов, без самопересечений. */
@@ -444,7 +456,7 @@ function genCandidate(seed, cfg) {
       if (!sh) continue;
       // держим фигуры кучно: первые попытки требуем соседство с уже стоящими
       if (arrows.length && t < 100 && rnd() < 0.75 && !touchesPlaced(sh.cells, occ, cols, rows)) continue;
-      const P = tracePath(level, sh.cells, sh.headIdx, sh.dir);
+      const P = tracePath(level, sh.cells, sh.dir);
       if (!P.ok || firstHit(occ, P.seq, -999, -999)) continue;
       // сколько уже стоящих стрелок эта позиция перекрывает — это и есть сложность:
       // перекрытые стрелки убираются позже неё, значит появляется зависимость
@@ -564,7 +576,7 @@ function assignSpecials(level, cfg, rnd) {
     if (!a) break;
     const back = dirBetween(a.cells[1], a.cells[0]);
     if (back === a.dir) { taken.delete(a.id); continue; }
-    const p2 = tracePath(level, a.cells, 0, back);
+    const p2 = tracePath(level, a.cells.slice().reverse(), back);
     if (!p2.ok) { taken.delete(a.id); continue; }
     a.type = T_DOUBLE; a.dir2 = back; a.path2 = p2;
   }
@@ -620,15 +632,15 @@ function campaignCfg(level) {
   const rows = level <= 10 ? 9 : level <= 25 ? 10 : level <= 60 ? 11 : 13;
   const lens = level <= 10 ? [2, 2, 3, 3, 4]
     : level <= 25 ? [2, 3, 3, 4, 4, 5]
-      : [2, 2, 3, 3, 4, 4, 5, 5];
+      : [2, 3, 3, 4, 4, 5, 5, 6];
   const fill = 0.30 + t * 0.36;
   return {
     cols, rows, lens, minFill: fill - 0.06,
     n: arrowCount(cols, rows, fill, lens),
     targetSafe: 0.62 - t * 0.34,
     greed: Math.min(1, t * 1.25),
-    maxTurns: level <= 4 ? 0 : level <= 12 ? 1 : 2,
-    turnP: level <= 4 ? 0 : 0.45,
+    maxTurns: level <= 4 ? 0 : level <= 12 ? 1 : level <= 30 ? 2 : 3,
+    turnP: level <= 4 ? 0 : 0.5,
     blocks: level >= 10 ? Math.min(5, 1 + Math.floor((level - 10) / 20)) : 0,
     portals: level >= 25 ? 1 : 0,
     ice: level >= 6 ? Math.min(3, 1 + Math.floor(level / 34)) : 0,
@@ -640,12 +652,12 @@ function campaignCfg(level) {
 }
 /** Вызов дня — один и тот же уровень у всех, «сложный» пресет. */
 function dailyCfg() {
-  const lens = [2, 2, 3, 3, 4, 4, 5, 5];
+  const lens = [2, 3, 3, 4, 4, 5, 5, 6];
   return {
     cols: 9, rows: 12, lens, minFill: 0.44,
     n: arrowCount(9, 12, 0.50, lens),
     targetSafe: 0.26, greed: 0.9,
-    maxTurns: 2, turnP: 0.45,
+    maxTurns: 3, turnP: 0.5,
     blocks: 3, portals: 1, ice: 2, lock: 2, chain: 1, bomb: 1, dbl: 1
   };
 }
@@ -654,14 +666,14 @@ function endlessCfg(d) {
   const t = Math.min(1, (d - 1) / 22);
   const cols = d <= 3 ? 7 : d <= 9 ? 8 : d <= 16 ? 9 : 10;
   const rows = d <= 3 ? 9 : d <= 9 ? 10 : d <= 16 ? 11 : 13;
-  const lens = d <= 4 ? [2, 3, 3, 4] : [2, 2, 3, 3, 4, 4, 5, 5];
+  const lens = d <= 4 ? [2, 3, 3, 4] : [2, 3, 3, 4, 4, 5, 5, 6];
   const fill = 0.26 + t * 0.30;
   return {
     cols, rows, lens, minFill: fill - 0.06,
     n: arrowCount(cols, rows, fill, lens),
     targetSafe: 0.58 - t * 0.38,
     greed: Math.min(1, t * 1.3),
-    maxTurns: d <= 2 ? 1 : 2, turnP: 0.45,
+    maxTurns: d <= 2 ? 1 : d <= 8 ? 2 : 3, turnP: 0.5,
     blocks: d >= 4 ? Math.min(5, Math.floor(d / 4)) : 0,
     portals: d >= 9 ? 1 : 0,
     ice: d >= 3 ? Math.min(3, Math.floor(d / 5) + 1) : 0,
@@ -790,6 +802,7 @@ function newGame(md, level, depth, carry) {
     shakeT: 0, shakeMag: 0, flashes: [], done: false, total: lv.arrows.length
   };
   scene = 'play';
+  if (cssW) layoutIfNeeded();     // чтобы координаты клеток были верны до первого кадра
   syncHud();
   hideAll();
 }
@@ -895,13 +908,13 @@ function launch(a, dir, res) {
   for (const it of list) {
     G.flying.push({
       a: it.a, dir: it.dir, res: it.res, p: 0,
-      dur: 0.13 + it.res.steps * 0.030, blocked: false, head: headFor(it.a, it.dir)
+      dur: 0.13 + it.res.path.P * 0.026, blocked: false
     });
     // освобождаем клетки сразу — иначе связка мешает сама себе
     for (const c of it.a.cells) G.occ[c[1] * G.lv.cols + c[0]] = EMPTY;
     G.alive.delete(it.a.id);
   }
-  sfxWhoosh(res.steps);
+  sfxWhoosh(res.path.P);
   buzz(8);
   G.moves++;
   G.combo++;
@@ -913,10 +926,8 @@ function launch(a, dir, res) {
 }
 /* ---- столкновение ---- */
 function crash(a, dir, res, partner) {
-  const it = partner || a;
   G.flying.push({
-    a, dir, res, p: 0, dur: 0.10 + res.steps * 0.024,
-    blocked: true, head: headFor(a, dir), hit: res.hit
+    a, dir, res, p: 0, dur: 0.11 + res.hitP * 0.026, blocked: true, hit: res.hit
   });
   G.combo = 0;
   G.hearts--;
@@ -1089,23 +1100,29 @@ function drawPortals(now) {
   }
 }
 
-/** Точки ломаной с учётом прогресса и телепортов. */
-function pathPoints(a, prog, dir, segs) {
-  const c = VIEW.cell;
-  let off = [0, 0];
-  if (segs) {
-    for (const s of segs) if (s.s <= Math.floor(prog)) off = s.off;
+/**
+ * Точки тела на прогрессе prog. Клетка тела i едет по рельсам в spine[i + prog],
+ * поэтому углы проходятся сами: хвост повторяет путь головы.
+ * Между несоседними клетками рельсов (прыжок через портал) не интерполируем.
+ */
+function snakePoints(path, prog) {
+  const c = VIEW.cell, sp = path.spine, last = sp.length - 1, out = [];
+  for (let i = 0; i < path.L; i++) {
+    const f = i + prog, j = Math.min(Math.floor(f), last), t = f - Math.floor(f);
+    const A = sp[j], B = sp[Math.min(j + 1, last)];
+    const jump = Math.abs(A[0] - B[0]) + Math.abs(A[1] - B[1]) > 1;
+    const x = jump ? (t < .5 ? A[0] : B[0]) : A[0] + (B[0] - A[0]) * t;
+    const y = jump ? (t < .5 ? A[1] : B[1]) : A[1] + (B[1] - A[1]) * t;
+    out.push([VIEW.ox + (x + .5) * c, VIEW.oy + (y + .5) * c]);
   }
-  const d = DIRS[dir != null ? dir : a.dir];
-  const dx = d[0] * prog + off[0], dy = d[1] * prog + off[1];
-  return a.cells.map(p => [VIEW.ox + (p[0] + dx + .5) * c, VIEW.oy + (p[1] + dy + .5) * c]);
+  return out;
 }
 
 function drawArrow(a, opt) {
   opt = opt || {};
   const c = VIEW.cell;
   const dir = opt.dir != null ? opt.dir : a.dir;
-  const pts = pathPoints(a, opt.prog || 0, dir, opt.segs);
+  const pts = snakePoints(opt.path || pathFor(a, dir), opt.prog || 0);
   const locked = a.type === T_LOCK && removedCount() < a.need;
   let col = locked ? '#4d5878' : DIR_COLOR[dir];
   if (a.type === T_ICE) col = a.hp > 1 ? '#7dd3fc' : '#bae6fd';
@@ -1137,7 +1154,8 @@ function drawArrow(a, opt) {
   ctx.strokeStyle = col; ctx.lineWidth = c * .38;
   strokePath(pts);
   headShape(pts, dir, c, col, false);
-  if (a.type === T_DOUBLE) headShape(pts.slice().reverse(), a.dir2, c, DIR_COLOR[a.dir2], false);
+  // вторую голову рисуем только у стоящей стрелки: в полёте хвост идёт по рельсам
+  if (a.type === T_DOUBLE && !opt.prog) headShape(pts.slice().reverse(), a.dir2, c, DIR_COLOR[a.dir2], false);
   // светлое ядро
   ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = c * .10;
   strokePath(pts);
@@ -1157,7 +1175,7 @@ function drawArrow(a, opt) {
   ctx.restore();
 
   // бейджи
-  const hp = pts[a.headIdx];
+  const hp = pts[pts.length - 1];
   if (locked) badge(hp, c, String(a.need - removedCount()), '#94a3b8', '#0b1020');
   if (a.type === T_BOMB) {
     const pulse = a.fuse <= 2 ? (0.6 + 0.4 * Math.sin(performance.now() / 110)) : 1;
@@ -1221,6 +1239,12 @@ function draw(now, dt) {
   drawPortals(now);
   drawBlocks();
 
+  // стрелки обрезаем по полю: улетающая должна уходить под край, а не поверх рамки
+  ctx.save();
+  const bw = VIEW.cell * G.lv.cols, bh = VIEW.cell * G.lv.rows;
+  rrect(VIEW.ox - 6, VIEW.oy - 6, bw + 12, bh + 12, 20);
+  ctx.clip();
+
   const hinting = G.hintId != null && now < G.hintUntil;
   for (const a of G.lv.arrows) {
     if (!G.alive.has(a.id)) continue;
@@ -1239,19 +1263,22 @@ function draw(now, dt) {
   // летящие
   for (const f of G.flying) {
     const k = f.blocked ? f.p : Math.pow(f.p, 0.78);
+    // упёрлась — доезжает до препятствия и отскакивает назад
     const prog = f.blocked
-      ? (f.res.steps - 1 + 0.42) * Math.sin(Math.min(1, f.p) * Math.PI) * 1.0
-      : k * f.res.steps;
-    const alpha = f.blocked ? 1 : Math.max(0, 1 - Math.max(0, k - 0.55) * 1.4);
-    drawArrow(f.a, { prog, dir: f.dir, segs: f.res.segs, alpha });
+      ? (f.res.hitP + 0.42) * Math.sin(Math.min(1, f.p) * Math.PI)
+      : k * f.res.path.P;
+    const alpha = f.blocked ? 1 : Math.max(0, 1 - Math.max(0, k - 0.62) * 1.7);
+    drawArrow(f.a, { prog, dir: f.dir, path: f.res.path, alpha });
     if (!f.blocked && Math.random() < 0.55) {
-      const p = pathPoints(f.a, prog, f.dir, f.res.segs)[0];
+      const p = snakePoints(f.res.path, prog)[0];
       G.parts.push({
         x: p[0], y: p[1], vx: (Math.random() - .5) * 40, vy: (Math.random() - .5) * 40,
         life: .3, t: 0, color: DIR_COLOR[f.dir], r: VIEW.cell * .05
       });
     }
   }
+  ctx.restore();
+
   // вспышки столкновений
   for (const fl of G.flashes) {
     const p = centerOf([fl.x, fl.y]), k = fl.t / 0.45;

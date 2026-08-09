@@ -70,6 +70,34 @@ function solve(level) {
   return null;
 }
 
+/**
+ * Проверка самой механики: стрелка ползёт змейкой, поэтому мешать ей могут только
+ * клетки строго перед головой. Если бы фигура ехала целиком, в списке помех
+ * оказались бы клетки сбоку — их появление и ловим.
+ */
+function snakeInvariant(level) {
+  if (level.portals.length) return null;              // с порталами след не прямой
+  for (const a of level.arrows) {
+    const head = a.cells[a.cells.length - 1];
+    const [dx, dy] = DIRS[a.dir];
+    for (const e of a.path.seq) {
+      const ox = e.x - head[0], oy = e.y - head[1];
+      const along = ox * dx + oy * dy;                // проекция на направление
+      if (ox !== dx * along || oy !== dy * along || along < 1) {
+        return `стрелка #${a.id}: клетка помехи (${e.x},${e.y}) вне луча перед головой (${head})`;
+      }
+    }
+    // рельсы должны начинаться телом — иначе тело не пойдёт по следу головы
+    for (let i = 0; i < a.cells.length; i++) {
+      if (a.path.spine[i][0] !== a.cells[i][0] || a.path.spine[i][1] !== a.cells[i][1]) {
+        return `стрелка #${a.id}: рельсы не начинаются телом`;
+      }
+    }
+  }
+  return null;
+}
+const DIRS = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+
 let fails = 0, checked = 0;
 const t0 = Date.now();
 const stat = { arrows: [], safe: [], ms: [] };
@@ -83,6 +111,8 @@ function check(name, seed, cfg) {
   stat.safe.push(lv.metrics ? lv.metrics.avgSafe : 0);
   stat.ms.push(gen);
   if (lv.arrows.length < 3) { console.error(`✗ ${name}: всего ${lv.arrows.length} стрелок`); fails++; return; }
+  const inv = snakeInvariant(lv);
+  if (inv) { console.error(`✗ ${name} (seed=${seed}): ${inv}`); fails++; }
   const err = solve(lv);
   if (err) { console.error(`✗ ${name} (seed=${seed}): ${err}`); fails++; }
 }
@@ -109,5 +139,5 @@ console.log(`стрелок в среднем: ${avg(stat.arrows).toFixed(1)} (�
 console.log(`средняя доля безопасных ходов: ${avg(stat.safe).toFixed(3)}`);
 console.log(`генерация: в среднем ${avg(stat.ms).toFixed(0)} мс, худшая ${Math.max(...stat.ms)} мс`);
 console.log(`всего за ${((Date.now() - t0) / 1000).toFixed(1)} с`);
-console.log(fails ? `✗ ПРОВАЛЕНО: ${fails}` : '✓ Все уровни решаются своим порядком уборки');
+console.log(fails ? `✗ ПРОВАЛЕНО: ${fails}` : '✓ Все уровни решаются своим порядком уборки, механика змейки соблюдена');
 process.exit(fails ? 1 : 0);
