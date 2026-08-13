@@ -1,0 +1,17 @@
+[Unit]
+Description=Прозрачный удалённый мониторинг экрана
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+# __PATHS__ подставит install.sh
+WorkingDirectory=__WORKDIR__
+Environment=MONITOR_PASSWORD=__PASSWORD__
+Environment=DISPLAY=:0
+ExecStart=__PYTHON__ __WORKDIR__/server.py --port __PORT__
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target
