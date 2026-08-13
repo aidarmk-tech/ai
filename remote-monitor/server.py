@@ -53,6 +53,7 @@ CONFIG = {
     "quality": 60,        # качество JPEG (1..95)
     "monitor": 1,         # номер экрана (1 = основной; 0 = все экраны вместе)
     "scale": 1.0,         # масштаб кадра (0.5 = уменьшить вдвое)
+    "no_auth": False,     # True = открыть без пароля (небезопасно, но удобно)
 }
 
 # Чтобы не спамить уведомлениями, запоминаем недавно подключавшиеся адреса.
@@ -115,6 +116,8 @@ def check_auth(pwd: str | None) -> bool:
 def require_auth(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
+        if CONFIG.get("no_auth"):
+            return fn(*args, **kwargs)
         auth = request.authorization
         if not auth or not check_auth(auth.password):
             return Response(
@@ -290,20 +293,26 @@ def main() -> None:
     parser.add_argument("--scale", type=float, default=1.0,
                         help="Масштаб кадра, напр. 0.5 — вдвое меньше (по умолчанию 1.0)")
     parser.add_argument("--no-tray", action="store_true", help="Не показывать значок в трее")
+    parser.add_argument("--no-auth", action="store_true",
+                        help="Открыть БЕЗ ПАРОЛЯ (удобно, но небезопасно для публичной ссылки)")
     args = parser.parse_args()
 
+    no_auth = args.no_auth or os.environ.get("MONITOR_NO_AUTH") == "1"
+
     password = args.password
-    if not password:
-        try:
-            password = getpass.getpass("Задайте пароль для доступа к мониторингу: ")
-        except (EOFError, KeyboardInterrupt):
-            password = ""
-    if not password:
-        print("Ошибка: пароль обязателен. Задайте --password или переменную MONITOR_PASSWORD.")
-        sys.exit(1)
+    if not no_auth:
+        if not password:
+            try:
+                password = getpass.getpass("Задайте пароль для доступа к мониторингу: ")
+            except (EOFError, KeyboardInterrupt):
+                password = ""
+        if not password:
+            print("Ошибка: пароль обязателен. Задайте --password, MONITOR_PASSWORD или флаг --no-auth.")
+            sys.exit(1)
 
     CONFIG.update(
         password=password,
+        no_auth=no_auth,
         fps=args.fps,
         quality=max(1, min(95, args.quality)),
         monitor=args.monitor,
@@ -317,7 +326,10 @@ def main() -> None:
     print("  ПРОЗРАЧНЫЙ МОНИТОРИНГ ЭКРАНА ЗАПУЩЕН")
     print("=" * 60)
     print(f"  Открывайте в браузере:   {url}")
-    print(f"  Логин:  любой   Пароль:  (заданный вами)")
+    if no_auth:
+        print("  Пароль:  ОТКЛЮЧЁН — не показывайте ссылку посторонним!")
+    else:
+        print(f"  Логин:  любой   Пароль:  (заданный вами)")
     print("  Наблюдение видно: зелёный значок в трее + уведомления.")
     print("  Остановить: Ctrl+C в этом окне или пункт в меню трея.")
     print("=" * 60, flush=True)
