@@ -84,5 +84,5 @@ echo.
 echo  ЧТОБЫ ОСТАНОВИТЬ: закройте это окно И окно "Мониторинг — СЕРВЕР".
 echo ------------------------------------------------------------
 echo.
-.\cloudflared.exe tunnel --url http://localhost:8000
+.\cloudflared.exe tunnel --url http://127.0.0.1:8000
 pause
