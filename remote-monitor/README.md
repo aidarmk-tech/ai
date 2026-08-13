@@ -72,11 +72,18 @@ cloudflared tunnel --url http://localhost:8000
 
 или Tailscale — тогда компьютер и телефон будут в одной приватной сети.
 
-## Автозапуск (по желанию)
+## Автозапуск
 
-- **Windows:** ярлык на `pythonw server.py` в папке «Автозагрузка».
-- **Linux:** unit для `systemd --user`.
-- **macOS:** `launchd`-агент (`~/Library/LaunchAgents`).
+Готовые установщики для всех трёх ОС — в папке [`autostart/`](autostart/README.md):
+
+```bash
+bash autostart/linux-systemd/install.sh                                  # Linux
+bash autostart/macos-launchd/install.sh                                  # macOS
+powershell -ExecutionPolicy Bypass -File .\autostart\windows\install.ps1 # Windows
+```
+
+Скрипт спросит пароль, пропишет автозапуск при входе в систему и сразу
+запустит мониторинг. Подробности и удаление — в [autostart/README.md](autostart/README.md).
 
 ## Безопасность
 
