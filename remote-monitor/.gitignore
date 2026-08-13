@@ -1,3 +1,7 @@
 venv/
 __pycache__/
 *.pyc
+cloudflared.exe
+server-log.txt
+monitor.log
+monitor.err.log

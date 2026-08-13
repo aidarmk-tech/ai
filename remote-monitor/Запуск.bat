@@ -20,15 +20,10 @@ if errorlevel 1 (
   exit /b 1
 )
 
-rem --- 2. venv + зависимости ---
-if not exist venv (
-  echo Создаю виртуальное окружение...
-  python -m venv venv
-)
-echo Устанавливаю компоненты...
-call venv\Scripts\activate.bat
+rem --- 2. Зависимости (в системный Python, без venv) ---
+echo Проверяю и устанавливаю компоненты...
 python -m pip install --upgrade pip >nul 2>nul
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 if errorlevel 1 (
   echo [ОШИБКА] Не удалось поставить компоненты. Проверьте интернет и запустите снова.
   pause
@@ -52,12 +47,24 @@ if not exist cloudflared.exe (
   exit /b 1
 )
 
-rem --- 4. Запускаем сервер в фоне (без отдельного окна, без пароля) ---
+rem --- 4. Запускаем сервер в фоне (лог пишем в файл для диагностики) ---
 echo Запускаю мониторинг в фоне...
-start /b "" python server.py --no-auth
+start "" /b cmd /c "python server.py --no-auth > server-log.txt 2>&1"
 
 rem Ждём, пока сервер поднимется
 powershell -Command "Start-Sleep -Seconds 5" >nul
+
+rem Проверяем, слушает ли сервер порт 8000
+powershell -Command "try { (New-Object Net.Sockets.TcpClient).Connect('127.0.0.1',8000); exit 0 } catch { exit 1 }"
+if errorlevel 1 (
+  echo.
+  echo [ОШИБКА] Сервер не запустился. Причина ниже:
+  echo ------------------------------------------------------------
+  type server-log.txt
+  echo ------------------------------------------------------------
+  pause
+  exit /b 1
+)
 
 rem --- 5. Туннель в этом же окне; ниже появится ссылка ---
 echo.
