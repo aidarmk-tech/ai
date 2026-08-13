@@ -4,6 +4,9 @@ __pycache__/
 cloudflared.exe
 server-log.txt
 cloudflared-log.txt
+run-tunnel.vbs
+LINK.txt
+ERROR.txt
 ССЫЛКА.txt
 ОШИБКА.txt
 monitor.log

