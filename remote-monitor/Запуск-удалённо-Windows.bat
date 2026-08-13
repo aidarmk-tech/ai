@@ -35,14 +35,24 @@ if errorlevel 1 (
 )
 
 rem --- 3. Скачиваем cloudflared, если его ещё нет ---
+set "CFURL=https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
 if not exist cloudflared.exe (
   echo Скачиваю cloudflared (мостик в интернет)...
-  powershell -Command "try { Invoke-WebRequest -Uri 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe' -OutFile 'cloudflared.exe' } catch { exit 1 }"
-  if not exist cloudflared.exe (
-    echo [ОШИБКА] Не удалось скачать cloudflared. Проверьте интернет и запустите снова.
-    pause
-    exit /b 1
-  )
+  rem Способ 1: curl (есть в Windows 10/11, корректно работает с TLS)
+  curl -L -o cloudflared.exe "%CFURL%" 2>nul
+)
+if not exist cloudflared.exe (
+  rem Способ 2: PowerShell с принудительным TLS 1.2
+  powershell -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; try { Invoke-WebRequest -Uri '%CFURL%' -OutFile 'cloudflared.exe' } catch {}"
+)
+if not exist cloudflared.exe (
+  echo.
+  echo [ОШИБКА] Не удалось скачать cloudflared автоматически.
+  echo Скачайте вручную по ссылке:
+  echo   %CFURL%
+  echo переименуйте файл в cloudflared.exe, положите в эту папку и запустите снова.
+  pause
+  exit /b 1
 )
 
 rem --- 4. Пароль ---
@@ -74,5 +84,5 @@ echo.
 echo  ЧТОБЫ ОСТАНОВИТЬ: закройте это окно И окно "Мониторинг — СЕРВЕР".
 echo ------------------------------------------------------------
 echo.
-cloudflared.exe tunnel --url http://localhost:8000
+.\cloudflared.exe tunnel --url http://localhost:8000
 pause
