@@ -71,7 +71,7 @@ python server.py --fps 3 --quality 45 --scale 0.6
 
 ```bash
 # Cloudflare Tunnel (бесплатно, https-адрес):
-cloudflared tunnel --url http://localhost:8000
+cloudflared tunnel --url http://127.0.0.1:8000
 ```
 
 или Tailscale — тогда компьютер и телефон будут в одной приватной сети.
