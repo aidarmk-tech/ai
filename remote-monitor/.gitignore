@@ -3,5 +3,8 @@ __pycache__/
 *.pyc
 cloudflared.exe
 server-log.txt
+cloudflared-log.txt
+ССЫЛКА.txt
+ОШИБКА.txt
 monitor.log
 monitor.err.log
