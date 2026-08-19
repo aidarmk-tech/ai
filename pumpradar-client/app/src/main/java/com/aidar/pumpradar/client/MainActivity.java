@@ -5,7 +5,6 @@ import android.content.ClipboardManager;
 import android.content.ClipData;
 import android.content.ContentResolver;
 import android.content.ContentValues;
-import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.net.Uri;
@@ -59,9 +58,9 @@ import javax.net.ssl.SSLException;
 public final class MainActivity extends Activity {
     private static final String DEFAULT_URL = "https://45.150.37.187";
     private static final long REFRESH_MS = 15_000L;
-    private static final String CLIENT_VERSION = "1.2.0";
+    private static final String CLIENT_VERSION = "1.3.0";
     private static final String[] STATUS_PATHS = {
-        "/api/status", "/status", "/api/health", "/health"
+        "/healthz", "/api/status", "/status", "/api/health", "/health"
     };
     private static final String[] EXPORT_PATHS = {
         "/api/export", "/export"
@@ -78,7 +77,9 @@ public final class MainActivity extends Activity {
     private EditText serverUrl;
     private TextView connectionBadge;
     private TextView summary;
+    private TextView regimeStatus;
     private TextView activeSlot;
+    private TextView metricsStatus;
     private TextView diagnostics;
     private TextView snapshotStatus;
     private TextView lastUpdate;
@@ -139,7 +140,7 @@ public final class MainActivity extends Activity {
         root.addView(title);
 
         TextView subtitle = text(
-            "Клиент " + CLIENT_VERSION + ": совместим со старыми и новыми форматами API, не блокирует сервер по версии и показывает точную причину ошибки.",
+            "Клиент " + CLIENT_VERSION + ": /healthz для 4.9.2, старые API как fallback, REGIME/feeds/каналы/outcomes и проверенный SQLite snapshot.",
             14,
             false
         );
@@ -183,13 +184,19 @@ public final class MainActivity extends Activity {
         summary = cardText("Ожидание ответа сервера…");
         root.addView(summary, margins(gap));
 
-        activeSlot = cardText("Активный paper-слот: проверка…");
+        regimeStatus = cardText("REGIME / feeds: проверка…");
+        root.addView(regimeStatus, margins(gap));
+
+        activeSlot = cardText("Активные paper-слоты: проверка…");
         root.addView(activeSlot, margins(gap));
+
+        metricsStatus = cardText("Каналы / outcomes: проверка…");
+        root.addView(metricsStatus, margins(gap));
 
         TextView diagnosticTitle = text("Диагностика соединения", 17, true);
         root.addView(diagnosticTitle, margins(gap));
 
-        diagnostics = cardText("Проверяются /api/status и резервные endpoint…");
+        diagnostics = cardText("Сначала проверяется /healthz, затем резервные status/health endpoint.");
         diagnostics.setTextIsSelectable(true);
         root.addView(diagnostics, margins(dp(6)));
 
@@ -209,7 +216,7 @@ public final class MainActivity extends Activity {
         root.addView(snapshotButton, margins(dp(6)));
 
         snapshotStatus = cardText(
-            "Клиент попробует новый и старый export endpoint, затем проверит размер и SHA-256 скачанного файла."
+            "Клиент создаёт новый export, отключает cache, затем проверяет размер и SHA-256 скачанного файла."
         );
         root.addView(snapshotStatus, margins(dp(6)));
 
@@ -218,7 +225,7 @@ public final class MainActivity extends Activity {
         root.addView(lastUpdate, margins(gap));
 
         TextView note = text(
-            "APK не содержит ключей Binance и не выставляет ордера. Если VPS или nginx остановлен, клиент покажет отказ соединения — APK не может запустить сервер сам.",
+            "APK не содержит ключей Binance и не выставляет ордера. Клиент только читает состояние сервера и скачивает export.",
             12,
             false
         );
@@ -395,46 +402,22 @@ public final class MainActivity extends Activity {
         String configHash = optStringAny(json, "—", "config_hash", "configHash");
         String runId = optStringAny(json, "—", "run_id", "runId");
         long uptime = optLongAny(json, 0L, "uptime_seconds", "uptimeSeconds", "uptime");
-        long marketAge = optLongAny(json, -1L, "market_feed_age_ms", "marketFeedAgeMs");
-        long candidateAge = optLongAny(json, -1L, "candidate_feed_age_ms", "candidateFeedAgeMs");
 
         StringBuilder text = new StringBuilder();
         text.append("Версия: ").append(algorithm).append('\n');
         text.append("Стратегия: ").append(strategy).append('\n');
         text.append("Config hash: ").append(configHash).append('\n');
         text.append("Run ID: ").append(runId).append('\n');
-        text.append("Работает: ").append(formatDuration(uptime)).append('\n');
-        text.append("Рыночный поток: ").append(formatAge(marketAge)).append('\n');
-        text.append("Поток кандидатов: ").append(formatAge(candidateAge)).append('\n');
-        text.append("Монет: ").append(optIntAny(json, 0, "universe_symbols", "universeSymbols")).append('\n');
-        text.append("Анализируется: ").append(optIntAny(json, 0, "evaluated_symbols", "evaluatedSymbols")).append('\n');
-        text.append("Снимков: ").append(optIntAny(json, 0, "snapshots", "snapshot_count")).append('\n');
-        text.append("Paper-слотов: ").append(optIntAny(json, 0, "slots", "slot_count"));
+        text.append("Работает: ").append(formatDuration(uptime));
+        appendIntIfPresent(text, json, "\nUniverse: ", "universe_symbols", "universeSymbols");
+        appendIntIfPresent(text, json, "\nEvaluated: ", "evaluated_symbols", "evaluatedSymbols");
+        appendIntIfPresent(text, json, "\nSnapshots: ", "snapshots", "snapshot_count", "snapshotCount");
+        appendIntIfPresent(text, json, "\nSlots: ", "slots", "slot_count", "slotCount");
         summary.setText(text.toString());
 
-        JSONObject slot = firstSlot(json);
-        if (slot == null) {
-            activeSlot.setText("Активный paper-слот: нет");
-        } else {
-            String symbol = optStringAny(slot, "—", "symbol", "ticker");
-            String channel = optStringAny(slot, "—", "channel", "signal_channel", "signalChannel");
-            String side = optStringAny(slot, "—", "side", "direction");
-            double entry = optDoubleAny(slot, 0.0, "entry_vwap", "entryVwap", "entry_price");
-            double amount = optDoubleAny(slot, 0.0, "margin_usdt", "position_usdt", "marginUsdt", "positionUsdt");
-            double mfe = optDoubleAny(slot, 0.0, "max_directional_return_percent", "max_executable_return_percent", "mfe_percent");
-            double mae = optDoubleAny(slot, 0.0, "min_directional_return_percent", "min_executable_return_percent", "mae_percent");
-            long opened = optLongAny(slot, 0L, "opened_at_ms", "openedAtMs");
-            activeSlot.setText(
-                "Активный paper-слот\n" +
-                "Канал: " + channel + "\n" +
-                "Сторона: " + side + "\n" +
-                "Монета: " + symbol + "\n" +
-                "Вход: " + formatNumber(entry) + "\n" +
-                "Маржа/размер: " + String.format(Locale.US, "%.2f USDT", amount) + "\n" +
-                "Открыт: " + formatTime(opened) + "\n" +
-                "MFE / MAE: " + String.format(Locale.US, "%+.3f%% / %+.3f%%", mfe, mae)
-            );
-        }
+        renderRegime(json);
+        renderSlots(json);
+        renderMetrics(json);
 
         String keys = json.names() == null ? "—" : json.names().toString();
         latestDiagnostics =
@@ -455,6 +438,176 @@ public final class MainActivity extends Activity {
         );
     }
 
+    private void renderRegime(JSONObject json) {
+        String serverSession = optStringAny(
+            json, "", "session", "current_session", "currentSession", "regime_session", "regimeSession"
+        );
+        String state = optStringAny(
+            json, "", "episode_state", "episodeState", "market_state", "marketState", "regime_state", "regimeState"
+        );
+
+        Boolean spotOk = optBooleanNullable(json, "spot_ok", "spotOk");
+        Boolean futuresOk = optBooleanNullable(json, "futures_ok", "futuresOk");
+        Boolean engineOk = optBooleanNullable(json, "regime_engine_ok", "regimeEngineOk");
+        Boolean positionOk = optBooleanNullable(json, "regime_position_ok", "regimePositionOk");
+
+        long spotAge = optLongAny(
+            json, -1L, "spot_feed_age_ms", "spotFeedAgeMs", "market_feed_age_ms", "marketFeedAgeMs"
+        );
+        long futuresAge = optLongAny(
+            json, -1L, "futures_feed_age_ms", "futuresFeedAgeMs", "candidate_feed_age_ms", "candidateFeedAgeMs"
+        );
+
+        StringBuilder out = new StringBuilder("REGIME / feeds\n");
+        if (!serverSession.isEmpty()) {
+            out.append("Сессия: ").append(serverSession).append('\n');
+        } else {
+            out.append("Сессия (Almaty, клиент): ").append(sessionAlmaty()).append('\n');
+        }
+        if (!state.isEmpty()) out.append("Состояние: ").append(state).append('\n');
+
+        out.append("Spot: ").append(formatBoolean(spotOk));
+        if (spotAge >= 0) out.append(" · ").append(formatAge(spotAge));
+        appendInlineIntIfPresent(out, json, " · symbols=", "spot_symbols", "spotSymbols", "spot_symbol_count");
+        out.append('\n');
+
+        out.append("Futures: ").append(formatBoolean(futuresOk));
+        if (futuresAge >= 0) out.append(" · ").append(formatAge(futuresAge));
+        appendInlineIntIfPresent(out, json, " · symbols=", "futures_symbols", "futuresSymbols", "futures_symbol_count");
+        out.append('\n');
+
+        out.append("REGIME engine: ").append(formatBoolean(engineOk)).append('\n');
+        out.append("REGIME position: ").append(formatBoolean(positionOk));
+
+        appendInlineIntIfPresent(
+            out, json, "\nEngine errors: ",
+            "regime_engine_errors", "regime_engine_error_count", "regimeEngineErrors", "regimeEngineErrorCount"
+        );
+        appendInlineIntIfPresent(
+            out, json, "\nPosition errors: ",
+            "regime_position_errors", "regime_position_error_count", "regimePositionErrors", "regimePositionErrorCount"
+        );
+
+        String engineError = optStringAny(
+            json, "", "regime_engine_last_error", "regime_last_engine_error", "regimeEngineLastError"
+        );
+        String positionError = optStringAny(
+            json, "", "regime_position_last_error", "regime_last_position_error", "regimePositionLastError"
+        );
+        if (!engineError.isEmpty()) out.append("\nEngine last error: ").append(compact(engineError));
+        if (!positionError.isEmpty()) out.append("\nPosition last error: ").append(compact(positionError));
+
+        regimeStatus.setText(out.toString());
+    }
+
+    private void renderSlots(JSONObject json) {
+        List<JSONObject> slots = allSlots(json);
+        if (slots.isEmpty()) {
+            activeSlot.setText("Активные paper-слоты: нет");
+            return;
+        }
+
+        StringBuilder out = new StringBuilder("Активные paper-слоты: ").append(slots.size());
+        int limit = Math.min(slots.size(), 8);
+        for (int i = 0; i < limit; i++) {
+            JSONObject slot = slots.get(i);
+            String symbol = optStringAny(slot, "—", "symbol", "ticker");
+            String channel = optStringAny(slot, "—", "channel", "signal_channel", "signalChannel");
+            String side = optStringAny(slot, "—", "side", "direction");
+            double entry = optDoubleAny(slot, 0.0, "entry_vwap", "entryVwap", "entry_price", "entryPrice");
+            double amount = optDoubleAny(
+                slot, 0.0, "margin_usdt", "position_usdt", "marginUsdt", "positionUsdt", "notional_usdt", "notionalUsdt"
+            );
+            double current = optDoubleAny(
+                slot, Double.NaN,
+                "directional_return_percent", "current_return_percent", "return_percent",
+                "directionalReturnPercent", "currentReturnPercent", "returnPercent"
+            );
+            double mfe = optDoubleAny(
+                slot, Double.NaN,
+                "max_directional_return_percent", "max_executable_return_percent", "mfe_percent",
+                "maxDirectionalReturnPercent", "mfePercent"
+            );
+            double mae = optDoubleAny(
+                slot, Double.NaN,
+                "min_directional_return_percent", "min_executable_return_percent", "mae_percent",
+                "minDirectionalReturnPercent", "maePercent"
+            );
+            long opened = optLongAny(slot, 0L, "opened_at_ms", "openedAtMs", "entry_at_ms", "entryAtMs");
+
+            out.append("\n\n#").append(i + 1)
+                .append(" ").append(channel)
+                .append(" · ").append(side)
+                .append(" · ").append(symbol);
+            if (entry != 0.0) out.append("\nВход: ").append(formatNumber(entry));
+            if (amount != 0.0) out.append(" · ").append(String.format(Locale.US, "%.2f USDT", amount));
+            if (opened > 0L) out.append("\nОткрыт: ").append(formatTime(opened));
+            if (!Double.isNaN(current)) {
+                out.append("\nСейчас: ").append(String.format(Locale.US, "%+.3f%%", current));
+            }
+            if (!Double.isNaN(mfe) || !Double.isNaN(mae)) {
+                out.append("\nMFE / MAE: ")
+                    .append(Double.isNaN(mfe) ? "—" : String.format(Locale.US, "%+.3f%%", mfe))
+                    .append(" / ")
+                    .append(Double.isNaN(mae) ? "—" : String.format(Locale.US, "%+.3f%%", mae));
+            }
+        }
+        if (slots.size() > limit) out.append("\n\n… ещё ").append(slots.size() - limit);
+        activeSlot.setText(out.toString());
+    }
+
+    private void renderMetrics(JSONObject json) {
+        StringBuilder out = new StringBuilder("Каналы / outcomes");
+        boolean any = false;
+
+        any |= appendMetric(
+            out, json, "Слотов на канал",
+            "regime_slots_per_channel", "regimeSlotsPerChannel", "slots_per_channel", "slotsPerChannel"
+        );
+        any |= appendMetric(
+            out, json, "Открыто по каналам",
+            "regime_open_slots_by_channel", "regime_open_channel_counts", "open_slots_by_channel",
+            "open_channel_counts", "regimeOpenSlotsByChannel"
+        );
+        any |= appendMetric(
+            out, json, "Закрыто по каналам",
+            "regime_closed_slots_by_channel", "regime_closed_channel_counts", "closed_slots_by_channel",
+            "closed_channel_counts", "regimeClosedSlotsByChannel"
+        );
+        any |= appendMetric(
+            out, json, "Сигналы",
+            "regime_signal_counts", "signal_counts", "regimeSignalCounts", "signalCounts"
+        );
+        any |= appendMetric(
+            out, json, "Disposition",
+            "regime_signal_dispositions", "signal_dispositions", "disposition_counts",
+            "regimeSignalDispositions", "signalDispositions"
+        );
+        any |= appendMetric(
+            out, json, "Snapshot coverage",
+            "snapshot_coverage", "regime_snapshot_coverage", "snapshotCoverage", "regimeSnapshotCoverage"
+        );
+        any |= appendMetric(
+            out, json, "Outcomes",
+            "regime_outcomes", "outcomes", "outcome_counts", "regimeOutcomes", "outcomeCounts"
+        );
+        any |= appendMetric(
+            out, json, "Outcomes по каналам",
+            "outcome_breakdown_by_channel", "regime_outcomes_by_channel", "outcomes_by_channel",
+            "outcomeBreakdownByChannel", "regimeOutcomesByChannel"
+        );
+        any |= appendMetric(
+            out, json, "Stop slippage",
+            "stop_slippage_metrics", "regime_stop_slippage_metrics", "stop_slippage",
+            "stopSlippageMetrics", "regimeStopSlippageMetrics"
+        );
+
+        if (!any) {
+            out.append("\nРасширенные поля 4.9.2 в этом endpoint не пришли. Клиент не подставляет нули вместо отсутствующих данных.");
+        }
+        metricsStatus.setText(out.toString());
+    }
+
     private void renderError(Exception error) {
         connectionBadge.setText("СЕРВЕР НЕ ОТВЕЧАЕТ");
         connectionBadge.setBackgroundColor(Color.rgb(185, 28, 28));
@@ -463,11 +616,14 @@ public final class MainActivity extends Activity {
             "Не удалось получить состояние сервера.\n\n" + description +
             "\n\nПроверь службу pumpradar, nginx/HTTPS gateway и порт 443."
         );
-        activeSlot.setText("Активный paper-слот: данные недоступны");
+        regimeStatus.setText("REGIME / feeds: данные недоступны");
+        activeSlot.setText("Активные paper-слоты: данные недоступны");
+        metricsStatus.setText("Каналы / outcomes: данные недоступны");
         latestDiagnostics =
             "PumpRadar Client " + CLIENT_VERSION + "\n" +
             "Время: " + formatTime(System.currentTimeMillis()) + "\n" +
             "Сервер: " + normalizeUrl(serverUrl.getText().toString()) + "\n" +
+            "Проверяемые endpoint: /healthz, /api/status, /status, /api/health, /health\n" +
             "Ошибка: " + description;
         diagnostics.setText(latestDiagnostics);
         lastUpdate.setText("Последняя попытка: " + formatTime(System.currentTimeMillis()));
@@ -499,7 +655,10 @@ public final class MainActivity extends Activity {
             Uri uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
             if (uri == null) throw new IllegalStateException("Android не создал файл в Downloads");
             try {
-                try (InputStream input = connection.getInputStream(); OutputStream output = resolver.openOutputStream(uri, "w")) {
+                try (
+                    InputStream input = connection.getInputStream();
+                    OutputStream output = resolver.openOutputStream(uri, "w")
+                ) {
                     if (output == null) throw new IllegalStateException("Не удалось открыть файл назначения");
                     copyAndDigest(input, output, digest, byteCount);
                 }
@@ -523,7 +682,10 @@ public final class MainActivity extends Activity {
             }
             File targetFile = new File(pumpRadarDir, fileName);
             try {
-                try (InputStream input = connection.getInputStream(); OutputStream output = new FileOutputStream(targetFile)) {
+                try (
+                    InputStream input = connection.getInputStream();
+                    OutputStream output = new FileOutputStream(targetFile)
+                ) {
                     copyAndDigest(input, output, digest, byteCount);
                 }
                 verifyDownloaded(metadata, byteCount[0], hex(digest.digest()));
@@ -538,7 +700,12 @@ public final class MainActivity extends Activity {
         return new DownloadResult(byteCount[0], metadata.expectedSha256, location);
     }
 
-    private static void copyAndDigest(InputStream input, OutputStream output, MessageDigest digest, long[] byteCount) throws Exception {
+    private static void copyAndDigest(
+        InputStream input,
+        OutputStream output,
+        MessageDigest digest,
+        long[] byteCount
+    ) throws Exception {
         byte[] buffer = new byte[64 * 1024];
         int read;
         while ((read = input.read(buffer)) >= 0) {
@@ -552,28 +719,145 @@ public final class MainActivity extends Activity {
 
     private static void verifyDownloaded(SnapshotMetadata metadata, long bytes, String sha256) {
         if (bytes != metadata.expectedBytes) {
-            throw new IllegalStateException("Размер не совпал: ожидалось " + metadata.expectedBytes + ", получено " + bytes);
+            throw new IllegalStateException(
+                "Размер не совпал: ожидалось " + metadata.expectedBytes + ", получено " + bytes
+            );
         }
         if (!sha256.equalsIgnoreCase(metadata.expectedSha256)) {
             throw new IllegalStateException("SHA-256 не совпал. Файл удалён.");
         }
     }
 
-    private static JSONObject firstSlot(JSONObject json) {
-        String[] objectKeys = {"active_regime_slot", "active_slot", "open_slot"};
-        for (String key : objectKeys) {
-            JSONObject slot = json.optJSONObject(key);
-            if (slot != null) return slot;
-        }
-        String[] arrayKeys = {"active_regime_slots", "active_slots", "open_slots", "regime_open_slots"};
+    private static List<JSONObject> allSlots(JSONObject json) {
+        List<JSONObject> result = new ArrayList<>();
+        String[] arrayKeys = {
+            "active_regime_slots", "active_slots", "open_slots", "regime_open_slots",
+            "activeRegimeSlots", "activeSlots", "openSlots", "regimeOpenSlots"
+        };
         for (String key : arrayKeys) {
             JSONArray slots = json.optJSONArray(key);
-            if (slots != null && slots.length() > 0) {
-                JSONObject slot = slots.optJSONObject(0);
-                if (slot != null) return slot;
+            if (slots == null || slots.length() == 0) continue;
+            for (int i = 0; i < slots.length(); i++) {
+                JSONObject slot = slots.optJSONObject(i);
+                if (slot != null) result.add(slot);
+            }
+            if (!result.isEmpty()) return result;
+        }
+
+        String[] objectKeys = {
+            "active_regime_slot", "active_slot", "open_slot",
+            "activeRegimeSlot", "activeSlot", "openSlot"
+        };
+        for (String key : objectKeys) {
+            JSONObject slot = json.optJSONObject(key);
+            if (slot != null) {
+                result.add(slot);
+                return result;
             }
         }
+        return result;
+    }
+
+    private static boolean appendMetric(
+        StringBuilder out,
+        JSONObject json,
+        String label,
+        String... keys
+    ) {
+        Object value = optAny(json, keys);
+        if (value == null) return false;
+        out.append('\n').append(label).append(": ").append(formatJsonValue(value));
+        return true;
+    }
+
+    private static Object optAny(JSONObject json, String... keys) {
+        for (String key : keys) {
+            if (!json.has(key) || json.isNull(key)) continue;
+            Object value = json.opt(key);
+            if (value != null && value != JSONObject.NULL) return value;
+        }
         return null;
+    }
+
+    private static String formatJsonValue(Object value) {
+        if (value == null || value == JSONObject.NULL) return "—";
+        if (value instanceof JSONObject) {
+            JSONObject object = (JSONObject) value;
+            JSONArray names = object.names();
+            if (names == null || names.length() == 0) return "{}";
+            StringBuilder out = new StringBuilder();
+            int limit = Math.min(names.length(), 12);
+            for (int i = 0; i < limit; i++) {
+                String name = names.optString(i, "");
+                if (name.isEmpty()) continue;
+                if (out.length() > 0) out.append(" · ");
+                Object nested = object.opt(name);
+                out.append(name).append('=');
+                if (nested instanceof JSONObject || nested instanceof JSONArray) {
+                    out.append(compact(String.valueOf(nested)));
+                } else {
+                    out.append(String.valueOf(nested));
+                }
+            }
+            if (names.length() > limit) out.append(" · …");
+            return out.toString();
+        }
+        if (value instanceof JSONArray) return compact(value.toString());
+        return String.valueOf(value);
+    }
+
+    private static void appendIntIfPresent(
+        StringBuilder out,
+        JSONObject json,
+        String prefix,
+        String... keys
+    ) {
+        for (String key : keys) {
+            if (!json.has(key) || json.isNull(key)) continue;
+            out.append(prefix).append(json.optInt(key));
+            return;
+        }
+    }
+
+    private static void appendInlineIntIfPresent(
+        StringBuilder out,
+        JSONObject json,
+        String prefix,
+        String... keys
+    ) {
+        appendIntIfPresent(out, json, prefix, keys);
+    }
+
+    private static Boolean optBooleanNullable(JSONObject json, String... keys) {
+        for (String key : keys) {
+            if (!json.has(key) || json.isNull(key)) continue;
+            Object raw = json.opt(key);
+            if (raw instanceof Boolean) return (Boolean) raw;
+            if (raw instanceof Number) return ((Number) raw).intValue() != 0;
+            String text = String.valueOf(raw).trim().toLowerCase(Locale.US);
+            if ("true".equals(text) || "ok".equals(text) || "yes".equals(text) || "1".equals(text)) return true;
+            if ("false".equals(text) || "fail".equals(text) || "no".equals(text) || "0".equals(text)) return false;
+        }
+        return null;
+    }
+
+    private static String formatBoolean(Boolean value) {
+        if (value == null) return "—";
+        return value ? "OK" : "ERROR";
+    }
+
+    private static String sessionAlmaty() {
+        SimpleDateFormat hourFormat = new SimpleDateFormat("H", Locale.US);
+        hourFormat.setTimeZone(TimeZone.getTimeZone("Asia/Almaty"));
+        int hour;
+        try {
+            hour = Integer.parseInt(hourFormat.format(new Date()));
+        } catch (NumberFormatException ignored) {
+            return "—";
+        }
+        if (hour >= 5 && hour < 13) return "ASIA";
+        if (hour >= 13 && hour < 21) return "EUROPE";
+        return "US";
     }
 
     private static String[] appendNonce(String[] paths, long nonce) {
@@ -651,22 +935,23 @@ public final class MainActivity extends Activity {
     }
 
     private static long optLongAny(JSONObject json, long fallback, String... keys) {
-        for (String key : keys) if (json.has(key) && !json.isNull(key)) return json.optLong(key, fallback);
-        return fallback;
-    }
-
-    private static int optIntAny(JSONObject json, int fallback, String... keys) {
-        for (String key : keys) if (json.has(key) && !json.isNull(key)) return json.optInt(key, fallback);
+        for (String key : keys) {
+            if (json.has(key) && !json.isNull(key)) return json.optLong(key, fallback);
+        }
         return fallback;
     }
 
     private static double optDoubleAny(JSONObject json, double fallback, String... keys) {
-        for (String key : keys) if (json.has(key) && !json.isNull(key)) return json.optDouble(key, fallback);
+        for (String key : keys) {
+            if (json.has(key) && !json.isNull(key)) return json.optDouble(key, fallback);
+        }
         return fallback;
     }
 
     private static boolean optBooleanAny(JSONObject json, boolean fallback, String... keys) {
-        for (String key : keys) if (json.has(key) && !json.isNull(key)) return json.optBoolean(key, fallback);
+        for (String key : keys) {
+            if (json.has(key) && !json.isNull(key)) return json.optBoolean(key, fallback);
+        }
         return fallback;
     }
 
@@ -742,7 +1027,10 @@ public final class MainActivity extends Activity {
     }
 
     private LinearLayout.LayoutParams fullWidth() {
-        return new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        return new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        );
     }
 
     private LinearLayout.LayoutParams weighted() {
@@ -781,7 +1069,14 @@ public final class MainActivity extends Activity {
         final long expectedBytes;
         final String expectedSha256;
 
-        SnapshotMetadata(long exportedAtMs, String runId, String algorithmVersion, String configHash, long expectedBytes, String expectedSha256) {
+        SnapshotMetadata(
+            long exportedAtMs,
+            String runId,
+            String algorithmVersion,
+            String configHash,
+            long expectedBytes,
+            String expectedSha256
+        ) {
             this.exportedAtMs = exportedAtMs;
             this.runId = runId;
             this.algorithmVersion = algorithmVersion;
@@ -793,16 +1088,20 @@ public final class MainActivity extends Activity {
         static SnapshotMetadata from(JSONObject exportResult, JSONObject manifest) {
             long exportedAtMs = optLongAny(manifest, 0L, "exported_at_ms", "exportedAtMs");
             if (exportedAtMs <= 0L) throw new IllegalStateException("Manifest не содержит exported_at_ms");
+
             JSONObject files = manifest.optJSONObject("files");
             JSONObject database = files == null ? null : files.optJSONObject("pumpradar.sqlite3.gz");
             if (database == null) throw new IllegalStateException("Manifest не содержит pumpradar.sqlite3.gz");
+
             String sha256 = optStringAny(database, "", "sha256", "sha_256");
-            long bytes = optLongAny(database, -1L, "bytes", "size");
+            long bytes = optLongAny(database, -1L, "bytes", "size", "size_bytes", "sizeBytes");
             if (sha256.length() != 64 || bytes <= 0L) {
                 throw new IllegalStateException("Manifest содержит неполные данные файла");
             }
+
             String exportDir = optStringAny(exportResult, "", "export_dir", "exportDir", "path");
             if (exportDir.isEmpty()) throw new IllegalStateException("Сервер не подтвердил создание export");
+
             return new SnapshotMetadata(
                 exportedAtMs,
                 optStringAny(manifest, "", "run_id", "runId"),
