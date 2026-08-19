@@ -1,9 +1,10 @@
 package com.aidar.pumpradar.client;
 
 import android.app.Activity;
+import android.content.ClipboardManager;
+import android.content.ClipData;
 import android.content.ContentResolver;
 import android.content.ContentValues;
-import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.net.Uri;
@@ -24,21 +25,27 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.net.ConnectException;
 import java.net.HttpURLConnection;
+import java.net.SocketTimeoutException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 import java.util.TimeZone;
 import java.util.concurrent.ExecutorService;
@@ -46,11 +53,21 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLException;
 
 public final class MainActivity extends Activity {
     private static final String DEFAULT_URL = "https://45.150.37.187";
     private static final long REFRESH_MS = 15_000L;
-    private static final String CLIENT_VERSION = "1.1.0";
+    private static final String CLIENT_VERSION = "1.3.0";
+    private static final String[] STATUS_PATHS = {
+        "/healthz", "/api/status", "/status", "/api/health", "/health"
+    };
+    private static final String[] EXPORT_PATHS = {
+        "/api/export", "/export"
+    };
+    private static final String[] MANIFEST_PATHS = {
+        "/api/export/latest/manifest.json", "/export/latest/manifest.json"
+    };
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -60,12 +77,15 @@ public final class MainActivity extends Activity {
     private EditText serverUrl;
     private TextView connectionBadge;
     private TextView summary;
+    private TextView regimeStatus;
     private TextView activeSlot;
-    private TextView researchStatus;
+    private TextView metricsStatus;
+    private TextView diagnostics;
     private TextView snapshotStatus;
     private TextView lastUpdate;
     private Button refreshButton;
-    private Button freshSnapshotButton;
+    private Button snapshotButton;
+    private String latestDiagnostics = "Диагностика ещё не выполнена.";
     private boolean resumed;
 
     private final Runnable autoRefresh = new Runnable() {
@@ -113,14 +133,14 @@ public final class MainActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(pad, pad, pad, pad);
-        root.setBackgroundColor(Color.rgb(248, 248, 248));
+        root.setBackgroundColor(Color.rgb(245, 247, 250));
 
         TextView title = text("PumpRadar Server", 26, true);
-        title.setTextColor(Color.rgb(30, 30, 30));
+        title.setTextColor(Color.rgb(20, 25, 35));
         root.addView(title);
 
         TextView subtitle = text(
-            "Клиент " + CLIENT_VERSION + ". Анализ выполняется на VPS; телефон показывает состояние и проверяет свежие snapshots.",
+            "Клиент " + CLIENT_VERSION + ": /healthz для 4.9.2, старые API как fallback, REGIME/feeds/каналы/outcomes и проверенный SQLite snapshot.",
             14,
             false
         );
@@ -134,21 +154,18 @@ public final class MainActivity extends Activity {
         connectionBadge.setPadding(gap, gap, gap, gap);
         root.addView(connectionBadge, margins(gap));
 
-        TextView serverLabel = text("Адрес сервера", 14, true);
-        root.addView(serverLabel, margins(gap));
+        root.addView(text("Адрес сервера", 14, true), margins(gap));
 
         serverUrl = new EditText(this);
         serverUrl.setSingleLine(true);
         serverUrl.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         serverUrl.setText(preferences.getString("server_url", DEFAULT_URL));
-        serverUrl.setSelectAllOnFocus(false);
         root.addView(serverUrl, fullWidth());
 
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
-        actions.setGravity(Gravity.CENTER_VERTICAL);
 
-        Button saveButton = button("Сохранить адрес");
+        Button saveButton = button("Сохранить");
         saveButton.setOnClickListener(v -> {
             String normalized = normalizeUrl(serverUrl.getText().toString());
             serverUrl.setText(normalized);
@@ -157,48 +174,58 @@ public final class MainActivity extends Activity {
         });
         actions.addView(saveButton, weighted());
 
-        refreshButton = button("Обновить");
+        refreshButton = button("Проверить");
         refreshButton.setOnClickListener(v -> refreshStatus(true));
         LinearLayout.LayoutParams refreshParams = weighted();
         refreshParams.setMarginStart(gap);
         actions.addView(refreshButton, refreshParams);
         root.addView(actions, margins(gap));
 
-        summary = cardText("Ожидание данных…");
+        summary = cardText("Ожидание ответа сервера…");
         root.addView(summary, margins(gap));
 
-        activeSlot = cardText("Активный paper-слот: проверка…");
+        regimeStatus = cardText("REGIME / feeds: проверка…");
+        root.addView(regimeStatus, margins(gap));
+
+        activeSlot = cardText("Активные paper-слоты: проверка…");
         root.addView(activeSlot, margins(gap));
 
-        researchStatus = cardText("Recorder/SHORT research: проверка…");
-        root.addView(researchStatus, margins(gap));
+        metricsStatus = cardText("Каналы / outcomes: проверка…");
+        root.addView(metricsStatus, margins(gap));
+
+        TextView diagnosticTitle = text("Диагностика соединения", 17, true);
+        root.addView(diagnosticTitle, margins(gap));
+
+        diagnostics = cardText("Сначала проверяется /healthz, затем резервные status/health endpoint.");
+        diagnostics.setTextIsSelectable(true);
+        root.addView(diagnostics, margins(dp(6)));
+
+        Button copyButton = button("Копировать диагностику");
+        copyButton.setOnClickListener(v -> {
+            ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            clipboard.setPrimaryClip(ClipData.newPlainText("PumpRadar diagnostics", latestDiagnostics));
+            Toast.makeText(this, "Диагностика скопирована", Toast.LENGTH_SHORT).show();
+        });
+        root.addView(copyButton, margins(dp(6)));
 
         TextView snapshotTitle = text("Свежий snapshot базы", 17, true);
         root.addView(snapshotTitle, margins(gap));
 
-        freshSnapshotButton = button("Создать, скачать и проверить SQLite.GZ");
-        freshSnapshotButton.setOnClickListener(v -> requestFreshSnapshot());
-        root.addView(freshSnapshotButton, margins(dp(6)));
+        snapshotButton = button("Создать, скачать и проверить SQLite.GZ");
+        snapshotButton.setOnClickListener(v -> requestFreshSnapshot());
+        root.addView(snapshotButton, margins(dp(6)));
 
         snapshotStatus = cardText(
-            "Кнопка сначала запускает новый SQLite backup на сервере, затем скачивает manifest и базу без кэша, проверяет размер и SHA-256."
+            "Клиент создаёт новый export, отключает cache, затем проверяет размер и SHA-256 скачанного файла."
         );
         root.addView(snapshotStatus, margins(dp(6)));
-
-        TextView downloadTitle = text("Файлы последнего экспорта", 17, true);
-        root.addView(downloadTitle, margins(gap));
-
-        root.addView(downloadButton("Манифест JSON", "manifest.json"), margins(dp(6)));
-        root.addView(downloadButton("Paper-сделки CSV.GZ", "paper_slots.csv.gz"), margins(dp(6)));
-        root.addView(downloadButton("Политики выходов CSV.GZ", "policy_runs.csv.gz"), margins(dp(6)));
-        root.addView(downloadButton("Снимки рынка CSV.GZ", "snapshots.csv.gz"), margins(dp(6)));
 
         lastUpdate = text("", 12, false);
         lastUpdate.setTextColor(Color.GRAY);
         root.addView(lastUpdate, margins(gap));
 
         TextView note = text(
-            "Клиент не содержит Binance API-ключей, не выставляет ордера и не запускает сканирование на телефоне.",
+            "APK не содержит ключей Binance и не выставляет ордера. Клиент только читает состояние сервера и скачивает export.",
             12,
             false
         );
@@ -208,25 +235,6 @@ public final class MainActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         scroll.addView(root);
         return scroll;
-    }
-
-    private Button downloadButton(String label, String fileName) {
-        Button button = button(label);
-        button.setOnClickListener(v -> {
-            String base = normalizeUrl(serverUrl.getText().toString());
-            long nonce = System.currentTimeMillis();
-            Uri uri = Uri.parse(base + "/api/export/latest/" + fileName + "?fresh=" + nonce);
-            try {
-                startActivity(new Intent(Intent.ACTION_VIEW, uri));
-            } catch (Exception error) {
-                Toast.makeText(
-                    this,
-                    "Не удалось открыть загрузку: " + safeMessage(error),
-                    Toast.LENGTH_LONG
-                ).show();
-            }
-        });
-        return button;
     }
 
     private void refreshStatus(boolean userInitiated) {
@@ -240,8 +248,8 @@ public final class MainActivity extends Activity {
 
         executor.execute(() -> {
             try {
-                JSONObject json = getJson(base + "/api/status");
-                runOnUiThread(() -> renderStatus(json));
+                EndpointResult result = getFirstJson(base, STATUS_PATHS);
+                runOnUiThread(() -> renderStatus(result));
             } catch (Exception error) {
                 runOnUiThread(() -> renderError(error));
             } finally {
@@ -254,90 +262,114 @@ public final class MainActivity extends Activity {
     private void requestFreshSnapshot() {
         if (!snapshotDownloading.compareAndSet(false, true)) return;
         String base = normalizeUrl(serverUrl.getText().toString());
-        freshSnapshotButton.setEnabled(false);
-        snapshotStatus.setText("Создание нового backup на сервере…");
+        snapshotButton.setEnabled(false);
+        snapshotStatus.setText("Запуск нового export на сервере…");
 
         executor.execute(() -> {
             try {
-                JSONObject exportResult = postJson(base + "/api/export");
+                EndpointResult export = postFirstJson(base, EXPORT_PATHS);
                 long nonce = System.currentTimeMillis();
-                JSONObject manifest = getJson(
-                    base + "/api/export/latest/manifest.json?fresh=" + nonce
+                EndpointResult manifestResult = getFirstJson(base, appendNonce(MANIFEST_PATHS, nonce));
+                SnapshotMetadata metadata = SnapshotMetadata.from(export.json, manifestResult.json);
+                String exportRoot = manifestResult.path.substring(
+                    0,
+                    manifestResult.path.length() - "/manifest.json".length()
                 );
-                SnapshotMetadata metadata = SnapshotMetadata.from(exportResult, manifest);
+
                 runOnUiThread(() -> snapshotStatus.setText(
                     "Snapshot создан: " + formatTime(metadata.exportedAtMs) + "\n" +
                     "Версия: " + metadata.algorithmVersion + "\n" +
-                    "Config hash: " + metadata.configHash + "\n" +
+                    "Config hash: " + emptyDash(metadata.configHash) + "\n" +
                     "Размер: " + formatBytes(metadata.expectedBytes) + "\n" +
-                    "SHA-256: " + metadata.expectedSha256 + "\n\n" +
-                    "Скачивание без кэша…"
+                    "SHA-256: " + metadata.expectedSha256 + "\n\nСкачивание…"
                 ));
 
-                String downloadUrl =
-                    base + "/api/export/latest/pumpradar.sqlite3.gz?fresh=" +
+                String target = base + exportRoot + "/pumpradar.sqlite3.gz?fresh=" +
                     metadata.exportedAtMs + "-" + nonce;
-                DownloadResult result = downloadVerified(downloadUrl, metadata);
-
+                DownloadResult result = downloadVerified(target, metadata);
                 runOnUiThread(() -> {
                     snapshotStatus.setText(
-                        "✅ Свежая база скачана и проверена\n" +
+                        "✅ База скачана и проверена\n" +
                         "Создана: " + formatTime(metadata.exportedAtMs) + "\n" +
                         "Версия: " + metadata.algorithmVersion + "\n" +
                         "Run ID: " + emptyDash(metadata.runId) + "\n" +
                         "Размер: " + formatBytes(result.bytes) + "\n" +
-                        "SHA-256 совпал: " + result.sha256 + "\n" +
+                        "SHA-256: " + result.sha256 + "\n" +
                         "Сохранено: " + result.location
                     );
                     Toast.makeText(this, "Snapshot проверен и сохранён", Toast.LENGTH_LONG).show();
                 });
             } catch (Exception error) {
                 runOnUiThread(() -> snapshotStatus.setText(
-                    "❌ Не удалось создать или проверить snapshot\n\n" +
-                    safeMessage(error) +
-                    "\n\nСтарая база не считается свежей и не помечается успешной."
+                    "❌ Snapshot не получен\n\n" + describeError(error)
                 ));
             } finally {
                 snapshotDownloading.set(false);
-                runOnUiThread(() -> freshSnapshotButton.setEnabled(true));
+                runOnUiThread(() -> snapshotButton.setEnabled(true));
             }
         });
     }
 
-    private JSONObject getJson(String target) throws Exception {
-        HttpURLConnection connection = openConnection(target, "GET");
-        connection.setRequestProperty("Accept", "application/json");
-        int status = connection.getResponseCode();
-        String body = readAll(responseStream(connection, status));
-        connection.disconnect();
-        if (status < 200 || status >= 300) {
-            throw new IllegalStateException("HTTP " + status + ": " + body);
-        }
-        return new JSONObject(body);
+    private EndpointResult getFirstJson(String base, String[] paths) throws Exception {
+        return firstJson(base, paths, "GET");
     }
 
-    private JSONObject postJson(String target) throws Exception {
-        HttpURLConnection connection = openConnection(target, "POST");
-        connection.setDoOutput(true);
-        connection.setFixedLengthStreamingMode(0);
-        connection.connect();
-        try (OutputStream output = connection.getOutputStream()) {
-            output.flush();
+    private EndpointResult postFirstJson(String base, String[] paths) throws Exception {
+        return firstJson(base, paths, "POST");
+    }
+
+    private EndpointResult firstJson(String base, String[] paths, String method) throws Exception {
+        List<String> attempts = new ArrayList<>();
+        Throwable last = null;
+        for (String pathWithQuery : paths) {
+            String path = pathWithQuery;
+            try {
+                EndpointResult result = requestJson(base, path, method);
+                if (result.status >= 200 && result.status < 300) return result;
+                attempts.add(path + " → HTTP " + result.status + " " + compact(result.body));
+            } catch (Exception error) {
+                last = error;
+                attempts.add(path + " → " + describeError(error));
+            }
+        }
+        StringBuilder message = new StringBuilder("Ни один endpoint не ответил корректно:");
+        for (String attempt : attempts) message.append("\n• ").append(attempt);
+        IllegalStateException combined = new IllegalStateException(message.toString());
+        if (last != null) combined.initCause(last);
+        throw combined;
+    }
+
+    private EndpointResult requestJson(String base, String path, String method) throws Exception {
+        HttpURLConnection connection = openConnection(base + path, method);
+        connection.setRequestProperty("Accept", "application/json");
+        if ("POST".equals(method)) {
+            connection.setDoOutput(true);
+            connection.setFixedLengthStreamingMode(0);
+            connection.connect();
+            try (OutputStream output = connection.getOutputStream()) {
+                output.flush();
+            }
         }
         int status = connection.getResponseCode();
         String body = readAll(responseStream(connection, status));
         connection.disconnect();
-        if (status < 200 || status >= 300) {
-            throw new IllegalStateException("HTTP " + status + ": " + body);
+        JSONObject json;
+        try {
+            json = new JSONObject(body);
+        } catch (JSONException error) {
+            throw new IllegalStateException(
+                "HTTP " + status + " вернул не JSON: " + compact(body),
+                error
+            );
         }
-        return new JSONObject(body);
+        return new EndpointResult(pathOnly(path), status, body, json);
     }
 
     private HttpURLConnection openConnection(String target, String method) throws Exception {
         URL url = new URL(target);
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
         if (!(connection instanceof HttpsURLConnection)) {
-            throw new IllegalStateException("Разрешён только HTTPS");
+            throw new IllegalStateException("Разрешён только HTTPS. Получено: " + url.getProtocol());
         }
         connection.setUseCaches(false);
         connection.setDefaultUseCaches(false);
@@ -347,14 +379,254 @@ public final class MainActivity extends Activity {
         connection.setRequestProperty("User-Agent", "PumpRadar-Server-Client/" + CLIENT_VERSION);
         connection.setRequestProperty("Cache-Control", "no-cache, no-store, max-age=0");
         connection.setRequestProperty("Pragma", "no-cache");
-        connection.setRequestProperty("Expires", "0");
         return connection;
     }
 
     private static InputStream responseStream(HttpURLConnection connection, int status) throws Exception {
-        return status >= 200 && status < 300
+        InputStream stream = status >= 200 && status < 300
             ? connection.getInputStream()
             : connection.getErrorStream();
+        return stream == null ? new ByteArrayInputStream(new byte[0]) : stream;
+    }
+
+    private void renderStatus(EndpointResult result) {
+        JSONObject json = result.json;
+        boolean ok = optBooleanAny(json, true, "ok", "ready", "healthy");
+        connectionBadge.setText(ok ? "СЕРВЕР ОТВЕЧАЕТ" : "СЕРВЕР ОТВЕЧАЕТ, НО НЕ ГОТОВ");
+        connectionBadge.setBackgroundColor(
+            ok ? Color.rgb(21, 128, 61) : Color.rgb(194, 65, 12)
+        );
+
+        String algorithm = optStringAny(json, "—", "algorithm_version", "algorithmVersion", "version");
+        String strategy = optStringAny(json, "—", "strategy_version", "strategyVersion", "strategy");
+        String configHash = optStringAny(json, "—", "config_hash", "configHash");
+        String runId = optStringAny(json, "—", "run_id", "runId");
+        long uptime = optLongAny(json, 0L, "uptime_seconds", "uptimeSeconds", "uptime");
+
+        StringBuilder text = new StringBuilder();
+        text.append("Версия: ").append(algorithm).append('\n');
+        text.append("Стратегия: ").append(strategy).append('\n');
+        text.append("Config hash: ").append(configHash).append('\n');
+        text.append("Run ID: ").append(runId).append('\n');
+        text.append("Работает: ").append(formatDuration(uptime));
+        appendIntIfPresent(text, json, "\nUniverse: ", "universe_symbols", "universeSymbols");
+        appendIntIfPresent(text, json, "\nEvaluated: ", "evaluated_symbols", "evaluatedSymbols");
+        appendIntIfPresent(text, json, "\nSnapshots: ", "snapshots", "snapshot_count", "snapshotCount");
+        appendIntIfPresent(text, json, "\nSlots: ", "slots", "slot_count", "slotCount");
+        summary.setText(text.toString());
+
+        renderRegime(json);
+        renderSlots(json);
+        renderMetrics(json);
+
+        String keys = json.names() == null ? "—" : json.names().toString();
+        latestDiagnostics =
+            "PumpRadar Client " + CLIENT_VERSION + "\n" +
+            "Время: " + formatTime(System.currentTimeMillis()) + "\n" +
+            "Сервер: " + normalizeUrl(serverUrl.getText().toString()) + "\n" +
+            "Endpoint: " + result.path + "\n" +
+            "HTTP: " + result.status + "\n" +
+            "API ok: " + ok + "\n" +
+            "Версия: " + algorithm + "\n" +
+            "Стратегия: " + strategy + "\n" +
+            "Config hash: " + configHash + "\n" +
+            "JSON keys: " + keys;
+        diagnostics.setText(latestDiagnostics);
+        lastUpdate.setText(
+            "Обновлено: " + formatTime(System.currentTimeMillis()) +
+            " · автообновление каждые 15 секунд"
+        );
+    }
+
+    private void renderRegime(JSONObject json) {
+        String serverSession = optStringAny(
+            json, "", "session", "current_session", "currentSession", "regime_session", "regimeSession"
+        );
+        String state = optStringAny(
+            json, "", "episode_state", "episodeState", "market_state", "marketState", "regime_state", "regimeState"
+        );
+
+        Boolean spotOk = optBooleanNullable(json, "spot_ok", "spotOk");
+        Boolean futuresOk = optBooleanNullable(json, "futures_ok", "futuresOk");
+        Boolean engineOk = optBooleanNullable(json, "regime_engine_ok", "regimeEngineOk");
+        Boolean positionOk = optBooleanNullable(json, "regime_position_ok", "regimePositionOk");
+
+        long spotAge = optLongAny(
+            json, -1L, "spot_feed_age_ms", "spotFeedAgeMs", "market_feed_age_ms", "marketFeedAgeMs"
+        );
+        long futuresAge = optLongAny(
+            json, -1L, "futures_feed_age_ms", "futuresFeedAgeMs", "candidate_feed_age_ms", "candidateFeedAgeMs"
+        );
+
+        StringBuilder out = new StringBuilder("REGIME / feeds\n");
+        if (!serverSession.isEmpty()) {
+            out.append("Сессия: ").append(serverSession).append('\n');
+        } else {
+            out.append("Сессия (Almaty, клиент): ").append(sessionAlmaty()).append('\n');
+        }
+        if (!state.isEmpty()) out.append("Состояние: ").append(state).append('\n');
+
+        out.append("Spot: ").append(formatBoolean(spotOk));
+        if (spotAge >= 0) out.append(" · ").append(formatAge(spotAge));
+        appendInlineIntIfPresent(out, json, " · symbols=", "spot_symbols", "spotSymbols", "spot_symbol_count");
+        out.append('\n');
+
+        out.append("Futures: ").append(formatBoolean(futuresOk));
+        if (futuresAge >= 0) out.append(" · ").append(formatAge(futuresAge));
+        appendInlineIntIfPresent(out, json, " · symbols=", "futures_symbols", "futuresSymbols", "futures_symbol_count");
+        out.append('\n');
+
+        out.append("REGIME engine: ").append(formatBoolean(engineOk)).append('\n');
+        out.append("REGIME position: ").append(formatBoolean(positionOk));
+
+        appendInlineIntIfPresent(
+            out, json, "\nEngine errors: ",
+            "regime_engine_errors", "regime_engine_error_count", "regimeEngineErrors", "regimeEngineErrorCount"
+        );
+        appendInlineIntIfPresent(
+            out, json, "\nPosition errors: ",
+            "regime_position_errors", "regime_position_error_count", "regimePositionErrors", "regimePositionErrorCount"
+        );
+
+        String engineError = optStringAny(
+            json, "", "regime_engine_last_error", "regime_last_engine_error", "regimeEngineLastError"
+        );
+        String positionError = optStringAny(
+            json, "", "regime_position_last_error", "regime_last_position_error", "regimePositionLastError"
+        );
+        if (!engineError.isEmpty()) out.append("\nEngine last error: ").append(compact(engineError));
+        if (!positionError.isEmpty()) out.append("\nPosition last error: ").append(compact(positionError));
+
+        regimeStatus.setText(out.toString());
+    }
+
+    private void renderSlots(JSONObject json) {
+        List<JSONObject> slots = allSlots(json);
+        if (slots.isEmpty()) {
+            activeSlot.setText("Активные paper-слоты: нет");
+            return;
+        }
+
+        StringBuilder out = new StringBuilder("Активные paper-слоты: ").append(slots.size());
+        int limit = Math.min(slots.size(), 8);
+        for (int i = 0; i < limit; i++) {
+            JSONObject slot = slots.get(i);
+            String symbol = optStringAny(slot, "—", "symbol", "ticker");
+            String channel = optStringAny(slot, "—", "channel", "signal_channel", "signalChannel");
+            String side = optStringAny(slot, "—", "side", "direction");
+            double entry = optDoubleAny(slot, 0.0, "entry_vwap", "entryVwap", "entry_price", "entryPrice");
+            double amount = optDoubleAny(
+                slot, 0.0, "margin_usdt", "position_usdt", "marginUsdt", "positionUsdt", "notional_usdt", "notionalUsdt"
+            );
+            double current = optDoubleAny(
+                slot, Double.NaN,
+                "directional_return_percent", "current_return_percent", "return_percent",
+                "directionalReturnPercent", "currentReturnPercent", "returnPercent"
+            );
+            double mfe = optDoubleAny(
+                slot, Double.NaN,
+                "max_directional_return_percent", "max_executable_return_percent", "mfe_percent",
+                "maxDirectionalReturnPercent", "mfePercent"
+            );
+            double mae = optDoubleAny(
+                slot, Double.NaN,
+                "min_directional_return_percent", "min_executable_return_percent", "mae_percent",
+                "minDirectionalReturnPercent", "maePercent"
+            );
+            long opened = optLongAny(slot, 0L, "opened_at_ms", "openedAtMs", "entry_at_ms", "entryAtMs");
+
+            out.append("\n\n#").append(i + 1)
+                .append(" ").append(channel)
+                .append(" · ").append(side)
+                .append(" · ").append(symbol);
+            if (entry != 0.0) out.append("\nВход: ").append(formatNumber(entry));
+            if (amount != 0.0) out.append(" · ").append(String.format(Locale.US, "%.2f USDT", amount));
+            if (opened > 0L) out.append("\nОткрыт: ").append(formatTime(opened));
+            if (!Double.isNaN(current)) {
+                out.append("\nСейчас: ").append(String.format(Locale.US, "%+.3f%%", current));
+            }
+            if (!Double.isNaN(mfe) || !Double.isNaN(mae)) {
+                out.append("\nMFE / MAE: ")
+                    .append(Double.isNaN(mfe) ? "—" : String.format(Locale.US, "%+.3f%%", mfe))
+                    .append(" / ")
+                    .append(Double.isNaN(mae) ? "—" : String.format(Locale.US, "%+.3f%%", mae));
+            }
+        }
+        if (slots.size() > limit) out.append("\n\n… ещё ").append(slots.size() - limit);
+        activeSlot.setText(out.toString());
+    }
+
+    private void renderMetrics(JSONObject json) {
+        StringBuilder out = new StringBuilder("Каналы / outcomes");
+        boolean any = false;
+
+        any |= appendMetric(
+            out, json, "Слотов на канал",
+            "regime_slots_per_channel", "regimeSlotsPerChannel", "slots_per_channel", "slotsPerChannel"
+        );
+        any |= appendMetric(
+            out, json, "Открыто по каналам",
+            "regime_open_slots_by_channel", "regime_open_channel_counts", "open_slots_by_channel",
+            "open_channel_counts", "regimeOpenSlotsByChannel"
+        );
+        any |= appendMetric(
+            out, json, "Закрыто по каналам",
+            "regime_closed_slots_by_channel", "regime_closed_channel_counts", "closed_slots_by_channel",
+            "closed_channel_counts", "regimeClosedSlotsByChannel"
+        );
+        any |= appendMetric(
+            out, json, "Сигналы",
+            "regime_signal_counts", "signal_counts", "regimeSignalCounts", "signalCounts"
+        );
+        any |= appendMetric(
+            out, json, "Disposition",
+            "regime_signal_dispositions", "signal_dispositions", "disposition_counts",
+            "regimeSignalDispositions", "signalDispositions"
+        );
+        any |= appendMetric(
+            out, json, "Snapshot coverage",
+            "snapshot_coverage", "regime_snapshot_coverage", "snapshotCoverage", "regimeSnapshotCoverage"
+        );
+        any |= appendMetric(
+            out, json, "Outcomes",
+            "regime_outcomes", "outcomes", "outcome_counts", "regimeOutcomes", "outcomeCounts"
+        );
+        any |= appendMetric(
+            out, json, "Outcomes по каналам",
+            "outcome_breakdown_by_channel", "regime_outcomes_by_channel", "outcomes_by_channel",
+            "outcomeBreakdownByChannel", "regimeOutcomesByChannel"
+        );
+        any |= appendMetric(
+            out, json, "Stop slippage",
+            "stop_slippage_metrics", "regime_stop_slippage_metrics", "stop_slippage",
+            "stopSlippageMetrics", "regimeStopSlippageMetrics"
+        );
+
+        if (!any) {
+            out.append("\nРасширенные поля 4.9.2 в этом endpoint не пришли. Клиент не подставляет нули вместо отсутствующих данных.");
+        }
+        metricsStatus.setText(out.toString());
+    }
+
+    private void renderError(Exception error) {
+        connectionBadge.setText("СЕРВЕР НЕ ОТВЕЧАЕТ");
+        connectionBadge.setBackgroundColor(Color.rgb(185, 28, 28));
+        String description = describeError(error);
+        summary.setText(
+            "Не удалось получить состояние сервера.\n\n" + description +
+            "\n\nПроверь службу pumpradar, nginx/HTTPS gateway и порт 443."
+        );
+        regimeStatus.setText("REGIME / feeds: данные недоступны");
+        activeSlot.setText("Активные paper-слоты: данные недоступны");
+        metricsStatus.setText("Каналы / outcomes: данные недоступны");
+        latestDiagnostics =
+            "PumpRadar Client " + CLIENT_VERSION + "\n" +
+            "Время: " + formatTime(System.currentTimeMillis()) + "\n" +
+            "Сервер: " + normalizeUrl(serverUrl.getText().toString()) + "\n" +
+            "Проверяемые endpoint: /healthz, /api/status, /status, /api/health, /health\n" +
+            "Ошибка: " + description;
+        diagnostics.setText(latestDiagnostics);
+        lastUpdate.setText("Последняя попытка: " + formatTime(System.currentTimeMillis()));
     }
 
     private DownloadResult downloadVerified(String target, SnapshotMetadata metadata) throws Exception {
@@ -364,15 +636,13 @@ public final class MainActivity extends Activity {
         if (status < 200 || status >= 300) {
             String body = readAll(connection.getErrorStream());
             connection.disconnect();
-            throw new IllegalStateException("HTTP " + status + ": " + body);
+            throw new IllegalStateException("HTTP " + status + ": " + compact(body));
         }
 
-        String fileName =
-            "pumpradar-" + metadata.exportedAtMs + "-" +
-            metadata.algorithmVersion.replaceAll("[^A-Za-z0-9._-]", "_") +
-            ".sqlite3.gz";
+        String fileName = "pumpradar-" + metadata.exportedAtMs + "-" +
+            metadata.algorithmVersion.replaceAll("[^A-Za-z0-9._-]", "_") + ".sqlite3.gz";
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
-        long[] byteCount = new long[] {0L};
+        long[] byteCount = {0L};
         String location;
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -380,24 +650,16 @@ public final class MainActivity extends Activity {
             ContentValues values = new ContentValues();
             values.put(MediaStore.Downloads.DISPLAY_NAME, fileName);
             values.put(MediaStore.Downloads.MIME_TYPE, "application/gzip");
-            values.put(
-                MediaStore.Downloads.RELATIVE_PATH,
-                Environment.DIRECTORY_DOWNLOADS + "/PumpRadar"
-            );
+            values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/PumpRadar");
             values.put(MediaStore.Downloads.IS_PENDING, 1);
             Uri uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
-            if (uri == null) {
-                connection.disconnect();
-                throw new IllegalStateException("Android не создал файл в Downloads");
-            }
+            if (uri == null) throw new IllegalStateException("Android не создал файл в Downloads");
             try {
                 try (
                     InputStream input = connection.getInputStream();
                     OutputStream output = resolver.openOutputStream(uri, "w")
                 ) {
-                    if (output == null) {
-                        throw new IllegalStateException("Не удалось открыть файл назначения");
-                    }
+                    if (output == null) throw new IllegalStateException("Не удалось открыть файл назначения");
                     copyAndDigest(input, output, digest, byteCount);
                 }
                 verifyDownloaded(metadata, byteCount[0], hex(digest.digest()));
@@ -413,38 +675,29 @@ public final class MainActivity extends Activity {
             }
         } else {
             File directory = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
-            if (directory == null) {
-                connection.disconnect();
-                throw new IllegalStateException("Android не предоставил каталог Downloads");
-            }
+            if (directory == null) throw new IllegalStateException("Android не предоставил каталог Downloads");
             File pumpRadarDir = new File(directory, "PumpRadar");
             if (!pumpRadarDir.exists() && !pumpRadarDir.mkdirs()) {
-                connection.disconnect();
                 throw new IllegalStateException("Не удалось создать каталог PumpRadar");
             }
-            File file = new File(pumpRadarDir, fileName);
+            File targetFile = new File(pumpRadarDir, fileName);
             try {
                 try (
                     InputStream input = connection.getInputStream();
-                    OutputStream output = new FileOutputStream(file)
+                    OutputStream output = new FileOutputStream(targetFile)
                 ) {
                     copyAndDigest(input, output, digest, byteCount);
                 }
                 verifyDownloaded(metadata, byteCount[0], hex(digest.digest()));
-                location = file.getAbsolutePath();
+                location = targetFile.getAbsolutePath();
             } catch (Exception error) {
-                if (file.exists()) file.delete();
+                targetFile.delete();
                 throw error;
             } finally {
                 connection.disconnect();
             }
         }
-
-        return new DownloadResult(
-            byteCount[0],
-            metadata.expectedSha256.toLowerCase(Locale.US),
-            location
-        );
+        return new DownloadResult(byteCount[0], metadata.expectedSha256, location);
     }
 
     private static void copyAndDigest(
@@ -453,9 +706,10 @@ public final class MainActivity extends Activity {
         MessageDigest digest,
         long[] byteCount
     ) throws Exception {
-        byte[] buffer = new byte[128 * 1024];
+        byte[] buffer = new byte[64 * 1024];
         int read;
-        while ((read = input.read(buffer)) != -1) {
+        while ((read = input.read(buffer)) >= 0) {
+            if (read == 0) continue;
             output.write(buffer, 0, read);
             digest.update(buffer, 0, read);
             byteCount[0] += read;
@@ -463,176 +717,200 @@ public final class MainActivity extends Activity {
         output.flush();
     }
 
-    private static void verifyDownloaded(
-        SnapshotMetadata metadata,
-        long actualBytes,
-        String actualSha256
-    ) {
-        if (metadata.expectedBytes > 0 && actualBytes != metadata.expectedBytes) {
+    private static void verifyDownloaded(SnapshotMetadata metadata, long bytes, String sha256) {
+        if (bytes != metadata.expectedBytes) {
             throw new IllegalStateException(
-                "Размер не совпал: ожидалось " + metadata.expectedBytes +
-                ", получено " + actualBytes
+                "Размер не совпал: ожидалось " + metadata.expectedBytes + ", получено " + bytes
             );
         }
-        if (metadata.expectedSha256 == null || metadata.expectedSha256.length() != 64) {
-            throw new IllegalStateException("Manifest не содержит корректный SHA-256");
+        if (!sha256.equalsIgnoreCase(metadata.expectedSha256)) {
+            throw new IllegalStateException("SHA-256 не совпал. Файл удалён.");
         }
-        if (!actualSha256.equalsIgnoreCase(metadata.expectedSha256)) {
-            throw new IllegalStateException("SHA-256 не совпал. Файл удалён как недостоверный.");
+    }
+
+    private static List<JSONObject> allSlots(JSONObject json) {
+        List<JSONObject> result = new ArrayList<>();
+        String[] arrayKeys = {
+            "active_regime_slots", "active_slots", "open_slots", "regime_open_slots",
+            "activeRegimeSlots", "activeSlots", "openSlots", "regimeOpenSlots"
+        };
+        for (String key : arrayKeys) {
+            JSONArray slots = json.optJSONArray(key);
+            if (slots == null || slots.length() == 0) continue;
+            for (int i = 0; i < slots.length(); i++) {
+                JSONObject slot = slots.optJSONObject(i);
+                if (slot != null) result.add(slot);
+            }
+            if (!result.isEmpty()) return result;
         }
+
+        String[] objectKeys = {
+            "active_regime_slot", "active_slot", "open_slot",
+            "activeRegimeSlot", "activeSlot", "openSlot"
+        };
+        for (String key : objectKeys) {
+            JSONObject slot = json.optJSONObject(key);
+            if (slot != null) {
+                result.add(slot);
+                return result;
+            }
+        }
+        return result;
+    }
+
+    private static boolean appendMetric(
+        StringBuilder out,
+        JSONObject json,
+        String label,
+        String... keys
+    ) {
+        Object value = optAny(json, keys);
+        if (value == null) return false;
+        out.append('\n').append(label).append(": ").append(formatJsonValue(value));
+        return true;
+    }
+
+    private static Object optAny(JSONObject json, String... keys) {
+        for (String key : keys) {
+            if (!json.has(key) || json.isNull(key)) continue;
+            Object value = json.opt(key);
+            if (value != null && value != JSONObject.NULL) return value;
+        }
+        return null;
+    }
+
+    private static String formatJsonValue(Object value) {
+        if (value == null || value == JSONObject.NULL) return "—";
+        if (value instanceof JSONObject) {
+            JSONObject object = (JSONObject) value;
+            JSONArray names = object.names();
+            if (names == null || names.length() == 0) return "{}";
+            StringBuilder out = new StringBuilder();
+            int limit = Math.min(names.length(), 12);
+            for (int i = 0; i < limit; i++) {
+                String name = names.optString(i, "");
+                if (name.isEmpty()) continue;
+                if (out.length() > 0) out.append(" · ");
+                Object nested = object.opt(name);
+                out.append(name).append('=');
+                if (nested instanceof JSONObject || nested instanceof JSONArray) {
+                    out.append(compact(String.valueOf(nested)));
+                } else {
+                    out.append(String.valueOf(nested));
+                }
+            }
+            if (names.length() > limit) out.append(" · …");
+            return out.toString();
+        }
+        if (value instanceof JSONArray) return compact(value.toString());
+        return String.valueOf(value);
+    }
+
+    private static void appendIntIfPresent(
+        StringBuilder out,
+        JSONObject json,
+        String prefix,
+        String... keys
+    ) {
+        for (String key : keys) {
+            if (!json.has(key) || json.isNull(key)) continue;
+            out.append(prefix).append(json.optInt(key));
+            return;
+        }
+    }
+
+    private static void appendInlineIntIfPresent(
+        StringBuilder out,
+        JSONObject json,
+        String prefix,
+        String... keys
+    ) {
+        appendIntIfPresent(out, json, prefix, keys);
+    }
+
+    private static Boolean optBooleanNullable(JSONObject json, String... keys) {
+        for (String key : keys) {
+            if (!json.has(key) || json.isNull(key)) continue;
+            Object raw = json.opt(key);
+            if (raw instanceof Boolean) return (Boolean) raw;
+            if (raw instanceof Number) return ((Number) raw).intValue() != 0;
+            String text = String.valueOf(raw).trim().toLowerCase(Locale.US);
+            if ("true".equals(text) || "ok".equals(text) || "yes".equals(text) || "1".equals(text)) return true;
+            if ("false".equals(text) || "fail".equals(text) || "no".equals(text) || "0".equals(text)) return false;
+        }
+        return null;
+    }
+
+    private static String formatBoolean(Boolean value) {
+        if (value == null) return "—";
+        return value ? "OK" : "ERROR";
+    }
+
+    private static String sessionAlmaty() {
+        SimpleDateFormat hourFormat = new SimpleDateFormat("H", Locale.US);
+        hourFormat.setTimeZone(TimeZone.getTimeZone("Asia/Almaty"));
+        int hour;
+        try {
+            hour = Integer.parseInt(hourFormat.format(new Date()));
+        } catch (NumberFormatException ignored) {
+            return "—";
+        }
+        if (hour >= 5 && hour < 13) return "ASIA";
+        if (hour >= 13 && hour < 21) return "EUROPE";
+        return "US";
+    }
+
+    private static String[] appendNonce(String[] paths, long nonce) {
+        String[] result = new String[paths.length];
+        for (int i = 0; i < paths.length; i++) {
+            result[i] = paths[i] + "?fresh=" + nonce;
+        }
+        return result;
+    }
+
+    private static String pathOnly(String path) {
+        int query = path.indexOf('?');
+        return query < 0 ? path : path.substring(0, query);
     }
 
     private static String readAll(InputStream stream) throws Exception {
         if (stream == null) return "";
         StringBuilder out = new StringBuilder();
-        try (
-            BufferedReader reader = new BufferedReader(
-                new InputStreamReader(stream, StandardCharsets.UTF_8)
-            )
-        ) {
-            String line;
-            while ((line = reader.readLine()) != null) out.append(line);
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+            char[] buffer = new char[8192];
+            int read;
+            while ((read = reader.read(buffer)) >= 0) {
+                if (read == 0) continue;
+                out.append(buffer, 0, read);
+                if (out.length() > 256_000) break;
+            }
         }
         return out.toString();
     }
 
-    private void renderStatus(JSONObject json) {
-        boolean ok = json.optBoolean("ok", false);
-        connectionBadge.setText(ok ? "СЕРВЕР РАБОТАЕТ" : "ПОТОК ДАННЫХ НЕ ГОТОВ");
-        connectionBadge.setBackgroundColor(
-            ok ? Color.rgb(21, 128, 61) : Color.rgb(194, 65, 12)
-        );
-
-        long uptime = json.optLong("uptime_seconds", 0L);
-        long marketAge = nullableLong(json, "market_feed_age_ms");
-        long candidateAge = nullableLong(json, "candidate_feed_age_ms");
-
-        StringBuilder text = new StringBuilder();
-        text.append("Версия: ").append(json.optString("algorithm_version", "—")).append('\n');
-        text.append("Стратегия: ").append(json.optString("strategy_version", "—")).append('\n');
-        text.append("Config hash: ").append(json.optString("config_hash", "—")).append('\n');
-        text.append("Run ID: ").append(json.optString("run_id", "—")).append('\n');
-        text.append("Работает: ").append(formatDuration(uptime)).append('\n');
-        text.append("Рыночный поток: ").append(formatAge(marketAge)).append('\n');
-        text.append("Поток кандидатов: ").append(formatAge(candidateAge)).append('\n');
-        text.append("Монет во вселенной: ").append(json.optInt("universe_symbols", 0)).append('\n');
-        text.append("Анализируется сейчас: ").append(json.optInt("evaluated_symbols", 0)).append('\n');
-        text.append("Снимков в текущем запуске: ").append(json.optInt("snapshots", 0)).append('\n');
-        text.append("Paper-слотов: ").append(json.optInt("slots", 0));
-        summary.setText(text.toString());
-
-        JSONObject slot = firstSlot(json);
-        if (slot == null) {
-            activeSlot.setText("Активный paper-слот: нет");
-        } else {
-            String symbol = slot.optString("symbol", "—");
-            String channel = slot.optString("channel", slot.optString("signal_channel", "—"));
-            String side = slot.optString("side", "—");
-            double entry = slot.optDouble("entry_vwap", 0.0);
-            double amount = slot.has("margin_usdt")
-                ? slot.optDouble("margin_usdt", 0.0)
-                : slot.optDouble("position_usdt", 0.0);
-            double mfe = slot.has("max_directional_return_percent")
-                ? slot.optDouble("max_directional_return_percent", 0.0)
-                : slot.optDouble("max_executable_return_percent", 0.0);
-            double mae = slot.has("min_directional_return_percent")
-                ? slot.optDouble("min_directional_return_percent", 0.0)
-                : slot.optDouble("min_executable_return_percent", 0.0);
-            long opened = slot.optLong("opened_at_ms", 0L);
-            activeSlot.setText(
-                "Активный paper-слот\n" +
-                "Канал: " + channel + "\n" +
-                "Сторона: " + side + "\n" +
-                "Монета: " + symbol + "\n" +
-                "Вход: " + formatNumber(entry) + "\n" +
-                "Маржа/размер: " + String.format(Locale.US, "%.2f USDT", amount) + "\n" +
-                "Открыт: " + formatTime(opened) + "\n" +
-                "MFE / MAE: " + String.format(Locale.US, "%+.3f%% / %+.3f%%", mfe, mae)
-            );
+    private static String describeError(Throwable error) {
+        Throwable current = error;
+        while (current.getCause() != null && current.getCause() != current) current = current.getCause();
+        String message = current.getMessage();
+        if (current instanceof ConnectException) {
+            return "Соединение отклонено: на порту 443 никто не отвечает. Вероятно, nginx или VPS-служба остановлена.";
         }
-
-        researchStatus.setText(formatResearchStatus(json));
-        lastUpdate.setText(
-            "Обновлено: " + formatTime(System.currentTimeMillis()) +
-            " · автообновление каждые 15 секунд"
-        );
-    }
-
-    private static JSONObject firstSlot(JSONObject json) {
-        JSONObject slot = json.optJSONObject("active_regime_slot");
-        if (slot != null) return slot;
-        JSONArray slots = json.optJSONArray("active_regime_slots");
-        if (slots != null && slots.length() > 0) {
-            return slots.optJSONObject(0);
+        if (current instanceof SocketTimeoutException) {
+            return "Таймаут: сервер принял соединение, но не ответил вовремя.";
         }
-        return json.optJSONObject("active_slot");
-    }
-
-    private static String formatResearchStatus(JSONObject json) {
-        JSONObject recorder = json.optJSONObject("recorder");
-        JSONObject shortResearch = json.optJSONObject("short_research");
-        if (recorder == null && shortResearch == null) {
-            return "Recorder/SHORT research\nСервер этой версии не передаёт расширенную диагностику.";
+        if (current instanceof SSLException) {
+            return "Ошибка SSL/TLS: " + emptyDash(message) + ". Проверь сертификат HTTPS gateway.";
         }
-
-        StringBuilder out = new StringBuilder("Recorder/SHORT research");
-        if (recorder != null) {
-            out.append("\nSchema: ").append(recorder.optString("schema_version", "—"));
-            out.append("\nСостояние: ").append(
-                recorder.optBoolean("healthy", false)
-                    ? "OK"
-                    : recorder.optString("status", "не готов")
-            );
-            appendOptional(out, "Import p95", recorder, "signal_import_delay_p95_ms", " мс");
-            appendOptional(out, "Pre-signal coverage", recorder, "pre_signal_coverage_percent", "%");
-            appendOptional(out, "Timestamp skew p95", recorder, "timestamp_skew_p95_ms", " мс");
+        if (error.getMessage() != null && error.getMessage().contains("Ни один endpoint")) {
+            return error.getMessage();
         }
-        if (shortResearch != null) {
-            appendOptional(out, "SHORT candidates", shortResearch, "candidates", "");
-            appendOptional(out, "Complete outcomes", shortResearch, "completed_outcomes", "");
-            appendOptional(out, "TARGET1 → stop", shortResearch, "target1_to_stop", "");
-            appendOptional(out, "Data-quality blocked", shortResearch, "data_quality_blocked", "");
-            out.append("\nChampion: ").append(
-                shortResearch.optString("champion", "REV_MC5_SHORT_600_2X")
-            );
-        }
-        return out.toString();
+        return current.getClass().getSimpleName() + ": " + emptyDash(message);
     }
 
-    private static void appendOptional(
-        StringBuilder out,
-        String label,
-        JSONObject source,
-        String key,
-        String suffix
-    ) {
-        if (!source.has(key) || source.isNull(key)) return;
-        out.append("\n").append(label).append(": ")
-            .append(source.optString(key, "—")).append(suffix);
-    }
-
-    private void renderError(Exception error) {
-        connectionBadge.setText("СЕРВЕР НЕДОСТУПЕН");
-        connectionBadge.setBackgroundColor(Color.rgb(185, 28, 28));
-        summary.setText(
-            "Не удалось подключиться к серверу.\n\n" +
-            safeMessage(error) + "\n\n" +
-            "Проверь HTTPS gateway и доступность порта 443."
-        );
-        activeSlot.setText("Активный paper-слот: данные недоступны");
-        researchStatus.setText("Recorder/SHORT research: данные недоступны");
-        lastUpdate.setText("Последняя попытка: " + formatTime(System.currentTimeMillis()));
-    }
-
-    private static long nullableLong(JSONObject json, String key) {
-        return json.isNull(key) ? -1L : json.optLong(key, -1L);
-    }
-
-    private static String safeMessage(Throwable error) {
-        String message = error.getMessage();
-        return message == null || message.trim().isEmpty()
-            ? error.getClass().getSimpleName()
-            : message;
+    private static String compact(String value) {
+        if (value == null) return "";
+        String compact = value.replaceAll("\\s+", " ").trim();
+        return compact.length() <= 240 ? compact : compact.substring(0, 240) + "…";
     }
 
     private String normalizeUrl(String raw) {
@@ -642,13 +920,43 @@ public final class MainActivity extends Activity {
             value = value.replaceFirst("^http://", "");
             value = "https://" + value;
         }
-        while (value.endsWith("/")) {
-            value = value.substring(0, value.length() - 1);
-        }
+        while (value.endsWith("/")) value = value.substring(0, value.length() - 1);
         return value;
     }
 
+    private static String optStringAny(JSONObject json, String fallback, String... keys) {
+        for (String key : keys) {
+            if (json.has(key) && !json.isNull(key)) {
+                String value = json.optString(key, "");
+                if (!value.trim().isEmpty()) return value;
+            }
+        }
+        return fallback;
+    }
+
+    private static long optLongAny(JSONObject json, long fallback, String... keys) {
+        for (String key : keys) {
+            if (json.has(key) && !json.isNull(key)) return json.optLong(key, fallback);
+        }
+        return fallback;
+    }
+
+    private static double optDoubleAny(JSONObject json, double fallback, String... keys) {
+        for (String key : keys) {
+            if (json.has(key) && !json.isNull(key)) return json.optDouble(key, fallback);
+        }
+        return fallback;
+    }
+
+    private static boolean optBooleanAny(JSONObject json, boolean fallback, String... keys) {
+        for (String key : keys) {
+            if (json.has(key) && !json.isNull(key)) return json.optBoolean(key, fallback);
+        }
+        return fallback;
+    }
+
     private static String formatDuration(long seconds) {
+        if (seconds <= 0) return "—";
         long days = seconds / 86_400;
         long hours = (seconds % 86_400) / 3_600;
         long minutes = (seconds % 3_600) / 60;
@@ -691,9 +999,7 @@ public final class MainActivity extends Activity {
 
     private static String hex(byte[] bytes) {
         StringBuilder out = new StringBuilder(bytes.length * 2);
-        for (byte value : bytes) {
-            out.append(String.format(Locale.US, "%02x", value & 0xff));
-        }
+        for (byte value : bytes) out.append(String.format(Locale.US, "%02x", value & 0xff));
         return out.toString();
     }
 
@@ -701,9 +1007,7 @@ public final class MainActivity extends Activity {
         TextView view = new TextView(this);
         view.setText(value);
         view.setTextSize(sp);
-        if (bold) {
-            view.setTypeface(view.getTypeface(), android.graphics.Typeface.BOLD);
-        }
+        if (bold) view.setTypeface(view.getTypeface(), android.graphics.Typeface.BOLD);
         return view;
     }
 
@@ -743,6 +1047,20 @@ public final class MainActivity extends Activity {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
+    private static final class EndpointResult {
+        final String path;
+        final int status;
+        final String body;
+        final JSONObject json;
+
+        EndpointResult(String path, int status, String body, JSONObject json) {
+            this.path = path;
+            this.status = status;
+            this.body = body;
+            this.json = json;
+        }
+    }
+
     private static final class SnapshotMetadata {
         final long exportedAtMs;
         final String runId;
@@ -768,31 +1086,27 @@ public final class MainActivity extends Activity {
         }
 
         static SnapshotMetadata from(JSONObject exportResult, JSONObject manifest) {
-            long exportedAtMs = manifest.optLong("exported_at_ms", 0L);
-            if (exportedAtMs <= 0L) {
-                throw new IllegalStateException("Manifest не содержит exported_at_ms");
-            }
+            long exportedAtMs = optLongAny(manifest, 0L, "exported_at_ms", "exportedAtMs");
+            if (exportedAtMs <= 0L) throw new IllegalStateException("Manifest не содержит exported_at_ms");
+
             JSONObject files = manifest.optJSONObject("files");
-            JSONObject database = files == null
-                ? null
-                : files.optJSONObject("pumpradar.sqlite3.gz");
-            if (database == null) {
-                throw new IllegalStateException("Manifest не содержит pumpradar.sqlite3.gz");
-            }
-            String sha256 = database.optString("sha256", "");
-            long bytes = database.optLong("bytes", -1L);
+            JSONObject database = files == null ? null : files.optJSONObject("pumpradar.sqlite3.gz");
+            if (database == null) throw new IllegalStateException("Manifest не содержит pumpradar.sqlite3.gz");
+
+            String sha256 = optStringAny(database, "", "sha256", "sha_256");
+            long bytes = optLongAny(database, -1L, "bytes", "size", "size_bytes", "sizeBytes");
             if (sha256.length() != 64 || bytes <= 0L) {
                 throw new IllegalStateException("Manifest содержит неполные данные файла");
             }
-            String exportDir = exportResult.optString("export_dir", "");
-            if (exportDir.isEmpty()) {
-                throw new IllegalStateException("Сервер не подтвердил создание нового export");
-            }
+
+            String exportDir = optStringAny(exportResult, "", "export_dir", "exportDir", "path");
+            if (exportDir.isEmpty()) throw new IllegalStateException("Сервер не подтвердил создание export");
+
             return new SnapshotMetadata(
                 exportedAtMs,
-                manifest.optString("run_id", ""),
-                manifest.optString("algorithm_version", "unknown"),
-                manifest.optString("config_hash", ""),
+                optStringAny(manifest, "", "run_id", "runId"),
+                optStringAny(manifest, "unknown", "algorithm_version", "algorithmVersion", "version"),
+                optStringAny(manifest, "", "config_hash", "configHash"),
                 bytes,
                 sha256
             );
