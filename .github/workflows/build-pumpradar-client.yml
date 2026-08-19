@@ -33,6 +33,17 @@ jobs:
         with:
           gradle-version: '8.9'
 
+      - name: Apply and verify 1.3.1 snapshot hotfix
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cd "$GITHUB_WORKSPACE/pumpradar-client"
+          python3 apply-v131-hotfix.py
+          grep -F 'CLIENT_VERSION = "1.3.1"' app/src/main/java/com/aidar/pumpradar/client/MainActivity.java
+          grep -F 'EXPORT_READ_TIMEOUT_MS = 300_000' app/src/main/java/com/aidar/pumpradar/client/MainActivity.java
+          grep -F 'waitForFreshManifest' app/src/main/java/com/aidar/pumpradar/client/MainActivity.java
+          grep -F 'вернул HTML вместо JSON' app/src/main/java/com/aidar/pumpradar/client/MainActivity.java
+
       - name: Build standalone client APK
         shell: bash
         run: |
@@ -47,13 +58,13 @@ jobs:
           set -Eeuo pipefail
           APK="$GITHUB_WORKSPACE/pumpradar-client/app/build/outputs/apk/debug/app-debug.apk"
           test -f "$APK"
-          cp "$APK" "$GITHUB_WORKSPACE/out/PumpRadar-Server-Client-v1.3.0.apk"
-          sha256sum "$GITHUB_WORKSPACE/out/PumpRadar-Server-Client-v1.3.0.apk" | tee "$GITHUB_WORKSPACE/out/SHA256SUMS.txt"
+          cp "$APK" "$GITHUB_WORKSPACE/out/PumpRadar-Server-Client-v1.3.1.apk"
+          sha256sum "$GITHUB_WORKSPACE/out/PumpRadar-Server-Client-v1.3.1.apk" | tee "$GITHUB_WORKSPACE/out/SHA256SUMS.txt"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: PumpRadar-Server-Client-v1.3.0-${{ github.run_number }}
+          name: PumpRadar-Server-Client-v1.3.1-${{ github.run_number }}
           path: out/
           if-no-files-found: error
           retention-days: 30
