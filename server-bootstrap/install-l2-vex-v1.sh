@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 ARCHIVE=${1:-/root/PumpRadar-L2-VEX-Research-V1.tar.gz}
-EXPECTED_SHA256='267cb008ce21f89b70dfc7d57dd5206db678c4664bf69dba5f6436036488152f'
+EXPECTED_SHA256='97b2d3d63690632f5316d16f83a63b1b31ca44f8c3be5417d4d078d4cc4fede7'
 STAGE=/root/pumpradar-l2-vex-v1-stage
 
 [[ ${EUID:-$(id -u)} -eq 0 ]] || { echo 'Run as root' >&2; exit 1; }
