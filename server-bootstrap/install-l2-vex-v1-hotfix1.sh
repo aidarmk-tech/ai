@@ -4,7 +4,7 @@ set -Eeuo pipefail
 ARCHIVE=${1:-/root/PumpRadar-L2-VEX-Research-V1-HOTFIX1.tar.gz}
 EXPECTED_SHA256='4180c6d97476474dad64c08560a9121ee12ba04251dfd2f94d6d89401fdfe192'
 STAGE=/root/pumpradar-l2-vex-v1-hotfix1-stage
-PAYLOAD_URL='https://raw.githubusercontent.com/aidarmk-tech/ai/chatgpt/pumpradar-l2-vex-research-v1/server-bootstrap/PumpRadar-L2-VEX-Research-V1-HOTFIX1.tar.gz.b64'
+PAYLOAD_URL='https://raw.githubusercontent.com/aidarmk-tech/ai/chatgpt/pumpradar-l2-vex-research-v1/server-bootstrap/PumpRadar-L2-VEX-Research-V1-HOTFIX1.tar.gz.b64?rev=cacf7300'
 
 [[ ${EUID:-$(id -u)} -eq 0 ]] || { echo 'Run as root' >&2; exit 1; }
 
