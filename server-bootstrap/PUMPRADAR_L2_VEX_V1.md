@@ -23,7 +23,7 @@ Based on the previously validated Recorder 2.0 depth accounting:
 
 Recent PumpRadar `regime_signals` are forced into the L2 depth universe for 15 minutes. A compact L2 context row is linked to every new main-server signal in `research_l2_signal_context`. This is observational only and is designed so L2 can later be evaluated against 4.9.2 PRICE_STOP/win outcomes without changing the strategy now.
 
-Raw second frames are kept separately under `/var/lib/pumpradar/l2-vex/seconds`, default 3-day retention / 800 MB cap. Main SQLite receives only compact state/current/event/VEX rows.
+Raw second frames are kept separately under `/var/lib/pumpradar/l2-vex/seconds`, default **1-day retention / 300 MB cap**. Main SQLite receives only compact state/current/event/VEX rows. The tighter cap is intentional because the current VPS has already experienced low-disk pressure.
 
 ## VEX1_CONFIRMED_BREAKOUT_V1
 
