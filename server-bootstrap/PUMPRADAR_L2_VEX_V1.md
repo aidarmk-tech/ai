@@ -23,7 +23,18 @@ Based on the previously validated Recorder 2.0 depth accounting:
 
 Recent PumpRadar `regime_signals` are forced into the L2 depth universe for 15 minutes. A compact L2 context row is linked to every new main-server signal in `research_l2_signal_context`. This is observational only and is designed so L2 can later be evaluated against 4.9.2 PRICE_STOP/win outcomes without changing the strategy now.
 
-Raw second frames are kept separately under `/var/lib/pumpradar/l2-vex/seconds`, default **1-day retention / 300 MB cap**. Main SQLite receives only compact state/current/event/VEX rows. The tighter cap is intentional because the current VPS has already experienced low-disk pressure.
+Raw second frames are kept separately under `/var/lib/pumpradar/l2-vex/seconds`, default 1-day retention / 300 MB cap. Main SQLite receives only compact state/current/event/VEX rows.
+
+## HOTFIX1 — Binance routed WebSockets
+
+Binance USD-M split WebSocket traffic by route. The legacy unrouted connection no longer delivers `market` streams after its retirement. HOTFIX1 keeps the research hypothesis unchanged and changes transport only:
+
+- `bookTicker` + partial depth -> `wss://fstream.binance.com/public`;
+- `aggTrade` + `markPrice` -> `wss://fstream.binance.com/market`;
+- public and market feeds use separate WebSocket connections;
+- task failures are explicitly logged instead of being silently swallowed by the reconnect supervisor.
+
+HOTFIX1 preserves the original VEX preregistration timestamp, existing $20 x2/x3 portfolios, H05 and active 4.9.2.
 
 ## VEX1_CONFIRMED_BREAKOUT_V1
 
