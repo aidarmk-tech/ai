@@ -17,8 +17,11 @@ data class SnapshotManifest(
 )
 
 class SnapshotRepository(private val context: Context) {
-    private val base = BuildConfig.SERVER_URL.trimEnd('/')
-    private val token = BuildConfig.READ_TOKEN
+    private val prefs = context.getSharedPreferences("connection", Context.MODE_PRIVATE)
+    private val base: String
+        get() = (prefs.getString("server_url", BuildConfig.SERVER_URL) ?: BuildConfig.SERVER_URL).trim().trimEnd('/')
+    private val token: String
+        get() = prefs.getString("read_token", "")?.trim().orEmpty()
 
     fun latest(): SnapshotManifest = readManifest(open("$base/api/v1/snapshots/latest"))
 
@@ -83,7 +86,7 @@ class SnapshotRepository(private val context: Context) {
             requestMethod = method
             connectTimeout = 15_000
             readTimeout = 120_000
-            setRequestProperty("X-TradeLab-Token", token)
+            if (token.isNotEmpty()) setRequestProperty("X-TradeLab-Token", token)
             setRequestProperty("Accept", "application/json, application/gzip")
         }
 
