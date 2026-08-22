@@ -19,7 +19,16 @@ android {
         buildConfigField("String", "READ_TOKEN", "\"$readToken\"")
     }
 
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
     buildFeatures { buildConfig = true }
+}
+
+kotlin {
+    jvmToolchain(17)
 }
 
 dependencies {
