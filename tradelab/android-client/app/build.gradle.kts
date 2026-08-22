@@ -13,10 +13,8 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
-        val serverUrl = System.getenv("TRADELAB_SERVER_URL") ?: "http://10.0.2.2:8000"
-        val readToken = System.getenv("TRADELAB_READ_TOKEN") ?: "change-me"
+        val serverUrl = System.getenv("TRADELAB_SERVER_URL") ?: "https://45.150.37.187"
         buildConfigField("String", "SERVER_URL", "\"$serverUrl\"")
-        buildConfigField("String", "READ_TOKEN", "\"$readToken\"")
     }
 
     compileOptions {
