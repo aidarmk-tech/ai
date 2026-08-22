@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=-/etc/default/tradelab-r4-five-models
-ExecStart=/usr/bin/python3 /opt/tradelab/r4-five-models/tradelab_r4_sidecar.py --run
+ExecStart=/usr/bin/python3 /opt/tradelab/r4-five-models/tradelab_r4_isolation.py --run
 Restart=on-failure
 RestartSec=3
 User=root
