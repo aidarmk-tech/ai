@@ -85,6 +85,16 @@ def latest_snapshot(db_path: Path) -> Snapshot | None:
     return Snapshot(**dict(row)) if row else None
 
 
+def list_snapshots(db_path: Path, after_ms: int = 0) -> list[Snapshot]:
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """SELECT snapshot_id, created_at_ms, filename, bytes, sha256
+               FROM snapshots WHERE created_at_ms > ? ORDER BY created_at_ms ASC LIMIT 15""",
+            (max(0, after_ms),),
+        ).fetchall()
+    return [Snapshot(**dict(row)) for row in rows]
+
+
 def get_snapshot(db_path: Path, snapshot_id: str) -> Snapshot | None:
     with connect(db_path) as conn:
         row = conn.execute(
