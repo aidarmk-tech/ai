@@ -56,6 +56,10 @@ def _compact_analysis_copy(path: Path, created_ms: int, raw_hours: int) -> None:
     cutoff = created_ms - hours * 3600_000
     with sqlite3.connect(path, timeout=30) as conn:
         conn.execute("PRAGMA busy_timeout=30000")
+        # The source DB runs in WAL mode. A backup may preserve that mode on the
+        # disposable copy. Switch the copy to DELETE so pruning/meta/VACUUM land
+        # in the main .sqlite3 file that will actually be gzipped (not a -wal sidecar).
+        conn.execute("PRAGMA journal_mode=DELETE")
         existing = {
             row[0]
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
@@ -75,6 +79,7 @@ def _compact_analysis_copy(path: Path, created_ms: int, raw_hours: int) -> None:
             )
         conn.commit()
         conn.execute("VACUUM")
+        conn.commit()
         check = conn.execute("PRAGMA quick_check").fetchone()[0]
         if check != "ok":
             raise RuntimeError(f"analysis snapshot quick_check failed: {check}")
