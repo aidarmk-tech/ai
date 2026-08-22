@@ -1,6 +1,7 @@
 import asyncio
 import faulthandler
 import os
+import resource
 import threading
 import time
 from datetime import datetime, timezone
@@ -34,12 +35,22 @@ class EventLoopWatchdog:
             last = self._last_beat
         return max(0.0, time.monotonic() - last)
 
+    @staticmethod
+    def _open_fd_count() -> int | None:
+        try:
+            return len(os.listdir("/proc/self/fd"))
+        except OSError:
+            return None
+
     def status(self) -> dict:
+        soft_limit, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
         return {
             "enabled": True,
             "heartbeat_age_ms": int(self.age_seconds() * 1000),
             "stall_seconds": self.stall_seconds,
             "log_path": str(self.log_path),
+            "open_fd_count": self._open_fd_count(),
+            "fd_soft_limit": soft_limit,
         }
 
     def start(self) -> None:
