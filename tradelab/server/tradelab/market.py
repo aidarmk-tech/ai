@@ -42,12 +42,14 @@ class MarketRecorder:
         self.depth_history = defaultdict(lambda: deque(maxlen=360))
         self.universe = list(BOOTSTRAP_SYMBOLS)
         self.micro = list(BOOTSTRAP_SYMBOLS[: self.settings.microstructure_size])
+        self.universe_generation = 0
         self.engine = StrategyEngine()
         self.last_market_event_ms = 0
         self.last_public_event_ms = 0
         self.last_sample_ms = 0
         self.started_at_ms = now_ms()
         self._cleanup_last_ms = 0
+        self._gap_audit_last_ms = 0
         self._health_pending: dict[str, tuple[str, int | None, str, int]] = {}
 
     async def run(self, stop: asyncio.Event) -> None:
@@ -56,17 +58,22 @@ class MarketRecorder:
             self._flush_health()
             await stop.wait()
             return
-        self._health("market_recorder", "STARTING", "public Binance USD-M data; shadow only")
-        tasks = [
-            asyncio.create_task(self._health_loop(stop)),
-            asyncio.create_task(self._market_stream_loop(stop)),
-            asyncio.create_task(self._public_stream_loop(stop)),
-            asyncio.create_task(self._sample_loop(stop)),
-            asyncio.create_task(self._universe_loop(stop)),
-            asyncio.create_task(self._oi_loop(stop)),
-            asyncio.create_task(self._paper_close_loop(stop)),
-            asyncio.create_task(self._label_loop(stop)),
+
+        self.started_at_ms = now_ms()
+        self._audit_sample_gaps(self.started_at_ms)
+        self._health("market_recorder", "STARTING", "public Binance USD-M data; shadow only; strict continuity")
+
+        components = [
+            ("health_supervisor", self._health_loop),
+            ("market_ws_supervisor", self._market_stream_loop),
+            ("public_ws_supervisor", self._public_stream_loop),
+            ("sampler_supervisor", self._sample_loop),
+            ("universe_supervisor", self._universe_loop),
+            ("oi_supervisor", self._oi_loop),
+            ("paper_supervisor", self._paper_close_loop),
+            ("label_supervisor", self._label_loop),
         ]
+        tasks = [asyncio.create_task(self._supervise(name, fn, stop)) for name, fn in components]
         try:
             await stop.wait()
         finally:
@@ -75,6 +82,22 @@ class MarketRecorder:
             await asyncio.gather(*tasks, return_exceptions=True)
             self._health("market_recorder", "STOPPED", "shutdown")
             self._flush_health()
+
+    async def _supervise(self, name: str, fn, stop: asyncio.Event) -> None:
+        while not stop.is_set():
+            try:
+                await fn(stop)
+                if not stop.is_set():
+                    self._health(name, "RESTARTING", "component loop returned unexpectedly")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._health(name, "RESTARTING", repr(exc))
+            if not stop.is_set():
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=2)
+                except TimeoutError:
+                    pass
 
     def status(self) -> dict:
         return {
@@ -87,8 +110,9 @@ class MarketRecorder:
             "microstructure_universe": self.micro,
             "universe_size": len(self.universe),
             "microstructure_size": len(self.micro),
+            "universe_generation": self.universe_generation,
             "live_trading": False,
-            "participant_mode": "SHADOW_ONLY_FIXED_HORIZON",
+            "participant_mode": "SHADOW_ONLY_FIXED_HORIZON_STRICT_CONTINUITY",
         }
 
     def _health(self, component: str, status: str, detail: str = "", event_ms: int | None = None) -> None:
@@ -110,8 +134,8 @@ class MarketRecorder:
                     rows,
                 )
         except Exception:
-            for component, (status, event_ms, detail, updated) in pending:
-                self._health_pending[component] = (status, event_ms, detail, updated)
+            for component, data in pending:
+                self._health_pending[component] = data
 
     async def _health_loop(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
@@ -129,15 +153,16 @@ class MarketRecorder:
 
     async def _market_stream_loop(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
+            generation = self.universe_generation
             symbols = list(dict.fromkeys(["BTCUSDT", "ETHUSDT"] + self.universe))
             streams = ["!ticker@arr", "!markPrice@arr@1s", "!forceOrder@arr"]
             streams += [f"{s.lower()}@aggTrade" for s in symbols]
             try:
                 async with ws_connect(MARKET_WS, ping_interval=20, ping_timeout=20, max_size=8 * 1024 * 1024) as ws:
                     await ws.send(json.dumps({"method": "SUBSCRIBE", "params": streams, "id": uuid.uuid4().hex}))
-                    self._health("binance_market_ws", "CONNECTED", f"{len(streams)} streams")
+                    self._health("binance_market_ws", "CONNECTED", f"{len(streams)} streams gen={generation}")
                     deadline = time.monotonic() + self.settings.subscription_refresh_seconds
-                    while not stop.is_set() and time.monotonic() < deadline:
+                    while not stop.is_set() and time.monotonic() < deadline and generation == self.universe_generation:
                         raw = await asyncio.wait_for(ws.recv(), timeout=35)
                         data = self._payload(json.loads(raw))
                         self.last_market_event_ms = now_ms()
@@ -165,7 +190,7 @@ class MarketRecorder:
         if event == "markPriceUpdate" and symbol and symbol.endswith("USDT"):
             self.marks[symbol] = data
             return
-        if event == "aggTrade" and symbol in set(self.universe):
+        if event == "aggTrade" and symbol in self.universe:
             price, qty = _f(data.get("p")), _f(data.get("q"))
             trade_ts = int(data.get("T") or data.get("E") or now_ms())
             bucket = trade_ts // 1000 * 1000
@@ -196,14 +221,15 @@ class MarketRecorder:
 
     async def _public_stream_loop(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
+            generation = self.universe_generation
             symbols = list(dict.fromkeys(self.micro))
             streams = ["!bookTicker"] + [f"{s.lower()}@depth10@500ms" for s in symbols]
             try:
                 async with ws_connect(PUBLIC_WS, ping_interval=20, ping_timeout=20, max_size=8 * 1024 * 1024) as ws:
                     await ws.send(json.dumps({"method": "SUBSCRIBE", "params": streams, "id": uuid.uuid4().hex}))
-                    self._health("binance_public_ws", "CONNECTED", f"{len(streams)} streams")
+                    self._health("binance_public_ws", "CONNECTED", f"{len(streams)} streams gen={generation}")
                     deadline = time.monotonic() + self.settings.subscription_refresh_seconds
-                    while not stop.is_set() and time.monotonic() < deadline:
+                    while not stop.is_set() and time.monotonic() < deadline and generation == self.universe_generation:
                         raw = await asyncio.wait_for(ws.recv(), timeout=35)
                         data = self._payload(json.loads(raw))
                         self.last_public_event_ms = now_ms()
@@ -225,10 +251,11 @@ class MarketRecorder:
         symbol = data.get("s")
         if not symbol or not symbol.endswith("USDT"):
             return
-        if event == "bookTicker":
+        # Some bookTicker variants do not carry an event name.
+        if event == "bookTicker" or ("b" in data and "a" in data and "B" in data and "A" in data and "U" not in data):
             self.books[symbol] = data
             return
-        if event != "depthUpdate" or symbol not in set(self.micro):
+        if event != "depthUpdate" or symbol not in self.micro:
             return
         bids = data.get("b") or []
         asks = data.get("a") or []
@@ -241,8 +268,9 @@ class MarketRecorder:
         spread_bps = ((best_ask - best_bid) / mid * 10000) if mid else None
         total = bid_notional + ask_notional
         imbalance = (bid_notional - ask_notional) / total if total else 0.0
+        event_ts = int(data.get("E") or now_ms())
         self.depth_latest[symbol] = (
-            bid_notional, ask_notional, imbalance, spread_bps,
+            event_ts, bid_notional, ask_notional, imbalance, spread_bps,
             _f(bids[0][1]), _f(asks[0][1]),
         )
 
@@ -260,13 +288,22 @@ class MarketRecorder:
                     if required not in selected:
                         selected.insert(0, required)
                 if selected:
-                    self.universe = list(dict.fromkeys(selected))[: self.settings.universe_size]
-                    self.micro = self.universe[: self.settings.microstructure_size]
-                    self._health("universe", "OK", f"universe={len(self.universe)} micro={len(self.micro)}", now_ms())
+                    new_universe = list(dict.fromkeys(selected))[: self.settings.universe_size]
+                    new_micro = new_universe[: self.settings.microstructure_size]
+                    if new_universe != self.universe or new_micro != self.micro:
+                        self.universe = new_universe
+                        self.micro = new_micro
+                        self.universe_generation += 1
+                    self._health(
+                        "universe", "OK",
+                        f"universe={len(self.universe)} micro={len(self.micro)} gen={self.universe_generation}",
+                        now_ms(),
+                    )
             except Exception as exc:
                 self._health("universe", "DEGRADED", repr(exc))
+            interval = 10 if len(self.universe) < self.settings.universe_size else 60
             try:
-                await asyncio.wait_for(stop.wait(), timeout=60)
+                await asyncio.wait_for(stop.wait(), timeout=interval)
             except TimeoutError:
                 pass
 
@@ -277,6 +314,8 @@ class MarketRecorder:
                 self._flush_flow(tick)
                 self._sample_depth(tick)
                 if (tick // 1000) % self.settings.market_sample_seconds == 0:
+                    if self.last_sample_ms and tick - self.last_sample_ms > self.settings.max_sample_gap_seconds * 1000:
+                        self._record_gap(self.last_sample_ms, tick, "live_sampler_gap")
                     self._sample_market(tick)
                     self._evaluate_strategies(tick)
                     self.last_sample_ms = tick
@@ -284,6 +323,9 @@ class MarketRecorder:
                 if tick - self._cleanup_last_ms >= 3600_000:
                     self._cleanup_raw(tick)
                     self._cleanup_last_ms = tick
+                if tick - self._gap_audit_last_ms >= 3600_000:
+                    self._audit_sample_gaps(tick)
+                    self._gap_audit_last_ms = tick
             except Exception as exc:
                 self._health("market_sampler", "DEGRADED", repr(exc), self.last_sample_ms or None)
             try:
@@ -314,7 +356,9 @@ class MarketRecorder:
             depth = self.depth_latest.get(symbol)
             if depth is None:
                 continue
-            bid_n, ask_n, imbalance, spread, best_bid_qty, best_ask_qty = depth
+            event_ts, bid_n, ask_n, imbalance, spread, best_bid_qty, best_ask_qty = depth
+            if ts - event_ts > 3_000:
+                continue
             prev_bid, prev_ask = self.depth_previous.get(symbol, (bid_n, ask_n))
             bid_rep = (bid_n - prev_bid) / prev_bid if prev_bid > 0 else 0.0
             ask_rep = (ask_n - prev_ask) / prev_ask if prev_ask > 0 else 0.0
@@ -336,6 +380,9 @@ class MarketRecorder:
         for symbol in self.universe:
             ticker = self.tickers.get(symbol)
             if not ticker:
+                continue
+            event_ts = int(ticker.get("E") or ts)
+            if ts - event_ts > 15_000:
                 continue
             last = _f(ticker.get("c"))
             if last <= 0:
@@ -369,7 +416,7 @@ class MarketRecorder:
 
     def _record_signal(self, signal: Signal, ts: int) -> None:
         payload = {
-            "spec_mode": "FROZEN_SHADOW",
+            "spec_mode": "FROZEN_SHADOW_STRICT_CONTINUITY",
             "score": signal.score,
             "horizon_seconds": signal.horizon_seconds,
             "features": signal.features,
@@ -455,18 +502,45 @@ class MarketRecorder:
         raw = exit_price / entry - 1.0
         return raw if side == "LONG" else -raw
 
+    @staticmethod
+    def _sample_at_or_after(conn, symbol: str, target_ms: int, grace_ms: int):
+        return conn.execute(
+            """SELECT ts_ms,last_price FROM market_samples
+               WHERE symbol=? AND ts_ms>=? AND ts_ms<=? ORDER BY ts_ms ASC LIMIT 1""",
+            (symbol, target_ms, target_ms + grace_ms),
+        ).fetchone()
+
     def _close_due_paper(self, ts: int) -> None:
         closed = 0
+        invalid = 0
+        grace_ms = self.settings.paper_exit_grace_seconds * 1000
         with connect(self.settings.db_path) as conn:
             trades = conn.execute(
                 "SELECT * FROM paper_trades WHERE status='OPEN' AND exit_due_ms<=? ORDER BY exit_due_ms LIMIT 100",
                 (ts,),
             ).fetchall()
             for trade in trades:
-                exit_a = self._latest_price(trade["symbol_a"])
-                exit_b = self._latest_price(trade["symbol_b"]) if trade["symbol_b"] else None
-                if exit_a is None or (trade["symbol_b"] and exit_b is None):
+                pa = self._sample_at_or_after(conn, trade["symbol_a"], trade["exit_due_ms"], grace_ms)
+                pb = self._sample_at_or_after(conn, trade["symbol_b"], trade["exit_due_ms"], grace_ms) if trade["symbol_b"] else None
+                if pa is None or (trade["symbol_b"] and pb is None):
+                    if ts <= trade["exit_due_ms"] + grace_ms:
+                        continue
+                    conn.execute(
+                        "UPDATE paper_trades SET status='INVALID_GAP',closed_at_ms=? WHERE trade_id=?",
+                        (ts, trade["trade_id"]),
+                    )
+                    display = trade["symbol_a"] if not trade["symbol_b"] else f"{trade['symbol_a']}|{trade['symbol_b']}"
+                    conn.execute(
+                        "INSERT INTO participant_events(ts_ms,participant_id,symbol,event_type,payload_json) VALUES(?,?,?,?,?)",
+                        (ts, trade["participant_id"], display, "PAPER_INVALID_GAP",
+                         json.dumps({"trade_id": trade["trade_id"], "exit_due_ms": trade["exit_due_ms"], "grace_ms": grace_ms})),
+                    )
+                    invalid += 1
                     continue
+
+                exit_a = pa["last_price"]
+                exit_b = pb["last_price"] if pb else None
+                close_ts = max(pa["ts_ms"], pb["ts_ms"] if pb else pa["ts_ms"])
                 ra = self._directional_return(trade["side_a"], trade["entry_a"], exit_a)
                 if trade["symbol_b"]:
                     rb = self._directional_return(trade["side_b"], trade["entry_b"], exit_b)
@@ -481,25 +555,21 @@ class MarketRecorder:
                 conn.execute(
                     """UPDATE paper_trades SET status='CLOSED',closed_at_ms=?,exit_a=?,exit_b=?,
                        gross_return_pct=?,net_return_pct=?,pnl_usdt=? WHERE trade_id=?""",
-                    (ts, exit_a, exit_b, gross * 100, net * 100, pnl, trade["trade_id"]),
+                    (close_ts, exit_a, exit_b, gross * 100, net * 100, pnl, trade["trade_id"]),
                 )
                 conn.execute("UPDATE participants SET equity=equity+? WHERE participant_id=?", (pnl, trade["participant_id"]))
                 display = trade["symbol_a"] if not trade["symbol_b"] else f"{trade['symbol_a']}|{trade['symbol_b']}"
                 conn.execute(
                     "INSERT INTO participant_events(ts_ms,participant_id,symbol,event_type,payload_json) VALUES(?,?,?,?,?)",
-                    (ts, trade["participant_id"], display, "PAPER_CLOSE",
-                     json.dumps({"trade_id": trade["trade_id"], "gross_return_pct": gross * 100, "net_return_pct": net * 100, "pnl_usdt": pnl})),
+                    (close_ts, trade["participant_id"], display, "PAPER_CLOSE",
+                     json.dumps({"trade_id": trade["trade_id"], "gross_return_pct": gross * 100, "net_return_pct": net * 100, "pnl_usdt": pnl, "exit_sample_ms": close_ts})),
                 )
                 closed += 1
-            if closed:
-                rows = conn.execute("SELECT participant_id,equity FROM participants ORDER BY equity DESC").fetchall()
-                for rank, row in enumerate(rows, 1):
-                    conn.execute("UPDATE participants SET rank=? WHERE participant_id=?", (rank, row["participant_id"]))
-        if closed:
-            self._health("paper_book", "OK", f"closed={closed}", ts)
+        if closed or invalid:
+            self._health("paper_book", "OK", f"closed={closed} invalid_gap={invalid}", ts)
 
     async def _oi_loop(self, stop: asyncio.Event) -> None:
-        async with httpx.AsyncClient(timeout=10.0, headers={"User-Agent": "TradeLab/0.2"}) as client:
+        async with httpx.AsyncClient(timeout=10.0, headers={"User-Agent": "TradeLab/0.2.2"}) as client:
             while not stop.is_set():
                 sem = asyncio.Semaphore(4)
 
@@ -515,7 +585,7 @@ class MarketRecorder:
                         except Exception:
                             return None
 
-                results = await asyncio.gather(*(fetch(s) for s in self.micro), return_exceptions=False)
+                results = await asyncio.gather(*(fetch(s) for s in list(self.micro)), return_exceptions=False)
                 rows = [x for x in results if x]
                 if rows:
                     with connect(self.settings.db_path) as conn:
@@ -532,9 +602,9 @@ class MarketRecorder:
     async def _label_loop(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
             try:
-                processed = self._label_ready_states(now_ms())
-                if processed:
-                    self._health("forward_labels", "OK", f"processed={processed}", now_ms())
+                valid, invalid = self._label_ready_states(now_ms())
+                if valid or invalid:
+                    self._health("forward_labels", "OK", f"valid={valid} invalid_gap={invalid}", now_ms())
             except Exception as exc:
                 self._health("forward_labels", "DEGRADED", repr(exc))
             try:
@@ -542,35 +612,63 @@ class MarketRecorder:
             except TimeoutError:
                 pass
 
-    def _label_ready_states(self, ts: int) -> int:
-        processed = 0
+    def _label_ready_states(self, ts: int) -> tuple[int, int]:
+        valid_count = 0
+        invalid_count = 0
+        grace_ms = self.settings.label_grace_seconds * 1000
+        max_gap_ms = self.settings.max_sample_gap_seconds * 1000
         with connect(self.settings.db_path) as conn:
             states = conn.execute(
                 """SELECT m.id,m.ts_ms,m.symbol FROM market_states m
-                   LEFT JOIN forward_labels f ON f.market_state_id=m.id
-                   WHERE f.market_state_id IS NULL AND m.ts_ms<=? ORDER BY m.ts_ms LIMIT 100""",
-                (ts - 300_000,),
+                   LEFT JOIN forward_label_quality q ON q.market_state_id=m.id
+                   WHERE q.market_state_id IS NULL AND m.ts_ms<=? ORDER BY m.ts_ms LIMIT 100""",
+                (ts - 300_000 - grace_ms,),
             ).fetchall()
             for state in states:
                 points = conn.execute(
-                    "SELECT ts_ms,last_price FROM market_samples WHERE symbol=? AND ts_ms BETWEEN ? AND ? ORDER BY ts_ms",
-                    (state["symbol"], state["ts_ms"] - 5_000, state["ts_ms"] + 305_000),
+                    """SELECT ts_ms,last_price FROM market_samples
+                       WHERE symbol=? AND ts_ms>=? AND ts_ms<=? ORDER BY ts_ms""",
+                    (state["symbol"], state["ts_ms"], state["ts_ms"] + 300_000 + grace_ms),
                 ).fetchall()
+                reason = None
+                observed_max_gap = 0
+                base = None
+                targets = {}
                 if not points:
-                    continue
-                base = min(points, key=lambda x: abs(x["ts_ms"] - state["ts_ms"]))["last_price"]
-                future = [(p["ts_ms"], p["last_price"]) for p in points if p["ts_ms"] >= state["ts_ms"]]
-                if base <= 0 or not future:
+                    reason = "NO_POINTS"
+                else:
+                    base_row = min(points, key=lambda p: abs(p["ts_ms"] - state["ts_ms"]))
+                    if abs(base_row["ts_ms"] - state["ts_ms"]) > grace_ms:
+                        reason = "NO_BASE_SAMPLE"
+                    else:
+                        base = base_row["last_price"]
+                    for a, b in zip(points, points[1:]):
+                        observed_max_gap = max(observed_max_gap, b["ts_ms"] - a["ts_ms"])
+                    if reason is None and observed_max_gap > max_gap_ms:
+                        reason = f"SAMPLE_GAP_{observed_max_gap}"
+                    if reason is None:
+                        for sec in (5, 15, 30, 60, 120, 300):
+                            target = state["ts_ms"] + sec * 1000
+                            row = next((p for p in points if p["ts_ms"] >= target and p["ts_ms"] <= target + grace_ms), None)
+                            if row is None:
+                                reason = f"MISSING_{sec}S"
+                                break
+                            targets[sec] = row["last_price"]
+
+                if reason is not None or base is None or base <= 0:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO forward_label_quality(market_state_id,valid,reason,max_gap_ms,evaluated_at_ms) VALUES(?,?,?,?,?)",
+                        (state["id"], 0, reason or "INVALID_BASE", observed_max_gap, ts),
+                    )
+                    invalid_count += 1
                     continue
 
-                def r_at(sec):
-                    target = state["ts_ms"] + sec * 1000
-                    p = min(future, key=lambda x: abs(x[0] - target))[1]
-                    return (p / base - 1.0) * 100
+                def ret(sec):
+                    return (targets[sec] / base - 1.0) * 100
 
                 def extrema(sec):
                     end = state["ts_ms"] + sec * 1000
-                    vals = [(p / base - 1.0) * 100 for t, p in future if t <= end]
+                    vals = [(p["last_price"] / base - 1.0) * 100 for p in points if p["ts_ms"] <= end]
                     return (max(vals), min(vals)) if vals else (None, None)
 
                 m30, a30 = extrema(30)
@@ -581,11 +679,43 @@ class MarketRecorder:
                        (market_state_id,ret_5s,ret_15s,ret_30s,ret_60s,ret_120s,ret_300s,
                         mfe_30s,mae_30s,mfe_60s,mae_60s,mfe_300s,mae_300s)
                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (state["id"], r_at(5), r_at(15), r_at(30), r_at(60), r_at(120), r_at(300),
+                    (state["id"], ret(5), ret(15), ret(30), ret(60), ret(120), ret(300),
                      m30, a30, m60, a60, m300, a300),
                 )
-                processed += 1
-        return processed
+                conn.execute(
+                    "INSERT OR REPLACE INTO forward_label_quality(market_state_id,valid,reason,max_gap_ms,evaluated_at_ms) VALUES(?,?,?,?,?)",
+                    (state["id"], 1, None, observed_max_gap, ts),
+                )
+                valid_count += 1
+        return valid_count, invalid_count
+
+    def _record_gap(self, start_ms: int, end_ms: int, reason: str) -> None:
+        if end_ms <= start_ms:
+            return
+        with connect(self.settings.db_path) as conn:
+            conn.execute(
+                """INSERT OR IGNORE INTO recorder_gaps(start_ms,end_ms,duration_ms,reason,detected_at_ms)
+                   VALUES(?,?,?,?,?)""",
+                (start_ms, end_ms, end_ms - start_ms, reason, now_ms()),
+            )
+
+    def _audit_sample_gaps(self, detected_at_ms: int) -> None:
+        threshold = self.settings.max_sample_gap_seconds * 1000
+        with connect(self.settings.db_path) as conn:
+            rows = conn.execute("SELECT DISTINCT ts_ms FROM market_samples ORDER BY ts_ms").fetchall()
+            inserts = []
+            for a, b in zip(rows, rows[1:]):
+                start_ms, end_ms = a["ts_ms"], b["ts_ms"]
+                if end_ms - start_ms > threshold:
+                    inserts.append((start_ms, end_ms, end_ms - start_ms, "historical_sample_gap", detected_at_ms))
+            if inserts:
+                conn.executemany(
+                    """INSERT OR IGNORE INTO recorder_gaps(start_ms,end_ms,duration_ms,reason,detected_at_ms)
+                       VALUES(?,?,?,?,?)""",
+                    inserts,
+                )
+        if rows:
+            self._health("gap_audit", "OK", f"gaps={len(inserts)} threshold_ms={threshold}", detected_at_ms)
 
     def _cleanup_raw(self, ts: int) -> None:
         cutoff = ts - self.settings.raw_retention_hours * 3600_000
@@ -602,11 +732,16 @@ def participant_stats(db_path) -> list[dict]:
                       COUNT(t.trade_id) AS trades,
                       SUM(CASE WHEN t.status='CLOSED' THEN 1 ELSE 0 END) AS closed_trades,
                       SUM(CASE WHEN t.status='OPEN' THEN 1 ELSE 0 END) AS open_trades,
+                      SUM(CASE WHEN t.status='INVALID_GAP' THEN 1 ELSE 0 END) AS invalid_gap_trades,
                       COALESCE(SUM(CASE WHEN t.status='CLOSED' THEN t.pnl_usdt END),0) AS net_pnl_usdt,
                       AVG(CASE WHEN t.status='CLOSED' THEN t.net_return_pct END) AS mean_net_return_pct,
-                      SUM(CASE WHEN t.status='CLOSED' AND t.net_return_pct>0 THEN 1 ELSE 0 END) AS winners
+                      SUM(CASE WHEN t.status='CLOSED' AND t.net_return_pct>0 THEN 1 ELSE 0 END) AS winners,
+                      CASE WHEN SUM(CASE WHEN t.status='CLOSED' AND t.pnl_usdt<0 THEN -t.pnl_usdt ELSE 0 END)>0
+                           THEN SUM(CASE WHEN t.status='CLOSED' AND t.pnl_usdt>0 THEN t.pnl_usdt ELSE 0 END) /
+                                SUM(CASE WHEN t.status='CLOSED' AND t.pnl_usdt<0 THEN -t.pnl_usdt ELSE 0 END)
+                           ELSE NULL END AS profit_factor
                FROM participants p LEFT JOIN paper_trades t USING(participant_id)
-               GROUP BY p.participant_id ORDER BY COALESCE(p.rank,999),p.participant_id"""
+               GROUP BY p.participant_id ORDER BY p.participant_id"""
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -614,4 +749,13 @@ def participant_stats(db_path) -> list[dict]:
 def recorder_health(db_path) -> list[dict]:
     with connect(db_path) as conn:
         rows = conn.execute("SELECT * FROM recorder_health ORDER BY component").fetchall()
+    return [dict(r) for r in rows]
+
+
+def recorder_gaps(db_path, limit: int = 20) -> list[dict]:
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM recorder_gaps ORDER BY end_ms DESC LIMIT ?",
+            (max(1, min(limit, 100)),),
+        ).fetchall()
     return [dict(r) for r in rows]
