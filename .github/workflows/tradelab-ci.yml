@@ -30,6 +30,12 @@ jobs:
       - run: pytest -q
       - run: python -m compileall tradelab
 
+  deploy-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash -n tradelab/deploy/bootstrap-ip.sh
+
   android:
     runs-on: ubuntu-latest
     defaults:
