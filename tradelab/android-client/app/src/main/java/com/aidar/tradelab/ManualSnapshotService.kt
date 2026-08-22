@@ -97,7 +97,7 @@ class ManualSnapshotService : Service() {
                 }
             }
 
-            p.edit()
+            val savedEdit = p.edit()
                 .putBoolean(KEY_ACTIVE, false)
                 .putString(KEY_STAGE, STAGE_SAVED)
                 .putString(KEY_FILE, saved.filename)
@@ -105,11 +105,16 @@ class ManualSnapshotService : Service() {
                 .putLong(KEY_TOTAL, saved.bytes)
                 .putString("last_file", saved.filename)
                 .putString("last_snapshot_id", manifest.id)
-                .putLong("last_snapshot_created_ms", manifest.createdAtMs)
+                .putLong("last_file_created_ms", manifest.createdAtMs)
                 .putLong("last_at_ms", System.currentTimeMillis())
                 .putLong("last_size", saved.bytes)
                 .remove(KEY_ERROR)
-                .apply()
+            // Periodic catch-up lists only compact analysis snapshots. A newer
+            // manual full export must not move that compact cursor forward.
+            if (mode != SnapshotWorker.MODE_FULL) {
+                savedEdit.putLong("last_snapshot_created_ms", manifest.createdAtMs)
+            }
+            savedEdit.apply()
             NotificationHelper.success(applicationContext, saved.filename, saved.bytes)
         } catch (e: CancellationException) {
             p.edit()
