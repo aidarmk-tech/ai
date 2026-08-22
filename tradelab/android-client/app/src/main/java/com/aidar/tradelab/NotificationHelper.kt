@@ -3,18 +3,43 @@ package com.aidar.tradelab
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import android.content.pm.ServiceInfo
 import android.os.Build
+import androidx.work.ForegroundInfo
 
 object NotificationHelper {
     private const val CHANNEL = "snapshots"
+    private const val DOWNLOAD_CHANNEL = "snapshot_download"
+    private const val SUCCESS_ID = 4101
+    private const val FOREGROUND_ID = 4102
+
+    private fun ensureChannels(context: Context) {
+        if (Build.VERSION.SDK_INT < 26) return
+        val nm = context.getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL, "TradeLab snapshots", NotificationManager.IMPORTANCE_DEFAULT)
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(DOWNLOAD_CHANNEL, "TradeLab snapshot download", NotificationManager.IMPORTANCE_LOW)
+        )
+    }
+
+    fun downloading(context: Context, text: String = "Preparing snapshot…"): ForegroundInfo {
+        ensureChannels(context)
+        val notification = android.app.Notification.Builder(context, DOWNLOAD_CHANNEL)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle("TradeLab: downloading snapshot")
+            .setContentText(text)
+            .setProgress(0, 0, true)
+            .setOngoing(true)
+            .build()
+        val type = if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0
+        return ForegroundInfo(FOREGROUND_ID, notification, type)
+    }
 
     fun success(context: Context, filename: String, bytes: Long, count: Int = 1) {
+        ensureChannels(context)
         val nm = context.getSystemService(NotificationManager::class.java)
-        if (Build.VERSION.SDK_INT >= 26) {
-            nm.createNotificationChannel(
-                NotificationChannel(CHANNEL, "TradeLab snapshots", NotificationManager.IMPORTANCE_DEFAULT)
-            )
-        }
         val title = if (count == 1) "TradeLab: snapshot downloaded" else "TradeLab: $count snapshots downloaded"
         val n = android.app.Notification.Builder(context, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
@@ -22,8 +47,6 @@ object NotificationHelper {
             .setContentText("Latest: $filename — ${formatBytes(bytes)}, SHA-256 OK · Download/TradeLab")
             .setAutoCancel(true)
             .build()
-        nm.notify(NOTIFICATION_ID, n)
+        nm.notify(SUCCESS_ID, n)
     }
-
-    private const val NOTIFICATION_ID = 4101
 }
