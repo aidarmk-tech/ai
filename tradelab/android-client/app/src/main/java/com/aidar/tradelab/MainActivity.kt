@@ -1,7 +1,10 @@
 package com.aidar.tradelab
 
 import android.Manifest
+import android.content.Intent
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.text.InputType
 import android.widget.Button
 import android.widget.EditText
@@ -11,11 +14,8 @@ import androidx.activity.ComponentActivity
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
-import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
-import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import java.util.concurrent.TimeUnit
@@ -27,7 +27,13 @@ class MainActivity : ComponentActivity() {
     private lateinit var latestButton: Button
     private lateinit var freshButton: Button
     private lateinit var cancelButton: Button
-    private var manualInfo: WorkInfo? = null
+    private val uiHandler = Handler(Looper.getMainLooper())
+    private val refreshRunnable = object : Runnable {
+        override fun run() {
+            renderStatus()
+            uiHandler.postDelayed(this, 500L)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,7 +68,7 @@ class MainActivity : ComponentActivity() {
             text = "Скачать последний готовый"
             setOnClickListener {
                 if (!saveConnection()) return@setOnClickListener
-                enqueueManual(SnapshotWorker.MODE_LATEST)
+                startManual(SnapshotWorker.MODE_LATEST)
             }
         }
 
@@ -70,15 +76,18 @@ class MainActivity : ComponentActivity() {
             text = "Создать свежий и скачать"
             setOnClickListener {
                 if (!saveConnection()) return@setOnClickListener
-                enqueueManual(SnapshotWorker.MODE_FRESH)
+                startManual(SnapshotWorker.MODE_FRESH)
             }
         }
 
         cancelButton = Button(this).apply {
-            text = "Отменить текущую задачу"
+            text = "Отменить текущую загрузку"
             isEnabled = false
             setOnClickListener {
-                WorkManager.getInstance(this@MainActivity).cancelUniqueWork(MANUAL_WORK)
+                startService(
+                    Intent(this@MainActivity, ManualSnapshotService::class.java)
+                        .setAction(ManualSnapshotService.ACTION_CANCEL)
+                )
             }
         }
 
@@ -86,14 +95,14 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(40, 70, 40, 40)
             addView(TextView(this@MainActivity).apply {
-                text = "TradeLab client 0.2.3\nA/B/C/D shadow tournament"
+                text = "TradeLab client 0.2.4\nA/B/C/D shadow tournament"
                 textSize = 22f
             })
             addView(serverUrl)
             addView(readToken)
             addView(saveButton)
             addView(TextView(this@MainActivity).apply {
-                text = "Файлы: Download/TradeLab · докачка после обрыва включена"
+                text = "Ручная загрузка: прямой foreground service · без очереди WorkManager"
             })
             addView(status)
             addView(latestButton)
@@ -102,14 +111,21 @@ class MainActivity : ComponentActivity() {
         }
         setContentView(root)
 
+        // Kill any stale manual WorkManager chain left by clients <=0.2.3.
+        WorkManager.getInstance(this).cancelUniqueWork(LEGACY_MANUAL_WORK)
         scheduleSnapshots()
-        observeManualWork()
         renderStatus()
     }
 
     override fun onResume() {
         super.onResume()
-        renderStatus()
+        uiHandler.removeCallbacks(refreshRunnable)
+        uiHandler.post(refreshRunnable)
+    }
+
+    override fun onPause() {
+        uiHandler.removeCallbacks(refreshRunnable)
+        super.onPause()
     }
 
     private fun saveConnection(): Boolean {
@@ -130,30 +146,20 @@ class MainActivity : ComponentActivity() {
         return true
     }
 
-    private fun enqueueManual(mode: String) {
-        val request = OneTimeWorkRequestBuilder<SnapshotWorker>()
-            // No WorkManager network constraint for user-initiated work. Some OEM
-            // Android builds report CONNECTED as unsatisfied even while HTTPS is
-            // usable, leaving the job permanently ENQUEUED. Start immediately and
-            // let the worker surface the real HTTP/network result instead.
-            .setBackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.SECONDS)
-            .setInputData(workDataOf(SnapshotWorker.KEY_MODE to mode))
-            .build()
-
-        WorkManager.getInstance(this).enqueueUniqueWork(
-            MANUAL_WORK,
-            ExistingWorkPolicy.REPLACE,
-            request,
-        )
-    }
-
-    private fun observeManualWork() {
-        WorkManager.getInstance(this)
-            .getWorkInfosForUniqueWorkLiveData(MANUAL_WORK)
-            .observe(this) { infos ->
-                manualInfo = infos.firstOrNull { !it.state.isFinished } ?: infos.lastOrNull()
-                renderStatus()
-            }
+    private fun startManual(mode: String) {
+        val p = getSharedPreferences("snapshots", MODE_PRIVATE)
+        p.edit()
+            .putBoolean(ManualSnapshotService.KEY_ACTIVE, true)
+            .putString(ManualSnapshotService.KEY_MODE, mode)
+            .putString(ManualSnapshotService.KEY_STAGE, ManualSnapshotService.STAGE_STARTING)
+            .remove(ManualSnapshotService.KEY_ERROR)
+            .putLong(ManualSnapshotService.KEY_DONE, 0L)
+            .putLong(ManualSnapshotService.KEY_TOTAL, 0L)
+            .apply()
+        val intent = Intent(this, ManualSnapshotService::class.java)
+            .putExtra(ManualSnapshotService.EXTRA_MODE, mode)
+        startForegroundService(intent)
+        renderStatus()
     }
 
     private fun scheduleSnapshots() {
@@ -174,44 +180,28 @@ class MainActivity : ComponentActivity() {
 
     private fun renderStatus() {
         val p = getSharedPreferences("snapshots", MODE_PRIVATE)
-        val info = manualInfo
-        val active = info != null && !info.state.isFinished
+        val active = p.getBoolean(ManualSnapshotService.KEY_ACTIVE, false)
+        val stage = p.getString(ManualSnapshotService.KEY_STAGE, null)
+        val manualError = p.getString(ManualSnapshotService.KEY_ERROR, null)
+        val currentFile = p.getString(ManualSnapshotService.KEY_FILE, null)
+        val done = p.getLong(ManualSnapshotService.KEY_DONE, 0L)
+        val total = p.getLong(ManualSnapshotService.KEY_TOTAL, 0L)
+
         latestButton.isEnabled = !active
         freshButton.isEnabled = !active
         cancelButton.isEnabled = active
 
-        if (active && info != null) {
-            val progress = info.progress
-            val stage = progress.getString(SnapshotWorker.KEY_STAGE)
-                ?: p.getString("worker_stage", "")
-                ?: ""
-            val file = progress.getString(SnapshotWorker.KEY_FILE)?.takeIf { it.isNotBlank() }
-                ?: p.getString("downloading_file", null)
-            val done = progress.getLong(
-                SnapshotWorker.KEY_DONE,
-                p.getLong("download_done", 0L),
-            )
-            val total = progress.getLong(
-                SnapshotWorker.KEY_TOTAL,
-                p.getLong("download_total", 0L),
-            )
-
-            val stateText = when (info.state) {
-                WorkInfo.State.ENQUEUED -> "Запускается"
-                WorkInfo.State.BLOCKED -> "Ожидает внутреннюю зависимость"
-                WorkInfo.State.RUNNING -> stageText(stage)
-                else -> info.state.name
-            }
+        if (active) {
             val percent = if (total > 0L) (done * 100L / total).coerceIn(0L, 100L) else null
             status.text = buildString {
-                append("Текущая задача: ").append(stateText)
-                if (!file.isNullOrBlank()) append("\nФайл: ").append(file)
+                append("Текущая задача: ").append(stageText(stage))
+                if (!currentFile.isNullOrBlank()) append("\nФайл: ").append(currentFile)
                 if (total > 0L) {
                     append("\nПрогресс: ").append(formatBytes(done)).append(" / ").append(formatBytes(total))
                     append(" (").append(percent).append("%)")
                 }
-                append("\nРучная задача запускается без системного network constraint.")
-                append("\nЕсли сеть/сервер недоступны, ниже появится реальная ошибка, а не вечное ожидание сети.")
+                append("\nРаботает напрямую, без очереди WorkManager.")
+                append("\nЭкран можно выключить после начала загрузки.")
             }
             return
         }
@@ -220,20 +210,23 @@ class MainActivity : ComponentActivity() {
         val at = p.getLong("last_at_ms", 0)
         val created = p.getLong("last_snapshot_created_ms", 0)
         val size = p.getLong("last_size", 0)
-        val error = p.getString("last_error", null)
-
-        val terminal = when (info?.state) {
-            WorkInfo.State.CANCELLED -> "Последняя ручная задача отменена."
-            WorkInfo.State.FAILED -> "Последняя ручная задача завершилась ошибкой."
-            WorkInfo.State.SUCCEEDED -> "Последняя ручная задача завершена."
-            else -> null
-        }
+        val lastError = manualError ?: p.getString("last_error", null)
 
         status.text = buildString {
-            if (terminal != null) append(terminal).append('\n')
+            when (stage) {
+                ManualSnapshotService.STAGE_FAILED -> append("Ошибка ручной загрузки.")
+                ManualSnapshotService.STAGE_CANCELLED -> append("Ручная загрузка отменена.")
+                ManualSnapshotService.STAGE_SAVED -> append("Ручная загрузка завершена.")
+            }
+            if (!lastError.isNullOrBlank()) {
+                if (isNotEmpty()) append('\n')
+                append("Причина: ").append(lastError)
+            }
             if (file == null) {
+                if (isNotEmpty()) append("\n\n")
                 append("Готовых скачанных снапшотов пока нет.")
             } else {
+                if (isNotEmpty()) append("\n\n")
                 append("Последний файл: ").append(file)
                 append("\nSnapshot сервера: ").append(java.util.Date(created))
                 append("\nСкачан: ").append(java.util.Date(at))
@@ -241,24 +234,22 @@ class MainActivity : ComponentActivity() {
                 append("\nSHA-256: OK")
                 append("\nПапка: Download/TradeLab")
             }
-            if (!error.isNullOrBlank()) append("\nПоследняя ошибка: ").append(error)
-            append("\n\n«Скачать последний готовый» не создаёт новую БД и обычно быстрее.")
-            append("\n«Создать свежий и скачать» сначала ждёт snapshot на VPS.")
+            append("\n\n«Скачать последний готовый» — без создания новой БД.")
+            append("\n«Создать свежий и скачать» — сначала создаёт snapshot на VPS.")
         }
     }
 
-    private fun stageText(stage: String): String = when (stage) {
-        SnapshotWorker.STAGE_CREATING -> "Сервер создаёт свежий snapshot"
-        SnapshotWorker.STAGE_CHECKING -> "Проверяю последний готовый snapshot"
-        SnapshotWorker.STAGE_DOWNLOADING -> "Скачивание"
-        SnapshotWorker.STAGE_VERIFYING -> "Проверка SHA-256"
-        SnapshotWorker.STAGE_SAVED -> "Сохранение завершено"
-        SnapshotWorker.STAGE_UP_TO_DATE -> "Новых snapshot нет"
-        SnapshotWorker.STAGE_RETRYING -> "Ошибка сети, ожидается повтор"
-        else -> "Выполняется"
+    private fun stageText(stage: String?): String = when (stage) {
+        ManualSnapshotService.STAGE_STARTING -> "Стартует foreground service"
+        ManualSnapshotService.STAGE_CHECKING -> "Проверяю последний готовый snapshot"
+        ManualSnapshotService.STAGE_CREATING -> "Сервер создаёт свежий snapshot"
+        ManualSnapshotService.STAGE_DOWNLOADING -> "Скачивание"
+        ManualSnapshotService.STAGE_VERIFYING -> "Проверка SHA-256"
+        ManualSnapshotService.STAGE_SAVED -> "Сохранено"
+        else -> stage ?: "Запуск"
     }
 
     companion object {
-        private const val MANUAL_WORK = "tradelab-manual-snapshot"
+        private const val LEGACY_MANUAL_WORK = "tradelab-manual-snapshot"
     }
 }
