@@ -16,6 +16,7 @@ RAW_TABLES = (
     "open_interest_samples",
     "liquidations",
 )
+ANALYSIS_PREFIX = "tradelab-analysis-"
 
 
 @dataclass(frozen=True)
@@ -73,8 +74,6 @@ def _compact_analysis_copy(path: Path, created_ms: int, raw_hours: int) -> None:
                 ],
             )
         conn.commit()
-        # DELETE does not return SQLite pages to the filesystem. VACUUM is done
-        # only on the disposable copied database so mobile downloads stay small.
         conn.execute("VACUUM")
         check = conn.execute("PRAGMA quick_check").fetchone()[0]
         if check != "ok":
@@ -90,7 +89,7 @@ def create_snapshot(
     snapshot_dir.mkdir(parents=True, exist_ok=True)
     created = int(time.time() * 1000)
     sid = uuid.uuid4().hex[:12]
-    base = f"tradelab-analysis-{created}-{sid}.sqlite3"
+    base = f"{ANALYSIS_PREFIX}{created}-{sid}.sqlite3"
     raw = snapshot_dir / base
     gz = snapshot_dir / f"{base}.gz"
 
@@ -133,7 +132,9 @@ def create_snapshot(
 def latest_snapshot(db_path: Path) -> Snapshot | None:
     with connect(db_path) as conn:
         row = conn.execute(
-            "SELECT snapshot_id, created_at_ms, filename, bytes, sha256 FROM snapshots ORDER BY created_at_ms DESC LIMIT 1"
+            """SELECT snapshot_id, created_at_ms, filename, bytes, sha256 FROM snapshots
+               WHERE filename LIKE ? ORDER BY created_at_ms DESC LIMIT 1""",
+            (ANALYSIS_PREFIX + "%",),
         ).fetchone()
     return Snapshot(**dict(row)) if row else None
 
@@ -142,8 +143,9 @@ def list_snapshots(db_path: Path, after_ms: int = 0) -> list[Snapshot]:
     with connect(db_path) as conn:
         rows = conn.execute(
             """SELECT snapshot_id, created_at_ms, filename, bytes, sha256
-               FROM snapshots WHERE created_at_ms > ? ORDER BY created_at_ms ASC LIMIT 15""",
-            (max(0, after_ms),),
+               FROM snapshots WHERE created_at_ms > ? AND filename LIKE ?
+               ORDER BY created_at_ms ASC LIMIT 15""",
+            (max(0, after_ms), ANALYSIS_PREFIX + "%"),
         ).fetchall()
     return [Snapshot(**dict(row)) for row in rows]
 
