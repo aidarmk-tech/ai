@@ -125,6 +125,15 @@ CREATE TABLE IF NOT EXISTS forward_labels (
   FOREIGN KEY(market_state_id) REFERENCES market_states(id)
 );
 
+CREATE TABLE IF NOT EXISTS forward_label_quality (
+  market_state_id INTEGER PRIMARY KEY,
+  valid INTEGER NOT NULL,
+  reason TEXT,
+  max_gap_ms INTEGER,
+  evaluated_at_ms INTEGER NOT NULL,
+  FOREIGN KEY(market_state_id) REFERENCES market_states(id)
+);
+
 CREATE TABLE IF NOT EXISTS paper_trades (
   trade_id TEXT PRIMARY KEY,
   participant_id TEXT NOT NULL,
@@ -156,6 +165,16 @@ CREATE TABLE IF NOT EXISTS recorder_health (
   last_event_ms INTEGER,
   detail TEXT,
   updated_at_ms INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS recorder_gaps (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  start_ms INTEGER NOT NULL,
+  end_ms INTEGER NOT NULL,
+  duration_ms INTEGER NOT NULL,
+  reason TEXT NOT NULL,
+  detected_at_ms INTEGER NOT NULL,
+  UNIQUE(start_ms, end_ms)
 );
 
 CREATE TABLE IF NOT EXISTS snapshots (
