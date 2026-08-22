@@ -5,6 +5,9 @@ from .participants import PARTICIPANTS
 
 
 CONFIG = {p.participant_id: p.config for p in PARTICIPANTS}
+SAMPLE_SECONDS = 5
+TARGET_TOLERANCE_MS = 7_500
+MAX_SAMPLE_GAP_MS = 12_000
 
 
 @dataclass(frozen=True)
@@ -26,19 +29,41 @@ class Signal:
         return self.symbol_a
 
 
-def _price_at(history, target_ms: int) -> float | None:
-    for ts, price in reversed(history):
-        if ts <= target_ms:
-            return price
-    return None
+def _price_near(history, target_ms: int, tolerance_ms: int = TARGET_TOLERANCE_MS) -> float | None:
+    if not history:
+        return None
+    candidates = [(abs(ts - target_ms), price) for ts, price in history if abs(ts - target_ms) <= tolerance_ms and price > 0]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda x: x[0])[1]
+
+
+def window_is_continuous(history, now_ms: int, seconds: int, sample_seconds: int = SAMPLE_SECONDS) -> bool:
+    if not history or seconds <= 0:
+        return False
+    target = now_ms - seconds * 1000
+    latest_ts = history[-1][0]
+    if abs(latest_ts - now_ms) > TARGET_TOLERANCE_MS:
+        return False
+    if _price_near(history, target) is None:
+        return False
+    points = [(ts, price) for ts, price in history if target - TARGET_TOLERANCE_MS <= ts <= now_ms + TARGET_TOLERANCE_MS and price > 0]
+    if len(points) < 2:
+        return False
+    points.sort()
+    max_gap = max((b[0] - a[0] for a, b in zip(points, points[1:])), default=0)
+    if max_gap > MAX_SAMPLE_GAP_MS:
+        return False
+    expected = seconds / max(1, sample_seconds) + 1
+    return len(points) >= max(2, int(expected * 0.85))
 
 
 def return_pct(history, now_ms: int, seconds: int) -> float | None:
     if not history:
         return None
-    current = history[-1][1]
-    previous = _price_at(history, now_ms - seconds * 1000)
-    if previous is None or previous <= 0:
+    current = _price_near(history, now_ms)
+    previous = _price_near(history, now_ms - seconds * 1000)
+    if current is None or previous is None or previous <= 0:
         return None
     return (current / previous - 1.0) * 100.0
 
@@ -54,7 +79,7 @@ def _aligned_prices(hist_a, hist_b, window_seconds: int) -> tuple[list[float], l
 
 
 def _returns(prices: list[float]) -> list[float]:
-    return [math.log(prices[i] / prices[i - 1]) for i in range(1, len(prices)) if prices[i - 1] > 0]
+    return [math.log(prices[i] / prices[i - 1]) for i in range(1, len(prices)) if prices[i - 1] > 0 and prices[i] > 0]
 
 
 def _covariance(a: list[float], b: list[float]) -> float:
@@ -142,7 +167,8 @@ class StrategyEngine:
     def _lead_lag(self, now_ms, universe, history, tickers) -> list[Signal]:
         cfg = CONFIG["BTC_ALT_LAG"]
         btc = history.get("BTCUSDT")
-        if not btc:
+        required = max(cfg["warmup_seconds"], cfg["beta_window_seconds"])
+        if not btc or not window_is_continuous(btc, now_ms, required):
             return []
         btc15 = return_pct(btc, now_ms, 15)
         if btc15 is None or abs(btc15) < cfg["btc_impulse_15s_pct"]:
@@ -150,6 +176,8 @@ class StrategyEngine:
         candidates = []
         for symbol in universe:
             if symbol == "BTCUSDT" or symbol not in history:
+                continue
+            if not window_is_continuous(history[symbol], now_ms, required):
                 continue
             qv = float(tickers.get(symbol, {}).get("q", 0) or 0)
             if qv < cfg["min_quote_volume_24h"]:
@@ -176,7 +204,10 @@ class StrategyEngine:
     def _momentum(self, now_ms, universe, history) -> list[Signal]:
         cfg = CONFIG["REGIME_MOMENTUM"]
         btc, eth = history.get("BTCUSDT"), history.get("ETHUSDT")
+        required = max(cfg["warmup_seconds"], 300)
         if not btc or not eth:
+            return []
+        if not window_is_continuous(btc, now_ms, required) or not window_is_continuous(eth, now_ms, required):
             return []
         btc60, btc300 = return_pct(btc, now_ms, 60), return_pct(btc, now_ms, 300)
         eth300 = return_pct(eth, now_ms, 300)
@@ -192,7 +223,7 @@ class StrategyEngine:
         candidates = []
         for symbol in universe[:25]:
             h = history.get(symbol)
-            if not h:
+            if not h or not window_is_continuous(h, now_ms, required):
                 continue
             r60, r15 = return_pct(h, now_ms, 60), return_pct(h, now_ms, 15)
             if r60 is None or r15 is None:
@@ -219,8 +250,12 @@ class StrategyEngine:
             h, fw, dw = history.get(symbol), flows.get(symbol), depths.get(symbol)
             if not h or not fw or not dw:
                 continue
+            if not window_is_continuous(h, now_ms, cfg["warmup_seconds"]):
+                continue
+            if now_ms - dw[-1][0] > 2_500:
+                continue
             recent = [x for x in fw if x[0] >= cutoff]
-            if not recent:
+            if not recent or now_ms - recent[-1][0] > 3_500:
                 continue
             buy = sum(x[1] for x in recent)
             sell = sum(x[2] for x in recent)
@@ -255,8 +290,9 @@ class StrategyEngine:
 
     def _stat_arb(self, now_ms, universe, history) -> list[Signal]:
         cfg = CONFIG["STAT_ARB"]
+        required = max(cfg["warmup_seconds"], cfg["pair_window_seconds"])
         candidates = []
-        symbols = [s for s in universe if s in history]
+        symbols = [s for s in universe if s in history and window_is_continuous(history[s], now_ms, required, cfg["sample_seconds"])]
         for i, a in enumerate(symbols):
             for b in symbols[i + 1:]:
                 corr = correlation(history[a], history[b], cfg["pair_window_seconds"])
