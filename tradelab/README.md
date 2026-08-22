@@ -1,54 +1,51 @@
-# TradeLab 0.2.2
+# TradeLab 0.2.3
 
 Clean restart of the crypto research/autotrading project. PumpRadar trading logic is intentionally not imported.
 
 ## Tournament
 
-Four isolated paper participants start with their own $20 equity ledger:
+Four isolated frozen-spec paper/shadow participants start with their own $20 equity ledger:
 
 - `BTC_ALT_LAG` — BTC lead/lag into lagging altcoins.
 - `REGIME_MOMENTUM` — trend continuation only in an allowed market regime.
 - `FLOW_ABSORPTION` — trades + L2 pressure versus absorption/price response.
-- `STAT_ARB` — relative-value / statistical spread trading.
+- `STAT_ARB` — relative-value spread trading.
 
-The strategy specs are frozen for the research epoch. Only valid fixed-horizon paper outcomes count. CHAMPION/RESERVE assignment remains disabled until evidence gates are reached.
+The accountable tournament starts at research epoch mode `CLEAN_SHADOW_V2`. Earlier infrastructure/preflight outputs are excluded. Once V2 exists, ordinary server restarts do not reset tournament results.
 
-## Strict data-quality rules
-
-TradeLab 0.2.2 treats recorder continuity as part of the experiment rather than an implementation detail:
-
-- configured warm-up windows must actually be present and continuous before a participant can signal;
-- 5-second market history rejects gaps larger than the configured tolerance;
-- paper exits use the first recorded market sample at/after the exact strategy horizon, never the current price after a restart;
-- if no horizon sample exists inside the grace window, the trade is `INVALID_GAP` and does not affect equity or PnL;
-- 5/15/30/60/120/300s forward labels are created only when the entire 300s path is continuous and each target exists;
-- invalid label windows are recorded in `forward_label_quality` instead of being silently approximated;
-- recorder gaps are stored in `recorder_gaps`;
-- universe changes immediately force WS resubscription so top-40 flow and top-12 microstructure coverage do not wait for the periodic refresh;
-- component supervisors restart unexpectedly terminated recorder loops.
-
-The first 0.2.2 deployment creates one clean research epoch. Earlier infrastructure/preflight paper trades, signals and labels are excluded once, while raw market data is preserved. Ordinary restarts do not reset the epoch.
+`CHAMPION` / `RESERVE` assignment remains disabled until evidence gates are reached; losers are frozen rather than repeatedly patched.
 
 ## Recorder
 
-Public Binance USD-M data only; no exchange credentials are needed:
+TradeLab records public Binance USD-M market data for a dynamic liquid universe: ticker/mark/funding, aggTrades, top-10 depth for the microstructure subset, liquidations and periodic open interest.
 
-- dynamic top-40 USDT universe by quote volume;
-- top-12 microstructure subset;
-- 5s market samples;
-- 1s aggregated aggressive trade flow;
-- top-10 L2 depth sampling;
-- mark/index/funding;
-- liquidations;
-- periodic open interest;
-- live raw retention currently 72h.
+Runtime rules:
+
+- bootstrap six-symbol universe is held until the all-market ticker cache has enough symbols for one stable transition to top-40;
+- top-12 receives the microstructure/L2 stream;
+- WebSocket subscriptions refresh immediately after a real universe generation change;
+- strategy windows require continuous 5s samples and their configured warm-up;
+- paper exits use the first recorded sample at/after the exact fixed horizon within a strict grace period;
+- absent horizon samples become `INVALID_GAP` and never alter equity;
+- forward labels are accepted only with a continuous 300s path and receive an explicit quality record;
+- recorder gaps are persisted for audit;
+- live trading remains disabled.
 
 ## Mobile analysis snapshots
 
-Phone snapshots are intentionally not full copies of the ever-growing live recorder database. Cumulative participant state, specs, paper trades, signals, market states and valid forward labels stay in the snapshot. Only the high-volume raw tables are trimmed to the configured snapshot raw window (currently 6h).
+Phone snapshots are intentionally **not** full copies of the ever-growing live recorder database.
 
-Snapshots use SQLite backup, gzip and SHA-256. Android stores verified files under `Download/TradeLab`, supports interrupted-download resume via HTTP Range and keeps a foreground data-sync notification for manual downloads.
+Each snapshot:
+
+- is made from an atomic SQLite backup;
+- keeps cumulative participant/spec/event/paper-trade/market-state/forward-label research records;
+- keeps only the newest 6 hours of high-volume raw market/flow/depth/OI/liquidation rows;
+- is vacuumed, compressed to `.sqlite3.gz`, and hashed with SHA-256;
+- is stored on Android in `Download/TradeLab`;
+- is downloaded automatically every 4 hours or manually on demand.
+
+Interrupted Android downloads keep a persistent `.part` file and resume with HTTP byte ranges. Manual downloads use a `dataSync` foreground WorkManager service, so locking the screen does not tie the transfer to the Activity lifecycle.
 
 ## Safety defaults
 
-There is no live-order endpoint. TradeLab remains shadow/paper only until historical/OOS/replay/paper evidence justifies promotion.
+TradeLab 0.2.3 has no live-order endpoint. All four participants remain shadow/paper only while evidence is collected.
