@@ -1,6 +1,11 @@
 package com.aidar.tradelab
 
+import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
@@ -16,12 +21,20 @@ data class SnapshotManifest(
     val downloadUrl: String,
 )
 
+data class SavedSnapshot(
+    val filename: String,
+    val bytes: Long,
+    val location: String,
+)
+
 class SnapshotRepository(private val context: Context) {
     private val prefs = context.getSharedPreferences("connection", Context.MODE_PRIVATE)
     private val base: String
         get() = (prefs.getString("server_url", BuildConfig.SERVER_URL) ?: BuildConfig.SERVER_URL).trim().trimEnd('/')
     private val token: String
         get() = prefs.getString("read_token", "")?.trim().orEmpty()
+    private val publicLocation = "Download/TradeLab"
+    private val relativePath = Environment.DIRECTORY_DOWNLOADS + "/TradeLab/"
 
     fun latest(): SnapshotManifest = readManifest(open("$base/api/v1/snapshots/latest"))
 
@@ -64,21 +77,124 @@ class SnapshotRepository(private val context: Context) {
         )
     }
 
-    fun download(manifest: SnapshotManifest): File {
-        val dir = File(context.getExternalFilesDir(null), "snapshots").apply { mkdirs() }
-        val final = File(dir, manifest.filename)
-        if (final.exists() && sha256(final) == manifest.sha256) return final
-        val part = File(dir, manifest.filename + ".part")
+    fun download(manifest: SnapshotManifest): SavedSnapshot {
+        findVerifiedExisting(manifest)?.let { return it }
+
+        val tempDir = File(context.cacheDir, "snapshots").apply { mkdirs() }
+        val part = File(tempDir, manifest.filename + ".part")
         part.delete()
+
         val c = open(base + manifest.downloadUrl)
         if (c.responseCode !in 200..299) error("download HTTP ${c.responseCode}")
         part.outputStream().use { out -> c.inputStream.use { input -> input.copyTo(out, 1024 * 1024) } }
         require(part.length() == manifest.bytes) { "size mismatch" }
         require(sha256(part) == manifest.sha256) { "sha256 mismatch" }
-        if (final.exists()) final.delete()
-        require(part.renameTo(final)) { "atomic rename failed" }
-        prune(dir, 15)
-        return final
+
+        val saved = publishVerified(part, manifest)
+        part.delete()
+        pruneDownloads(15)
+        return saved
+    }
+
+    private fun findVerifiedExisting(manifest: SnapshotManifest): SavedSnapshot? {
+        if (Build.VERSION.SDK_INT >= 29) {
+            val resolver = context.contentResolver
+            val projection = arrayOf(MediaStore.Downloads._ID)
+            val selection = "${MediaStore.Downloads.DISPLAY_NAME}=? AND ${MediaStore.Downloads.RELATIVE_PATH}=?"
+            val args = arrayOf(manifest.filename, relativePath)
+            resolver.query(MediaStore.Downloads.EXTERNAL_CONTENT_URI, projection, selection, args, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Downloads._ID))
+                    val uri = ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id)
+                    if (sha256(uri) == manifest.sha256) {
+                        return SavedSnapshot(manifest.filename, manifest.bytes, publicLocation)
+                    }
+                    resolver.delete(uri, null, null)
+                }
+            }
+            return null
+        }
+
+        @Suppress("DEPRECATION")
+        val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "TradeLab").apply { mkdirs() }
+        val file = File(dir, manifest.filename)
+        if (file.exists() && sha256(file) == manifest.sha256) {
+            return SavedSnapshot(file.name, file.length(), publicLocation)
+        }
+        if (file.exists()) file.delete()
+        return null
+    }
+
+    private fun publishVerified(source: File, manifest: SnapshotManifest): SavedSnapshot {
+        if (Build.VERSION.SDK_INT >= 29) {
+            val resolver = context.contentResolver
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, manifest.filename)
+                put(MediaStore.Downloads.MIME_TYPE, "application/gzip")
+                put(MediaStore.Downloads.RELATIVE_PATH, relativePath)
+                put(MediaStore.Downloads.IS_PENDING, 1)
+            }
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: error("cannot create Downloads entry")
+            try {
+                resolver.openOutputStream(uri, "w")?.use { out ->
+                    source.inputStream().use { input -> input.copyTo(out, 1024 * 1024) }
+                } ?: error("cannot open Downloads output")
+                val done = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
+                resolver.update(uri, done, null, null)
+            } catch (e: Exception) {
+                resolver.delete(uri, null, null)
+                throw e
+            }
+            return SavedSnapshot(manifest.filename, manifest.bytes, publicLocation)
+        }
+
+        @Suppress("DEPRECATION")
+        val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "TradeLab").apply { mkdirs() }
+        val final = File(dir, manifest.filename)
+        source.copyTo(final, overwrite = true)
+        return SavedSnapshot(final.name, final.length(), publicLocation)
+    }
+
+    private fun pruneDownloads(keep: Int) {
+        if (Build.VERSION.SDK_INT >= 29) {
+            val resolver = context.contentResolver
+            val projection = arrayOf(
+                MediaStore.Downloads._ID,
+                MediaStore.Downloads.DISPLAY_NAME,
+                MediaStore.Downloads.DATE_ADDED,
+            )
+            val selection = "${MediaStore.Downloads.RELATIVE_PATH}=?"
+            val args = arrayOf(relativePath)
+            val oldUris = mutableListOf<android.net.Uri>()
+            resolver.query(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                projection,
+                selection,
+                args,
+                "${MediaStore.Downloads.DATE_ADDED} DESC",
+            )?.use { cursor ->
+                var index = 0
+                while (cursor.moveToNext()) {
+                    val name = cursor.getString(cursor.getColumnIndexOrThrow(MediaStore.Downloads.DISPLAY_NAME))
+                    if (!name.endsWith(".sqlite3.gz")) continue
+                    val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Downloads._ID))
+                    if (index >= keep) {
+                        oldUris += ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id)
+                    }
+                    index++
+                }
+            }
+            oldUris.forEach { resolver.delete(it, null, null) }
+            return
+        }
+
+        @Suppress("DEPRECATION")
+        val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "TradeLab")
+        dir.listFiles { f -> f.name.endsWith(".sqlite3.gz") }
+            ?.sortedByDescending { it.lastModified() }
+            ?.drop(keep)
+            ?.forEach { it.delete() }
     }
 
     private fun open(url: String, method: String = "GET"): HttpURLConnection =
@@ -90,23 +206,19 @@ class SnapshotRepository(private val context: Context) {
             setRequestProperty("Accept", "application/json, application/gzip")
         }
 
-    private fun sha256(file: File): String {
+    private fun sha256(file: File): String = file.inputStream().use { sha256(it) }
+
+    private fun sha256(uri: android.net.Uri): String =
+        context.contentResolver.openInputStream(uri)?.use { sha256(it) } ?: ""
+
+    private fun sha256(input: java.io.InputStream): String {
         val md = MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { input ->
-            val buf = ByteArray(1024 * 1024)
-            while (true) {
-                val n = input.read(buf)
-                if (n <= 0) break
-                md.update(buf, 0, n)
-            }
+        val buf = ByteArray(1024 * 1024)
+        while (true) {
+            val n = input.read(buf)
+            if (n <= 0) break
+            md.update(buf, 0, n)
         }
         return md.digest().joinToString("") { "%02x".format(it) }
-    }
-
-    private fun prune(dir: File, keep: Int) {
-        dir.listFiles { f -> f.name.endsWith(".sqlite3.gz") }
-            ?.sortedByDescending { it.lastModified() }
-            ?.drop(keep)
-            ?.forEach { it.delete() }
     }
 }
