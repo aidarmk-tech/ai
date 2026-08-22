@@ -140,9 +140,6 @@ class MainActivity : ComponentActivity() {
             .setInputData(workDataOf(SnapshotWorker.KEY_MODE to mode))
             .build()
 
-        // REPLACE is intentional: a stale ENQUEUED/RETRY job must never make a
-        // new user tap a no-op. Partial bytes remain on disk, so MODE_LATEST can
-        // continue the same latest snapshot via HTTP Range.
         WorkManager.getInstance(this).enqueueUniqueWork(
             MANUAL_WORK,
             ExistingWorkPolicy.REPLACE,
@@ -190,12 +187,14 @@ class MainActivity : ComponentActivity() {
                 ?: ""
             val file = progress.getString(SnapshotWorker.KEY_FILE)?.takeIf { it.isNotBlank() }
                 ?: p.getString("downloading_file", null)
-            val done = if (progress.hasKeyWithValueOfType<Long>(SnapshotWorker.KEY_DONE)) {
-                progress.getLong(SnapshotWorker.KEY_DONE, 0L)
-            } else p.getLong("download_done", 0L)
-            val total = if (progress.hasKeyWithValueOfType<Long>(SnapshotWorker.KEY_TOTAL)) {
-                progress.getLong(SnapshotWorker.KEY_TOTAL, 0L)
-            } else p.getLong("download_total", 0L)
+            val done = progress.getLong(
+                SnapshotWorker.KEY_DONE,
+                p.getLong("download_done", 0L),
+            )
+            val total = progress.getLong(
+                SnapshotWorker.KEY_TOTAL,
+                p.getLong("download_total", 0L),
+            )
 
             val stateText = when (info.state) {
                 WorkInfo.State.ENQUEUED -> "В очереди / ожидает сеть"
