@@ -117,17 +117,20 @@ class SnapshotWorker(context: Context, params: WorkerParameters) : CoroutineWork
 
                 lastFileName = saved.filename
                 lastFileSize = saved.bytes
-                prefs.edit()
+                val savedEdit = prefs.edit()
                     .putString("last_file", saved.filename)
                     .putString("last_snapshot_id", manifest.id)
-                    .putLong("last_snapshot_created_ms", manifest.createdAtMs)
+                    .putLong("last_file_created_ms", manifest.createdAtMs)
                     .putLong("last_at_ms", System.currentTimeMillis())
                     .putLong("last_size", saved.bytes)
                     .remove("last_error")
                     .remove("downloading_file")
                     .remove("download_done")
                     .remove("download_total")
-                    .apply()
+                if (mode != MODE_FULL) {
+                    savedEdit.putLong("last_snapshot_created_ms", manifest.createdAtMs)
+                }
+                savedEdit.apply()
                 stage(STAGE_SAVED, saved.filename, saved.bytes, saved.bytes)
             }
             NotificationHelper.success(applicationContext, lastFileName, lastFileSize, manifests.size)
