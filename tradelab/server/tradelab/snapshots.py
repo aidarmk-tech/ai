@@ -66,6 +66,14 @@ def create_snapshot(db_path: Path, snapshot_dir: Path, keep: int = 15) -> Snapsh
     rows = sorted(snapshot_dir.glob("tradelab-*.sqlite3.gz"), key=lambda p: p.stat().st_mtime, reverse=True)
     for old in rows[max(1, keep):]:
         old.unlink(missing_ok=True)
+
+    existing = {p.name for p in snapshot_dir.glob("tradelab-*.sqlite3.gz")}
+    with connect(db_path) as conn:
+        stale = conn.execute("SELECT snapshot_id, filename FROM snapshots").fetchall()
+        conn.executemany(
+            "DELETE FROM snapshots WHERE snapshot_id = ?",
+            [(r["snapshot_id"],) for r in stale if r["filename"] not in existing],
+        )
     return snap
 
 
@@ -73,5 +81,14 @@ def latest_snapshot(db_path: Path) -> Snapshot | None:
     with connect(db_path) as conn:
         row = conn.execute(
             "SELECT snapshot_id, created_at_ms, filename, bytes, sha256 FROM snapshots ORDER BY created_at_ms DESC LIMIT 1"
+        ).fetchone()
+    return Snapshot(**dict(row)) if row else None
+
+
+def get_snapshot(db_path: Path, snapshot_id: str) -> Snapshot | None:
+    with connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT snapshot_id, created_at_ms, filename, bytes, sha256 FROM snapshots WHERE snapshot_id = ?",
+            (snapshot_id,),
         ).fetchone()
     return Snapshot(**dict(row)) if row else None
