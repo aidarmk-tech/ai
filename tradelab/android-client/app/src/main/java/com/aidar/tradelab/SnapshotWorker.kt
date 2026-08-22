@@ -11,7 +11,9 @@ class SnapshotWorker(context: Context, params: WorkerParameters) : CoroutineWork
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val connection = applicationContext.getSharedPreferences("connection", Context.MODE_PRIVATE)
         if (connection.getString("read_token", "").isNullOrBlank()) {
-            return@withContext Result.success()
+            return@withContext Result.failure(
+                workDataOf(KEY_STAGE to STAGE_FAILED, KEY_ERROR to "Read token is empty")
+            )
         }
 
         val prefs = applicationContext.getSharedPreferences("snapshots", Context.MODE_PRIVATE)
@@ -37,21 +39,22 @@ class SnapshotWorker(context: Context, params: WorkerParameters) : CoroutineWork
                 .putLong("download_total", total)
             if (file.isNullOrBlank()) edit.remove("downloading_file") else edit.putString("downloading_file", file)
             edit.apply()
-            if (manual) {
+
+            // Do not start a foreground dataSync service while merely checking the
+            // manifest or asking the VPS to create a compact snapshot. Some Android
+            // 14-16/OEM builds reject or delay that foreground transition. Promote
+            // only once there is an actual file transfer to protect.
+            if (manual && name in setOf(STAGE_DOWNLOADING, STAGE_VERIFYING)) {
                 val text = when (name) {
-                    STAGE_CREATING -> "Creating fresh snapshot on server…"
-                    STAGE_CHECKING -> "Checking latest ready snapshot…"
                     STAGE_DOWNLOADING -> if (total > 0) "$file · ${formatBytes(done)} / ${formatBytes(total)}" else "$file · starting download"
                     STAGE_VERIFYING -> "$file · verifying SHA-256…"
-                    STAGE_SAVED -> "$file · saved to Download/TradeLab"
-                    else -> "Preparing snapshot…"
+                    else -> "TradeLab snapshot"
                 }
                 setForeground(NotificationHelper.downloading(applicationContext, text))
             }
         }
 
         try {
-            if (manual) setForeground(NotificationHelper.downloading(applicationContext, "Preparing snapshot task…"))
             val repo = SnapshotRepository(applicationContext)
             val manifests = when (mode) {
                 MODE_FRESH -> {
@@ -130,20 +133,25 @@ class SnapshotWorker(context: Context, params: WorkerParameters) : CoroutineWork
             NotificationHelper.success(applicationContext, lastFileName, lastFileSize, manifests.size)
             Result.success()
         } catch (e: Exception) {
-            val message = e.message ?: e.javaClass.simpleName
+            val detail = buildString {
+                append(e.javaClass.simpleName)
+                if (!e.message.isNullOrBlank()) append(": ").append(e.message)
+            }
             prefs.edit()
-                .putString("worker_stage", STAGE_RETRYING)
-                .putString("last_error", message)
+                .putString("worker_stage", STAGE_FAILED)
+                .putString("last_error", detail)
                 .putLong("last_error_ms", System.currentTimeMillis())
                 .apply()
-            setProgressAsync(workDataOf(KEY_STAGE to STAGE_RETRYING, KEY_MODE to mode))
 
-            // Authentication/configuration errors will never heal via backoff.
-            if (message.contains("HTTP 401") || message.contains("HTTP 403") || message.contains("HTTPS server URL")) {
-                Result.failure(workDataOf(KEY_STAGE to STAGE_FAILED, KEY_ERROR to message))
-            } else {
-                Result.retry()
-            }
+            val failure = workDataOf(
+                KEY_STAGE to STAGE_FAILED,
+                KEY_ERROR to detail,
+                KEY_MODE to mode,
+            )
+
+            // A user tap must never disappear into WorkManager's retry/backoff
+            // loop. Keep the .part file and fail visibly; the next tap resumes it.
+            if (manual) Result.failure(failure) else Result.retry()
         }
     }
 
