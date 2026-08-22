@@ -40,10 +40,6 @@ class SnapshotWorker(context: Context, params: WorkerParameters) : CoroutineWork
             if (file.isNullOrBlank()) edit.remove("downloading_file") else edit.putString("downloading_file", file)
             edit.apply()
 
-            // Do not start a foreground dataSync service while merely checking the
-            // manifest or asking the VPS to create a compact snapshot. Some Android
-            // 14-16/OEM builds reject or delay that foreground transition. Promote
-            // only once there is an actual file transfer to protect.
             if (manual && name in setOf(STAGE_DOWNLOADING, STAGE_VERIFYING)) {
                 val text = when (name) {
                     STAGE_DOWNLOADING -> if (total > 0) "$file · ${formatBytes(done)} / ${formatBytes(total)}" else "$file · starting download"
@@ -60,6 +56,10 @@ class SnapshotWorker(context: Context, params: WorkerParameters) : CoroutineWork
                 MODE_FRESH -> {
                     stage(STAGE_CREATING)
                     listOf(repo.createFresh())
+                }
+                MODE_FULL -> {
+                    stage(STAGE_CREATING)
+                    listOf(repo.createFull())
                 }
                 MODE_LATEST -> {
                     stage(STAGE_CHECKING)
@@ -149,8 +149,6 @@ class SnapshotWorker(context: Context, params: WorkerParameters) : CoroutineWork
                 KEY_MODE to mode,
             )
 
-            // A user tap must never disappear into WorkManager's retry/backoff
-            // loop. Keep the .part file and fail visibly; the next tap resumes it.
             if (manual) Result.failure(failure) else Result.retry()
         }
     }
@@ -164,6 +162,7 @@ class SnapshotWorker(context: Context, params: WorkerParameters) : CoroutineWork
         const val KEY_ERROR = "error"
 
         const val MODE_FRESH = "fresh"
+        const val MODE_FULL = "full"
         const val MODE_LATEST = "latest"
         const val MODE_CATCHUP = "catchup"
 
