@@ -20,18 +20,30 @@ class SnapshotRepository(private val context: Context) {
     private val base = BuildConfig.SERVER_URL.trimEnd('/')
     private val token = BuildConfig.READ_TOKEN
 
-    fun latest(): SnapshotManifest {
-        val c = open("$base/api/v1/snapshots/latest")
+    fun latest(): SnapshotManifest = readManifest(open("$base/api/v1/snapshots/latest"))
+
+    fun createFresh(): SnapshotManifest {
+        val c = open("$base/api/v1/snapshots/create", "POST")
+        c.doOutput = true
+        c.outputStream.use { }
+        return readManifest(c, fallbackDownloadUrl = true)
+    }
+
+    private fun readManifest(c: HttpURLConnection, fallbackDownloadUrl: Boolean = false): SnapshotManifest {
+        val code = c.responseCode
+        if (code !in 200..299) error("snapshot manifest HTTP $code")
         val text = c.inputStream.bufferedReader().use { it.readText() }
-        if (c.responseCode !in 200..299) error("latest HTTP ${c.responseCode}")
         val j = JSONObject(text)
+        val id = j.getString("snapshot_id")
         return SnapshotManifest(
-            id = j.getString("snapshot_id"),
+            id = id,
             filename = j.getString("filename"),
             sha256 = j.getString("sha256"),
             bytes = j.getLong("bytes"),
             createdAtMs = j.getLong("created_at_ms"),
-            downloadUrl = j.getString("download_url"),
+            downloadUrl = if (j.has("download_url")) j.getString("download_url")
+                else if (fallbackDownloadUrl) "/api/v1/snapshots/$id/download"
+                else error("download_url missing"),
         )
     }
 
@@ -40,6 +52,7 @@ class SnapshotRepository(private val context: Context) {
         val final = File(dir, manifest.filename)
         if (final.exists() && sha256(final) == manifest.sha256) return final
         val part = File(dir, manifest.filename + ".part")
+        part.delete()
         val c = open(base + manifest.downloadUrl)
         if (c.responseCode !in 200..299) error("download HTTP ${c.responseCode}")
         part.outputStream().use { out -> c.inputStream.use { input -> input.copyTo(out, 1024 * 1024) } }
@@ -51,12 +64,14 @@ class SnapshotRepository(private val context: Context) {
         return final
     }
 
-    private fun open(url: String): HttpURLConnection = (URL(url).openConnection() as HttpURLConnection).apply {
-        connectTimeout = 15_000
-        readTimeout = 120_000
-        setRequestProperty("X-TradeLab-Token", token)
-        setRequestProperty("Accept", "application/json, application/gzip")
-    }
+    private fun open(url: String, method: String = "GET"): HttpURLConnection =
+        (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = method
+            connectTimeout = 15_000
+            readTimeout = 120_000
+            setRequestProperty("X-TradeLab-Token", token)
+            setRequestProperty("Accept", "application/json, application/gzip")
+        }
 
     private fun sha256(file: File): String {
         val md = MessageDigest.getInstance("SHA-256")
