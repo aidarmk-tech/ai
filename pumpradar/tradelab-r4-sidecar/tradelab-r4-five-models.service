@@ -1,0 +1,16 @@
+[Unit]
+Description=TradeLab R4 Five-Model Shadow Sidecar
+After=network-online.target pumpradar.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/tradelab-r4-five-models
+ExecStart=/usr/bin/python3 /opt/tradelab/r4-five-models/tradelab_r4_sidecar.py --run
+Restart=on-failure
+RestartSec=3
+User=root
+Nice=5
+
+[Install]
+WantedBy=multi-user.target
