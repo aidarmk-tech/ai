@@ -11,8 +11,8 @@ android {
         applicationId = "com.aidar.tradelab"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.1.1"
         val serverUrl = System.getenv("TRADELAB_SERVER_URL") ?: "https://45.150.37.187"
         buildConfigField("String", "SERVER_URL", "\"$serverUrl\"")
     }
