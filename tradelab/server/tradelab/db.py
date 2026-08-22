@@ -187,9 +187,27 @@ CREATE TABLE IF NOT EXISTS snapshots (
 """
 
 
+class ClosingConnection(sqlite3.Connection):
+    """SQLite connection whose context manager also closes the file handle.
+
+    ``sqlite3.Connection.__exit__`` only commits or rolls back; it does not
+    close the connection. TradeLab opens many short-lived connections inside
+    ``with connect(...)`` blocks, so the default behavior leaked one SQLite
+    file descriptor per block until the process hit EMFILE (errno 24). This
+    subclass preserves normal transaction semantics and then deterministically
+    closes the connection on context exit.
+    """
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
 def connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, timeout=30)
+    conn = sqlite3.connect(path, timeout=30, factory=ClosingConnection)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout=30000")
     return conn
