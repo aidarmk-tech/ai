@@ -2,7 +2,32 @@
 
 TradeLab 0.1 is research/paper infrastructure only. It intentionally has no live-order endpoint.
 
-## Fresh Ubuntu host
+## Recommended: fresh Ubuntu VPS with public IPv4
+
+For the current TradeLab host (`45.150.37.187`), run as a sudo-capable user:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/aidarmk-tech/ai/tradelab-v0.1/tradelab/deploy/bootstrap-ip.sh -o /tmp/bootstrap-tradelab.sh
+sudo bash /tmp/bootstrap-tradelab.sh 45.150.37.187
+```
+
+The bootstrap:
+
+- installs the Python server, Nginx and a current Certbot;
+- binds TradeLab itself to `127.0.0.1:8000` only;
+- generates a random 256-bit read token locally on the VPS;
+- requests a public Let’s Encrypt short-lived certificate for the IPv4 address;
+- exposes only HTTPS through Nginx;
+- enables automatic TLS renewal checks twice daily;
+- starts the TradeLab systemd service;
+- checks both local and external `/health` endpoints;
+- prints the Android read token once at the end.
+
+Save that token and enter it in the Android client. Do not put it in GitHub and do not reuse any Binance credential.
+
+The ACME validation needs inbound TCP 80 and the client needs TCP 443. Port 8000 should remain closed externally.
+
+## Manual install
 
 ```bash
 sudo apt update
@@ -22,7 +47,7 @@ sudo -u tradelab /opt/tradelab/venv/bin/pip install --upgrade pip
 sudo -u tradelab /opt/tradelab/venv/bin/pip install /opt/tradelab/server
 ```
 
-Create `/etc/tradelab.env` as root. Use a long random read token; never reuse a Binance API key here.
+Create `/etc/tradelab.env` as root:
 
 ```text
 TRADELAB_DATA_DIR=/var/lib/tradelab
@@ -42,7 +67,3 @@ curl http://127.0.0.1:8000/health
 ```
 
 Expected health response includes `"live_trading": false`.
-
-## Network exposure
-
-Do not expose port 8000 directly to the Internet in production. Put HTTPS/authenticated reverse proxy or a private network in front of it. The Android read token must not be sent over plain public HTTP.
