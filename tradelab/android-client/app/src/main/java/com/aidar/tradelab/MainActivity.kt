@@ -86,7 +86,7 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(40, 70, 40, 40)
             addView(TextView(this@MainActivity).apply {
-                text = "TradeLab client 0.2.2\nA/B/C/D shadow tournament"
+                text = "TradeLab client 0.2.3\nA/B/C/D shadow tournament"
                 textSize = 22f
             })
             addView(serverUrl)
@@ -131,11 +131,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun enqueueManual(mode: String) {
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
-            .build()
         val request = OneTimeWorkRequestBuilder<SnapshotWorker>()
-            .setConstraints(constraints)
+            // No WorkManager network constraint for user-initiated work. Some OEM
+            // Android builds report CONNECTED as unsatisfied even while HTTPS is
+            // usable, leaving the job permanently ENQUEUED. Start immediately and
+            // let the worker surface the real HTTP/network result instead.
             .setBackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.SECONDS)
             .setInputData(workDataOf(SnapshotWorker.KEY_MODE to mode))
             .build()
@@ -197,8 +197,8 @@ class MainActivity : ComponentActivity() {
             )
 
             val stateText = when (info.state) {
-                WorkInfo.State.ENQUEUED -> "В очереди / ожидает сеть"
-                WorkInfo.State.BLOCKED -> "Ожидает зависимость"
+                WorkInfo.State.ENQUEUED -> "Запускается"
+                WorkInfo.State.BLOCKED -> "Ожидает внутреннюю зависимость"
                 WorkInfo.State.RUNNING -> stageText(stage)
                 else -> info.state.name
             }
@@ -210,8 +210,8 @@ class MainActivity : ComponentActivity() {
                     append("\nПрогресс: ").append(formatBytes(done)).append(" / ").append(formatBytes(total))
                     append(" (").append(percent).append("%)")
                 }
-                append("\nМожно закрыть приложение или экран — задача остаётся в WorkManager.")
-                append("\nЕсли она реально застряла, нажмите «Отменить», затем «Скачать последний готовый».")
+                append("\nРучная задача запускается без системного network constraint.")
+                append("\nЕсли сеть/сервер недоступны, ниже появится реальная ошибка, а не вечное ожидание сети.")
             }
             return
         }
