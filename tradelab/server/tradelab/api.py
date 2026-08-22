@@ -4,8 +4,12 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from .config import settings
 from .db import initialize
+from .market import MarketRecorder, participant_stats, recorder_health
 from .participants import list_participants, seed
 from .snapshots import create_snapshot, get_snapshot, latest_snapshot, list_snapshots
+
+
+market_recorder = MarketRecorder(settings)
 
 
 def require_token(x_tradelab_token: str | None) -> None:
@@ -30,26 +34,55 @@ async def lifespan(app: FastAPI):
     initialize(settings.db_path)
     seed(settings.db_path)
     stop = asyncio.Event()
-    task = asyncio.create_task(snapshot_loop(stop))
+    tasks = [
+        asyncio.create_task(snapshot_loop(stop)),
+        asyncio.create_task(market_recorder.run(stop)),
+    ]
     yield
     stop.set()
-    task.cancel()
-    with suppress(asyncio.CancelledError):
-        await task
+    for task in tasks:
+        task.cancel()
+    for task in tasks:
+        with suppress(asyncio.CancelledError):
+            await task
 
 
-app = FastAPI(title="TradeLab", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="TradeLab", version="0.2.0", lifespan=lifespan)
 
 
 @app.get("/health")
 def health():
-    return {"ok": True, "version": "0.1.0", "live_trading": False}
+    market = market_recorder.status()
+    return {
+        "ok": True,
+        "version": "0.2.0",
+        "live_trading": False,
+        "market_enabled": market["enabled"],
+        "last_market_event_ms": market["last_market_event_ms"],
+        "last_sample_ms": market["last_sample_ms"],
+    }
 
 
 @app.get("/api/v1/participants")
 def participants(x_tradelab_token: str | None = Header(default=None)):
     require_token(x_tradelab_token)
     return {"participants": list_participants(settings.db_path)}
+
+
+@app.get("/api/v1/tournament")
+def tournament(x_tradelab_token: str | None = Header(default=None)):
+    require_token(x_tradelab_token)
+    return {
+        "mode": "SHADOW_ONLY_FIXED_HORIZON",
+        "champion_assignment": "DISABLED_UNTIL_EVIDENCE_GATE",
+        "participants": participant_stats(settings.db_path),
+    }
+
+
+@app.get("/api/v1/market/status")
+def market_status(x_tradelab_token: str | None = Header(default=None)):
+    require_token(x_tradelab_token)
+    return {"recorder": market_recorder.status(), "components": recorder_health(settings.db_path)}
 
 
 @app.post("/api/v1/snapshots/create")
