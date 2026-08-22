@@ -8,18 +8,23 @@ import android.os.Build
 object NotificationHelper {
     private const val CHANNEL = "snapshots"
 
-    fun success(context: Context, filename: String, bytes: Long) {
+    fun success(context: Context, filename: String, bytes: Long, count: Int = 1) {
         val nm = context.getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= 26) {
-            nm.createNotificationChannel(NotificationChannel(CHANNEL, "TradeLab snapshots", NotificationManager.IMPORTANCE_DEFAULT))
+            nm.createNotificationChannel(
+                NotificationChannel(CHANNEL, "TradeLab snapshots", NotificationManager.IMPORTANCE_DEFAULT)
+            )
         }
         val mb = bytes / 1024.0 / 1024.0
+        val title = if (count == 1) "TradeLab: snapshot downloaded" else "TradeLab: $count snapshots downloaded"
         val n = android.app.Notification.Builder(context, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
-            .setContentTitle("TradeLab: snapshot downloaded")
-            .setContentText("$filename — %.1f MB, SHA-256 OK".format(mb))
+            .setContentTitle(title)
+            .setContentText("Latest: $filename — %.1f MB, SHA-256 OK".format(mb))
             .setAutoCancel(true)
             .build()
-        nm.notify(filename.hashCode(), n)
+        nm.notify(NOTIFICATION_ID, n)
     }
+
+    private const val NOTIFICATION_ID = 4101
 }
