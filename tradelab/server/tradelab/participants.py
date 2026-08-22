@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from .db import connect
 
 
+TARGET_RESEARCH_MODE = "CLEAN_SHADOW_V2"
+
+
 @dataclass(frozen=True)
 class Participant:
     participant_id: str
@@ -98,16 +101,19 @@ def seed(db_path) -> None:
 
 
 def ensure_clean_research_epoch(db_path) -> dict:
-    """Create the first accountable tournament epoch exactly once.
+    """Create the accountable tournament epoch and rotate V1 exactly once.
 
-    Anything produced before 0.2.2 was infrastructure/preflight data and may
-    contain stale-horizon closes or labels across recorder gaps. Raw market data
-    is deliberately preserved; only tournament outputs are cleared once.
+    0.2.2 created CLEAN_SHADOW_V1, but the first seconds exposed a bootstrap
+    universe race before any accountable market sample was written. 0.2.3 uses
+    CLEAN_SHADOW_V2 as the final T0. Once V2 exists, ordinary restarts never
+    clear tournament results again.
     """
     now = int(time.time() * 1000)
     with connect(db_path) as conn:
         existing = conn.execute("SELECT value FROM meta WHERE key='research_epoch_id'").fetchone()
-        if existing:
+        mode_row = conn.execute("SELECT value FROM meta WHERE key='research_epoch_mode'").fetchone()
+        current_mode = mode_row[0] if mode_row else None
+        if existing and current_mode == TARGET_RESEARCH_MODE:
             started = conn.execute("SELECT value FROM meta WHERE key='research_epoch_started_at_ms'").fetchone()
             return {
                 "epoch_id": existing[0],
@@ -127,27 +133,37 @@ def ensure_clean_research_epoch(db_path) -> dict:
         conn.execute("DELETE FROM paper_trades")
         conn.execute("UPDATE participants SET equity=starting_equity, rank=NULL, role='CANDIDATE'")
 
-        epoch = f"R1-{now}-{uuid.uuid4().hex[:8]}"
+        previous_epoch = existing[0] if existing else None
+        epoch = f"R2-{now}-{uuid.uuid4().hex[:8]}"
         meta = [
             ("research_epoch_id", epoch),
             ("research_epoch_started_at_ms", str(now)),
-            ("research_epoch_mode", "CLEAN_SHADOW_V1"),
+            ("research_epoch_mode", TARGET_RESEARCH_MODE),
             ("preflight_discarded_json", json.dumps(counts, sort_keys=True)),
         ]
+        if previous_epoch:
+            meta.append(("previous_research_epoch_id", previous_epoch))
         conn.executemany("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", meta)
-        return {"epoch_id": epoch, "started_at_ms": now, "created": True, "discarded": counts}
+        return {
+            "epoch_id": epoch,
+            "started_at_ms": now,
+            "created": True,
+            "discarded": counts,
+            "previous_epoch_id": previous_epoch,
+        }
 
 
 def research_epoch(db_path) -> dict:
     with connect(db_path) as conn:
         rows = dict(conn.execute(
-            "SELECT key,value FROM meta WHERE key IN ('research_epoch_id','research_epoch_started_at_ms','research_epoch_mode','preflight_discarded_json')"
+            "SELECT key,value FROM meta WHERE key IN ('research_epoch_id','research_epoch_started_at_ms','research_epoch_mode','preflight_discarded_json','previous_research_epoch_id')"
         ).fetchall())
     return {
         "epoch_id": rows.get("research_epoch_id"),
         "started_at_ms": int(rows.get("research_epoch_started_at_ms", 0) or 0),
         "mode": rows.get("research_epoch_mode"),
         "preflight_discarded": json.loads(rows.get("preflight_discarded_json", "{}")),
+        "previous_epoch_id": rows.get("previous_research_epoch_id"),
     }
 
 
