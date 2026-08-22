@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from .config import settings
 from .db import initialize
 from .participants import list_participants, seed
-from .snapshots import create_snapshot, get_snapshot, latest_snapshot
+from .snapshots import create_snapshot, get_snapshot, latest_snapshot, list_snapshots
 
 
 def require_token(x_tradelab_token: str | None) -> None:
@@ -57,6 +57,17 @@ def make_snapshot(x_tradelab_token: str | None = Header(default=None)):
     require_token(x_tradelab_token)
     snap = create_snapshot(settings.db_path, settings.snapshot_dir, settings.snapshot_keep)
     return snap.as_dict()
+
+
+@app.get("/api/v1/snapshots")
+def snapshots(after_ms: int = 0, x_tradelab_token: str | None = Header(default=None)):
+    require_token(x_tradelab_token)
+    items = []
+    for snap in list_snapshots(settings.db_path, after_ms):
+        data = snap.as_dict()
+        data["download_url"] = f"/api/v1/snapshots/{snap.snapshot_id}/download"
+        items.append(data)
+    return {"snapshots": items}
 
 
 @app.get("/api/v1/snapshots/latest")
