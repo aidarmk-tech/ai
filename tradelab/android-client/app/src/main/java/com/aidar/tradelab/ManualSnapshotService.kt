@@ -38,9 +38,7 @@ class ManualSnapshotService : Service() {
         val mode = intent?.getStringExtra(EXTRA_MODE) ?: SnapshotWorker.MODE_LATEST
         if (transferJob?.isActive == true) return START_REDELIVER_INTENT
 
-        transferJob = scope.launch {
-            runTransfer(mode)
-        }
+        transferJob = scope.launch { runTransfer(mode) }
         return START_REDELIVER_INTENT
     }
 
@@ -59,8 +57,12 @@ class ManualSnapshotService : Service() {
             val repo = SnapshotRepository(applicationContext)
             val manifest = when (mode) {
                 SnapshotWorker.MODE_FRESH -> {
-                    setStage(STAGE_CREATING, "Server is creating a fresh snapshot…")
+                    setStage(STAGE_CREATING, "Server is creating a fresh compact snapshot…")
                     repo.createFresh()
+                }
+                SnapshotWorker.MODE_FULL -> {
+                    setStage(STAGE_CREATING_FULL, "Server is creating the full retained research DB…")
+                    repo.createFull()
                 }
                 else -> {
                     setStage(STAGE_CHECKING, "Checking latest ready snapshot…")
@@ -172,6 +174,7 @@ class ManualSnapshotService : Service() {
         const val STAGE_STARTING = "STARTING"
         const val STAGE_CHECKING = "CHECKING"
         const val STAGE_CREATING = "CREATING"
+        const val STAGE_CREATING_FULL = "CREATING_FULL"
         const val STAGE_DOWNLOADING = "DOWNLOADING"
         const val STAGE_VERIFYING = "VERIFYING"
         const val STAGE_SAVED = "SAVED"
