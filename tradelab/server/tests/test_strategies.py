@@ -3,17 +3,18 @@ from collections import defaultdict, deque
 from tradelab.strategies import StrategyEngine, correlation, rolling_beta, spread_zscore
 
 
-def make_history(start_ms=1_000_000, points=100, step_ms=5000, base=100.0, drift=0.0005):
+def make_history(start_ms=1_000_000, points=100, step_ms=5000, base=100.0, drift=0.0005, variable=False):
     out = deque(maxlen=900)
     price = base
     for i in range(points):
-        price *= 1 + drift
+        step = drift + (((i % 7) - 3) * 0.00004 if variable else 0.0)
+        price *= 1 + step
         out.append((start_ms + i * step_ms, price))
     return out
 
 
 def test_beta_and_correlation_are_sane():
-    btc = make_history(points=100, base=100, drift=0.0005)
+    btc = make_history(points=100, base=100, drift=0.0005, variable=True)
     alt = deque((ts, 50 * (p / btc[0][1]) ** 1.5) for ts, p in btc)
     beta = rolling_beta(alt, btc, 180)
     corr = correlation(alt, btc, 180)
@@ -22,7 +23,7 @@ def test_beta_and_correlation_are_sane():
 
 
 def test_spread_zscore_detects_relative_dislocation():
-    b = make_history(points=400, base=100, drift=0.0001)
+    b = make_history(points=400, base=100, drift=0.0001, variable=True)
     a = deque(maxlen=900)
     for idx, (ts, p) in enumerate(b):
         relative = 1.0 + (0.0002 if idx % 20 < 10 else -0.0002)
