@@ -1,0 +1,23 @@
+[Unit]
+Description=TradeLab research server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tradelab
+Group=tradelab
+WorkingDirectory=/opt/tradelab/server
+EnvironmentFile=/etc/tradelab.env
+ExecStart=/opt/tradelab/venv/bin/python -m tradelab
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/tradelab
+
+[Install]
+WantedBy=multi-user.target
