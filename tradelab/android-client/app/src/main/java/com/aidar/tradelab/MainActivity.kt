@@ -27,9 +27,6 @@ class MainActivity : Activity() {
         if (android.os.Build.VERSION.SDK_INT >= 33) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 100)
         }
-        if (android.os.Build.VERSION.SDK_INT <= 28) {
-            requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), 101)
-        }
 
         val connection = getSharedPreferences("connection", MODE_PRIVATE)
         serverUrl = EditText(this).apply {
