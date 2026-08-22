@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 from .config import settings
 from .db import connect, initialize
 from .market import participant_stats, recorder_gaps, recorder_health
-from .market_runtime import StableMarketRecorder
+from .market_cadence import ProductionMarketRecorder
 from .participants import ensure_clean_research_epoch, list_participants, research_epoch, seed
 from .snapshots import (
     create_full_snapshot,
@@ -20,7 +20,7 @@ from .snapshots import (
 from .watchdog import EventLoopWatchdog
 
 
-market_recorder = StableMarketRecorder(settings)
+market_recorder = ProductionMarketRecorder(settings)
 event_loop_watchdog = EventLoopWatchdog(settings.data_dir / "event-loop-watchdog.log")
 
 
@@ -111,7 +111,7 @@ async def lifespan(app: FastAPI):
             await task
 
 
-app = FastAPI(title="TradeLab", version="0.2.7", lifespan=lifespan)
+app = FastAPI(title="TradeLab", version="0.2.8", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -120,7 +120,7 @@ def health():
     epoch = research_epoch(settings.db_path)
     return {
         "ok": True,
-        "version": "0.2.7",
+        "version": "0.2.8",
         "live_trading": False,
         "market_enabled": market["enabled"],
         "last_market_event_ms": market["last_market_event_ms"],
