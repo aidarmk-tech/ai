@@ -1,6 +1,5 @@
 import asyncio
 import json
-import math
 import time
 import uuid
 from collections import defaultdict, deque
@@ -22,7 +21,7 @@ def now_ms() -> int:
     return int(time.time() * 1000)
 
 
-def _f(value, default=0.0) -> float:
+def _f(value, default=0.0):
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -48,16 +47,18 @@ class MarketRecorder:
         self.last_public_event_ms = 0
         self.last_sample_ms = 0
         self.started_at_ms = now_ms()
-        self.reconnect_generation = 0
         self._cleanup_last_ms = 0
+        self._health_pending: dict[str, tuple[str, int | None, str, int]] = {}
 
     async def run(self, stop: asyncio.Event) -> None:
         if not self.settings.market_enabled:
             self._health("market_recorder", "DISABLED", "TRADELAB_MARKET_ENABLED=false")
+            self._flush_health()
             await stop.wait()
             return
         self._health("market_recorder", "STARTING", "public Binance USD-M data; shadow only")
         tasks = [
+            asyncio.create_task(self._health_loop(stop)),
             asyncio.create_task(self._market_stream_loop(stop)),
             asyncio.create_task(self._public_stream_loop(stop)),
             asyncio.create_task(self._sample_loop(stop)),
@@ -73,6 +74,7 @@ class MarketRecorder:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             self._health("market_recorder", "STOPPED", "shutdown")
+            self._flush_health()
 
     def status(self) -> dict:
         return {
@@ -90,15 +92,34 @@ class MarketRecorder:
         }
 
     def _health(self, component: str, status: str, detail: str = "", event_ms: int | None = None) -> None:
-        ts = now_ms()
-        with connect(self.settings.db_path) as conn:
-            conn.execute(
-                """INSERT INTO recorder_health(component,status,last_event_ms,detail,updated_at_ms)
-                   VALUES(?,?,?,?,?)
-                   ON CONFLICT(component) DO UPDATE SET status=excluded.status,
-                   last_event_ms=excluded.last_event_ms,detail=excluded.detail,updated_at_ms=excluded.updated_at_ms""",
-                (component, status, event_ms, detail[:1000], ts),
-            )
+        self._health_pending[component] = (status, event_ms, detail[:1000], now_ms())
+
+    def _flush_health(self) -> None:
+        if not self._health_pending:
+            return
+        pending = list(self._health_pending.items())
+        self._health_pending.clear()
+        rows = [(component, status, event_ms, detail, updated) for component, (status, event_ms, detail, updated) in pending]
+        try:
+            with connect(self.settings.db_path) as conn:
+                conn.executemany(
+                    """INSERT INTO recorder_health(component,status,last_event_ms,detail,updated_at_ms)
+                       VALUES(?,?,?,?,?)
+                       ON CONFLICT(component) DO UPDATE SET status=excluded.status,
+                       last_event_ms=excluded.last_event_ms,detail=excluded.detail,updated_at_ms=excluded.updated_at_ms""",
+                    rows,
+                )
+        except Exception:
+            for component, (status, event_ms, detail, updated) in pending:
+                self._health_pending[component] = (status, event_ms, detail, updated)
+
+    async def _health_loop(self, stop: asyncio.Event) -> None:
+        while not stop.is_set():
+            self._flush_health()
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=1)
+            except TimeoutError:
+                pass
 
     @staticmethod
     def _payload(message):
@@ -140,27 +161,29 @@ class MarketRecorder:
         symbol = data.get("s")
         if event == "24hrTicker" and symbol and symbol.endswith("USDT"):
             self.tickers[symbol] = data
-        elif event == "markPriceUpdate" and symbol and symbol.endswith("USDT"):
+            return
+        if event == "markPriceUpdate" and symbol and symbol.endswith("USDT"):
             self.marks[symbol] = data
-        elif event == "aggTrade" and symbol in set(self.universe):
+            return
+        if event == "aggTrade" and symbol in set(self.universe):
             price, qty = _f(data.get("p")), _f(data.get("q"))
             trade_ts = int(data.get("T") or data.get("E") or now_ms())
             bucket = trade_ts // 1000 * 1000
             key = (symbol, bucket)
             row = self.flow_buckets.setdefault(key, [0.0, 0.0, 0.0, 0.0, 0])
             notional = price * qty
-            buyer_is_maker = bool(data.get("m"))
-            if buyer_is_maker:
+            if bool(data.get("m")):
                 row[1] += notional
                 row[3] += qty
             else:
                 row[0] += notional
                 row[2] += qty
             row[4] += 1
-        elif event == "forceOrder":
+            return
+        if event == "forceOrder":
             order = data.get("o") or {}
             symbol = order.get("s")
-            if not symbol or not symbol.endswith("USDT") or data.get("st") not in (None, 1):
+            if not symbol or not symbol.endswith("USDT"):
                 return
             qty = _f(order.get("z") or order.get("q"))
             price = _f(order.get("ap") or order.get("p"))
@@ -357,11 +380,10 @@ class MarketRecorder:
             "hedge_ratio": signal.hedge_ratio,
         }
         text = json.dumps(payload, separators=(",", ":"), sort_keys=True)
-        display_symbol = signal.key
         with connect(self.settings.db_path) as conn:
             conn.execute(
                 "INSERT INTO participant_events(ts_ms,participant_id,symbol,event_type,payload_json) VALUES(?,?,?,?,?)",
-                (ts, signal.participant_id, display_symbol, "SIGNAL", text),
+                (ts, signal.participant_id, signal.key, "SIGNAL", text),
             )
             if signal.symbol_b is None:
                 conn.execute(
@@ -434,12 +456,12 @@ class MarketRecorder:
         return raw if side == "LONG" else -raw
 
     def _close_due_paper(self, ts: int) -> None:
+        closed = 0
         with connect(self.settings.db_path) as conn:
             trades = conn.execute(
                 "SELECT * FROM paper_trades WHERE status='OPEN' AND exit_due_ms<=? ORDER BY exit_due_ms LIMIT 100",
                 (ts,),
             ).fetchall()
-            changed = False
             for trade in trades:
                 exit_a = self._latest_price(trade["symbol_a"])
                 exit_b = self._latest_price(trade["symbol_b"]) if trade["symbol_b"] else None
@@ -462,22 +484,23 @@ class MarketRecorder:
                     (ts, exit_a, exit_b, gross * 100, net * 100, pnl, trade["trade_id"]),
                 )
                 conn.execute("UPDATE participants SET equity=equity+? WHERE participant_id=?", (pnl, trade["participant_id"]))
+                display = trade["symbol_a"] if not trade["symbol_b"] else f"{trade['symbol_a']}|{trade['symbol_b']}"
                 conn.execute(
                     "INSERT INTO participant_events(ts_ms,participant_id,symbol,event_type,payload_json) VALUES(?,?,?,?,?)",
-                    (ts, trade["participant_id"], trade["symbol_a"] if not trade["symbol_b"] else f"{trade['symbol_a']}|{trade['symbol_b']}",
-                     "PAPER_CLOSE", json.dumps({"trade_id": trade["trade_id"], "gross_return_pct": gross * 100, "net_return_pct": net * 100, "pnl_usdt": pnl})),
+                    (ts, trade["participant_id"], display, "PAPER_CLOSE",
+                     json.dumps({"trade_id": trade["trade_id"], "gross_return_pct": gross * 100, "net_return_pct": net * 100, "pnl_usdt": pnl})),
                 )
-                changed = True
-            if changed:
+                closed += 1
+            if closed:
                 rows = conn.execute("SELECT participant_id,equity FROM participants ORDER BY equity DESC").fetchall()
                 for rank, row in enumerate(rows, 1):
                     conn.execute("UPDATE participants SET rank=? WHERE participant_id=?", (rank, row["participant_id"]))
-                self._health("paper_book", "OK", f"closed={len(trades)}", ts)
+        if closed:
+            self._health("paper_book", "OK", f"closed={closed}", ts)
 
     async def _oi_loop(self, stop: asyncio.Event) -> None:
         async with httpx.AsyncClient(timeout=10.0, headers={"User-Agent": "TradeLab/0.2"}) as client:
             while not stop.is_set():
-                rows = []
                 sem = asyncio.Semaphore(4)
 
                 async def fetch(symbol):
@@ -509,7 +532,9 @@ class MarketRecorder:
     async def _label_loop(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
             try:
-                self._label_ready_states(now_ms())
+                processed = self._label_ready_states(now_ms())
+                if processed:
+                    self._health("forward_labels", "OK", f"processed={processed}", now_ms())
             except Exception as exc:
                 self._health("forward_labels", "DEGRADED", repr(exc))
             try:
@@ -517,7 +542,8 @@ class MarketRecorder:
             except TimeoutError:
                 pass
 
-    def _label_ready_states(self, ts: int) -> None:
+    def _label_ready_states(self, ts: int) -> int:
+        processed = 0
         with connect(self.settings.db_path) as conn:
             states = conn.execute(
                 """SELECT m.id,m.ts_ms,m.symbol FROM market_states m
@@ -558,8 +584,8 @@ class MarketRecorder:
                     (state["id"], r_at(5), r_at(15), r_at(30), r_at(60), r_at(120), r_at(300),
                      m30, a30, m60, a60, m300, a300),
                 )
-            if states:
-                self._health("forward_labels", "OK", f"processed={len(states)}", ts)
+                processed += 1
+        return processed
 
     def _cleanup_raw(self, ts: int) -> None:
         cutoff = ts - self.settings.raw_retention_hours * 3600_000
