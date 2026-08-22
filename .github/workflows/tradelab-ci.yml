@@ -1,0 +1,41 @@
+name: TradeLab CI
+
+on:
+  push:
+    branches: [tradelab-v0.1]
+    paths:
+      - 'tradelab/**'
+      - '.github/workflows/tradelab-ci.yml'
+  pull_request:
+    paths:
+      - 'tradelab/**'
+      - '.github/workflows/tradelab-ci.yml'
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tradelab/server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -e '.[test]'
+      - run: pytest -q
+      - run: python -m compileall tradelab
+
+  android:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tradelab/android-client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - run: gradle :app:assembleDebug --stacktrace
