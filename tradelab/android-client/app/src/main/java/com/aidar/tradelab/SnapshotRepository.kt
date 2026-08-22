@@ -22,6 +22,17 @@ class SnapshotRepository(private val context: Context) {
 
     fun latest(): SnapshotManifest = readManifest(open("$base/api/v1/snapshots/latest"))
 
+    fun since(afterMs: Long): List<SnapshotManifest> {
+        val c = open("$base/api/v1/snapshots?after_ms=${afterMs.coerceAtLeast(0)}")
+        val code = c.responseCode
+        if (code !in 200..299) error("snapshot list HTTP $code")
+        val text = c.inputStream.bufferedReader().use { it.readText() }
+        val array = JSONObject(text).getJSONArray("snapshots")
+        return buildList {
+            for (i in 0 until array.length()) add(parseManifest(array.getJSONObject(i)))
+        }
+    }
+
     fun createFresh(): SnapshotManifest {
         val c = open("$base/api/v1/snapshots/create", "POST")
         c.doOutput = true
@@ -33,7 +44,10 @@ class SnapshotRepository(private val context: Context) {
         val code = c.responseCode
         if (code !in 200..299) error("snapshot manifest HTTP $code")
         val text = c.inputStream.bufferedReader().use { it.readText() }
-        val j = JSONObject(text)
+        return parseManifest(JSONObject(text), fallbackDownloadUrl)
+    }
+
+    private fun parseManifest(j: JSONObject, fallbackDownloadUrl: Boolean = false): SnapshotManifest {
         val id = j.getString("snapshot_id")
         return SnapshotManifest(
             id = id,
