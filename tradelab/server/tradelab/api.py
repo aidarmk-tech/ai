@@ -8,9 +8,11 @@ from .market import participant_stats, recorder_gaps, recorder_health
 from .market_runtime import StableMarketRecorder
 from .participants import ensure_clean_research_epoch, list_participants, research_epoch, seed
 from .snapshots import create_snapshot, get_snapshot, latest_snapshot, list_snapshots
+from .watchdog import EventLoopWatchdog
 
 
 market_recorder = StableMarketRecorder(settings)
+event_loop_watchdog = EventLoopWatchdog(settings.data_dir / "event-loop-watchdog.log")
 
 
 def require_token(x_tradelab_token: str | None) -> None:
@@ -50,12 +52,18 @@ async def lifespan(app: FastAPI):
     with connect(settings.db_path) as conn:
         conn.execute("DELETE FROM recorder_health")
     stop = asyncio.Event()
+    event_loop_watchdog.start()
     tasks = [
+        asyncio.create_task(event_loop_watchdog.heartbeat_loop(stop)),
         asyncio.create_task(snapshot_loop(stop)),
         asyncio.create_task(market_recorder.run(stop)),
     ]
     yield
     stop.set()
+    # Disarm the native watchdog before normal graceful shutdown. A real stall
+    # never reaches this point, so its thread will persist the stack trace and
+    # exit non-zero for systemd recovery.
+    event_loop_watchdog.stop()
     for task in tasks:
         task.cancel()
     for task in tasks:
@@ -63,7 +71,7 @@ async def lifespan(app: FastAPI):
             await task
 
 
-app = FastAPI(title="TradeLab", version="0.2.4", lifespan=lifespan)
+app = FastAPI(title="TradeLab", version="0.2.5", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -72,7 +80,7 @@ def health():
     epoch = research_epoch(settings.db_path)
     return {
         "ok": True,
-        "version": "0.2.4",
+        "version": "0.2.5",
         "live_trading": False,
         "market_enabled": market["enabled"],
         "last_market_event_ms": market["last_market_event_ms"],
@@ -83,6 +91,7 @@ def health():
         "research_epoch_started_at_ms": epoch["started_at_ms"],
         "research_epoch_mode": epoch["mode"],
         "strict_continuity": True,
+        "event_loop_watchdog": event_loop_watchdog.status(),
     }
 
 
