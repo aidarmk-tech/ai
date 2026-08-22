@@ -1,6 +1,6 @@
 from collections import defaultdict, deque
 
-from tradelab.strategies import StrategyEngine, correlation, rolling_beta, spread_zscore
+from tradelab.strategies import StrategyEngine, correlation, rolling_beta, spread_zscore, window_is_continuous
 
 
 def make_history(start_ms=1_000_000, points=100, step_ms=5000, base=100.0, drift=0.0005, variable=False):
@@ -37,7 +37,17 @@ def test_spread_zscore_detects_relative_dislocation():
     assert beta > 0
 
 
-def test_absorption_emits_reversal_signal():
+def test_continuity_rejects_large_gap_even_with_enough_points():
+    now = 2_000_000
+    h = deque(maxlen=900)
+    for ts in range(now - 180_000, now + 1, 5_000):
+        if now - 100_000 <= ts <= now - 60_000:
+            continue
+        h.append((ts, 100.0))
+    assert not window_is_continuous(h, now, 180)
+
+
+def test_absorption_emits_reversal_signal_after_real_warmup():
     engine = StrategyEngine()
     now = 2_000_000
     history = defaultdict(lambda: deque(maxlen=900))
@@ -55,3 +65,21 @@ def test_absorption_emits_reversal_signal():
     c = [s for s in signals if s.participant_id == "FLOW_ABSORPTION"]
     assert len(c) == 1
     assert c[0].side_a == "SHORT"
+
+
+def test_absorption_does_not_emit_before_60s_warmup():
+    engine = StrategyEngine()
+    now = 2_000_000
+    history = defaultdict(lambda: deque(maxlen=900))
+    for i in range(8):
+        ts = now - (7 - i) * 5000
+        history["BTCUSDT"].append((ts, 100.0))
+        history["TESTUSDT"].append((ts, 10.0))
+    flows = defaultdict(lambda: deque(maxlen=360))
+    for i in range(15):
+        flows["TESTUSDT"].append((now - (14 - i) * 1000, 9000.0, 1000.0))
+    depths = defaultdict(lambda: deque(maxlen=360))
+    depths["TESTUSDT"].append((now, -0.1, 0.0, 0.15, 2.0))
+    tickers = {"TESTUSDT": {"q": "100000000"}}
+    signals = engine.evaluate(now, ["BTCUSDT", "TESTUSDT"], ["TESTUSDT"], history, flows, depths, tickers)
+    assert not [s for s in signals if s.participant_id == "FLOW_ABSORPTION"]
