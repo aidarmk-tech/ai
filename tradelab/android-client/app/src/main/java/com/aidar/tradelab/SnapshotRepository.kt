@@ -8,6 +8,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
@@ -77,23 +78,92 @@ class SnapshotRepository(private val context: Context) {
         )
     }
 
-    fun download(manifest: SnapshotManifest): SavedSnapshot {
+    fun download(
+        manifest: SnapshotManifest,
+        onProgress: (downloaded: Long, total: Long) -> Unit = { _, _ -> },
+    ): SavedSnapshot {
         findVerifiedExisting(manifest)?.let { return it }
 
-        val tempDir = File(context.cacheDir, "snapshots").apply { mkdirs() }
+        // Keep partial bytes in persistent app storage. If Android kills the worker,
+        // the next WorkManager attempt continues this exact file using HTTP Range.
+        val tempDir = File(context.getExternalFilesDir(null), "snapshot-parts").apply { mkdirs() }
         val part = File(tempDir, manifest.filename + ".part")
-        part.delete()
+        if (part.length() > manifest.bytes) part.delete()
 
-        val c = open(base + manifest.downloadUrl)
-        if (c.responseCode !in 200..299) error("download HTTP ${c.responseCode}")
-        part.outputStream().use { out -> c.inputStream.use { input -> input.copyTo(out, 1024 * 1024) } }
-        require(part.length() == manifest.bytes) { "size mismatch" }
-        require(sha256(part) == manifest.sha256) { "sha256 mismatch" }
+        if (part.exists() && part.length() == manifest.bytes) {
+            if (sha256(part) == manifest.sha256) return finishPart(part, manifest)
+            part.delete()
+        }
 
+        var offset = if (part.exists()) part.length() else 0L
+        val c = open(base + manifest.downloadUrl).apply {
+            if (offset > 0L) setRequestProperty("Range", "bytes=$offset-")
+        }
+        val code = c.responseCode
+
+        val append = when {
+            offset > 0L && code == HttpURLConnection.HTTP_PARTIAL -> {
+                val range = c.getHeaderField("Content-Range").orEmpty()
+                require(range.startsWith("bytes $offset-")) { "unexpected Content-Range: $range" }
+                true
+            }
+            code in 200..299 -> {
+                // Server/proxy ignored Range. Restart this one attempt safely.
+                if (offset > 0L) {
+                    part.delete()
+                    offset = 0L
+                }
+                false
+            }
+            code == 416 && offset == manifest.bytes -> {
+                if (sha256(part) == manifest.sha256) return finishPart(part, manifest)
+                part.delete()
+                error("range complete but SHA-256 mismatch")
+            }
+            else -> error("download HTTP $code")
+        }
+
+        onProgress(offset, manifest.bytes)
+        FileOutputStream(part, append).use { out ->
+            c.inputStream.use { input ->
+                val buf = ByteArray(256 * 1024)
+                var downloaded = offset
+                while (true) {
+                    val n = input.read(buf)
+                    if (n <= 0) break
+                    out.write(buf, 0, n)
+                    downloaded += n
+                    require(downloaded <= manifest.bytes) { "download exceeds manifest size" }
+                    onProgress(downloaded, manifest.bytes)
+                }
+                out.fd.sync()
+            }
+        }
+
+        require(part.length() == manifest.bytes) {
+            "incomplete download: ${part.length()} of ${manifest.bytes} bytes"
+        }
+        if (sha256(part) != manifest.sha256) {
+            part.delete()
+            error("sha256 mismatch; partial file discarded")
+        }
+        return finishPart(part, manifest)
+    }
+
+    private fun finishPart(part: File, manifest: SnapshotManifest): SavedSnapshot {
         val saved = publishVerified(part, manifest)
         part.delete()
         pruneDownloads(15)
+        pruneParts(3)
         return saved
+    }
+
+    private fun pruneParts(keep: Int) {
+        val dir = File(context.getExternalFilesDir(null), "snapshot-parts")
+        dir.listFiles { f -> f.name.endsWith(".part") }
+            ?.sortedByDescending { it.lastModified() }
+            ?.drop(keep)
+            ?.forEach { it.delete() }
     }
 
     private fun findVerifiedExisting(manifest: SnapshotManifest): SavedSnapshot? {
@@ -159,11 +229,7 @@ class SnapshotRepository(private val context: Context) {
     private fun pruneDownloads(keep: Int) {
         if (Build.VERSION.SDK_INT >= 29) {
             val resolver = context.contentResolver
-            val projection = arrayOf(
-                MediaStore.Downloads._ID,
-                MediaStore.Downloads.DISPLAY_NAME,
-                MediaStore.Downloads.DATE_ADDED,
-            )
+            val projection = arrayOf(MediaStore.Downloads._ID, MediaStore.Downloads.DISPLAY_NAME, MediaStore.Downloads.DATE_ADDED)
             val selection = "${MediaStore.Downloads.RELATIVE_PATH}=?"
             val args = arrayOf(relativePath)
             val oldUris = mutableListOf<android.net.Uri>()
@@ -179,9 +245,7 @@ class SnapshotRepository(private val context: Context) {
                     val name = cursor.getString(cursor.getColumnIndexOrThrow(MediaStore.Downloads.DISPLAY_NAME))
                     if (!name.endsWith(".sqlite3.gz")) continue
                     val id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.Downloads._ID))
-                    if (index >= keep) {
-                        oldUris += ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id)
-                    }
+                    if (index >= keep) oldUris += ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id)
                     index++
                 }
             }
@@ -200,10 +264,11 @@ class SnapshotRepository(private val context: Context) {
     private fun open(url: String, method: String = "GET"): HttpURLConnection =
         (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = method
-            connectTimeout = 15_000
-            readTimeout = 120_000
+            connectTimeout = 20_000
+            readTimeout = 180_000
             if (token.isNotEmpty()) setRequestProperty("X-TradeLab-Token", token)
             setRequestProperty("Accept", "application/json, application/gzip")
+            setRequestProperty("Accept-Encoding", "identity")
         }
 
     private fun sha256(file: File): String = file.inputStream().use { sha256(it) }
