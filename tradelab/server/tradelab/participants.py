@@ -1,5 +1,6 @@
 import json
 import time
+import uuid
 from dataclasses import dataclass
 from .db import connect
 
@@ -94,6 +95,60 @@ def seed(db_path) -> None:
                 VALUES (?, ?, ?, ?, 'SHADOW_ONLY')""",
                 (p.participant_id, p.spec_version, json.dumps(p.config, sort_keys=True), now),
             )
+
+
+def ensure_clean_research_epoch(db_path) -> dict:
+    """Create the first accountable tournament epoch exactly once.
+
+    Anything produced before 0.2.2 was infrastructure/preflight data and may
+    contain stale-horizon closes or labels across recorder gaps. Raw market data
+    is deliberately preserved; only tournament outputs are cleared once.
+    """
+    now = int(time.time() * 1000)
+    with connect(db_path) as conn:
+        existing = conn.execute("SELECT value FROM meta WHERE key='research_epoch_id'").fetchone()
+        if existing:
+            started = conn.execute("SELECT value FROM meta WHERE key='research_epoch_started_at_ms'").fetchone()
+            return {
+                "epoch_id": existing[0],
+                "started_at_ms": int(started[0]) if started else 0,
+                "created": False,
+            }
+
+        counts = {}
+        for table in ("paper_trades", "participant_events", "market_states", "forward_labels", "forward_label_quality"):
+            counts[table] = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+
+        # Child rows first because of foreign keys.
+        conn.execute("DELETE FROM forward_label_quality")
+        conn.execute("DELETE FROM forward_labels")
+        conn.execute("DELETE FROM market_states")
+        conn.execute("DELETE FROM participant_events")
+        conn.execute("DELETE FROM paper_trades")
+        conn.execute("UPDATE participants SET equity=starting_equity, rank=NULL, role='CANDIDATE'")
+
+        epoch = f"R1-{now}-{uuid.uuid4().hex[:8]}"
+        meta = [
+            ("research_epoch_id", epoch),
+            ("research_epoch_started_at_ms", str(now)),
+            ("research_epoch_mode", "CLEAN_SHADOW_V1"),
+            ("preflight_discarded_json", json.dumps(counts, sort_keys=True)),
+        ]
+        conn.executemany("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", meta)
+        return {"epoch_id": epoch, "started_at_ms": now, "created": True, "discarded": counts}
+
+
+def research_epoch(db_path) -> dict:
+    with connect(db_path) as conn:
+        rows = dict(conn.execute(
+            "SELECT key,value FROM meta WHERE key IN ('research_epoch_id','research_epoch_started_at_ms','research_epoch_mode','preflight_discarded_json')"
+        ).fetchall())
+    return {
+        "epoch_id": rows.get("research_epoch_id"),
+        "started_at_ms": int(rows.get("research_epoch_started_at_ms", 0) or 0),
+        "mode": rows.get("research_epoch_mode"),
+        "preflight_discarded": json.loads(rows.get("preflight_discarded_json", "{}")),
+    }
 
 
 def list_participants(db_path) -> list[dict]:
