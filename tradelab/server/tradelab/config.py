@@ -8,6 +8,9 @@ class Settings(BaseSettings):
     data_dir: Path = Path("./data")
     snapshot_keep: int = 15
     snapshot_interval_hours: int = 4
+    # Phone snapshots are analysis exports, not full copies of the 72h live recorder.
+    # Keep one 4h cycle plus overlap so their download size reaches a steady state.
+    snapshot_raw_hours: int = 6
     read_token: str = "change-me"
 
     market_enabled: bool = True
