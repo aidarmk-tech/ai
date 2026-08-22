@@ -9,6 +9,15 @@ from pathlib import Path
 from .db import connect
 
 
+RAW_TABLES = (
+    "market_samples",
+    "flow_samples",
+    "depth_samples",
+    "open_interest_samples",
+    "liquidations",
+)
+
+
 @dataclass(frozen=True)
 class Snapshot:
     snapshot_id: str
@@ -35,11 +44,53 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def create_snapshot(db_path: Path, snapshot_dir: Path, keep: int = 15) -> Snapshot:
+def _compact_analysis_copy(path: Path, created_ms: int, raw_hours: int) -> None:
+    """Trim only high-volume raw tables in the copied DB.
+
+    Cumulative participants, paper trades, signals/events, strategy specs,
+    market_states and forward_labels remain intact. The live recorder DB is never
+    modified here and continues to keep its longer raw retention window.
+    """
+    hours = max(1, int(raw_hours))
+    cutoff = created_ms - hours * 3600_000
+    with sqlite3.connect(path, timeout=30) as conn:
+        conn.execute("PRAGMA busy_timeout=30000")
+        existing = {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
+        for table in RAW_TABLES:
+            if table in existing:
+                conn.execute(f"DELETE FROM {table} WHERE ts_ms < ?", (cutoff,))
+        if "meta" in existing:
+            conn.executemany(
+                "INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)",
+                [
+                    ("snapshot_kind", "analysis"),
+                    ("snapshot_raw_hours", str(hours)),
+                    ("snapshot_cutoff_ms", str(cutoff)),
+                    ("snapshot_created_at_ms", str(created_ms)),
+                ],
+            )
+        conn.commit()
+        # DELETE does not return SQLite pages to the filesystem. VACUUM is done
+        # only on the disposable copied database so mobile downloads stay small.
+        conn.execute("VACUUM")
+        check = conn.execute("PRAGMA quick_check").fetchone()[0]
+        if check != "ok":
+            raise RuntimeError(f"analysis snapshot quick_check failed: {check}")
+
+
+def create_snapshot(
+    db_path: Path,
+    snapshot_dir: Path,
+    keep: int = 15,
+    raw_hours: int = 6,
+) -> Snapshot:
     snapshot_dir.mkdir(parents=True, exist_ok=True)
     created = int(time.time() * 1000)
     sid = uuid.uuid4().hex[:12]
-    base = f"tradelab-{created}-{sid}.sqlite3"
+    base = f"tradelab-analysis-{created}-{sid}.sqlite3"
     raw = snapshot_dir / base
     gz = snapshot_dir / f"{base}.gz"
 
@@ -51,6 +102,8 @@ def create_snapshot(db_path: Path, snapshot_dir: Path, keep: int = 15) -> Snapsh
     finally:
         target.close()
         source.close()
+
+    _compact_analysis_copy(raw, created, raw_hours)
 
     with raw.open("rb") as src, gzip.open(gz, "wb", compresslevel=6) as dst:
         shutil.copyfileobj(src, dst, length=1024 * 1024)
