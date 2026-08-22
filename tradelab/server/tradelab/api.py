@@ -71,7 +71,7 @@ async def lifespan(app: FastAPI):
             await task
 
 
-app = FastAPI(title="TradeLab", version="0.2.5", lifespan=lifespan)
+app = FastAPI(title="TradeLab", version="0.2.6", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -80,7 +80,7 @@ def health():
     epoch = research_epoch(settings.db_path)
     return {
         "ok": True,
-        "version": "0.2.5",
+        "version": "0.2.6",
         "live_trading": False,
         "market_enabled": market["enabled"],
         "last_market_event_ms": market["last_market_event_ms"],
