@@ -1,5 +1,6 @@
 package com.aidar.tradelab
 
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
@@ -11,7 +12,7 @@ object NotificationHelper {
     private const val CHANNEL = "snapshots"
     private const val DOWNLOAD_CHANNEL = "snapshot_download"
     private const val SUCCESS_ID = 4101
-    private const val FOREGROUND_ID = 4102
+    const val FOREGROUND_ID = 4102
 
     private fun ensureChannels(context: Context) {
         if (Build.VERSION.SDK_INT < 26) return
@@ -24,17 +25,20 @@ object NotificationHelper {
         )
     }
 
-    fun downloading(context: Context, text: String = "Preparing snapshot…"): ForegroundInfo {
+    fun downloadNotification(context: Context, text: String = "Preparing snapshot…"): Notification {
         ensureChannels(context)
-        val notification = android.app.Notification.Builder(context, DOWNLOAD_CHANNEL)
+        return android.app.Notification.Builder(context, DOWNLOAD_CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("TradeLab: downloading snapshot")
+            .setContentTitle("TradeLab: snapshot")
             .setContentText(text)
             .setProgress(0, 0, true)
             .setOngoing(true)
             .build()
+    }
+
+    fun downloading(context: Context, text: String = "Preparing snapshot…"): ForegroundInfo {
         val type = if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0
-        return ForegroundInfo(FOREGROUND_ID, notification, type)
+        return ForegroundInfo(FOREGROUND_ID, downloadNotification(context, text), type)
     }
 
     fun success(context: Context, filename: String, bytes: Long, count: Int = 1) {
