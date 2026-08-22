@@ -36,6 +36,11 @@ class SnapshotWorker(context: Context, params: WorkerParameters) : CoroutineWork
             var lastFileName = ""
             var lastFileSize = 0L
             for (manifest in manifests) {
+                prefs.edit()
+                    .putString("downloading_file", manifest.filename)
+                    .putLong("download_total", manifest.bytes)
+                    .apply()
+
                 if (forceCreate) {
                     setForeground(
                         NotificationHelper.downloading(
@@ -44,7 +49,17 @@ class SnapshotWorker(context: Context, params: WorkerParameters) : CoroutineWork
                         )
                     )
                 }
-                val saved = repo.download(manifest)
+
+                var lastPersisted = -1L
+                val saved = repo.download(manifest) { downloaded, total ->
+                    if (lastPersisted < 0L || downloaded == total || downloaded - lastPersisted >= 1024 * 1024) {
+                        prefs.edit()
+                            .putLong("download_done", downloaded)
+                            .putLong("download_total", total)
+                            .apply()
+                        lastPersisted = downloaded
+                    }
+                }
                 lastFileName = saved.filename
                 lastFileSize = saved.bytes
                 prefs.edit()
@@ -54,6 +69,9 @@ class SnapshotWorker(context: Context, params: WorkerParameters) : CoroutineWork
                     .putLong("last_at_ms", System.currentTimeMillis())
                     .putLong("last_size", saved.bytes)
                     .remove("last_error")
+                    .remove("downloading_file")
+                    .remove("download_done")
+                    .remove("download_total")
                     .apply()
             }
             NotificationHelper.success(applicationContext, lastFileName, lastFileSize, manifests.size)
