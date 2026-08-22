@@ -25,7 +25,8 @@ rm -rf /opt/tradelab/server
 mv /opt/tradelab/server.new /opt/tradelab/server
 chown -R tradelab:tradelab /opt/tradelab/server /var/lib/tradelab
 
-# Keep the existing read token and TLS configuration. Add only missing 0.2 settings.
+# Keep the existing read token and TLS configuration. Add only missing settings.
+grep -q '^TRADELAB_SNAPSHOT_RAW_HOURS=' /etc/tradelab.env || echo 'TRADELAB_SNAPSHOT_RAW_HOURS=6' >>/etc/tradelab.env
 grep -q '^TRADELAB_MARKET_ENABLED=' /etc/tradelab.env || cat >>/etc/tradelab.env <<'EOF'
 TRADELAB_MARKET_ENABLED=true
 TRADELAB_UNIVERSE_SIZE=40
