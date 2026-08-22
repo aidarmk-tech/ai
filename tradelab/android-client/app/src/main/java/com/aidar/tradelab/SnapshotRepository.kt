@@ -37,24 +37,48 @@ class SnapshotRepository(private val context: Context) {
     private val publicLocation = "Download/TradeLab"
     private val relativePath = Environment.DIRECTORY_DOWNLOADS + "/TradeLab/"
 
-    fun latest(): SnapshotManifest = readManifest(open("$base/api/v1/snapshots/latest"))
+    fun latest(): SnapshotManifest {
+        val c = open("$base/api/v1/snapshots/latest")
+        return try { readManifest(c) } finally { c.disconnect() }
+    }
 
     fun since(afterMs: Long): List<SnapshotManifest> {
         val c = open("$base/api/v1/snapshots?after_ms=${afterMs.coerceAtLeast(0)}")
-        val code = c.responseCode
-        if (code !in 200..299) error("snapshot list HTTP $code")
-        val text = c.inputStream.bufferedReader().use { it.readText() }
-        val array = JSONObject(text).getJSONArray("snapshots")
-        return buildList {
-            for (i in 0 until array.length()) add(parseManifest(array.getJSONObject(i)))
+        return try {
+            val code = c.responseCode
+            if (code !in 200..299) error("snapshot list HTTP $code")
+            val text = c.inputStream.bufferedReader().use { it.readText() }
+            val array = JSONObject(text).getJSONArray("snapshots")
+            buildList {
+                for (i in 0 until array.length()) add(parseManifest(array.getJSONObject(i)))
+            }
+        } finally {
+            c.disconnect()
         }
     }
 
     fun createFresh(): SnapshotManifest {
         val c = open("$base/api/v1/snapshots/create", "POST")
-        c.doOutput = true
-        c.outputStream.use { }
-        return readManifest(c, fallbackDownloadUrl = true)
+        return try {
+            c.doOutput = true
+            c.outputStream.use { }
+            readManifest(c, fallbackDownloadUrl = true)
+        } finally {
+            c.disconnect()
+        }
+    }
+
+    fun createFull(): SnapshotManifest {
+        // A 72-hour retained DB can be hundreds of MB and takes longer to
+        // prepare than the routine compact export. The request is manual only.
+        val c = open("$base/api/v1/snapshots/full/create", "POST", readTimeoutMs = 900_000)
+        return try {
+            c.doOutput = true
+            c.outputStream.use { }
+            readManifest(c, fallbackDownloadUrl = true)
+        } finally {
+            c.disconnect()
+        }
     }
 
     private fun readManifest(c: HttpURLConnection, fallbackDownloadUrl: Boolean = false): SnapshotManifest {
@@ -84,8 +108,6 @@ class SnapshotRepository(private val context: Context) {
     ): SavedSnapshot {
         findVerifiedExisting(manifest)?.let { return it }
 
-        // Keep partial bytes in persistent app storage. If Android kills the worker,
-        // the next WorkManager attempt continues this exact file using HTTP Range.
         val tempDir = File(context.getExternalFilesDir(null), "snapshot-parts").apply { mkdirs() }
         val part = File(tempDir, manifest.filename + ".part")
         if (part.length() > manifest.bytes) part.delete()
@@ -96,48 +118,52 @@ class SnapshotRepository(private val context: Context) {
         }
 
         var offset = if (part.exists()) part.length() else 0L
-        val c = open(base + manifest.downloadUrl).apply {
+        val c = open(base + manifest.downloadUrl, readTimeoutMs = 900_000).apply {
             if (offset > 0L) setRequestProperty("Range", "bytes=$offset-")
         }
-        val code = c.responseCode
 
-        val append = when {
-            offset > 0L && code == HttpURLConnection.HTTP_PARTIAL -> {
-                val range = c.getHeaderField("Content-Range").orEmpty()
-                require(range.startsWith("bytes $offset-")) { "unexpected Content-Range: $range" }
-                true
-            }
-            code in 200..299 -> {
-                // Server/proxy ignored Range. Restart this one attempt safely.
-                if (offset > 0L) {
+        var append = false
+        try {
+            val code = c.responseCode
+            append = when {
+                offset > 0L && code == HttpURLConnection.HTTP_PARTIAL -> {
+                    val range = c.getHeaderField("Content-Range").orEmpty()
+                    require(range.startsWith("bytes $offset-")) { "unexpected Content-Range: $range" }
+                    true
+                }
+                code in 200..299 -> {
+                    if (offset > 0L) {
+                        part.delete()
+                        offset = 0L
+                    }
+                    false
+                }
+                code == 416 && offset == manifest.bytes -> {
+                    if (sha256(part) == manifest.sha256) return finishPart(part, manifest)
                     part.delete()
-                    offset = 0L
+                    error("range complete but SHA-256 mismatch")
                 }
-                false
+                else -> error("download HTTP $code")
             }
-            code == 416 && offset == manifest.bytes -> {
-                if (sha256(part) == manifest.sha256) return finishPart(part, manifest)
-                part.delete()
-                error("range complete but SHA-256 mismatch")
-            }
-            else -> error("download HTTP $code")
-        }
 
-        onProgress(offset, manifest.bytes)
-        FileOutputStream(part, append).use { out ->
-            c.inputStream.use { input ->
-                val buf = ByteArray(256 * 1024)
-                var downloaded = offset
-                while (true) {
-                    val n = input.read(buf)
-                    if (n <= 0) break
-                    out.write(buf, 0, n)
-                    downloaded += n
-                    require(downloaded <= manifest.bytes) { "download exceeds manifest size" }
-                    onProgress(downloaded, manifest.bytes)
+            onProgress(offset, manifest.bytes)
+            FileOutputStream(part, append).use { out ->
+                c.inputStream.use { input ->
+                    val buf = ByteArray(256 * 1024)
+                    var downloaded = offset
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n <= 0) break
+                        out.write(buf, 0, n)
+                        downloaded += n
+                        require(downloaded <= manifest.bytes) { "download exceeds manifest size" }
+                        onProgress(downloaded, manifest.bytes)
+                    }
+                    out.fd.sync()
                 }
-                out.fd.sync()
             }
+        } finally {
+            c.disconnect()
         }
 
         require(part.length() == manifest.bytes) {
@@ -261,11 +287,15 @@ class SnapshotRepository(private val context: Context) {
             ?.forEach { it.delete() }
     }
 
-    private fun open(url: String, method: String = "GET"): HttpURLConnection =
+    private fun open(
+        url: String,
+        method: String = "GET",
+        readTimeoutMs: Int = 180_000,
+    ): HttpURLConnection =
         (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = 20_000
-            readTimeout = 180_000
+            readTimeout = readTimeoutMs
             if (token.isNotEmpty()) setRequestProperty("X-TradeLab-Token", token)
             setRequestProperty("Accept", "application/json, application/gzip")
             setRequestProperty("Accept-Encoding", "identity")
