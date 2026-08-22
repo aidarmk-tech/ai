@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from .config import settings
 from .db import initialize
 from .participants import list_participants, seed
-from .snapshots import create_snapshot, latest_snapshot
+from .snapshots import create_snapshot, get_snapshot, latest_snapshot
 
 
 def require_token(x_tradelab_token: str | None) -> None:
@@ -73,8 +73,8 @@ def latest(x_tradelab_token: str | None = Header(default=None)):
 @app.get("/api/v1/snapshots/{snapshot_id}/download")
 def download(snapshot_id: str, x_tradelab_token: str | None = Header(default=None)):
     require_token(x_tradelab_token)
-    snap = latest_snapshot(settings.db_path)
-    if snap is None or snap.snapshot_id != snapshot_id:
+    snap = get_snapshot(settings.db_path, snapshot_id)
+    if snap is None:
         raise HTTPException(status_code=404, detail="snapshot not found")
     path = settings.snapshot_dir / snap.filename
     if not path.exists():
