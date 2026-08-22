@@ -29,15 +29,15 @@ class SnapshotWorker(context: Context, params: WorkerParameters) : CoroutineWork
             var lastFileName = ""
             var lastFileSize = 0L
             for (manifest in manifests) {
-                val file = repo.download(manifest)
-                lastFileName = file.name
-                lastFileSize = file.length()
+                val saved = repo.download(manifest)
+                lastFileName = saved.filename
+                lastFileSize = saved.bytes
                 prefs.edit()
-                    .putString("last_file", file.name)
+                    .putString("last_file", saved.filename)
                     .putString("last_snapshot_id", manifest.id)
                     .putLong("last_snapshot_created_ms", manifest.createdAtMs)
                     .putLong("last_at_ms", System.currentTimeMillis())
-                    .putLong("last_size", file.length())
+                    .putLong("last_size", saved.bytes)
                     .apply()
             }
             NotificationHelper.success(applicationContext, lastFileName, lastFileSize, manifests.size)
