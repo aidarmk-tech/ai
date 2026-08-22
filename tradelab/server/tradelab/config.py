@@ -1,4 +1,5 @@
 from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,6 +10,7 @@ class Settings(BaseSettings):
     snapshot_keep: int = 15
     snapshot_interval_hours: int = 4
     snapshot_raw_hours: int = 6
+    full_snapshot_keep: int = 1
     read_token: str = "change-me"
 
     market_enabled: bool = True
