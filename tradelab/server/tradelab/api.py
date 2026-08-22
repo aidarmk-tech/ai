@@ -3,13 +3,14 @@ from contextlib import asynccontextmanager, suppress
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from .config import settings
-from .db import initialize
-from .market import MarketRecorder, participant_stats, recorder_gaps, recorder_health
+from .db import connect, initialize
+from .market import participant_stats, recorder_gaps, recorder_health
+from .market_runtime import StableMarketRecorder
 from .participants import ensure_clean_research_epoch, list_participants, research_epoch, seed
 from .snapshots import create_snapshot, get_snapshot, latest_snapshot, list_snapshots
 
 
-market_recorder = MarketRecorder(settings)
+market_recorder = StableMarketRecorder(settings)
 
 
 def require_token(x_tradelab_token: str | None) -> None:
@@ -43,6 +44,11 @@ async def lifespan(app: FastAPI):
     initialize(settings.db_path)
     seed(settings.db_path)
     ensure_clean_research_epoch(settings.db_path)
+    # recorder_health is an ephemeral status table, not research evidence.
+    # Removing stale rows prevents a previous process shutdown from reporting
+    # DEGRADED during the new process warm-up.
+    with connect(settings.db_path) as conn:
+        conn.execute("DELETE FROM recorder_health")
     stop = asyncio.Event()
     tasks = [
         asyncio.create_task(snapshot_loop(stop)),
@@ -57,7 +63,7 @@ async def lifespan(app: FastAPI):
             await task
 
 
-app = FastAPI(title="TradeLab", version="0.2.2", lifespan=lifespan)
+app = FastAPI(title="TradeLab", version="0.2.3", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -66,7 +72,7 @@ def health():
     epoch = research_epoch(settings.db_path)
     return {
         "ok": True,
-        "version": "0.2.2",
+        "version": "0.2.3",
         "live_trading": False,
         "market_enabled": market["enabled"],
         "last_market_event_ms": market["last_market_event_ms"],
@@ -75,6 +81,7 @@ def health():
         "snapshot_raw_hours": settings.snapshot_raw_hours,
         "research_epoch_id": epoch["epoch_id"],
         "research_epoch_started_at_ms": epoch["started_at_ms"],
+        "research_epoch_mode": epoch["mode"],
         "strict_continuity": True,
     }
 
