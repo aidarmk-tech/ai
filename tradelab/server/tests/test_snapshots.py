@@ -20,7 +20,16 @@ def test_snapshot_is_valid_and_hashed(tmp_path):
     raw.write_bytes(gzip.decompress(gz.read_bytes()))
     with sqlite3.connect(raw) as conn:
         assert conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
-    assert len(list_participants(db)) == 4
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        for required in (
+            "market_samples", "flow_samples", "depth_samples", "open_interest_samples",
+            "liquidations", "paper_trades", "participant_specs", "recorder_health",
+        ):
+            assert required in tables
+    participants = list_participants(db)
+    assert len(participants) == 4
+    assert all(p["active_effect"] == "SHADOW_ONLY" for p in participants)
+    assert all(p["role"] == "CANDIDATE" for p in participants)
 
 
 def test_snapshot_catchup_and_retention(tmp_path):
