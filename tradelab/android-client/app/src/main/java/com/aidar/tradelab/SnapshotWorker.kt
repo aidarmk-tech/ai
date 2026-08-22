@@ -8,6 +8,11 @@ import kotlinx.coroutines.withContext
 
 class SnapshotWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        val connection = applicationContext.getSharedPreferences("connection", Context.MODE_PRIVATE)
+        if (connection.getString("read_token", "").isNullOrBlank()) {
+            return@withContext Result.success()
+        }
+
         try {
             val repo = SnapshotRepository(applicationContext)
             val prefs = applicationContext.getSharedPreferences("snapshots", Context.MODE_PRIVATE)
