@@ -27,24 +27,25 @@ chown -R tradelab:tradelab /opt/tradelab/server /var/lib/tradelab
 
 # Keep the existing read token and TLS configuration. Add only missing settings.
 grep -q '^TRADELAB_SNAPSHOT_RAW_HOURS=' /etc/tradelab.env || echo 'TRADELAB_SNAPSHOT_RAW_HOURS=6' >>/etc/tradelab.env
-grep -q '^TRADELAB_MARKET_ENABLED=' /etc/tradelab.env || cat >>/etc/tradelab.env <<'EOF'
-TRADELAB_MARKET_ENABLED=true
-TRADELAB_UNIVERSE_SIZE=40
-TRADELAB_MICROSTRUCTURE_SIZE=12
-TRADELAB_MARKET_SAMPLE_SECONDS=5
-TRADELAB_RAW_RETENTION_HOURS=72
-TRADELAB_SUBSCRIPTION_REFRESH_SECONDS=300
-TRADELAB_OI_INTERVAL_SECONDS=60
-TRADELAB_PAPER_FEE_BPS_PER_SIDE=5
-TRADELAB_PAPER_SLIPPAGE_BPS_PER_SIDE=2
-TRADELAB_PAPER_MAX_OPEN=2
-TRADELAB_PAPER_STARTING_NOTIONAL_USDT=10
-EOF
+grep -q '^TRADELAB_MARKET_ENABLED=' /etc/tradelab.env || echo 'TRADELAB_MARKET_ENABLED=true' >>/etc/tradelab.env
+grep -q '^TRADELAB_UNIVERSE_SIZE=' /etc/tradelab.env || echo 'TRADELAB_UNIVERSE_SIZE=40' >>/etc/tradelab.env
+grep -q '^TRADELAB_MICROSTRUCTURE_SIZE=' /etc/tradelab.env || echo 'TRADELAB_MICROSTRUCTURE_SIZE=12' >>/etc/tradelab.env
+grep -q '^TRADELAB_MARKET_SAMPLE_SECONDS=' /etc/tradelab.env || echo 'TRADELAB_MARKET_SAMPLE_SECONDS=5' >>/etc/tradelab.env
+grep -q '^TRADELAB_RAW_RETENTION_HOURS=' /etc/tradelab.env || echo 'TRADELAB_RAW_RETENTION_HOURS=72' >>/etc/tradelab.env
+grep -q '^TRADELAB_SUBSCRIPTION_REFRESH_SECONDS=' /etc/tradelab.env || echo 'TRADELAB_SUBSCRIPTION_REFRESH_SECONDS=300' >>/etc/tradelab.env
+grep -q '^TRADELAB_OI_INTERVAL_SECONDS=' /etc/tradelab.env || echo 'TRADELAB_OI_INTERVAL_SECONDS=60' >>/etc/tradelab.env
+grep -q '^TRADELAB_MAX_SAMPLE_GAP_SECONDS=' /etc/tradelab.env || echo 'TRADELAB_MAX_SAMPLE_GAP_SECONDS=12' >>/etc/tradelab.env
+grep -q '^TRADELAB_PAPER_EXIT_GRACE_SECONDS=' /etc/tradelab.env || echo 'TRADELAB_PAPER_EXIT_GRACE_SECONDS=15' >>/etc/tradelab.env
+grep -q '^TRADELAB_LABEL_GRACE_SECONDS=' /etc/tradelab.env || echo 'TRADELAB_LABEL_GRACE_SECONDS=10' >>/etc/tradelab.env
+grep -q '^TRADELAB_PAPER_FEE_BPS_PER_SIDE=' /etc/tradelab.env || echo 'TRADELAB_PAPER_FEE_BPS_PER_SIDE=5' >>/etc/tradelab.env
+grep -q '^TRADELAB_PAPER_SLIPPAGE_BPS_PER_SIDE=' /etc/tradelab.env || echo 'TRADELAB_PAPER_SLIPPAGE_BPS_PER_SIDE=2' >>/etc/tradelab.env
+grep -q '^TRADELAB_PAPER_MAX_OPEN=' /etc/tradelab.env || echo 'TRADELAB_PAPER_MAX_OPEN=2' >>/etc/tradelab.env
+grep -q '^TRADELAB_PAPER_STARTING_NOTIONAL_USDT=' /etc/tradelab.env || echo 'TRADELAB_PAPER_STARTING_NOTIONAL_USDT=10' >>/etc/tradelab.env
 chmod 600 /etc/tradelab.env
 
 systemctl daemon-reload
 systemctl start tradelab
-sleep 3
+sleep 4
 curl -fsS http://127.0.0.1:8000/health
 echo
 systemctl --no-pager --full status tradelab | sed -n '1,14p'
