@@ -1,13 +1,22 @@
 import asyncio
+import time
 from contextlib import asynccontextmanager, suppress
+
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
+
 from .config import settings
 from .db import connect, initialize
 from .market import participant_stats, recorder_gaps, recorder_health
 from .market_runtime import StableMarketRecorder
 from .participants import ensure_clean_research_epoch, list_participants, research_epoch, seed
-from .snapshots import create_snapshot, get_snapshot, latest_snapshot, list_snapshots
+from .snapshots import (
+    create_full_snapshot,
+    create_snapshot,
+    get_snapshot,
+    latest_snapshot,
+    list_snapshots,
+)
 from .watchdog import EventLoopWatchdog
 
 
@@ -29,15 +38,51 @@ def build_snapshot():
     )
 
 
+def build_full_snapshot():
+    return create_full_snapshot(
+        settings.db_path,
+        settings.snapshot_dir,
+        settings.full_snapshot_keep,
+        settings.raw_retention_hours,
+    )
+
+
 async def snapshot_loop(stop: asyncio.Event) -> None:
-    interval = max(1, settings.snapshot_interval_hours) * 3600
+    """Keep routine snapshots on a true four-hour wall-clock cadence.
+
+    Older versions waited a fresh four hours after every process restart even
+    when the latest snapshot was already several hours old. That could create a
+    >6h hole between compact snapshots. The loop now schedules from the latest
+    snapshot timestamp, so service restarts cannot stretch the archive cadence.
+    """
+    interval_ms = max(1, settings.snapshot_interval_hours) * 3600_000
     while not stop.is_set():
         try:
-            if latest_snapshot(settings.db_path) is None:
-                await asyncio.to_thread(build_snapshot)
-            await asyncio.wait_for(stop.wait(), timeout=interval)
+            snap = latest_snapshot(settings.db_path)
+            now = int(time.time() * 1000)
+            if snap is None or now - snap.created_at_ms >= interval_ms:
+                snap = await asyncio.to_thread(build_snapshot)
+                market_recorder._health(
+                    "snapshot_loop",
+                    "OK",
+                    f"created={snap.filename} bytes={snap.bytes}",
+                    snap.created_at_ms,
+                )
+                now = int(time.time() * 1000)
+
+            due_ms = snap.created_at_ms + interval_ms
+            wait_seconds = max(1.0, (due_ms - now) / 1000.0)
+            await asyncio.wait_for(stop.wait(), timeout=wait_seconds)
         except TimeoutError:
-            await asyncio.to_thread(build_snapshot)
+            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            market_recorder._health("snapshot_loop", "DEGRADED", repr(exc))
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=60)
+            except TimeoutError:
+                pass
 
 
 @asynccontextmanager
@@ -47,8 +92,6 @@ async def lifespan(app: FastAPI):
     seed(settings.db_path)
     ensure_clean_research_epoch(settings.db_path)
     # recorder_health is an ephemeral status table, not research evidence.
-    # Removing stale rows prevents a previous process shutdown from reporting
-    # DEGRADED during the new process warm-up.
     with connect(settings.db_path) as conn:
         conn.execute("DELETE FROM recorder_health")
     stop = asyncio.Event()
@@ -60,9 +103,6 @@ async def lifespan(app: FastAPI):
     ]
     yield
     stop.set()
-    # Disarm the native watchdog before normal graceful shutdown. A real stall
-    # never reaches this point, so its thread will persist the stack trace and
-    # exit non-zero for systemd recovery.
     event_loop_watchdog.stop()
     for task in tasks:
         task.cancel()
@@ -71,7 +111,7 @@ async def lifespan(app: FastAPI):
             await task
 
 
-app = FastAPI(title="TradeLab", version="0.2.6", lifespan=lifespan)
+app = FastAPI(title="TradeLab", version="0.2.7", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -80,13 +120,15 @@ def health():
     epoch = research_epoch(settings.db_path)
     return {
         "ok": True,
-        "version": "0.2.6",
+        "version": "0.2.7",
         "live_trading": False,
         "market_enabled": market["enabled"],
         "last_market_event_ms": market["last_market_event_ms"],
         "last_sample_ms": market["last_sample_ms"],
         "snapshot_kind": "analysis",
         "snapshot_raw_hours": settings.snapshot_raw_hours,
+        "full_snapshot_raw_hours": settings.raw_retention_hours,
+        "snapshot_interval_hours": settings.snapshot_interval_hours,
         "research_epoch_id": epoch["epoch_id"],
         "research_epoch_started_at_ms": epoch["started_at_ms"],
         "research_epoch_mode": epoch["mode"],
@@ -127,6 +169,16 @@ def make_snapshot(x_tradelab_token: str | None = Header(default=None)):
     require_token(x_tradelab_token)
     snap = build_snapshot()
     return snap.as_dict()
+
+
+@app.post("/api/v1/snapshots/full/create")
+def make_full_snapshot(x_tradelab_token: str | None = Header(default=None)):
+    """On-demand complete export of every row still retained by the VPS DB."""
+    require_token(x_tradelab_token)
+    snap = build_full_snapshot()
+    data = snap.as_dict()
+    data["download_url"] = f"/api/v1/snapshots/{snap.snapshot_id}/download"
+    return data
 
 
 @app.get("/api/v1/snapshots")
