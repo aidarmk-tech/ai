@@ -12,6 +12,7 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import androidx.work.workDataOf
 import java.util.concurrent.TimeUnit
 
 class MainActivity : Activity() {
@@ -23,16 +24,22 @@ class MainActivity : Activity() {
 
         status = TextView(this)
         val button = Button(this).apply {
-            text = "Download snapshot now"
+            text = "Download fresh snapshot now"
             setOnClickListener {
-                WorkManager.getInstance(this@MainActivity).enqueue(OneTimeWorkRequestBuilder<SnapshotWorker>().build())
-                status.text = "Manual snapshot download queued…"
+                val request = OneTimeWorkRequestBuilder<SnapshotWorker>()
+                    .setInputData(workDataOf(SnapshotWorker.KEY_FORCE_CREATE to true))
+                    .build()
+                WorkManager.getInstance(this@MainActivity).enqueue(request)
+                status.text = "Creating and downloading a fresh snapshot…"
             }
         }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(40, 80, 40, 40)
-            addView(TextView(this@MainActivity).apply { text = "TradeLab 0.1\n4 participants · CHAMPION + RESERVE"; textSize = 22f })
+            addView(TextView(this@MainActivity).apply {
+                text = "TradeLab 0.1\n4 participants · CHAMPION + RESERVE"
+                textSize = 22f
+            })
             addView(status)
             addView(button)
         }
@@ -62,11 +69,12 @@ class MainActivity : Activity() {
         val p = getSharedPreferences("snapshots", MODE_PRIVATE)
         val file = p.getString("last_file", null)
         val at = p.getLong("last_at_ms", 0)
+        val created = p.getLong("last_snapshot_created_ms", 0)
         val size = p.getLong("last_size", 0)
         status.text = if (file == null) {
             "No downloaded snapshot yet. Automatic interval: 4h."
         } else {
-            "Last snapshot: $file\nDownloaded: ${java.util.Date(at)}\nSize: %.1f MB\nStatus: SHA-256 OK".format(size / 1024.0 / 1024.0)
+            "Last snapshot: $file\nServer snapshot: ${java.util.Date(created)}\nDownloaded: ${java.util.Date(at)}\nSize: %.1f MB\nStatus: SHA-256 OK".format(size / 1024.0 / 1024.0)
         }
     }
 }
