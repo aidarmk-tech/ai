@@ -47,15 +47,14 @@ class MainActivity : Activity() {
         val saveButton = Button(this).apply {
             text = "Save connection"
             setOnClickListener {
-                saveConnection()
-                status.text = "Connection settings saved."
+                if (saveConnection()) status.text = "Connection settings saved."
             }
         }
 
         val button = Button(this).apply {
             text = "Download fresh snapshot now"
             setOnClickListener {
-                saveConnection()
+                if (!saveConnection()) return@setOnClickListener
                 val request = OneTimeWorkRequestBuilder<SnapshotWorker>()
                     .setInputData(workDataOf(SnapshotWorker.KEY_FORCE_CREATE to true))
                     .build()
@@ -87,13 +86,22 @@ class MainActivity : Activity() {
         refreshStatus()
     }
 
-    private fun saveConnection() {
+    private fun saveConnection(): Boolean {
         val url = serverUrl.text.toString().trim().trimEnd('/')
-        require(url.startsWith("https://")) { "HTTPS server URL is required" }
+        val token = readToken.text.toString().trim()
+        if (!url.startsWith("https://")) {
+            status.text = "HTTPS server URL is required."
+            return false
+        }
+        if (token.isBlank()) {
+            status.text = "Enter the Android read token printed by the VPS bootstrap."
+            return false
+        }
         getSharedPreferences("connection", MODE_PRIVATE).edit()
             .putString("server_url", url)
-            .putString("read_token", readToken.text.toString().trim())
+            .putString("read_token", token)
             .apply()
+        return true
     }
 
     private fun scheduleSnapshots() {
