@@ -10,6 +10,18 @@ class Settings(BaseSettings):
     snapshot_interval_hours: int = 4
     read_token: str = "change-me"
 
+    market_enabled: bool = True
+    universe_size: int = 40
+    microstructure_size: int = 12
+    market_sample_seconds: int = 5
+    raw_retention_hours: int = 72
+    subscription_refresh_seconds: int = 300
+    oi_interval_seconds: int = 60
+    paper_fee_bps_per_side: float = 5.0
+    paper_slippage_bps_per_side: float = 2.0
+    paper_max_open: int = 2
+    paper_starting_notional_usdt: float = 10.0
+
     @property
     def db_path(self) -> Path:
         return self.data_dir / "tradelab.sqlite3"
