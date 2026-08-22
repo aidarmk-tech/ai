@@ -67,7 +67,8 @@ def _prepare_snapshot_copy(
     tables. Full exports deliberately skip VACUUM because compacting a multi-GB
     72-hour DB would double I/O for no analytical benefit.
     """
-    with sqlite3.connect(path, timeout=30) as conn:
+    conn = sqlite3.connect(path, timeout=30)
+    try:
         conn.execute("PRAGMA busy_timeout=30000")
         conn.execute("PRAGMA journal_mode=DELETE")
         existing = {
@@ -103,6 +104,8 @@ def _prepare_snapshot_copy(
         check = conn.execute("PRAGMA quick_check").fetchone()[0]
         if check != "ok":
             raise RuntimeError(f"{kind} snapshot quick_check failed: {check}")
+    finally:
+        conn.close()
 
 
 def _create_snapshot(
@@ -214,7 +217,7 @@ def list_snapshots(db_path: Path, after_ms: int = 0) -> list[Snapshot]:
             """SELECT snapshot_id, created_at_ms, filename, bytes, sha256
                FROM snapshots WHERE created_at_ms > ? AND filename LIKE ?
                ORDER BY created_at_ms ASC LIMIT 15""",
-            (max(0, after_ms), ANALYSIS_PREFIX + "%"),
+            (max(0, after_ms), ANALYSIS_PREFIX + "%",),
         ).fetchall()
     return [Snapshot(**dict(row)) for row in rows]
 
