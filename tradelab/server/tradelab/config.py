@@ -8,8 +8,6 @@ class Settings(BaseSettings):
     data_dir: Path = Path("./data")
     snapshot_keep: int = 15
     snapshot_interval_hours: int = 4
-    # Phone snapshots are analysis exports, not full copies of the 72h live recorder.
-    # Keep one 4h cycle plus overlap so their download size reaches a steady state.
     snapshot_raw_hours: int = 6
     read_token: str = "change-me"
 
@@ -20,6 +18,10 @@ class Settings(BaseSettings):
     raw_retention_hours: int = 72
     subscription_refresh_seconds: int = 300
     oi_interval_seconds: int = 60
+    max_sample_gap_seconds: int = 12
+    paper_exit_grace_seconds: int = 15
+    label_grace_seconds: int = 10
+
     paper_fee_bps_per_side: float = 5.0
     paper_slippage_bps_per_side: float = 2.0
     paper_max_open: int = 2
