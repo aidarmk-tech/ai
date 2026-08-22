@@ -2,6 +2,7 @@ package com.aidar.tradelab
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -26,6 +27,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var readToken: EditText
     private lateinit var latestButton: Button
     private lateinit var freshButton: Button
+    private lateinit var fullButton: Button
     private lateinit var cancelButton: Button
     private val uiHandler = Handler(Looper.getMainLooper())
     private val refreshRunnable = object : Runnable {
@@ -39,6 +41,11 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         if (android.os.Build.VERSION.SDK_INT >= 33) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 100)
+        }
+        if (android.os.Build.VERSION.SDK_INT <= 28 &&
+            checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), 101)
         }
 
         val connection = getSharedPreferences("connection", MODE_PRIVATE)
@@ -73,10 +80,18 @@ class MainActivity : ComponentActivity() {
         }
 
         freshButton = Button(this).apply {
-            text = "Создать свежий и скачать"
+            text = "Создать свежий 6ч и скачать"
             setOnClickListener {
                 if (!saveConnection()) return@setOnClickListener
                 startManual(SnapshotWorker.MODE_FRESH)
+            }
+        }
+
+        fullButton = Button(this).apply {
+            text = "Полная исследовательская база 72ч"
+            setOnClickListener {
+                if (!saveConnection()) return@setOnClickListener
+                startManual(SnapshotWorker.MODE_FULL)
             }
         }
 
@@ -95,7 +110,7 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(40, 70, 40, 40)
             addView(TextView(this@MainActivity).apply {
-                text = "TradeLab client 0.2.4\nA/B/C/D shadow tournament"
+                text = "TradeLab client 0.2.5\nA/B/C/D shadow tournament"
                 textSize = 22f
             })
             addView(serverUrl)
@@ -107,11 +122,11 @@ class MainActivity : ComponentActivity() {
             addView(status)
             addView(latestButton)
             addView(freshButton)
+            addView(fullButton)
             addView(cancelButton)
         }
         setContentView(root)
 
-        // Kill any stale manual WorkManager chain left by clients <=0.2.3.
         WorkManager.getInstance(this).cancelUniqueWork(LEGACY_MANUAL_WORK)
         scheduleSnapshots()
         renderStatus()
@@ -189,6 +204,7 @@ class MainActivity : ComponentActivity() {
 
         latestButton.isEnabled = !active
         freshButton.isEnabled = !active
+        fullButton.isEnabled = !active
         cancelButton.isEnabled = active
 
         if (active) {
@@ -234,15 +250,17 @@ class MainActivity : ComponentActivity() {
                 append("\nSHA-256: OK")
                 append("\nПапка: Download/TradeLab")
             }
-            append("\n\n«Скачать последний готовый» — без создания новой БД.")
-            append("\n«Создать свежий и скачать» — сначала создаёт snapshot на VPS.")
+            append("\n\nПоследний готовый — без создания новой БД.")
+            append("\nСвежий 6ч — обычный компактный файл для регулярного анализа.")
+            append("\nПолная 72ч — ручной глубокий экспорт всей raw-истории, которую ещё хранит VPS.")
         }
     }
 
     private fun stageText(stage: String?): String = when (stage) {
         ManualSnapshotService.STAGE_STARTING -> "Стартует foreground service"
         ManualSnapshotService.STAGE_CHECKING -> "Проверяю последний готовый snapshot"
-        ManualSnapshotService.STAGE_CREATING -> "Сервер создаёт свежий snapshot"
+        ManualSnapshotService.STAGE_CREATING -> "Сервер создаёт свежий 6ч snapshot"
+        ManualSnapshotService.STAGE_CREATING_FULL -> "Сервер создаёт полную 72ч базу"
         ManualSnapshotService.STAGE_DOWNLOADING -> "Скачивание"
         ManualSnapshotService.STAGE_VERIFYING -> "Проверка SHA-256"
         ManualSnapshotService.STAGE_SAVED -> "Сохранено"
