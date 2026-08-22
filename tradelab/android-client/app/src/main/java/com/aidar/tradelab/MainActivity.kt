@@ -224,7 +224,8 @@ class MainActivity : ComponentActivity() {
 
         val file = p.getString("last_file", null)
         val at = p.getLong("last_at_ms", 0)
-        val created = p.getLong("last_snapshot_created_ms", 0)
+        val compactCursor = p.getLong("last_snapshot_created_ms", 0)
+        val created = p.getLong("last_file_created_ms", compactCursor)
         val size = p.getLong("last_size", 0)
         val lastError = manualError ?: p.getString("last_error", null)
 
