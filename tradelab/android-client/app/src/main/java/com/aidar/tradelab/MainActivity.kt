@@ -27,6 +27,9 @@ class MainActivity : Activity() {
         if (android.os.Build.VERSION.SDK_INT >= 33) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 100)
         }
+        if (android.os.Build.VERSION.SDK_INT <= 28) {
+            requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), 101)
+        }
 
         val connection = getSharedPreferences("connection", MODE_PRIVATE)
         serverUrl = EditText(this).apply {
@@ -47,7 +50,7 @@ class MainActivity : Activity() {
         val saveButton = Button(this).apply {
             text = "Save connection"
             setOnClickListener {
-                if (saveConnection()) status.text = "Connection settings saved."
+                if (saveConnection()) status.text = "Connection settings saved.\nSnapshots folder: Download/TradeLab"
             }
         }
 
@@ -59,7 +62,7 @@ class MainActivity : Activity() {
                     .setInputData(workDataOf(SnapshotWorker.KEY_FORCE_CREATE to true))
                     .build()
                 WorkManager.getInstance(this@MainActivity).enqueue(request)
-                status.text = "Creating and downloading a fresh snapshot…"
+                status.text = "Creating and downloading a fresh snapshot…\nDestination: Download/TradeLab"
             }
         }
 
@@ -73,6 +76,7 @@ class MainActivity : Activity() {
             addView(serverUrl)
             addView(readToken)
             addView(saveButton)
+            addView(TextView(this@MainActivity).apply { text = "Snapshots: Download/TradeLab" })
             addView(status)
             addView(button)
         }
@@ -123,9 +127,9 @@ class MainActivity : Activity() {
         val created = p.getLong("last_snapshot_created_ms", 0)
         val size = p.getLong("last_size", 0)
         status.text = if (file == null) {
-            "No downloaded snapshot yet. Automatic interval: 4h."
+            "No downloaded snapshot yet. Automatic interval: 4h.\nDestination: Download/TradeLab"
         } else {
-            "Last snapshot: $file\nServer snapshot: ${java.util.Date(created)}\nDownloaded: ${java.util.Date(at)}\nSize: %.1f MB\nStatus: SHA-256 OK".format(size / 1024.0 / 1024.0)
+            "Last snapshot: $file\nServer snapshot: ${java.util.Date(created)}\nDownloaded: ${java.util.Date(at)}\nSize: ${formatBytes(size)}\nSaved to: Download/TradeLab\nStatus: SHA-256 OK"
         }
     }
 }
