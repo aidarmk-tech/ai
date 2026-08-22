@@ -17,15 +17,24 @@ def require_token(x_tradelab_token: str | None) -> None:
         raise HTTPException(status_code=401, detail="invalid token")
 
 
+def build_snapshot():
+    return create_snapshot(
+        settings.db_path,
+        settings.snapshot_dir,
+        settings.snapshot_keep,
+        settings.snapshot_raw_hours,
+    )
+
+
 async def snapshot_loop(stop: asyncio.Event) -> None:
     interval = max(1, settings.snapshot_interval_hours) * 3600
     while not stop.is_set():
         try:
             if latest_snapshot(settings.db_path) is None:
-                await asyncio.to_thread(create_snapshot, settings.db_path, settings.snapshot_dir, settings.snapshot_keep)
+                await asyncio.to_thread(build_snapshot)
             await asyncio.wait_for(stop.wait(), timeout=interval)
         except TimeoutError:
-            await asyncio.to_thread(create_snapshot, settings.db_path, settings.snapshot_dir, settings.snapshot_keep)
+            await asyncio.to_thread(build_snapshot)
 
 
 @asynccontextmanager
@@ -47,7 +56,7 @@ async def lifespan(app: FastAPI):
             await task
 
 
-app = FastAPI(title="TradeLab", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="TradeLab", version="0.2.1", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -55,11 +64,13 @@ def health():
     market = market_recorder.status()
     return {
         "ok": True,
-        "version": "0.2.0",
+        "version": "0.2.1",
         "live_trading": False,
         "market_enabled": market["enabled"],
         "last_market_event_ms": market["last_market_event_ms"],
         "last_sample_ms": market["last_sample_ms"],
+        "snapshot_kind": "analysis",
+        "snapshot_raw_hours": settings.snapshot_raw_hours,
     }
 
 
@@ -88,7 +99,7 @@ def market_status(x_tradelab_token: str | None = Header(default=None)):
 @app.post("/api/v1/snapshots/create")
 def make_snapshot(x_tradelab_token: str | None = Header(default=None)):
     require_token(x_tradelab_token)
-    snap = create_snapshot(settings.db_path, settings.snapshot_dir, settings.snapshot_keep)
+    snap = build_snapshot()
     return snap.as_dict()
 
 
@@ -123,4 +134,11 @@ def download(snapshot_id: str, x_tradelab_token: str | None = Header(default=Non
     path = settings.snapshot_dir / snap.filename
     if not path.exists():
         raise HTTPException(status_code=404, detail="snapshot file missing")
-    return FileResponse(path, media_type="application/gzip", filename=snap.filename)
+    # Starlette FileResponse supports HTTP byte ranges, which the Android client
+    # uses to continue interrupted .part downloads instead of restarting.
+    return FileResponse(
+        path,
+        media_type="application/gzip",
+        filename=snap.filename,
+        headers={"Accept-Ranges": "bytes", "Cache-Control": "private, no-store"},
+    )
