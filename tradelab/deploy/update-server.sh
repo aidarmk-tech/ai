@@ -41,6 +41,18 @@ grep -q '^TRADELAB_PAPER_MAX_OPEN=' /etc/tradelab.env || echo 'TRADELAB_PAPER_MA
 grep -q '^TRADELAB_PAPER_STARTING_NOTIONAL_USDT=' /etc/tradelab.env || echo 'TRADELAB_PAPER_STARTING_NOTIONAL_USDT=10' >>/etc/tradelab.env
 chmod 600 /etc/tradelab.env
 
+# Full retained exports can take several minutes to build before response
+# headers exist. Keep the normal reverse proxy but allow that explicit manual
+# operation to finish instead of Nginx returning a premature 504.
+if [[ -f /etc/nginx/sites-available/tradelab ]]; then
+  sed -i -E 's/proxy_read_timeout[[:space:]]+[0-9]+s;/proxy_read_timeout 900s;/' /etc/nginx/sites-available/tradelab
+  if ! grep -q 'proxy_send_timeout' /etc/nginx/sites-available/tradelab; then
+    sed -i '/proxy_read_timeout 900s;/a\        proxy_send_timeout 900s;' /etc/nginx/sites-available/tradelab
+  fi
+  nginx -t
+  systemctl reload nginx
+fi
+
 systemctl stop tradelab
 rm -rf /opt/tradelab/server
 mv /opt/tradelab/server.new /opt/tradelab/server
@@ -49,8 +61,6 @@ install -m 0644 /tmp/tradelab-update/tradelab/deploy/tradelab.service /etc/syste
 systemctl daemon-reload
 systemctl start tradelab
 
-# Startup now includes schema/epoch checks and Binance supervisors. Wait for the
-# local control plane instead of assuming an arbitrary four seconds is enough.
 for _ in $(seq 1 30); do
   if curl -fsS --max-time 2 http://127.0.0.1:8000/health; then
     echo
