@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from tradelab.db import connect, initialize
+from tradelab.market_cadence import ProductionMarketRecorder
 from tradelab.market_runtime import StableMarketRecorder
 from tradelab.participants import seed
 from tradelab.strategies import Signal
@@ -79,6 +80,13 @@ def test_rank_reorder_does_not_force_websocket_generation_change():
     r.tickers["T00USDT"]["q"] = "777777777"
     r._refresh_universe_once()
     assert r.universe_generation == generation + 1
+
+
+def test_sampler_delay_stays_anchored_to_next_wall_second():
+    assert ProductionMarketRecorder._seconds_to_next_wall_second(1_000) == 1.0
+    assert ProductionMarketRecorder._seconds_to_next_wall_second(1_125) == 0.875
+    assert ProductionMarketRecorder._seconds_to_next_wall_second(1_999) == 0.01
+    assert ProductionMarketRecorder._seconds_to_next_wall_second(12_250) == 0.75
 
 
 def test_paper_entry_uses_exact_persisted_market_sample(tmp_path):
