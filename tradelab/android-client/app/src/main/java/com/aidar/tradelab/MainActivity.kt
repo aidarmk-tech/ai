@@ -8,8 +8,10 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
@@ -55,11 +57,22 @@ class MainActivity : Activity() {
             text = "Download fresh snapshot now"
             setOnClickListener {
                 if (!saveConnection()) return@setOnClickListener
+                val constraints = Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build()
                 val request = OneTimeWorkRequestBuilder<SnapshotWorker>()
+                    .setConstraints(constraints)
+                    .setBackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.SECONDS)
                     .setInputData(workDataOf(SnapshotWorker.KEY_FORCE_CREATE to true))
                     .build()
-                WorkManager.getInstance(this@MainActivity).enqueue(request)
-                status.text = "Creating and downloading a fresh snapshot…\nDestination: Download/TradeLab"
+                // KEEP means repeated taps do not create multiple large snapshots.
+                // If a transfer is retrying, the same job continues its .part file.
+                WorkManager.getInstance(this@MainActivity).enqueueUniqueWork(
+                    "tradelab-manual-snapshot",
+                    ExistingWorkPolicy.KEEP,
+                    request,
+                )
+                status.text = "Creating/downloading snapshot…\nYou can lock the screen. Interrupted transfers resume automatically.\nDestination: Download/TradeLab"
             }
         }
 
@@ -67,13 +80,13 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(40, 80, 40, 40)
             addView(TextView(this@MainActivity).apply {
-                text = "TradeLab 0.1\n4 participants · CHAMPION + RESERVE"
+                text = "TradeLab 0.2.1\n4 participants · CHAMPION + RESERVE"
                 textSize = 22f
             })
             addView(serverUrl)
             addView(readToken)
             addView(saveButton)
-            addView(TextView(this@MainActivity).apply { text = "Snapshots: Download/TradeLab" })
+            addView(TextView(this@MainActivity).apply { text = "Snapshots: Download/TradeLab · resumable" })
             addView(status)
             addView(button)
         }
@@ -109,6 +122,7 @@ class MainActivity : Activity() {
         val constraints = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
         val request = PeriodicWorkRequestBuilder<SnapshotWorker>(4, TimeUnit.HOURS)
             .setConstraints(constraints)
+            .setBackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.SECONDS)
             .build()
         WorkManager.getInstance(this).enqueueUniquePeriodicWork(
             "tradelab-snapshot-4h",
@@ -123,10 +137,22 @@ class MainActivity : Activity() {
         val at = p.getLong("last_at_ms", 0)
         val created = p.getLong("last_snapshot_created_ms", 0)
         val size = p.getLong("last_size", 0)
+        val downloading = p.getString("downloading_file", null)
+        val done = p.getLong("download_done", 0)
+        val total = p.getLong("download_total", 0)
+        val error = p.getString("last_error", null)
+
+        val progress = if (downloading != null && total > 0) {
+            "\nCurrent: $downloading\nProgress: ${formatBytes(done)} / ${formatBytes(total)}\nResume: enabled"
+        } else ""
+        val problem = if (!error.isNullOrBlank()) {
+            "\nLast interruption: $error\nWorkManager will retry from the saved partial file."
+        } else ""
+
         status.text = if (file == null) {
-            "No downloaded snapshot yet. Automatic interval: 4h.\nDestination: Download/TradeLab"
+            "No completed snapshot yet. Automatic interval: 4h.\nDestination: Download/TradeLab$progress$problem"
         } else {
-            "Last snapshot: $file\nServer snapshot: ${java.util.Date(created)}\nDownloaded: ${java.util.Date(at)}\nSize: ${formatBytes(size)}\nSaved to: Download/TradeLab\nStatus: SHA-256 OK"
+            "Last snapshot: $file\nServer snapshot: ${java.util.Date(created)}\nDownloaded: ${java.util.Date(at)}\nSize: ${formatBytes(size)}\nSaved to: Download/TradeLab\nStatus: SHA-256 OK$progress$problem"
         }
     }
 }
