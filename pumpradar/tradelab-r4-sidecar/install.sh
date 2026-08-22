@@ -8,6 +8,7 @@ SRC="$(cd "$(dirname "$0")" && pwd)"
 DST=/opt/tradelab/r4-five-models
 mkdir -p "$DST"
 install -m 0755 "$SRC/tradelab_r4_sidecar.py" "$DST/tradelab_r4_sidecar.py"
+install -m 0755 "$SRC/tradelab_r4_isolation.py" "$DST/tradelab_r4_isolation.py"
 install -m 0644 "$SRC/README.md" "$DST/README.md"
 install -m 0644 "$SRC/tradelab-r4-five-models.service" /etc/systemd/system/tradelab-r4-five-models.service
 
@@ -22,7 +23,7 @@ fi
 
 BACKUP_DIR=/var/lib/pumpradar/backups
 mkdir -p "$BACKUP_DIR"
-BACKUP="$BACKUP_DIR/tradelab-pre-r4-$(date +%Y%m%d-%H%M%S).sqlite3"
+BACKUP="$BACKUP_DIR/tradelab-pre-r4-hotfix-$(date +%Y%m%d-%H%M%S).sqlite3"
 python3 - "$DB" "$BACKUP" <<'PY'
 import sqlite3,sys
 src,dst=sys.argv[1:]
@@ -35,13 +36,15 @@ a.close(); b.close()
 PY
 printf 'TRADELAB_DB=%q\n' "$DB" > /etc/default/tradelab-r4-five-models
 
-python3 "$DST/tradelab_r4_sidecar.py" --db "$DB" --activate-r4
+systemctl stop tradelab-r4-five-models.service 2>/dev/null || true
+python3 "$DST/tradelab_r4_isolation.py" --db "$DB" --apply
 systemctl daemon-reload
 systemctl enable --now tradelab-r4-five-models.service
 sleep 1
-python3 "$DST/tradelab_r4_sidecar.py" --db "$DB" --status
+python3 "$DST/tradelab_r4_isolation.py" --db "$DB" --status
 systemctl is-active tradelab-r4-five-models.service
 
-echo "Installed. DB: $DB"
+echo "Installed R4 isolation hotfix. DB: $DB"
 echo "Backup: $BACKUP"
-echo "All new models are SHADOW_ONLY; no exchange/order API is used."
+echo "Five active candidates restarted at virtual $20 from the clean hotfix epoch."
+echo "FLOW_ABSORPTION is write-blocked and retired. HFT/EXTREME paper positions are isolated from legacy paper_book."
