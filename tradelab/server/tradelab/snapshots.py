@@ -6,6 +6,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+
 from .db import connect
 
 
@@ -17,6 +18,7 @@ RAW_TABLES = (
     "liquidations",
 )
 ANALYSIS_PREFIX = "tradelab-analysis-"
+FULL_PREFIX = "tradelab-full-"
 
 
 @dataclass(frozen=True)
@@ -27,6 +29,10 @@ class Snapshot:
     bytes: int
     sha256: str
 
+    @property
+    def kind(self) -> str:
+        return "full" if self.filename.startswith(FULL_PREFIX) else "analysis"
+
     def as_dict(self) -> dict:
         return {
             "snapshot_id": self.snapshot_id,
@@ -34,6 +40,7 @@ class Snapshot:
             "filename": self.filename,
             "bytes": self.bytes,
             "sha256": self.sha256,
+            "kind": self.kind,
         }
 
 
@@ -45,56 +52,72 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _compact_analysis_copy(path: Path, created_ms: int, raw_hours: int) -> None:
-    """Trim only high-volume raw tables in the copied DB.
+def _prepare_snapshot_copy(
+    path: Path,
+    created_ms: int,
+    *,
+    kind: str,
+    raw_hours: int | None,
+) -> None:
+    """Finalize the disposable SQLite backup before gzip.
 
-    Cumulative participants, paper trades, signals/events, strategy specs,
-    market_states and forward_labels remain intact. The live recorder DB is never
-    modified here and continues to keep its longer raw retention window.
+    Analysis snapshots keep only a recent raw overlap window. Full snapshots do
+    not prune any rows from the consistent backup and therefore contain every
+    raw row still retained by the live server plus all cumulative research
+    tables. Full exports deliberately skip VACUUM because compacting a multi-GB
+    72-hour DB would double I/O for no analytical benefit.
     """
-    hours = max(1, int(raw_hours))
-    cutoff = created_ms - hours * 3600_000
     with sqlite3.connect(path, timeout=30) as conn:
         conn.execute("PRAGMA busy_timeout=30000")
-        # The source DB runs in WAL mode. A backup may preserve that mode on the
-        # disposable copy. Switch the copy to DELETE so pruning/meta/VACUUM land
-        # in the main .sqlite3 file that will actually be gzipped (not a -wal sidecar).
         conn.execute("PRAGMA journal_mode=DELETE")
         existing = {
             row[0]
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         }
-        for table in RAW_TABLES:
-            if table in existing:
-                conn.execute(f"DELETE FROM {table} WHERE ts_ms < ?", (cutoff,))
+
+        cutoff = None
+        if kind == "analysis":
+            hours = max(1, int(raw_hours or 1))
+            cutoff = created_ms - hours * 3600_000
+            for table in RAW_TABLES:
+                if table in existing:
+                    conn.execute(f"DELETE FROM {table} WHERE ts_ms < ?", (cutoff,))
+        else:
+            hours = int(raw_hours or 0)
+
         if "meta" in existing:
-            conn.executemany(
-                "INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)",
-                [
-                    ("snapshot_kind", "analysis"),
-                    ("snapshot_raw_hours", str(hours)),
-                    ("snapshot_cutoff_ms", str(cutoff)),
-                    ("snapshot_created_at_ms", str(created_ms)),
-                ],
-            )
+            meta = [
+                ("snapshot_kind", kind),
+                ("snapshot_created_at_ms", str(created_ms)),
+            ]
+            if hours > 0:
+                meta.append(("snapshot_raw_hours", str(hours)))
+            if cutoff is not None:
+                meta.append(("snapshot_cutoff_ms", str(cutoff)))
+            conn.executemany("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", meta)
+
         conn.commit()
-        conn.execute("VACUUM")
-        conn.commit()
+        if kind == "analysis":
+            conn.execute("VACUUM")
+            conn.commit()
         check = conn.execute("PRAGMA quick_check").fetchone()[0]
         if check != "ok":
-            raise RuntimeError(f"analysis snapshot quick_check failed: {check}")
+            raise RuntimeError(f"{kind} snapshot quick_check failed: {check}")
 
 
-def create_snapshot(
+def _create_snapshot(
     db_path: Path,
     snapshot_dir: Path,
-    keep: int = 15,
-    raw_hours: int = 6,
+    *,
+    kind: str,
+    raw_hours: int,
+    keep: int,
 ) -> Snapshot:
     snapshot_dir.mkdir(parents=True, exist_ok=True)
     created = int(time.time() * 1000)
     sid = uuid.uuid4().hex[:12]
-    base = f"{ANALYSIS_PREFIX}{created}-{sid}.sqlite3"
+    prefix = FULL_PREFIX if kind == "full" else ANALYSIS_PREFIX
+    base = f"{prefix}{created}-{sid}.sqlite3"
     raw = snapshot_dir / base
     gz = snapshot_dir / f"{base}.gz"
 
@@ -107,11 +130,17 @@ def create_snapshot(
         target.close()
         source.close()
 
-    _compact_analysis_copy(raw, created, raw_hours)
-
-    with raw.open("rb") as src, gzip.open(gz, "wb", compresslevel=6) as dst:
-        shutil.copyfileobj(src, dst, length=1024 * 1024)
-    raw.unlink(missing_ok=True)
+    try:
+        _prepare_snapshot_copy(
+            raw,
+            created,
+            kind=kind,
+            raw_hours=raw_hours,
+        )
+        with raw.open("rb") as src, gzip.open(gz, "wb", compresslevel=6) as dst:
+            shutil.copyfileobj(src, dst, length=1024 * 1024)
+    finally:
+        raw.unlink(missing_ok=True)
 
     snap = Snapshot(sid, created, gz.name, gz.stat().st_size, _sha256(gz))
     with connect(db_path) as conn:
@@ -120,7 +149,10 @@ def create_snapshot(
             (snap.snapshot_id, snap.created_at_ms, snap.filename, snap.bytes, snap.sha256),
         )
 
-    rows = sorted(snapshot_dir.glob("tradelab-*.sqlite3.gz"), key=lambda p: p.stat().st_mtime, reverse=True)
+    # Compact and full exports have separate retention pools. An occasional
+    # full research export must never evict the 4-hour compact history used by
+    # the Android catch-up worker.
+    rows = sorted(snapshot_dir.glob(f"{prefix}*.sqlite3.gz"), key=lambda p: p.stat().st_mtime, reverse=True)
     for old in rows[max(1, keep):]:
         old.unlink(missing_ok=True)
 
@@ -132,6 +164,38 @@ def create_snapshot(
             [(r["snapshot_id"],) for r in stale if r["filename"] not in existing],
         )
     return snap
+
+
+def create_snapshot(
+    db_path: Path,
+    snapshot_dir: Path,
+    keep: int = 15,
+    raw_hours: int = 6,
+) -> Snapshot:
+    """Create the routine compact snapshot used every four hours."""
+    return _create_snapshot(
+        db_path,
+        snapshot_dir,
+        kind="analysis",
+        raw_hours=max(1, int(raw_hours)),
+        keep=keep,
+    )
+
+
+def create_full_snapshot(
+    db_path: Path,
+    snapshot_dir: Path,
+    keep: int = 1,
+    retained_raw_hours: int = 72,
+) -> Snapshot:
+    """Create an on-demand full research export of the live retained DB."""
+    return _create_snapshot(
+        db_path,
+        snapshot_dir,
+        kind="full",
+        raw_hours=max(1, int(retained_raw_hours)),
+        keep=keep,
+    )
 
 
 def latest_snapshot(db_path: Path) -> Snapshot | None:
