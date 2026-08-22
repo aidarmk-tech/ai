@@ -4,8 +4,8 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from .config import settings
 from .db import initialize
-from .market import MarketRecorder, participant_stats, recorder_health
-from .participants import list_participants, seed
+from .market import MarketRecorder, participant_stats, recorder_gaps, recorder_health
+from .participants import ensure_clean_research_epoch, list_participants, research_epoch, seed
 from .snapshots import create_snapshot, get_snapshot, latest_snapshot, list_snapshots
 
 
@@ -42,6 +42,7 @@ async def lifespan(app: FastAPI):
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     initialize(settings.db_path)
     seed(settings.db_path)
+    ensure_clean_research_epoch(settings.db_path)
     stop = asyncio.Event()
     tasks = [
         asyncio.create_task(snapshot_loop(stop)),
@@ -56,21 +57,25 @@ async def lifespan(app: FastAPI):
             await task
 
 
-app = FastAPI(title="TradeLab", version="0.2.1", lifespan=lifespan)
+app = FastAPI(title="TradeLab", version="0.2.2", lifespan=lifespan)
 
 
 @app.get("/health")
 def health():
     market = market_recorder.status()
+    epoch = research_epoch(settings.db_path)
     return {
         "ok": True,
-        "version": "0.2.1",
+        "version": "0.2.2",
         "live_trading": False,
         "market_enabled": market["enabled"],
         "last_market_event_ms": market["last_market_event_ms"],
         "last_sample_ms": market["last_sample_ms"],
         "snapshot_kind": "analysis",
         "snapshot_raw_hours": settings.snapshot_raw_hours,
+        "research_epoch_id": epoch["epoch_id"],
+        "research_epoch_started_at_ms": epoch["started_at_ms"],
+        "strict_continuity": True,
     }
 
 
@@ -84,8 +89,9 @@ def participants(x_tradelab_token: str | None = Header(default=None)):
 def tournament(x_tradelab_token: str | None = Header(default=None)):
     require_token(x_tradelab_token)
     return {
-        "mode": "SHADOW_ONLY_FIXED_HORIZON",
+        "mode": "SHADOW_ONLY_FIXED_HORIZON_STRICT_CONTINUITY",
         "champion_assignment": "DISABLED_UNTIL_EVIDENCE_GATE",
+        "epoch": research_epoch(settings.db_path),
         "participants": participant_stats(settings.db_path),
     }
 
@@ -93,7 +99,11 @@ def tournament(x_tradelab_token: str | None = Header(default=None)):
 @app.get("/api/v1/market/status")
 def market_status(x_tradelab_token: str | None = Header(default=None)):
     require_token(x_tradelab_token)
-    return {"recorder": market_recorder.status(), "components": recorder_health(settings.db_path)}
+    return {
+        "recorder": market_recorder.status(),
+        "components": recorder_health(settings.db_path),
+        "gaps": recorder_gaps(settings.db_path),
+    }
 
 
 @app.post("/api/v1/snapshots/create")
@@ -134,8 +144,6 @@ def download(snapshot_id: str, x_tradelab_token: str | None = Header(default=Non
     path = settings.snapshot_dir / snap.filename
     if not path.exists():
         raise HTTPException(status_code=404, detail="snapshot file missing")
-    # Starlette FileResponse supports HTTP byte ranges, which the Android client
-    # uses to continue interrupted .part downloads instead of restarting.
     return FileResponse(
         path,
         media_type="application/gzip",
