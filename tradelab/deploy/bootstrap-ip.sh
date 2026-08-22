@@ -32,6 +32,9 @@ cat >/etc/tradelab.env <<EOF
 TRADELAB_DATA_DIR=/var/lib/tradelab
 TRADELAB_SNAPSHOT_KEEP=15
 TRADELAB_SNAPSHOT_INTERVAL_HOURS=4
+TRADELAB_SNAPSHOT_RAW_HOURS=6
+TRADELAB_FULL_SNAPSHOT_KEEP=1
+TRADELAB_RAW_RETENTION_HOURS=72
 TRADELAB_READ_TOKEN=${TOKEN}
 EOF
 chmod 600 /etc/tradelab.env
@@ -118,7 +121,8 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto https;
-        proxy_read_timeout 180s;
+        proxy_read_timeout 900s;
+        proxy_send_timeout 900s;
     }
 }
 EOF
@@ -158,7 +162,7 @@ curl -fsS "https://${IP}/health" >/dev/null
 
 echo
 echo "============================================================"
-echo "TradeLab 0.1 deployed successfully"
+echo "TradeLab deployed successfully"
 echo "Server: https://${IP}"
 echo "Android read token: ${TOKEN}"
 echo "SAVE THIS TOKEN and enter it in the TradeLab Android app."
