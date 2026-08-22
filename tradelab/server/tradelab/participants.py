@@ -2,10 +2,11 @@ import json
 import time
 import uuid
 from dataclasses import dataclass
+
 from .db import connect
 
 
-TARGET_RESEARCH_MODE = "CLEAN_SHADOW_V2"
+TARGET_RESEARCH_MODE = "CLEAN_SHADOW_V3"
 
 
 @dataclass(frozen=True)
@@ -101,12 +102,13 @@ def seed(db_path) -> None:
 
 
 def ensure_clean_research_epoch(db_path) -> dict:
-    """Create the accountable tournament epoch and rotate V1 exactly once.
+    """Create the final accountable tournament epoch exactly once.
 
-    0.2.2 created CLEAN_SHADOW_V1, but the first seconds exposed a bootstrap
-    universe race before any accountable market sample was written. 0.2.3 uses
-    CLEAN_SHADOW_V2 as the final T0. Once V2 exists, ordinary restarts never
-    clear tournament results again.
+    V1/V2 were infrastructure preflight periods. V3 begins only after the FD
+    leak, false sampler health, subscription churn and paper replay invariants
+    were hardened. Raw market evidence is deliberately retained across the
+    rotation; only tournament outputs and participant equity are reset.
+    Ordinary restarts under V3 never clear results again.
     """
     now = int(time.time() * 1000)
     with connect(db_path) as conn:
@@ -122,10 +124,15 @@ def ensure_clean_research_epoch(db_path) -> dict:
             }
 
         counts = {}
-        for table in ("paper_trades", "participant_events", "market_states", "forward_labels", "forward_label_quality"):
+        for table in (
+            "paper_trades",
+            "participant_events",
+            "market_states",
+            "forward_labels",
+            "forward_label_quality",
+        ):
             counts[table] = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
 
-        # Child rows first because of foreign keys.
         conn.execute("DELETE FROM forward_label_quality")
         conn.execute("DELETE FROM forward_labels")
         conn.execute("DELETE FROM market_states")
@@ -134,7 +141,7 @@ def ensure_clean_research_epoch(db_path) -> dict:
         conn.execute("UPDATE participants SET equity=starting_equity, rank=NULL, role='CANDIDATE'")
 
         previous_epoch = existing[0] if existing else None
-        epoch = f"R2-{now}-{uuid.uuid4().hex[:8]}"
+        epoch = f"R3-{now}-{uuid.uuid4().hex[:8]}"
         meta = [
             ("research_epoch_id", epoch),
             ("research_epoch_started_at_ms", str(now)),
@@ -155,9 +162,11 @@ def ensure_clean_research_epoch(db_path) -> dict:
 
 def research_epoch(db_path) -> dict:
     with connect(db_path) as conn:
-        rows = dict(conn.execute(
-            "SELECT key,value FROM meta WHERE key IN ('research_epoch_id','research_epoch_started_at_ms','research_epoch_mode','preflight_discarded_json','previous_research_epoch_id')"
-        ).fetchall())
+        rows = dict(
+            conn.execute(
+                "SELECT key,value FROM meta WHERE key IN ('research_epoch_id','research_epoch_started_at_ms','research_epoch_mode','preflight_discarded_json','previous_research_epoch_id')"
+            ).fetchall()
+        )
     return {
         "epoch_id": rows.get("research_epoch_id"),
         "started_at_ms": int(rows.get("research_epoch_started_at_ms", 0) or 0),
