@@ -1,45 +1,37 @@
-# TradeLab 0.2
+# TradeLab 0.2.1
 
-Clean-room replacement for PumpRadar research infrastructure. PumpRadar trading logic is intentionally not imported.
+Clean restart of the crypto research/autotrading project. PumpRadar trading logic is intentionally not imported.
 
 ## Tournament
 
-TradeLab runs four isolated shadow participants:
+Four isolated frozen-spec paper/shadow participants start with their own equity ledger:
 
-- `BTC_ALT_LAG` — BTC → ALT delayed-response hypothesis.
-- `REGIME_MOMENTUM` — continuation only when market regime and asset momentum align.
-- `FLOW_ABSORPTION` — aggressive flow that stops moving price while opposite liquidity replenishes.
-- `STAT_ARB` — rolling highly-correlated pair spread dislocation.
+- `BTC_ALT_LAG` — BTC lead/lag into lagging altcoins.
+- `REGIME_MOMENTUM` — trend continuation only in an allowed market regime.
+- `FLOW_ABSORPTION` — trades + L2 pressure versus absorption/price response.
+- `STAT_ARB` — relative-value / cointegration spread trading.
 
-Every participant has a frozen `spec_version` and starts as `CANDIDATE`. Thresholds are not optimized while forward data is collecting. CHAMPION/RESERVE assignment is disabled until an evidence gate is defined and reached.
+The research phase produces a ranking. `CHAMPION` / `RESERVE` assignment remains disabled until evidence gates are reached; the two losers are frozen rather than repeatedly patched.
 
-## Binance recorder
+## Recorder
 
-Inputs are public Binance USD-M data only; no API key is required for 0.2:
+TradeLab records public Binance USD-M market data for a dynamic liquid universe: ticker/mark/funding, aggTrades, top-10 depth for the microstructure subset, liquidations and periodic open interest. Raw market data stays on the VPS for the longer server retention window while strategy events, paper trades and forward labels accumulate for research.
 
-- all-market 24h futures ticker;
-- all-market mark/index/funding stream;
-- aggregate trades for the dynamic tracked universe;
-- top-10 partial depth for the microstructure subset;
-- all-market liquidation snapshots;
-- periodic open interest for the microstructure subset.
+## Mobile analysis snapshots
 
-The default dynamic universe is 40 USDT perpetual symbols ranked by 24h quote volume. The top 12 receive the heavier flow/L2/OI recorder.
+Phone snapshots are intentionally **not** full copies of the ever-growing live recorder database.
 
-Storage is aggregated rather than raw tick-for-tick: market state every 5s, flow/depth every 1s, with raw research rows retained for 72h by default. Participant events, paper trades and forward labels remain available for analysis.
+Each snapshot:
 
-Paper scoring uses each strategy's frozen holding horizon and a common conservative fee/slippage model. It is research accounting only; TradeLab 0.2 still has no live-order endpoint.
+- is made from an atomic SQLite backup;
+- keeps cumulative participant/spec/event/paper-trade/market-state/forward-label research records;
+- keeps only the newest 6 hours of high-volume raw market/flow/depth/OI/liquidation rows;
+- is vacuumed, compressed to `.sqlite3.gz`, and hashed with SHA-256;
+- is stored on Android in `Download/TradeLab`;
+- is downloaded automatically every 4 hours or manually on demand.
 
-## Snapshots
+Interrupted Android downloads keep a persistent `.part` file and resume with HTTP byte ranges. Manual downloads use a `dataSync` foreground WorkManager service, so locking the screen does not tie the transfer to the Activity lifecycle. Repeated manual taps do not create duplicate large jobs.
 
-The server creates atomic SQLite backups, gzips them and publishes a SHA-256 manifest. Android automatically checks every 4 hours, catches up missed snapshots and supports a manual fresh snapshot at any time. Verified files are saved to `Download/TradeLab` and the user receives a system notification.
+## Safety defaults
 
-## Useful API
-
-- `GET /health`
-- `GET /api/v1/market/status` — recorder/universe/component health
-- `GET /api/v1/tournament` — A/B/C/D paper standings
-- `GET /api/v1/participants`
-- snapshot endpoints under `/api/v1/snapshots`
-
-Authenticated API endpoints use the Android read token. No Binance credentials are stored in the Android client.
+TradeLab 0.2.1 has no live-order endpoint. All four participants are shadow/paper only while evidence is collected.
