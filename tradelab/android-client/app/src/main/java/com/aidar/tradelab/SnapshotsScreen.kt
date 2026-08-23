@@ -22,8 +22,6 @@ class SnapshotsScreen(private val activity: MainActivity) {
     private lateinit var progressTitle: TextView
     private lateinit var progressDetail: TextView
     private lateinit var cancelButton: Button
-    private lateinit var smartButton: Button
-    private lateinit var staleBox: LinearLayout
     private lateinit var deviceListBox: LinearLayout
     private lateinit var syncInfo: TextView
 
@@ -58,28 +56,31 @@ class SnapshotsScreen(private val activity: MainActivity) {
             )
         )
         primary.addView(Ui.spacer(activity, 10))
-        smartButton = Button(activity).apply {
-            text = "Обновить данные"
-            textSize = 16f
-        }
-        smartButton.setOnClickListener {
-            val mode = pickSmartMode()
-            if (mode == SnapshotWorker.MODE_LATEST && latestIsStale()) {
-                staleBox.visibility = View.VISIBLE
-            }
-            start(mode)
-        }
-        primary.addView(smartButton)
-        primary.addView(Ui.spacer(activity, 8))
 
-        staleBox = Ui.card(activity).apply { setBackgroundColor(Ui.CARD_ALT) }
-        staleBox.addView(Ui.text(activity, "Последний готовый снапшот на сервере устарел.", 13, Ui.AMBER))
-        staleBox.addView(Ui.spacer(activity, 6))
-        val mkFresh = Button(activity).apply { text = "Создать свежий 6ч и скачать" }
-        mkFresh.setOnClickListener { start(SnapshotWorker.MODE_FRESH) }
-        staleBox.addView(mkFresh)
-        staleBox.visibility = View.GONE
-        primary.addView(staleBox)
+        val buttons = Ui.column(activity)
+        val latestBtn = Button(activity).apply {
+            text = "Обновить (последний готовый)"
+            textSize = 15f
+        }
+        latestBtn.setOnClickListener { start(SnapshotWorker.MODE_LATEST) }
+        buttons.addView(latestBtn)
+        buttons.addView(Ui.spacer(activity, 6))
+        val freshBtn = Button(activity).apply {
+            text = "Срез на сейчас · создать и скачать"
+            textSize = 15f
+        }
+        freshBtn.setOnClickListener { start(SnapshotWorker.MODE_FRESH) }
+        buttons.addView(freshBtn)
+        primary.addView(buttons)
+        primary.addView(Ui.spacer(activity, 8))
+        primary.addView(
+            Ui.text(
+                activity,
+                "«Срез на сейчас» фиксирует состояние сервера в момент нажатия " +
+                    "(создание занимает до пары минут).",
+                12, Ui.MUTED,
+            )
+        )
 
         progressCard = progressView()
         primary.addView(progressCard)
@@ -129,16 +130,6 @@ class SnapshotsScreen(private val activity: MainActivity) {
         renderProgress()
         renderSyncInfo()
         renderDeviceList()
-    }
-
-    private fun latestIsStale(): Boolean {
-        val created = prefs().getLong("last_snapshot_created_ms", 0L)
-        return created > 0 && System.currentTimeMillis() - created > 7 * 3600_000L
-    }
-
-    private fun pickSmartMode(): String {
-        val last = prefs().getLong("last_snapshot_created_ms", 0L)
-        return if (last == 0L) SnapshotWorker.MODE_LATEST else SnapshotWorker.MODE_LATEST
     }
 
     private fun wifiOnlyPref(): Boolean =
