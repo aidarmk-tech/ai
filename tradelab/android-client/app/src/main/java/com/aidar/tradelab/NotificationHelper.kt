@@ -25,20 +25,37 @@ object NotificationHelper {
         )
     }
 
-    fun downloadNotification(context: Context, text: String = "Preparing snapshot…"): Notification {
+    fun downloadNotification(
+        context: Context,
+        text: String = "Preparing snapshot…",
+        cancelIntent: android.app.PendingIntent? = null,
+    ): Notification {
         ensureChannels(context)
-        return android.app.Notification.Builder(context, DOWNLOAD_CHANNEL)
+        val b = android.app.Notification.Builder(context, DOWNLOAD_CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle("TradeLab: snapshot")
             .setContentText(text)
             .setProgress(0, 0, true)
             .setOngoing(true)
-            .build()
+        if (cancelIntent != null) {
+            b.addAction(
+                android.app.Notification.Action.Builder(
+                    android.R.drawable.ic_menu_close_clear_cancel,
+                    "Отменить",
+                    cancelIntent,
+                ).build()
+            )
+        }
+        return b.build()
     }
 
-    fun downloading(context: Context, text: String = "Preparing snapshot…"): ForegroundInfo {
+    fun downloading(
+        context: Context,
+        text: String = "Preparing snapshot…",
+        cancelIntent: android.app.PendingIntent? = null,
+    ): ForegroundInfo {
         val type = if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0
-        return ForegroundInfo(FOREGROUND_ID, downloadNotification(context, text), type)
+        return ForegroundInfo(FOREGROUND_ID, downloadNotification(context, text, cancelIntent), type)
     }
 
     fun success(context: Context, filename: String, bytes: Long, count: Int = 1) {
