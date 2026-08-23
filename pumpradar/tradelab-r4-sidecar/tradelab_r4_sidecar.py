@@ -220,13 +220,19 @@ class Sidecar:
         self.history: dict[str, Deque[PricePoint]] = defaultdict(lambda: deque(maxlen=100))
         self.hft_quotes: dict[str, Quote] = {}
         self.cooldown_until: dict[tuple[str, str], int] = {}
-        latest = con.execute("SELECT COALESCE(MAX(ts_ms),0) FROM market_samples").fetchone()[0]
-        # NOTE: startup resumes from MAX(ts_ms): samples ingested while the
-        # sidecar was down are intentionally NOT replayed (see open issue on
-        # restart recovery / persistent cursor). Within a live process, the
-        # keyset cursor below guarantees no skips and no reprocessing.
-        self.last_seen_ts = max(int(latest or 0), epoch_ts - 1)
-        self.last_seen_symbol = ""
+        # NOTE: cross-restart backlog replay is intentionally out of scope
+        # (#37). The newest existing row is treated as ALREADY CONSUMED on
+        # startup: an immediate step() processes nothing and the MAX(ts_ms)
+        # group is not replayed (it was seeded into history below).
+        latest_row = con.execute(
+            "SELECT ts_ms,symbol FROM market_samples ORDER BY ts_ms DESC, symbol DESC LIMIT 1"
+        ).fetchone()
+        if latest_row is not None and int(latest_row["ts_ms"]) >= epoch_ts:
+            self.last_seen_ts = int(latest_row["ts_ms"])
+            self.last_seen_symbol = str(latest_row["symbol"])
+        else:
+            self.last_seen_ts = max(epoch_ts - 1, 0)
+            self.last_seen_symbol = ""
         self._seed_history(self.last_seen_ts)
         self._restore_cooldowns()
 
@@ -507,18 +513,21 @@ def main() -> None:
     args = ap.parse_args(); db = detect_db(args.db)
     if args.detect_db: print(db); return
     con = connect(db)
-    epoch = activate_r4(con) if (args.activate_r4 or args.run) else int((con.execute("SELECT value FROM meta WHERE key='five_model_epoch_started_at_ms'").fetchone() or [0])[0])
-    if args.activate_r4 and not args.run: print(jdump(status(con))); return
-    if args.status: print(json.dumps(status(con), ensure_ascii=False, indent=2, sort_keys=True)); return
     if args.run:
-        # Refuse legacy-status ('OPEN') operation over an isolated DB to avoid
-        # recreating the double-ownership defect; use tradelab_r4_isolation.py.
+        # G4: guard BEFORE any DB mutation. activate_r4() rewrites
+        # participants/participant_specs/meta (resurrects retired slots,
+        # flips active_effect, updates five_model_active_ids), so a forbidden
+        # legacy --run must SystemExit while the isolated state is untouched.
         hotfix = con.execute("SELECT value FROM meta WHERE key='r4_isolation_hotfix_started_at_ms'").fetchone()
         if hotfix:
             raise SystemExit(
                 "r4 isolation hotfix is active for this DB; base sidecar writes legacy status='OPEN' trades. "
                 "Run tradelab_r4_isolation.py --run instead (paper_owner=R4_SIDECAR, status=R4_OPEN)."
             )
+    epoch = activate_r4(con) if (args.activate_r4 or args.run) else int((con.execute("SELECT value FROM meta WHERE key='five_model_epoch_started_at_ms'").fetchone() or [0])[0])
+    if args.activate_r4 and not args.run: print(jdump(status(con))); return
+    if args.status: print(json.dumps(status(con), ensure_ascii=False, indent=2, sort_keys=True)); return
+    if args.run:
         Sidecar(con, epoch).run(); return
     ap.error("choose --activate-r4, --status, --run, or --detect-db")
 

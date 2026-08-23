@@ -81,8 +81,8 @@ class R4Tests(unittest.TestCase):
 
         Two ts groups of 3000 symbols each. The cursor is rewound below the
         fixture timestamps to emulate a live process positioned before the
-        data (startup watermark behaviour itself is intentionally out of
-        scope here - see the restart-recovery open issue). Legacy watermark
+        data (startup watermark behaviour itself is covered by
+        test_startup_cursor_consumes_existing_max_group). Legacy watermark
         cursor lost the tail of the second group when the 5000-row page
         ended mid-group; the keyset cursor must process all 6000 rows
         exactly once."""
@@ -130,11 +130,59 @@ class R4Tests(unittest.TestCase):
         statuses = {r[0] for r in self.con.execute("SELECT DISTINCT status FROM paper_trades")}
         self.assertEqual(statuses, {"CLOSED"})
 
-    def test_base_run_refuses_when_hotfix_active(self):
-        """G4: legacy entrypoint must refuse to run over an isolated DB."""
+    def test_startup_cursor_consumes_existing_max_group(self):
+        """Startup watermark: the newest existing row is already-consumed.
+        Immediate step() is a no-op (no replay of the MAX(ts_ms) group that
+        _seed_history already ingested); only genuinely new rows are
+        processed, exactly once."""
+        epoch = r4.activate_r4(self.con)
+        t0 = 70_000_000
+        self._insert_sample(t0, "AAAUSDT", 100.0)
+        self._insert_sample(t0, "BBBUSDT", 101.0)
+        self.con.commit()
+        sc = r4.Sidecar(self.con, epoch)
+        self.assertEqual(sc.last_seen_ts, t0)
+        self.assertEqual(sc.last_seen_symbol, "BBBUSDT")
+        # C) immediate step() processes nothing
+        self.assertEqual(sc.step(), 0)
+        # D) new timestamp with several symbols
+        t1 = t0 + 5_000
+        self._insert_sample(t1, "AAAUSDT", 102.0)
+        self._insert_sample(t1, "BBBUSDT", 103.0)
+        self._insert_sample(t1, "CCCUSDT", 104.0)
+        self.con.commit()
+        # E) exactly those three rows, exactly once
+        self.assertEqual(sc.step(), 3)
+        self.assertEqual(sc.step(), 0)
+        # empty DB case: cursor falls back to epoch boundary, consumes ""
+        sc2 = r4.Sidecar(self.con, epoch + 10_000_000)
+        self.assertEqual(sc2.last_seen_ts, epoch + 10_000_000 - 1)
+        self.assertEqual(sc2.last_seen_symbol, "")
+
+    def test_run_guard_blocks_before_any_db_mutation(self):
+        """G4: legacy --run over an isolated DB must SystemExit BEFORE
+        activate_r4() runs. A late guard allowed activate_r4 to resurrect
+        retired slots (ACTIVE/ELIMINATED->CANDIDATE, active_effect flip,
+        five_model_active_ids rewrite) before exiting."""
         r4.activate_r4(self.con)
         r4.upsert_meta(self.con, "r4_isolation_hotfix_started_at_ms", "12345")
+        # Simulate fully isolated/retired HFT slot that a buggy late guard
+        # would have resurrected.
+        self.con.execute("UPDATE participants SET status='RETIRED', role='ELIMINATED' WHERE participant_id=?", (r4.HFT,))
+        self.con.execute("UPDATE participant_specs SET active_effect='RETIRED_NO_SCORE' WHERE participant_id=?", (r4.HFT,))
         self.con.commit()
+
+        def snapshot():
+            return {
+                "participants": [tuple(r) for r in self.con.execute("SELECT * FROM participants ORDER BY participant_id")],
+                "participant_specs": [tuple(r) for r in self.con.execute("SELECT * FROM participant_specs ORDER BY participant_id")],
+                "meta": [tuple(r) for r in self.con.execute("SELECT key,value FROM meta ORDER BY key")],
+                "events": self.con.execute("SELECT COUNT(*) FROM participant_events").fetchone()[0],
+                "trades": self.con.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0],
+                "states": self.con.execute("SELECT COUNT(*) FROM market_states").fetchone()[0],
+            }
+
+        before = snapshot()
         saved_detect, saved_argv = r4.detect_db, sys.argv
         r4.detect_db = lambda explicit=None: self.db
         sys.argv = ["tradelab_r4_sidecar.py", "--run"]
@@ -143,8 +191,13 @@ class R4Tests(unittest.TestCase):
                 r4.main()
             self.assertIn("hotfix", str(cm.exception))
         finally:
-            r4.detect_db = saved_detect
-            sys.argv = saved_argv
+            r4.detect_db, sys.argv = saved_detect, saved_argv
+        # Field-for-field: nothing changed anywhere.
+        self.assertEqual(snapshot(), before)
+        hft = self.con.execute("SELECT status,role FROM participants WHERE participant_id=?", (r4.HFT,)).fetchone()
+        self.assertEqual((hft["status"], hft["role"]), ("RETIRED", "ELIMINATED"))
+        eff = self.con.execute("SELECT active_effect FROM participant_specs WHERE participant_id=?", (r4.HFT,)).fetchone()[0]
+        self.assertEqual(eff, "RETIRED_NO_SCORE")
 
 
 if __name__ == "__main__":
