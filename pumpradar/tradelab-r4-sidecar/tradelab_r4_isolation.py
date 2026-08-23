@@ -542,7 +542,14 @@ def main() -> None:
     args = ap.parse_args()
     db = base.detect_db(args.db)
     con = base.connect(db)
-    base.activate_r4(con)
+    # Once the clean R4 isolation exists, never call base.activate_r4() again:
+    # it intentionally re-activates the legacy HFT slot.  A retired HFT must
+    # remain retired across service restarts, including the tiny interval
+    # before candidate-set triggers are re-asserted.
+    if meta_int(con, CLEAN_KEY):
+        base.required_schema_ok(con)
+    else:
+        base.activate_r4(con)
     clean = apply_isolation(con)
     apply_candidate_set(con)
     if args.apply and not args.run:
