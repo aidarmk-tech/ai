@@ -19,6 +19,8 @@ R4_MODE = "FIVE_MODEL_SHADOW_R4"
 COMMON_ROUND_TRIP_COST_PCT = 0.14
 MAKER_COUNTERFACTUAL_COST_PCT = 0.04
 POLL_SECONDS = 1.0
+# G7: per-symbol sampling-gap threshold; larger silences are written to recorder_gaps.
+PER_SYMBOL_GAP_MS = 60_000
 
 EXISTING_ACTIVE = ("BTC_ALT_LAG", "STAT_ARB", "REGIME_MOMENTUM")
 RETIRED = "FLOW_ABSORPTION"
@@ -222,6 +224,11 @@ class Sidecar:
         self.cooldown_until: dict[tuple[str, str], int] = {}
         latest = con.execute("SELECT COALESCE(MAX(ts_ms),0) FROM market_samples").fetchone()[0]
         self.last_seen_ts = max(int(latest or 0), epoch_ts - 1)
+        # G1: composite watermark (ts_ms, symbol); PK(ts_ms,symbol) makes this loss-free.
+        self.last_seen_symbol = ""
+        # G7: per-symbol previous-sample tracking for gap detection.
+        self._prev_ts: dict[str, int] = {}
+        self._recorder_gaps_available: Optional[bool] = None
         self._seed_history(self.last_seen_ts)
         self._restore_cooldowns()
 
@@ -243,6 +250,7 @@ class Sidecar:
         ).fetchall()
         for r in rows:
             self._append_history(r["symbol"], int(r["ts_ms"]), float(r["last_price"]))
+            self._prev_ts[r["symbol"]] = int(r["ts_ms"])
 
     def _append_history(self, symbol: str, ts: int, price: float) -> None:
         dq = self.history[symbol]
@@ -256,6 +264,21 @@ class Sidecar:
         dq.append(PricePoint(ts, price, z))
         while dq and dq[0].ts_ms < ts - 360_000:
             dq.popleft()
+
+    def _record_gap(self, symbol: str, start_ms: int, end_ms: int) -> None:
+        """G7: best-effort persistence of per-symbol data gaps into recorder_gaps."""
+        if self._recorder_gaps_available is None:
+            self._recorder_gaps_available = "recorder_gaps" in table_names(self.con)
+        if not self._recorder_gaps_available:
+            return
+        try:
+            self.con.execute(
+                "INSERT OR IGNORE INTO recorder_gaps(start_ms,end_ms,duration_ms,reason,detected_at_ms) VALUES(?,?,?,?,?)",
+                (start_ms, end_ms, end_ms - start_ms, f"per_symbol_gap:{symbol}", now_ms()),
+            )
+            self.con.commit()
+        except sqlite3.Error:
+            self._recorder_gaps_available = False
 
     def _price_at_or_before(self, symbol: str, target_ts: int, max_age_ms: int = 10_000) -> Optional[float]:
         for p in reversed(self.history[symbol]):
@@ -308,15 +331,23 @@ class Sidecar:
         self.con.commit()
         return True
 
-    def _close_trade(self, trade: sqlite3.Row, ts: int, exit_price: float, reason: str) -> None:
+    def _close_trade(self, trade: sqlite3.Row, ts: int, exit_price: float, reason: str) -> bool:
+        """G2/G3: conditional close; equity credited only when exactly one row flips OPEN->CLOSED."""
         gross = pct_return(float(trade["entry_a"]), exit_price, trade["side_a"])
         net = gross - COMMON_ROUND_TRIP_COST_PCT
         pnl = float(trade["notional_usdt"]) * net / 100.0
         maker_cf = gross - MAKER_COUNTERFACTUAL_COST_PCT if trade["participant_id"] == HFT else None
-        self.con.execute(
-            "UPDATE paper_trades SET closed_at_ms=?,exit_a=?,gross_return_pct=?,net_return_pct=?,pnl_usdt=?,status='CLOSED' WHERE trade_id=?",
+        cur = self.con.execute(
+            "UPDATE paper_trades SET closed_at_ms=?,exit_a=?,gross_return_pct=?,net_return_pct=?,pnl_usdt=?,status='CLOSED' WHERE trade_id=? AND status='OPEN'",
             (ts, exit_price, gross, net, pnl, trade["trade_id"]),
         )
+        if cur.rowcount != 1:
+            # Another writer closed it first (e.g. legacy paper_book): never double-credit.
+            self.con.rollback()
+            add_event(self.con, trade["participant_id"], ts, trade["symbol_a"], "PAPER_CLOSE_SKIPPED",
+                      {"trade_id": trade["trade_id"], "attempted_reason": reason})
+            self.con.commit()
+            return False
         self.con.execute("UPDATE participants SET equity=equity+? WHERE participant_id=?", (pnl, trade["participant_id"]))
         payload: dict[str, Any] = {
             "trade_id": trade["trade_id"], "exit_reason": reason, "gross_return_pct": gross,
@@ -328,6 +359,7 @@ class Sidecar:
             payload["maker_counterfactual_cost_pct"] = MAKER_COUNTERFACTUAL_COST_PCT
         add_event(self.con, trade["participant_id"], ts, trade["symbol_a"], "PAPER_CLOSE", payload)
         self.con.commit()
+        return True
 
     def _close_due_extreme(self, symbol: str, ts: int, price: float) -> None:
         rows = self.con.execute(
@@ -359,7 +391,7 @@ class Sidecar:
             if reason is None and ts >= int(trade["exit_due_ms"]): reason = "GRID_TTL"
             if reason:
                 self._close_trade(trade, ts, exit_price, reason)
-                self.cooldown_until[(HFT, symbol)] = ts + int(HFT_CONFIG["cooldown_seconds"] * 1000)
+                self.cooldown_until[(HFT, symbol)] = ts + int(HFT_CONFIG["cooldown_seconds"]) * 1000
 
     def _extreme_features(self, symbol: str, ts: int, price: float) -> Optional[dict[str, float]]:
         p15 = self._price_at_or_before(symbol, ts - 15_000)
@@ -389,7 +421,7 @@ class Sidecar:
         payload = {"features": {**f, "spread_bps": spread, "quote_volume_24h": r["quote_volume_24h"]},
                    "score": abs(f["previous_60s_return_ending_15s_ago_pct"]) + abs(f["ret_15s_pct"])}
         self._emit_signal_and_open(EXTREME, ts, symbol, side, price, int(EXTREME_CONFIG["horizon_seconds"]), payload)
-        self.cooldown_until[(EXTREME, symbol)] = ts + int(EXTREME_CONFIG["cooldown_seconds"] * 1000)
+        self.cooldown_until[(EXTREME, symbol)] = ts + int(EXTREME_CONFIG["cooldown_seconds"]) * 1000
 
     def _realized_vol_bps(self, symbol: str, ts: int) -> Optional[float]:
         pts = [p for p in self.history[symbol] if ts - 60_000 <= p.ts_ms <= ts]
@@ -438,26 +470,36 @@ class Sidecar:
                     "virtual_quote_ask": previous.ask, "touch_price": price}, "score": abs(previous.imbalance),
                     "warning": "Queue position is not observable in current recorder; this is a research proxy, not a queue-accurate HFT fill."}
                 self._emit_signal_and_open(HFT, ts, symbol, side, entry, int(HFT_CONFIG["ttl_seconds"]), payload)
-                self.cooldown_until[(HFT, symbol)] = ts + int(HFT_CONFIG["cooldown_seconds"] * 1000)
+                self.cooldown_until[(HFT, symbol)] = ts + int(HFT_CONFIG["cooldown_seconds"]) * 1000
         q = self._build_hft_quote(r, depth)
         if q: self.hft_quotes[symbol] = q
         else: self.hft_quotes.pop(symbol, None)
 
     def process_row(self, r: sqlite3.Row) -> None:
         ts, symbol, price = int(r["ts_ms"]), r["symbol"], float(r["last_price"])
+        prev = self._prev_ts.get(symbol)
+        if prev is not None and ts - prev >= PER_SYMBOL_GAP_MS:
+            self._record_gap(symbol, prev, ts)
         self._append_history(symbol, ts, price)
+        self._prev_ts[symbol] = ts
         self._close_due_extreme(symbol, ts, price)
         self._close_hft(symbol, ts, price)
         self._maybe_extreme(r)
         self._maybe_hft(r)
 
     def step(self) -> int:
-        rows = self.con.execute("SELECT * FROM market_samples WHERE ts_ms>? ORDER BY ts_ms,symbol LIMIT 5000", (self.last_seen_ts,)).fetchall()
+        """G1: keyset pagination over PK(ts_ms,symbol) — no row sharing a boundary
+        timestamp can be skipped when the page saturates."""
+        rows = self.con.execute(
+            "SELECT * FROM market_samples WHERE (ts_ms>?) OR (ts_ms=? AND symbol>?) ORDER BY ts_ms,symbol LIMIT 5000",
+            (self.last_seen_ts, self.last_seen_ts, self.last_seen_symbol),
+        ).fetchall()
         if not rows: return 0
-        max_ts = self.last_seen_ts
         for r in rows:
-            self.process_row(r); max_ts = max(max_ts, int(r["ts_ms"]))
-        self.last_seen_ts = max_ts
+            self.process_row(r)
+        tail = rows[-1]
+        self.last_seen_ts = int(tail["ts_ms"])
+        self.last_seen_symbol = str(tail["symbol"])
         return len(rows)
 
     def run(self) -> None:
@@ -487,6 +529,15 @@ def main() -> None:
     args = ap.parse_args(); db = detect_db(args.db)
     if args.detect_db: print(db); return
     con = connect(db)
+    # G4: the legacy entrypoint writes status='OPEN'; after the isolation hotfix
+    # it must never run again — route through tradelab_r4_isolation.py.
+    if args.run:
+        hotfix = con.execute("SELECT value FROM meta WHERE key='r4_isolation_hotfix_started_at_ms'").fetchone()
+        if hotfix:
+            raise SystemExit(
+                "Refusing legacy --run: r4_isolation_hotfix_started_at_ms is present. "
+                "Use tradelab_r4_isolation.py --run instead (R4_OPEN isolation)."
+            )
     epoch = activate_r4(con) if (args.activate_r4 or args.run) else int((con.execute("SELECT value FROM meta WHERE key='five_model_epoch_started_at_ms'").fetchone() or [0])[0])
     if args.activate_r4 and not args.run: print(jdump(status(con))); return
     if args.status: print(json.dumps(status(con), ensure_ascii=False, indent=2, sort_keys=True)); return
