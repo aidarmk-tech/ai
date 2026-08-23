@@ -28,7 +28,7 @@ Causal rule, both directions:
 - prior 60-second displacement ending 15 seconds ago: `>= 0.80%` absolute;
 - rolling 5-minute price z-score reached `>= 2.5` absolute during the last 30 seconds;
 - subsequent 15-second reversal confirmation: `>= 0.05%` in the opposite direction;
-- spread <= 10 bps;
+- spread `<= 10 bps`;
 - fixed 300-second paper horizon;
 - 300-second per-symbol cooldown;
 - max two concurrent positions.
@@ -59,3 +59,36 @@ This is a code sanity replay, not an out-of-sample performance claim.
 - `HFT_GRID TOUCH_PROXY_V1`: 35 touch signals, 32 closed; mean gross `+0.0125%`, mean common-cost net `-0.1275%`, maker-cost counterfactual mean `-0.0275%`.
 
 The negative HFT sanity result is intentionally not tuned away: the slot remains SHADOW until queue-aware L2 data can validate or reject it honestly.
+
+## Infra hardening v2 (audit follow-up, branch fix/r4-g1-g7)
+
+Live-data audit of the R4C epoch produced four infrastructure fixes (no trading-logic changes):
+
+- **G1 keyset pagination** — `step()` advances a composite cursor `(ts_ms, symbol)` instead of the watermark `ts_ms > last_seen`. Removes permanent row skips when a 5000-row page breaks inside one timestamp group, plus the startup off-by-one at `MAX(ts_ms)`.
+- **G2/G3 idempotent close** — base `_close_trade` guards the UPDATE with `status='OPEN'` and credits equity / emits `PAPER_CLOSE` only when exactly one row changed. Mirrors the isolation sidecar guard.
+- **G4 hotfix guard** — base entrypoint refuses `--run` over an isolated DB (`meta.r4_isolation_hotfix_started_at_ms` present); operators must use `tradelab_r4_isolation.py --run` (R4_OPEN namespace).
+- **G7 per-symbol gap detector** — holes >= 60 s for a single symbol are written to `recorder_gaps` as `symbol_gap:<SYM>` (the global recorder previously missed symbol-level outages up to 115 minutes).
+- **CI** — `.github/workflows/r4-tests.yml` runs unit tests and a no-real-order-API scan.
+
+Label consistency can be checked any time against the live DB (read-only):
+
+```bash
+python3 audit_forward_labels.py --db /var/lib/pumpradar/tradelab.sqlite3
+```
+
+## Label units
+
+`forward_labels.ret_5s .. ret_300s` are stored as **plain percentages**: `ret_300s = (p_end / p_start - 1) * 100`, where `p_start` is the sample at the state ts and `p_end` is the first sample at `ts + 300 s`. Verified to machine precision during the R4C audit; `audit_forward_labels.py` re-checks continuously and exits 3 on drift.
+
+## Candidate roadmap v2 (research queue, owner-approved)
+
+Ordered; none of these change existing participants; each joins via `meta['join_started_at_ms_<PID>']` without resetting the R4C epoch:
+
+1. `LIQ_CASCADE_REVERSION` — causal reversal after liquidation cascades (source: `liquidations`).
+2. `BASIS_PREMIUM_REVERSION` — extreme perp premium vs index mean-reversion (source: `mark_price` vs `index_price`).
+3. `STAT_ARB_V2` — pair logic A/B vs legacy STAT_ARB; FIFO opening (no score priority), z-corridor [2.0; 3.0].
+4. `FLOW_TOXICITY` research track on `flow_samples`, then shadow (adverse-selection stress-tested first).
+5. `OI_FLUSH_REVERSION` — open-interest flush + price dislocation reversion.
+6. `XS_MOMENTUM_NEUTRAL` — cross-sectional long-top/short-bottom replacement candidate for REGIME_MOMENTUM.
+7. HFT slot returns only via the hftbacktest/GLFT queue-aware track once event-level L2 capture exists.
+8. Meta-labeling filter on existing `forward_labels` (MFE/MAE triple-barrier labels already computed) to size/filter EXTREME entries ex-ante.
