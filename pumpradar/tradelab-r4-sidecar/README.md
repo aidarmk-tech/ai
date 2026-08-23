@@ -62,18 +62,19 @@ The negative HFT sanity result is intentionally not tuned away: the slot remains
 
 ## Infra hardening v2 (audit follow-up, branch fix/r4-g1-g7)
 
-Live-data audit of the R4C epoch produced four infrastructure fixes (no trading-logic changes):
+Live-data audit of the R4C epoch produced three infrastructure fixes (**no intentional strategy-parameter/signal-rule changes**):
 
-- **G1 keyset pagination** — `step()` advances a composite cursor `(ts_ms, symbol)` instead of the watermark `ts_ms > last_seen`. Removes permanent row skips when a 5000-row page breaks inside one timestamp group, plus the startup off-by-one at `MAX(ts_ms)`.
+- **G1 keyset pagination** — `step()` advances a composite cursor `(ts_ms, symbol)` instead of the watermark `ts_ms > last_seen`. Removes permanent row skips when a 5000-row page breaks inside one timestamp group, plus the startup off-by-one at `MAX(ts_ms)`. **Scope: continuity within one live process.** Cross-restart backlog replay is intentionally skipped and tracked in #37 — do not add a persistent cursor without an exactly-once/dedup design.
 - **G2/G3 idempotent close** — base `_close_trade` guards the UPDATE with `status='OPEN'` and credits equity / emits `PAPER_CLOSE` only when exactly one row changed. Mirrors the isolation sidecar guard.
 - **G4 hotfix guard** — base entrypoint refuses `--run` over an isolated DB (`meta.r4_isolation_hotfix_started_at_ms` present); operators must use `tradelab_r4_isolation.py --run` (R4_OPEN namespace).
-- **G7 per-symbol gap detector** — holes >= 60 s for a single symbol are written to `recorder_gaps` as `symbol_gap:<SYM>` (the global recorder previously missed symbol-level outages up to 115 minutes).
 - **CI** — `.github/workflows/r4-tests.yml` runs unit tests and a no-real-order-API scan.
+
+Per-symbol gap detection (prototype G7) was **reverted during review**: live holes (e.g. COTIUSDT 115 min) stem from dynamic universe/watchlist rotation, not recorder outages. Writing universe absence into `recorder_gaps` would corrupt its semantics, and prod `UNIQUE(start_ms, end_ms)` forbids multi-symbol rows anyway. Classification design (`RECORDER_GAP` vs `UNIVERSE_ABSENCE`) is tracked in #38.
 
 Label consistency can be checked any time against the live DB (read-only):
 
 ```bash
-python3 audit_forward_labels.py --db /var/lib/pumpradar/tradelab.sqlite3
+python3 audit_forward_labels.py --db /var/lib/tradelab/tradelab.sqlite3
 ```
 
 ## Label units
