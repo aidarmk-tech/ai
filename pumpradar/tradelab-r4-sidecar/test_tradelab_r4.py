@@ -23,6 +23,7 @@ CREATE TABLE market_states(id INTEGER PRIMARY KEY AUTOINCREMENT,ts_ms INTEGER NO
 CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
 """
 
+
 class R4Tests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -39,6 +40,9 @@ class R4Tests(unittest.TestCase):
     def tearDown(self):
         self.con.close()
         self.tmp.cleanup()
+
+    def _insert_sample(self, ts: int, symbol: str, price: float) -> None:
+        self.con.execute("INSERT INTO market_samples(ts_ms,symbol,last_price) VALUES(?,?,?)", (ts, symbol, price))
 
     def test_activation_has_five_active_and_retires_flow(self):
         r4.activate_r4(self.con)
@@ -69,6 +73,139 @@ class R4Tests(unittest.TestCase):
         text = (HERE / "tradelab_r4_sidecar.py").read_text()
         for forbidden in ["apiKey", "secretKey", "/fapi/v1/order", "create_order", "place_order"]:
             self.assertNotIn(forbidden, text)
+
+    # ---- regression tests for infra fixes (audit follow-up) ----
+
+    def test_keyset_pagination_never_skips_boundary_group(self):
+        """G1: rows sharing one ts_ms must survive a LIMIT page break.
+
+        Two ts groups of 3000 symbols each. The cursor is rewound below the
+        fixture timestamps to emulate a live process positioned before the
+        data (startup watermark behaviour itself is covered by
+        test_startup_cursor_consumes_existing_max_group). Legacy watermark
+        cursor lost the tail of the second group when the 5000-row page
+        ended mid-group; the keyset cursor must process all 6000 rows
+        exactly once."""
+        epoch = r4.activate_r4(self.con)
+        sc = r4.Sidecar(self.con, epoch)
+        base_ts = 20_000_000
+        rows = []
+        for i in range(3000):
+            rows.append((base_ts, f"S{i:04d}USDT", 100.0))
+            rows.append((base_ts + 5_000, f"S{i:04d}USDT", 100.0))
+        self.con.executemany("INSERT INTO market_samples(ts_ms,symbol,last_price) VALUES(?,?,?)", rows)
+        self.con.commit()
+        # Rewind cursor to just before the fixture window (live-process scope).
+        sc.last_seen_ts = base_ts - 1
+        sc.last_seen_symbol = ""
+        total = 0
+        for _ in range(10):
+            n = sc.step()
+            if n == 0:
+                break
+            total += n
+        self.assertEqual(total, 6000)
+        # and stepping again yields nothing (no reprocessing)
+        self.assertEqual(sc.step(), 0)
+
+    def test_close_is_idempotent_and_credits_equity_once(self):
+        """G2/G3: second close attempt must be a no-op (no equity change,
+        no duplicate PAPER_CLOSE event)."""
+        epoch = r4.activate_r4(self.con)
+        sc = r4.Sidecar(self.con, epoch)
+        sym, ts = "YUSDT", 50_000_000
+        self._insert_sample(ts, sym, 100.0)
+        self.con.commit()
+        self.assertTrue(sc._emit_signal_and_open(r4.EXTREME, ts, sym, "LONG", 100.0, 300, {"features": {}}))
+        eq_open = sc._equity(r4.EXTREME)
+        trade = self.con.execute("SELECT * FROM paper_trades WHERE status='OPEN' LIMIT 1").fetchone()
+        self.assertIsNotNone(trade)
+        self.assertTrue(sc._close_trade(trade, ts + 300_000, 101.0, "FIXED_300S"))
+        eq_closed = sc._equity(r4.EXTREME)
+        self.assertFalse(sc._close_trade(trade, ts + 300_000, 101.0, "FIXED_300S"))
+        self.assertEqual(sc._equity(r4.EXTREME), eq_closed)
+        self.assertNotEqual(eq_closed, eq_open)
+        closes = self.con.execute("SELECT COUNT(*) FROM participant_events WHERE event_type='PAPER_CLOSE'").fetchone()[0]
+        self.assertEqual(closes, 1)
+        statuses = {r[0] for r in self.con.execute("SELECT DISTINCT status FROM paper_trades")}
+        self.assertEqual(statuses, {"CLOSED"})
+
+    def test_startup_cursor_consumes_existing_max_group(self):
+        """Startup watermark: the newest existing row is already-consumed.
+        Immediate step() is a no-op (no replay of the MAX(ts_ms) group that
+        _seed_history already ingested); only genuinely new rows are
+        processed, exactly once.
+
+        Fixture timestamps POSTDATE the epoch: in production every sample
+        ingested after activation is newer than five_model_epoch_started_at_ms,
+        and pre-epoch history is deliberately never replayed (#37 anti-backlog
+        invariant enforced by Sidecar.__init__)."""
+        epoch = r4.activate_r4(self.con)
+        t0 = epoch + 60_000  # post-epoch fixture (prod invariant)
+        self._insert_sample(t0, "AAAUSDT", 100.0)
+        self._insert_sample(t0, "BBBUSDT", 101.0)
+        self.con.commit()
+        sc = r4.Sidecar(self.con, epoch)
+        self.assertEqual(sc.last_seen_ts, t0)
+        self.assertEqual(sc.last_seen_symbol, "BBBUSDT")
+        # C) immediate step() processes nothing
+        self.assertEqual(sc.step(), 0)
+        # D) new timestamp with several symbols
+        t1 = t0 + 5_000
+        self._insert_sample(t1, "AAAUSDT", 102.0)
+        self._insert_sample(t1, "BBBUSDT", 103.0)
+        self._insert_sample(t1, "CCCUSDT", 104.0)
+        self.con.commit()
+        # E) exactly those three rows, exactly once
+        self.assertEqual(sc.step(), 3)
+        self.assertEqual(sc.step(), 0)
+        # far-future epoch boundary: no rows at/after it -> fallback to
+        # last_seen_ts = epoch_ts-1, last_seen_symbol = "" (nothing consumed)
+        sc2 = r4.Sidecar(self.con, epoch + 10_000_000)
+        self.assertEqual(sc2.last_seen_ts, epoch + 10_000_000 - 1)
+        self.assertEqual(sc2.last_seen_symbol, "")
+        self.assertEqual(sc2.step(), 0)
+
+    def test_run_guard_blocks_before_any_db_mutation(self):
+        """G4: legacy --run over an isolated DB must SystemExit BEFORE
+        activate_r4() runs. A late guard allowed activate_r4 to resurrect
+        retired slots (ACTIVE/ELIMINATED->CANDIDATE, active_effect flip,
+        five_model_active_ids rewrite) before exiting."""
+        r4.activate_r4(self.con)
+        r4.upsert_meta(self.con, "r4_isolation_hotfix_started_at_ms", "12345")
+        # Simulate fully isolated/retired HFT slot that a buggy late guard
+        # would have resurrected.
+        self.con.execute("UPDATE participants SET status='RETIRED', role='ELIMINATED' WHERE participant_id=?", (r4.HFT,))
+        self.con.execute("UPDATE participant_specs SET active_effect='RETIRED_NO_SCORE' WHERE participant_id=?", (r4.HFT,))
+        self.con.commit()
+
+        def snapshot():
+            return {
+                "participants": [tuple(r) for r in self.con.execute("SELECT * FROM participants ORDER BY participant_id")],
+                "participant_specs": [tuple(r) for r in self.con.execute("SELECT * FROM participant_specs ORDER BY participant_id")],
+                "meta": [tuple(r) for r in self.con.execute("SELECT key,value FROM meta ORDER BY key")],
+                "events": self.con.execute("SELECT COUNT(*) FROM participant_events").fetchone()[0],
+                "trades": self.con.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0],
+                "states": self.con.execute("SELECT COUNT(*) FROM market_states").fetchone()[0],
+            }
+
+        before = snapshot()
+        saved_detect, saved_argv = r4.detect_db, sys.argv
+        r4.detect_db = lambda explicit=None: self.db
+        sys.argv = ["tradelab_r4_sidecar.py", "--run"]
+        try:
+            with self.assertRaises(SystemExit) as cm:
+                r4.main()
+            self.assertIn("hotfix", str(cm.exception))
+        finally:
+            r4.detect_db, sys.argv = saved_detect, saved_argv
+        # Field-for-field: nothing changed anywhere.
+        self.assertEqual(snapshot(), before)
+        hft = self.con.execute("SELECT status,role FROM participants WHERE participant_id=?", (r4.HFT,)).fetchone()
+        self.assertEqual((hft["status"], hft["role"]), ("RETIRED", "ELIMINATED"))
+        eff = self.con.execute("SELECT active_effect FROM participant_specs WHERE participant_id=?", (r4.HFT,)).fetchone()[0]
+        self.assertEqual(eff, "RETIRED_NO_SCORE")
+
 
 if __name__ == "__main__":
     unittest.main()

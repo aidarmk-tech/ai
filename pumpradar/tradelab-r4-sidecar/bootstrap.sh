@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-REV="d5bc19990d80a1534c58a89c8eb0f3861fdad913"
+REV="${TRADELAB_REV:-8d023d48a855b8c55742cfc1a64db3d2959b97a1}"
 BASE="https://raw.githubusercontent.com/aidarmk-tech/ai/${REV}/pumpradar/tradelab-r4-sidecar"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT

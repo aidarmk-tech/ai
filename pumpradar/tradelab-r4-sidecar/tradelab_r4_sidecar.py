@@ -220,8 +220,19 @@ class Sidecar:
         self.history: dict[str, Deque[PricePoint]] = defaultdict(lambda: deque(maxlen=100))
         self.hft_quotes: dict[str, Quote] = {}
         self.cooldown_until: dict[tuple[str, str], int] = {}
-        latest = con.execute("SELECT COALESCE(MAX(ts_ms),0) FROM market_samples").fetchone()[0]
-        self.last_seen_ts = max(int(latest or 0), epoch_ts - 1)
+        # NOTE: cross-restart backlog replay is intentionally out of scope
+        # (#37). The newest existing row is treated as ALREADY CONSUMED on
+        # startup: an immediate step() processes nothing and the MAX(ts_ms)
+        # group is not replayed (it was seeded into history below).
+        latest_row = con.execute(
+            "SELECT ts_ms,symbol FROM market_samples ORDER BY ts_ms DESC, symbol DESC LIMIT 1"
+        ).fetchone()
+        if latest_row is not None and int(latest_row["ts_ms"]) >= epoch_ts:
+            self.last_seen_ts = int(latest_row["ts_ms"])
+            self.last_seen_symbol = str(latest_row["symbol"])
+        else:
+            self.last_seen_ts = max(epoch_ts - 1, 0)
+            self.last_seen_symbol = ""
         self._seed_history(self.last_seen_ts)
         self._restore_cooldowns()
 
@@ -308,15 +319,21 @@ class Sidecar:
         self.con.commit()
         return True
 
-    def _close_trade(self, trade: sqlite3.Row, ts: int, exit_price: float, reason: str) -> None:
+    def _close_trade(self, trade: sqlite3.Row, ts: int, exit_price: float, reason: str) -> bool:
+        # Idempotent close: credit equity and emit PAPER_CLOSE only when this
+        # call performs the single successful OPEN->CLOSED transition.
         gross = pct_return(float(trade["entry_a"]), exit_price, trade["side_a"])
         net = gross - COMMON_ROUND_TRIP_COST_PCT
         pnl = float(trade["notional_usdt"]) * net / 100.0
         maker_cf = gross - MAKER_COUNTERFACTUAL_COST_PCT if trade["participant_id"] == HFT else None
-        self.con.execute(
-            "UPDATE paper_trades SET closed_at_ms=?,exit_a=?,gross_return_pct=?,net_return_pct=?,pnl_usdt=?,status='CLOSED' WHERE trade_id=?",
+        cur = self.con.execute(
+            "UPDATE paper_trades SET closed_at_ms=?,exit_a=?,gross_return_pct=?,net_return_pct=?,pnl_usdt=?,status='CLOSED' "
+            "WHERE trade_id=? AND status='OPEN'",
             (ts, exit_price, gross, net, pnl, trade["trade_id"]),
         )
+        if cur.rowcount != 1:
+            self.con.rollback()
+            return False
         self.con.execute("UPDATE participants SET equity=equity+? WHERE participant_id=?", (pnl, trade["participant_id"]))
         payload: dict[str, Any] = {
             "trade_id": trade["trade_id"], "exit_reason": reason, "gross_return_pct": gross,
@@ -328,6 +345,7 @@ class Sidecar:
             payload["maker_counterfactual_cost_pct"] = MAKER_COUNTERFACTUAL_COST_PCT
         add_event(self.con, trade["participant_id"], ts, trade["symbol_a"], "PAPER_CLOSE", payload)
         self.con.commit()
+        return True
 
     def _close_due_extreme(self, symbol: str, ts: int, price: float) -> None:
         rows = self.con.execute(
@@ -359,7 +377,7 @@ class Sidecar:
             if reason is None and ts >= int(trade["exit_due_ms"]): reason = "GRID_TTL"
             if reason:
                 self._close_trade(trade, ts, exit_price, reason)
-                self.cooldown_until[(HFT, symbol)] = ts + int(HFT_CONFIG["cooldown_seconds"] * 1000)
+                self.cooldown_until[(HFT, symbol)] = ts + int(HFT_CONFIG["cooldown_seconds"]) * 1000
 
     def _extreme_features(self, symbol: str, ts: int, price: float) -> Optional[dict[str, float]]:
         p15 = self._price_at_or_before(symbol, ts - 15_000)
@@ -389,7 +407,7 @@ class Sidecar:
         payload = {"features": {**f, "spread_bps": spread, "quote_volume_24h": r["quote_volume_24h"]},
                    "score": abs(f["previous_60s_return_ending_15s_ago_pct"]) + abs(f["ret_15s_pct"])}
         self._emit_signal_and_open(EXTREME, ts, symbol, side, price, int(EXTREME_CONFIG["horizon_seconds"]), payload)
-        self.cooldown_until[(EXTREME, symbol)] = ts + int(EXTREME_CONFIG["cooldown_seconds"] * 1000)
+        self.cooldown_until[(EXTREME, symbol)] = ts + int(EXTREME_CONFIG["cooldown_seconds"]) * 1000
 
     def _realized_vol_bps(self, symbol: str, ts: int) -> Optional[float]:
         pts = [p for p in self.history[symbol] if ts - 60_000 <= p.ts_ms <= ts]
@@ -438,7 +456,7 @@ class Sidecar:
                     "virtual_quote_ask": previous.ask, "touch_price": price}, "score": abs(previous.imbalance),
                     "warning": "Queue position is not observable in current recorder; this is a research proxy, not a queue-accurate HFT fill."}
                 self._emit_signal_and_open(HFT, ts, symbol, side, entry, int(HFT_CONFIG["ttl_seconds"]), payload)
-                self.cooldown_until[(HFT, symbol)] = ts + int(HFT_CONFIG["cooldown_seconds"] * 1000)
+                self.cooldown_until[(HFT, symbol)] = ts + int(HFT_CONFIG["cooldown_seconds"]) * 1000
         q = self._build_hft_quote(r, depth)
         if q: self.hft_quotes[symbol] = q
         else: self.hft_quotes.pop(symbol, None)
@@ -452,12 +470,20 @@ class Sidecar:
         self._maybe_hft(r)
 
     def step(self) -> int:
-        rows = self.con.execute("SELECT * FROM market_samples WHERE ts_ms>? ORDER BY ts_ms,symbol LIMIT 5000", (self.last_seen_ts,)).fetchall()
+        # Composite keyset cursor (ts_ms,symbol): rows sharing the boundary
+        # ts_ms survive LIMIT page breaks, and no row is ever processed twice.
+        # Scope: continuity WITHIN one live process only (see __init__ note).
+        rows = self.con.execute(
+            "SELECT * FROM market_samples WHERE (ts_ms>?) OR (ts_ms=? AND symbol>?) "
+            "ORDER BY ts_ms,symbol LIMIT 5000",
+            (self.last_seen_ts, self.last_seen_ts, self.last_seen_symbol),
+        ).fetchall()
         if not rows: return 0
-        max_ts = self.last_seen_ts
         for r in rows:
-            self.process_row(r); max_ts = max(max_ts, int(r["ts_ms"]))
-        self.last_seen_ts = max_ts
+            self.process_row(r)
+        last = rows[-1]
+        self.last_seen_ts = int(last["ts_ms"])
+        self.last_seen_symbol = str(last["symbol"])
         return len(rows)
 
     def run(self) -> None:
@@ -487,10 +513,22 @@ def main() -> None:
     args = ap.parse_args(); db = detect_db(args.db)
     if args.detect_db: print(db); return
     con = connect(db)
+    if args.run:
+        # G4: guard BEFORE any DB mutation. activate_r4() rewrites
+        # participants/participant_specs/meta (resurrects retired slots,
+        # flips active_effect, updates five_model_active_ids), so a forbidden
+        # legacy --run must SystemExit while the isolated state is untouched.
+        hotfix = con.execute("SELECT value FROM meta WHERE key='r4_isolation_hotfix_started_at_ms'").fetchone()
+        if hotfix:
+            raise SystemExit(
+                "r4 isolation hotfix is active for this DB; base sidecar writes legacy status='OPEN' trades. "
+                "Run tradelab_r4_isolation.py --run instead (paper_owner=R4_SIDECAR, status=R4_OPEN)."
+            )
     epoch = activate_r4(con) if (args.activate_r4 or args.run) else int((con.execute("SELECT value FROM meta WHERE key='five_model_epoch_started_at_ms'").fetchone() or [0])[0])
     if args.activate_r4 and not args.run: print(jdump(status(con))); return
     if args.status: print(json.dumps(status(con), ensure_ascii=False, indent=2, sort_keys=True)); return
-    if args.run: Sidecar(con, epoch).run(); return
+    if args.run:
+        Sidecar(con, epoch).run(); return
     ap.error("choose --activate-r4, --status, --run, or --detect-db")
 
 if __name__ == "__main__": main()
