@@ -1,0 +1,35 @@
+name: r4-tests
+
+on:
+  push:
+    branches: [tradelab-r4-five-models, fix/r4-g1-g7]
+    paths:
+      - 'pumpradar/tradelab-r4-sidecar/**'
+      - '.github/workflows/r4-tests.yml'
+  pull_request:
+    paths:
+      - 'pumpradar/tradelab-r4-sidecar/**'
+      - '.github/workflows/r4-tests.yml'
+  workflow_dispatch:
+
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Unit tests
+        run: python -m unittest discover -s pumpradar/tradelab-r4-sidecar -p 'test_*.py' -v
+      - name: Shell syntax check
+        run: |
+          bash -n pumpradar/tradelab-r4-sidecar/bootstrap.sh
+          bash -n pumpradar/tradelab-r4-sidecar/install.sh
+      - name: No-real-order-API scan (defense in depth)
+        run: |
+          ! grep -nE 'apiKey|secretKey|/fapi/v1/order|create_order|place_order' \
+            pumpradar/tradelab-r4-sidecar/tradelab_r4_sidecar.py \
+            pumpradar/tradelab-r4-sidecar/tradelab_r4_isolation.py \
+            pumpradar/tradelab-r4-sidecar/audit_forward_labels.py
