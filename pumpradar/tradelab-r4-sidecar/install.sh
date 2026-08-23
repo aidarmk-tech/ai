@@ -46,5 +46,5 @@ systemctl is-active tradelab-r4-five-models.service
 
 echo "Installed R4 isolation hotfix. DB: $DB"
 echo "Backup: $BACKUP"
-echo "Five active candidates restarted at virtual $20 from the clean hotfix epoch."
+echo 'Five active candidates restarted at virtual $20 from the clean hotfix epoch.'
 echo "FLOW_ABSORPTION is write-blocked and retired. HFT/EXTREME paper positions are isolated from legacy paper_book."
