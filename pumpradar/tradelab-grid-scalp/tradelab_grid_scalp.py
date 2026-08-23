@@ -210,11 +210,15 @@ def main():
             if len(dq) > 1500:
                 dq.popleft()
 
-            if sym not in qualified:
+            if sym not in qualified and states[sym].long_entry is None and states[sym].short_entry is None:
                 continue
             st = states[sym]
 
             # --- close due / target legs ---
+            # NOTE: runs before any open logic; a leg opened while the symbol
+            # was qualified must stay closable (TTL/target) even after the
+            # symbol leaves the qualified set, else it becomes an orphan that
+            # permanently consumes max_open_trades capacity.
             for key, st_field in (("LONG", "long_entry"), ("SHORT", "short_entry")):
                 ent = getattr(st, st_field)
                 if ent is None:
@@ -236,6 +240,9 @@ def main():
                         close_trade(row, ts, px, "TARGET" if hit_target else "TTL")
                         con.commit()
                     setattr(st, st_field, None)
+
+            if sym not in qualified:
+                continue
 
             # --- open new legs ---
             cur_open = sum(1 for v in states.values() for f in ("long_entry", "short_entry")
