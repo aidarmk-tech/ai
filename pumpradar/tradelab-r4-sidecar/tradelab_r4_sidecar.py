@@ -19,7 +19,6 @@ R4_MODE = "FIVE_MODEL_SHADOW_R4"
 COMMON_ROUND_TRIP_COST_PCT = 0.14
 MAKER_COUNTERFACTUAL_COST_PCT = 0.04
 POLL_SECONDS = 1.0
-GAP_MIN_MS = 60_000  # G7: per-symbol data-gap threshold for recorder_gaps
 
 EXISTING_ACTIVE = ("BTC_ALT_LAG", "STAT_ARB", "REGIME_MOMENTUM")
 RETIRED = "FLOW_ABSORPTION"
@@ -222,9 +221,12 @@ class Sidecar:
         self.hft_quotes: dict[str, Quote] = {}
         self.cooldown_until: dict[tuple[str, str], int] = {}
         latest = con.execute("SELECT COALESCE(MAX(ts_ms),0) FROM market_samples").fetchone()[0]
+        # NOTE: startup resumes from MAX(ts_ms): samples ingested while the
+        # sidecar was down are intentionally NOT replayed (see open issue on
+        # restart recovery / persistent cursor). Within a live process, the
+        # keyset cursor below guarantees no skips and no reprocessing.
         self.last_seen_ts = max(int(latest or 0), epoch_ts - 1)
-        self.last_seen_symbol = ""  # G1: composite keyset cursor (ts_ms, symbol)
-        self.last_sample_ts: dict[str, int] = {}  # G7: previous ts per symbol for gap detection
+        self.last_seen_symbol = ""
         self._seed_history(self.last_seen_ts)
         self._restore_cooldowns()
 
@@ -246,7 +248,6 @@ class Sidecar:
         ).fetchall()
         for r in rows:
             self._append_history(r["symbol"], int(r["ts_ms"]), float(r["last_price"]))
-            self.last_sample_ts[r["symbol"]] = int(r["ts_ms"])
 
     def _append_history(self, symbol: str, ts: int, price: float) -> None:
         dq = self.history[symbol]
@@ -286,17 +287,6 @@ class Sidecar:
         row = self.con.execute("SELECT equity FROM participants WHERE participant_id=?", (participant,)).fetchone()
         return float(row[0]) if row else 20.0
 
-    def _record_gap(self, symbol: str, prev_ts: int, ts: int) -> None:
-        # G7: per-symbol gap detection; never break trading on audit logging failures.
-        try:
-            self.con.execute(
-                "INSERT OR IGNORE INTO recorder_gaps(start_ms,end_ms,duration_ms,reason,detected_at_ms) VALUES(?,?,?,?,?)",
-                (prev_ts, ts, ts - prev_ts, f"symbol_gap:{symbol}", now_ms()),
-            )
-            self.con.commit()
-        except sqlite3.Error:
-            pass
-
     def _emit_signal_and_open(self, participant: str, ts: int, symbol: str, side: str, price: float, horizon_s: int, payload: dict[str, Any]) -> bool:
         payload = dict(payload)
         payload.update({
@@ -324,8 +314,8 @@ class Sidecar:
         return True
 
     def _close_trade(self, trade: sqlite3.Row, ts: int, exit_price: float, reason: str) -> bool:
-        # G2/G3: idempotent close - credit equity and emit PAPER_CLOSE only when this call
-        # is the single successful transition OPEN->CLOSED for the trade row.
+        # Idempotent close: credit equity and emit PAPER_CLOSE only when this
+        # call performs the single successful OPEN->CLOSED transition.
         gross = pct_return(float(trade["entry_a"]), exit_price, trade["side_a"])
         net = gross - COMMON_ROUND_TRIP_COST_PCT
         pnl = float(trade["notional_usdt"]) * net / 100.0
@@ -467,10 +457,6 @@ class Sidecar:
 
     def process_row(self, r: sqlite3.Row) -> None:
         ts, symbol, price = int(r["ts_ms"]), r["symbol"], float(r["last_price"])
-        prev_ts = self.last_sample_ts.get(symbol)
-        if prev_ts is not None and ts - prev_ts >= GAP_MIN_MS:
-            self._record_gap(symbol, prev_ts, ts)
-        self.last_sample_ts[symbol] = ts
         self._append_history(symbol, ts, price)
         self._close_due_extreme(symbol, ts, price)
         self._close_hft(symbol, ts, price)
@@ -478,8 +464,9 @@ class Sidecar:
         self._maybe_hft(r)
 
     def step(self) -> int:
-        # G1: composite keyset cursor (ts_ms,symbol) - never skips rows sharing the
-        # boundary ts_ms at a page break, never re-processes a row.
+        # Composite keyset cursor (ts_ms,symbol): rows sharing the boundary
+        # ts_ms survive LIMIT page breaks, and no row is ever processed twice.
+        # Scope: continuity WITHIN one live process only (see __init__ note).
         rows = self.con.execute(
             "SELECT * FROM market_samples WHERE (ts_ms>?) OR (ts_ms=? AND symbol>?) "
             "ORDER BY ts_ms,symbol LIMIT 5000",
@@ -524,8 +511,8 @@ def main() -> None:
     if args.activate_r4 and not args.run: print(jdump(status(con))); return
     if args.status: print(json.dumps(status(con), ensure_ascii=False, indent=2, sort_keys=True)); return
     if args.run:
-        # G4: the base sidecar writes legacy status='OPEN' trades; refuse when the
-        # isolation hotfix epoch is active for this DB to prevent double-ownership.
+        # Refuse legacy-status ('OPEN') operation over an isolated DB to avoid
+        # recreating the double-ownership defect; use tradelab_r4_isolation.py.
         hotfix = con.execute("SELECT value FROM meta WHERE key='r4_isolation_hotfix_started_at_ms'").fetchone()
         if hotfix:
             raise SystemExit(
