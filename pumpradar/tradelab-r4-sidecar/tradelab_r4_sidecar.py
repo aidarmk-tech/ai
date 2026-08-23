@@ -44,16 +44,18 @@ HFT_CONFIG = {
 }
 
 EXTREME_CONFIG = {
-    "mode": "CAUSAL_EXTREME_REVERSAL_V1",
+    "mode": "CAUSAL_EXTREME_REVERSAL_V2",
     "min_quote_volume_24h": 5_000_000,
     "max_spread_bps": 10.0,
     "displacement_60s_pct": 0.80,
+    "max_displacement_60s_pct": 1.60,
+    "funding_filter": "REQUIRE_CROWD_OPPOSITE_TO_FADE",
     "confirmation_15s_pct": 0.05,
     "z_abs": 2.50,
     "z_lookback_seconds": 300,
     "extreme_recent_seconds": 30,
     "displacement_end_lag_seconds": 15,
-    "horizon_seconds": 300,
+    "horizon_seconds": 600,
     "cooldown_seconds": 300,
     "max_open_trades": 2,
     "common_cost_pct": COMMON_ROUND_TRIP_COST_PCT,
@@ -403,9 +405,17 @@ class Sidecar:
         d, c, z = float(EXTREME_CONFIG["displacement_60s_pct"]), float(EXTREME_CONFIG["confirmation_15s_pct"]), float(EXTREME_CONFIG["z_abs"])
         if f["previous_60s_return_ending_15s_ago_pct"] <= -d and f["recent_min_z"] <= -z and f["ret_15s_pct"] >= c: side = "LONG"
         elif f["previous_60s_return_ending_15s_ago_pct"] >= d and f["recent_max_z"] >= z and f["ret_15s_pct"] <= -c: side = "SHORT"
-        if not side or ts < self.cooldown_until.get((EXTREME, symbol), 0): return
-        payload = {"features": {**f, "spread_bps": spread, "quote_volume_24h": r["quote_volume_24h"]},
-                   "score": abs(f["previous_60s_return_ending_15s_ago_pct"]) + abs(f["ret_15s_pct"])}
+        if not side: return
+        dmax = float(EXTREME_CONFIG.get("max_displacement_60s_pct") or 0)
+        if dmax > 0 and abs(f["previous_60s_return_ending_15s_ago_pct"]) > dmax: return
+        if EXTREME_CONFIG.get("funding_filter") == "REQUIRE_CROWD_OPPOSITE_TO_FADE":
+            fr = r["funding_rate"]
+            if fr is None or fr == 0: return
+            if side == "LONG" and fr <= 0: return
+            if side == "SHORT" and fr >= 0: return
+        if ts < self.cooldown_until.get((EXTREME, symbol), 0): return
+        payload = {"features": {**f, "spread_bps": spread, "quote_volume_24h": r["quote_volume_24h"], "funding_rate": r["funding_rate"]},
+                   "spec_mode": EXTREME_CONFIG["mode"], "score": abs(f["previous_60s_return_ending_15s_ago_pct"]) + abs(f["ret_15s_pct"])}
         self._emit_signal_and_open(EXTREME, ts, symbol, side, price, int(EXTREME_CONFIG["horizon_seconds"]), payload)
         self.cooldown_until[(EXTREME, symbol)] = ts + int(EXTREME_CONFIG["cooldown_seconds"]) * 1000
 
