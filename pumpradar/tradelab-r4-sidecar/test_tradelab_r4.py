@@ -134,9 +134,14 @@ class R4Tests(unittest.TestCase):
         """Startup watermark: the newest existing row is already-consumed.
         Immediate step() is a no-op (no replay of the MAX(ts_ms) group that
         _seed_history already ingested); only genuinely new rows are
-        processed, exactly once."""
+        processed, exactly once.
+
+        Fixture timestamps POSTDATE the epoch: in production every sample
+        ingested after activation is newer than five_model_epoch_started_at_ms,
+        and pre-epoch history is deliberately never replayed (#37 anti-backlog
+        invariant enforced by Sidecar.__init__)."""
         epoch = r4.activate_r4(self.con)
-        t0 = 70_000_000
+        t0 = epoch + 60_000  # post-epoch fixture (prod invariant)
         self._insert_sample(t0, "AAAUSDT", 100.0)
         self._insert_sample(t0, "BBBUSDT", 101.0)
         self.con.commit()
@@ -154,10 +159,12 @@ class R4Tests(unittest.TestCase):
         # E) exactly those three rows, exactly once
         self.assertEqual(sc.step(), 3)
         self.assertEqual(sc.step(), 0)
-        # empty DB case: cursor falls back to epoch boundary, consumes ""
+        # far-future epoch boundary: no rows at/after it -> fallback to
+        # last_seen_ts = epoch_ts-1, last_seen_symbol = "" (nothing consumed)
         sc2 = r4.Sidecar(self.con, epoch + 10_000_000)
         self.assertEqual(sc2.last_seen_ts, epoch + 10_000_000 - 1)
         self.assertEqual(sc2.last_seen_symbol, "")
+        self.assertEqual(sc2.step(), 0)
 
     def test_run_guard_blocks_before_any_db_mutation(self):
         """G4: legacy --run over an isolated DB must SystemExit BEFORE
