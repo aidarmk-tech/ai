@@ -209,8 +209,8 @@ class DashboardScreen(private val activity: MainActivity) {
         bottom.addView(
             Ui.pill(
                 activity,
-                p.status ?: "",
-                if ((p.status ?: "") == "ACTIVE") Ui.GREEN else Ui.MUTED,
+                if ((p.role ?: "") == "ELIMINATED") "OUT" else "CANDIDATE",
+                if ((p.role ?: "") == "ELIMINATED") Ui.MUTED else Ui.GREEN,
             )
         )
         c.addView(bottom)
