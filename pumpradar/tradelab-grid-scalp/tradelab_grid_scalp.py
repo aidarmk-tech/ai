@@ -161,6 +161,10 @@ def main():
             "net_return_pct=?, pnl_usdt=?, status=? WHERE trade_id=?",
             (ts, px, gross, net, pnl, STATUS_CLOSED, row["trade_id"]),
         )
+        con.execute(
+            "UPDATE participants SET equity = equity + ? WHERE participant_id=?",
+            (pnl, PID),
+        )
         emit_event(ts, "PAPER_CLOSE", row["symbol_a"], {
             "trade_id": row["trade_id"], "exit_reason": reason,
             "gross_return_pct": gross, "net_return_pct": net, "paper_owner": "GRID_SIDECAR"})
