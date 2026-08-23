@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-REV="062af39fd7623a4ecceebaef05b762d52583b813"
+REV="d5bc19990d80a1534c58a89c8eb0f3861fdad913"
 BASE="https://raw.githubusercontent.com/aidarmk-tech/ai/${REV}/pumpradar/tradelab-r4-sidecar"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -34,8 +34,6 @@ def matches(p: Path) -> bool:
     except Exception:
         return False
 
-# 1) Prefer DB files actually opened by the legacy recorder/server. Explicitly
-# de-prioritize the R4 sidecar because it may already be attached to a wrong backup.
 proc_candidates=[]
 proc=Path('/proc')
 for pd in proc.iterdir() if proc.exists() else []:
@@ -73,7 +71,6 @@ if proc_candidates:
     print(proc_candidates[0][2])
     raise SystemExit(0)
 
-# 2) Safe persisted path, only if it is not a backup/snapshot.
 envfile=Path('/etc/default/tradelab-r4-five-models')
 if envfile.exists():
     try:
@@ -86,7 +83,6 @@ if envfile.exists():
     except Exception:
         pass
 
-# 3) Disk scan excluding backup/snapshot directories; newest valid DB wins.
 roots=[Path('/var/lib'),Path('/opt'),Path('/srv'),Path('/root')]
 found=[]
 for root in roots:
