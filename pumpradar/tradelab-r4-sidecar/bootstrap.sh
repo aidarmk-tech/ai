@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-REV="d5bc19990d80a1534c58a89c8eb0f3861fdad913"
+REV="${TRADELAB_REV:-8d023d48a855b8c55742cfc1a64db3d2959b97a1}"
 BASE="https://raw.githubusercontent.com/aidarmk-tech/ai/${REV}/pumpradar/tradelab-r4-sidecar"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -102,7 +102,7 @@ if found:
     print(found[0][1]); raise SystemExit(0)
 raise SystemExit(1)
 PY
-)" || true
+)"
 fi
 
 if [[ -z "${TRADELAB_DB:-}" || ! -f "${TRADELAB_DB:-}" ]]; then
@@ -110,7 +110,7 @@ if [[ -z "${TRADELAB_DB:-}" || ! -f "${TRADELAB_DB:-}" ]]; then
   echo "Persisted env (may be stale):" >&2
   cat /etc/default/tradelab-r4-five-models 2>/dev/null >&2 || true
   echo "SQLite candidates:" >&2
-  find /var/lib /opt /srv /root -type f \( -iname '*.sqlite3' -o -iname '*.sqlite' -o -iname '*.db' \) -print 2>/dev/null | head -100 >&2 || true
+  find /var/lib /opt /srv /root -type f \( -iname '*.sqlite3' -o -iname '*.sqlite' \) -print 2>/dev/null | head -100 >&2 || true
   exit 2
 fi
 
