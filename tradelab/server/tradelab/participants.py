@@ -63,8 +63,8 @@ PARTICIPANTS = (
     ),
     Participant(
         "FUNDING_FADE",
-        "Funding Crowd Fade",
-        "E1-20260825",
+        "Funding Momentum",
+        "E2-20260825",
         {
             "warmup_seconds": 600,
             "min_funding_abs": 0.0015,

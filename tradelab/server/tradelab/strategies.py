@@ -244,6 +244,37 @@ class StrategyEngine:
                 out.append(signal)
         return out
 
+    def _funding_fade(self, now_ms, universe, history, funding) -> list[Signal]:
+        """E2 funding-momentum: 72h event study showed extreme funding
+        CONTINUES short-term on our universe (naive fade avg -0.46%),
+        so we enter WITH the crowd while it stays crowded."""
+        cfg = CONFIG["FUNDING_FADE"]
+        out: list[Signal] = []
+        if not funding:
+            return out
+        thr = float(cfg["min_funding_abs"])
+        stall_win = int(cfg["stall_window_seconds"])
+        max_stall = float(cfg["max_stall_abs_pct"])
+        candidates = []
+        for symbol in universe[:25]:
+            fr = funding.get(symbol)
+            if fr is None or abs(fr) < thr:
+                continue
+            h = history.get(symbol)
+            r30 = return_pct(h, now_ms, stall_win)
+            if r30 is None or abs(r30) > max_stall:
+                continue
+            side = "LONG" if fr > 0 else "SHORT"
+            candidates.append((abs(fr), Signal(
+                "FUNDING_FADE", symbol, side, cfg["horizon_seconds"], abs(fr),
+                {"funding_rate": fr, "stall_ret_pct": r30},
+            )))
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        for _, signal in candidates[: int(cfg.get("max_signals_per_eval", 2))]:
+            if self._allowed(signal.participant_id, signal.key, now_ms, cfg["cooldown_seconds"]):
+                out.append(signal)
+        return out
+
     def _absorption(self, now_ms, micro, history, flows, depths) -> list[Signal]:
         cfg = CONFIG["FLOW_ABSORPTION"]
         candidates = []
