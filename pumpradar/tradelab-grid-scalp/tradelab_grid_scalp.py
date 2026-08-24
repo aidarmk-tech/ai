@@ -16,8 +16,8 @@ from collections import defaultdict, deque
 
 DB = "/var/lib/tradelab/tradelab.sqlite3"
 PID = "GRID_SCALP_ADAPTIVE"
-SPEC_VERSION = "GS1-20260824"
-MODE = "REGIME_GATED_GRID_V1"
+SPEC_VERSION = "GS2-20260824"
+MODE = "REGIME_GATED_GRID_V2"
 STATUS_OPEN, STATUS_CLOSED = "G_OPEN", "G_CLOSED"
 
 CFG = {
@@ -34,17 +34,27 @@ CFG = {
     "horizon_seconds": 1800,
     "cooldown_seconds": 60,
     "max_open_trades": 3,
+    # GS2 risk controls. Full-loop replay (5h window, audit 2026-08-24) showed
+    # anchor freeze alone turns PnL positive (-0.65$ -> +0.42$, WR 87->90%);
+    # every stop/kill variant tested was net-negative due to close->re-anchor
+    # churn. Infrastructure kept, disabled until more data says otherwise.
+    "stop_steps": None,                 # hard stop when adverse >= N steps
+    "stop_confirm_seconds": 15,         # breach must persist this long (anti-noise)
+    "trend_kill_steps": None,           # adverse >= N steps ...
+    "trend_kill_disp_5m_bps": 60,       # ... AND 5m displacement confirms a trend
 }
-NOTIONAL = 10.0
 
 
 class GridState:
-    __slots__ = ("last_lvl", "long_entry", "short_entry")
+    __slots__ = ("last_lvl", "long_entry", "short_entry",
+                 "long_stop_since", "short_stop_since")
 
     def __init__(self):
         self.last_lvl = None
         self.long_entry = None   # (entry_px, opened_ms)
         self.short_entry = None
+        self.long_stop_since = None   # ts_ms when adverse-stop breach began
+        self.short_stop_since = None
 
 
 def log(msg):
@@ -132,8 +142,16 @@ def main():
             (ts, PID, symbol, event_type, jdump(payload)),
         )
 
+    def cur_equity():
+        row = con.execute(
+            "SELECT equity FROM participants WHERE participant_id=?", (PID,)
+        ).fetchone()
+        return float(row[0]) if row else 20.0
+
     def open_trade(ts, symbol, side, px, reason_tag, extra):
         trade_id = uuid.uuid4().hex
+        # GS2: notional = equity/max_open (was fixed 10.0 -> 155% leverage)
+        notional = round(max(0.0, cur_equity() / cfg["max_open_trades"]), 2)
         payload = {
             "features": extra, "mode": MODE, "spec_version": SPEC_VERSION,
             "side_a": side, "symbol_a": symbol, "reason": reason_tag,
@@ -143,11 +161,11 @@ def main():
             "INSERT INTO paper_trades(trade_id,participant_id,symbol_a,side_a,opened_at_ms,entry_a,"
             "exit_due_ms,notional_usdt,status,signal_json) VALUES(?,?,?,?,?,?,?,?,?,?)",
             (trade_id, PID, symbol, side, ts, px, ts + cfg["horizon_seconds"] * 1000,
-             NOTIONAL, STATUS_OPEN, jdump(payload)),
+             notional, STATUS_OPEN, jdump(payload)),
         )
         emit_event(ts, "SIGNAL", symbol, payload)
         emit_event(ts, "PAPER_OPEN", symbol, {
-            **payload, "entry_a": px, "trade_id": trade_id, "notional_usdt": NOTIONAL})
+            **payload, "entry_a": px, "trade_id": trade_id, "notional_usdt": notional})
         return trade_id
 
     def close_trade(row, ts, px, reason):
@@ -173,6 +191,21 @@ def main():
 
     def cooldown_ok(ts, symbol):
         return ts - opens_this_second.get((PID, symbol), 0) >= cfg["cooldown_seconds"] * 1000
+
+    def disp_5m_bps(symbol, ts, px):
+        """GS2: 5m log-displacement in bps (+ means price rose over the window)."""
+        dq = prices.get(symbol)
+        if not dq:
+            return None
+        ref = None
+        for t, p in dq:
+            if t <= ts - 300_000:
+                ref = p
+            else:
+                break
+        if ref is None or ref <= 0:
+            return None
+        return math.log(px / ref) * 10_000
 
     # restore open positions across restarts
     states = defaultdict(GridState)
@@ -218,22 +251,60 @@ def main():
                 continue
             st = states[sym]
 
-            # --- close due / target legs ---
+            # --- close due / target / stop legs ---
             # NOTE: runs before any open logic; a leg opened while the symbol
-            # was qualified must stay closable (TTL/target) even after the
+            # was qualified must stay closable (TTL/target/stop) even after the
             # symbol leaves the qualified set, else it becomes an orphan that
             # permanently consumes max_open_trades capacity.
-            for key, st_field in (("LONG", "long_entry"), ("SHORT", "short_entry")):
+            for key, st_field, tm_field in (
+                ("LONG", "long_entry", "long_stop_since"),
+                ("SHORT", "short_entry", "short_stop_since"),
+            ):
                 ent = getattr(st, st_field)
                 if ent is None:
                     continue
                 epx, oms = ent
                 lvl_ent = math.log(epx) / step_r
                 lvl_now = math.log(px) / step_r
+                # GS2: adverse move expressed in grid steps (positive = against)
+                adverse = (lvl_ent - lvl_now) if key == "LONG" else (lvl_now - lvl_ent)
                 hit_target = (key == "LONG" and lvl_now >= lvl_ent + 1) or \
                              (key == "SHORT" and lvl_now <= lvl_ent - 1)
                 hit_ttl = ts - oms >= cfg["horizon_seconds"] * 1000
-                if hit_target or hit_ttl:
+
+                # GS2 hard stop: adverse >= stop_steps, sustained for
+                # stop_confirm_seconds so a single bad tick cannot fire it.
+                since = getattr(st, tm_field)
+                if cfg["stop_steps"] and adverse >= cfg["stop_steps"]:
+                    if since is None:
+                        setattr(st, tm_field, ts)
+                        since = ts
+                    stop_confirmed = ts - since >= cfg["stop_confirm_seconds"] * 1000
+                else:
+                    setattr(st, tm_field, None)
+                    stop_confirmed = False
+
+                # GS2 trend kill-switch: adverse >= trend_kill_steps AND the
+                # 5m displacement confirms a directional move against the leg.
+                trend_kill = False
+                if cfg["trend_kill_steps"] and adverse >= cfg["trend_kill_steps"]:
+                    d = disp_5m_bps(sym, ts, px)
+                    if d is not None and (
+                        (key == "LONG" and d <= -cfg["trend_kill_disp_5m_bps"]) or
+                        (key == "SHORT" and d >= cfg["trend_kill_disp_5m_bps"])
+                    ):
+                        trend_kill = True
+
+                reason = None
+                if hit_target:
+                    reason = "TARGET"
+                elif hit_ttl:
+                    reason = "TTL"
+                elif stop_confirmed:
+                    reason = "STOP"
+                elif trend_kill:
+                    reason = "TREND_KILL"
+                if reason:
                     row = open_rows.pop(sym + key, None)
                     if row is None:
                         row = con.execute(
@@ -241,9 +312,17 @@ def main():
                             (PID, sym, key, STATUS_OPEN),
                         ).fetchone()
                     if row is not None:
-                        close_trade(row, ts, px, "TARGET" if hit_target else "TTL")
+                        close_trade(row, ts, px, reason)
                         con.commit()
                     setattr(st, st_field, None)
+                    setattr(st, tm_field, None)
+                    # GS2: re-anchor the grid where price actually is, so a
+                    # closed loser cannot instantly re-trigger an entry.
+                    st.last_lvl = lvl_now
+                    if reason == "TREND_KILL":
+                        qualified.pop(sym, None)
+                        emit_event(ts, "SYMBOL_DISQUALIFIED", sym,
+                                   {"reason": "trend_kill", "adverse_steps": round(adverse, 2)})
 
             if sym not in qualified:
                 continue
@@ -284,7 +363,10 @@ def main():
                 opens_this_second[(PID, sym)] = ts
                 con.commit()
             else:
-                st.last_lvl = lvl
+                # GS2: hold the grid anchor while any leg is open. Drifting it
+                # tick-by-tick made entries fire on micro-noise mid-trend.
+                if st.long_entry is None and st.short_entry is None:
+                    st.last_lvl = lvl
 
 
 def register(con):
