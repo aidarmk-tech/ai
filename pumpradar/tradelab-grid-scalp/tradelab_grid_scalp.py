@@ -16,7 +16,7 @@ from collections import defaultdict, deque
 
 DB = "/var/lib/tradelab/tradelab.sqlite3"
 PID = "GRID_SCALP_ADAPTIVE"
-SPEC_VERSION = "GS2.1-20260824"
+SPEC_VERSION = "GS2.2-20260824"
 MODE = "REGIME_GATED_GRID_V2"
 STATUS_OPEN, STATUS_CLOSED = "G_OPEN", "G_CLOSED"
 
@@ -38,8 +38,8 @@ CFG = {
     # anchor freeze alone turns PnL positive (-0.65$ -> +0.42$, WR 87->90%);
     # every stop/kill variant tested was net-negative due to close->re-anchor
     # churn. Infrastructure kept, disabled until more data says otherwise.
-    "stop_steps": None,                 # hard stop when adverse >= N steps
-    "stop_confirm_seconds": 15,         # breach must persist this long (anti-noise)
+    "stop_steps": 5,                 # hard stop when adverse >= N steps
+    "stop_confirm_seconds": 120,         # breach must persist this long (anti-noise)
     "trend_kill_steps": None,           # adverse >= N steps ...
     "trend_kill_disp_5m_bps": 60,       # ... AND 5m displacement confirms a trend
 }
@@ -238,6 +238,37 @@ def main():
     while True:
         time.sleep(2)
         now_ms = int(time.time() * 1000)
+
+        # GS2.2 watchdog: TTL must close an open leg even if the symbol
+        # stopped producing samples (orphan leg otherwise hangs forever and
+        # eats max_open_trades capacity). Runs regardless of spec_version the
+        # leg was opened under. Uses last known price, fallback entry price.
+        for wkey in list(open_rows.keys()):
+            wrow = open_rows[wkey]
+            wsym = wrow["symbol_a"]
+            wside = wrow["side_a"] if wrow["side_a"] in ("LONG", "SHORT") else "LONG"
+            wst = states.get(wsym)
+            went = getattr(wst, "long_entry" if wside == "LONG" else "short_entry", None)
+            if wst is None or went is None:
+                continue
+            wepx, woms = went
+            if now_ms - woms < cfg["horizon_seconds"] * 1000 + 60_000:
+                continue
+            wdq = prices.get(wsym)
+            wpx = wdq[-1][1] if wdq else wepx
+            wgross = (wpx / wepx - 1.0) * 100.0 * (1 if wside == "LONG" else -1)
+            open_rows.pop(wkey, None)
+            close_trade(wrow, now_ms, wpx, "TTL", {
+                "mfe_pct": round(wgross, 4),
+                "mae_pct": round(wgross, 4),
+                "hold_seconds": int((now_ms - woms) / 1000),
+                "watchdog": True,
+            })
+            con.commit()
+            setattr(wst, "long_entry" if wside == "LONG" else "short_entry", None)
+            wst.last_lvl = math.log(wpx) / step_r
+            log(f"watchdog TTL close {wsym} {wside} px={wpx}")
+
         fresh = con.execute(
             "SELECT * FROM market_samples WHERE ts_ms>? ORDER BY ts_ms", (last_ts,)
         ).fetchall()
@@ -276,8 +307,8 @@ def main():
                 lvl_ent = math.log(epx) / step_r
                 lvl_now = math.log(px) / step_r
                 # GS2.1 telemetry: unrealized path extremes since entry (%)
-                mfe_f = key[0].lower() + "_mfe"
-                mae_f = key[0].lower() + "_mae"
+                mfe_f = key.lower() + "_mfe"
+                mae_f = key.lower() + "_mae"
                 gross_now = (px / epx - 1.0) * 100.0 * (1 if key == "LONG" else -1)
                 if gross_now > getattr(st, mfe_f):
                     setattr(st, mfe_f, gross_now)
