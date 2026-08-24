@@ -40,6 +40,7 @@ class MarketRecorder:
         self.history = defaultdict(lambda: deque(maxlen=900))
         self.flow_history = defaultdict(lambda: deque(maxlen=360))
         self.depth_history = defaultdict(lambda: deque(maxlen=360))
+        self.funding: dict[str, float] = {}
         self.universe = list(BOOTSTRAP_SYMBOLS)
         self.micro = list(BOOTSTRAP_SYMBOLS[: self.settings.microstructure_size])
         self.universe_generation = 0
@@ -397,6 +398,8 @@ class MarketRecorder:
             )
             rows.append(row)
             self.history[symbol].append((ts, last))
+            if len(row) > 9 and row[9] is not None:
+                self.funding[symbol] = row[9]
         if rows:
             with connect(self.settings.db_path) as conn:
                 conn.executemany(
@@ -409,7 +412,7 @@ class MarketRecorder:
     def _evaluate_strategies(self, ts: int) -> None:
         signals = self.engine.evaluate(
             ts, self.universe, self.micro, self.history, self.flow_history,
-            self.depth_history, self.tickers,
+            self.depth_history, self.tickers, self.funding,
         )
         for signal in signals:
             self._record_signal(signal, ts)

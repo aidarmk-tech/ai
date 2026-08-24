@@ -156,10 +156,12 @@ class StrategyEngine:
         self.cooldowns[(participant_id, key)] = now_ms
         return True
 
-    def evaluate(self, now_ms: int, universe: list[str], micro: list[str], history, flows, depths, tickers) -> list[Signal]:
+    def evaluate(self, now_ms: int, universe: list[str], micro: list[str], history, flows, depths, tickers, funding=None) -> list[Signal]:
         signals: list[Signal] = []
         signals += self._lead_lag(now_ms, universe, history, tickers)
-        signals += self._momentum(now_ms, universe, history)
+        # REGIME_MOMENTUM retired 2026-08-25: chased extended moves, WR 40%.
+        if "FUNDING_FADE" in CONFIG:
+            signals += self._funding_fade(now_ms, universe, history, funding or {})
         signals += self._absorption(now_ms, micro, history, flows, depths)
         signals += self._stat_arb(now_ms, universe[:14], history)
         return signals
@@ -238,6 +240,37 @@ class StrategyEngine:
             )))
         out = []
         for _, signal in sorted(candidates, key=lambda x: x[0], reverse=True)[:2]:
+            if self._allowed(signal.participant_id, signal.key, now_ms, cfg["cooldown_seconds"]):
+                out.append(signal)
+        return out
+
+    def _funding_fade(self, now_ms, universe, history, funding) -> list[Signal]:
+        """E2 funding-momentum: 72h event study showed extreme funding
+        CONTINUES short-term on our universe (naive fade avg -0.46%),
+        so we enter WITH the crowd while it stays crowded."""
+        cfg = CONFIG["FUNDING_FADE"]
+        out: list[Signal] = []
+        if not funding:
+            return out
+        thr = float(cfg["min_funding_abs"])
+        stall_win = int(cfg["stall_window_seconds"])
+        max_stall = float(cfg["max_stall_abs_pct"])
+        candidates = []
+        for symbol in universe[:25]:
+            fr = funding.get(symbol)
+            if fr is None or abs(fr) < thr:
+                continue
+            h = history.get(symbol)
+            r30 = return_pct(h, now_ms, stall_win)
+            if r30 is None or abs(r30) > max_stall:
+                continue
+            side = "LONG" if fr > 0 else "SHORT"
+            candidates.append((abs(fr), Signal(
+                "FUNDING_FADE", symbol, side, cfg["horizon_seconds"], abs(fr),
+                {"funding_rate": fr, "stall_ret_pct": r30},
+            )))
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        for _, signal in candidates[: int(cfg.get("max_signals_per_eval", 2))]:
             if self._allowed(signal.participant_id, signal.key, now_ms, cfg["cooldown_seconds"]):
                 out.append(signal)
         return out

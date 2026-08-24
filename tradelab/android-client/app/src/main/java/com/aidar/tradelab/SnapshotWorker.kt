@@ -68,7 +68,16 @@ class SnapshotWorker(context: Context, params: WorkerParameters) : CoroutineWork
                 else -> {
                     stage(STAGE_CHECKING)
                     val lastCreated = prefs.getLong("last_snapshot_created_ms", 0L)
-                    repo.since(lastCreated)
+                    if (lastCreated <= 0L) {
+                        // Fresh install (or wiped prefs): never backfill the whole
+                        // server archive — just fetch the single newest snapshot.
+                        listOf(repo.latest())
+                    } else {
+                        // Normal catch-up; cap the backlog so a long offline
+                        // period cannot trigger a huge sequential download.
+                        val pending = repo.since(lastCreated)
+                        if (pending.size > 2) pending.takeLast(2) else pending
+                    }
                 }
             }
 

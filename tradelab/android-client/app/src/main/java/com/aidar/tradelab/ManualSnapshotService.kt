@@ -146,7 +146,13 @@ class ManualSnapshotService : Service() {
     }
 
     private fun startAsForeground(text: String) {
-        val n = NotificationHelper.downloadNotification(this, text)
+        val cancelPi = android.app.PendingIntent.getService(
+            this,
+            0,
+            Intent(this, ManualSnapshotService::class.java).setAction(ACTION_CANCEL),
+            android.app.PendingIntent.FLAG_IMMUTABLE,
+        )
+        val n = NotificationHelper.downloadNotification(this, text, cancelPi)
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(
                 NotificationHelper.FOREGROUND_ID,

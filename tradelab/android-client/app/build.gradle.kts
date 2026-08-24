@@ -11,8 +11,8 @@ android {
         applicationId = "com.aidar.tradelab"
         minSdk = 26
         targetSdk = 36
-        versionCode = 7
-        versionName = "0.2.5"
+        versionCode = 8
+        versionName = "0.3.0"
         val serverUrl = System.getenv("TRADELAB_SERVER_URL") ?: "https://45.150.37.187"
         buildConfigField("String", "SERVER_URL", "\"$serverUrl\"")
     }
@@ -32,4 +32,7 @@ kotlin {
 dependencies {
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("androidx.work:work-runtime-ktx:2.10.3")
+    implementation("androidx.core:core-ktx:1.15.0")
+    implementation("com.google.android.material:material:1.12.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 }
