@@ -22,6 +22,8 @@ CLEAN_KEY = "r4_isolation_hotfix_started_at_ms"
 HFT_RETIRED_KEY = "retired_at_ms_HFT_GRID"
 OI = "OI_FLUSH_REVERSION"
 LIQ = "LIQ_CASCADE_REVERSION"
+STORM_LIQ10M_USD = 2_000_000.0   # regime gate: 10m liquidation notional
+STORM_MAJOR_RET_BPS = 40.0       # majors ~4m aligned move
 LEGACY_ACTIVE5 = (*base.EXISTING_ACTIVE, base.HFT, base.EXTREME)
 ACTIVE6 = (*base.EXISTING_ACTIVE, base.EXTREME, OI, LIQ)
 
@@ -497,13 +499,58 @@ class IsolatedSidecar(base.Sidecar):
         self._emit_signal_and_open(LIQ, ts, symbol, side, price, int(LIQ_CONFIG["horizon_seconds"]), payload)
         self.cooldown_until[(LIQ, symbol)] = ts + int(LIQ_CONFIG["cooldown_seconds"]) * 1000
 
+    _regime_cache = (0, False)
+
+    def _slog(self, msg: str) -> None:
+        print(time.strftime("[%H:%M:%S]"), msg, flush=True)
+
+    def _ret300_bps(self, symbol: str, ts: int) -> Optional[float]:
+        dq = self.history.get(symbol)
+        if not dq:
+            return None
+        p_now = dq[-1].price
+        ref = None
+        for p in reversed(dq):
+            if ts - p.ts_ms >= 240_000:
+                ref = p.price
+                break
+        if not ref or not p_now:
+            return None
+        return (p_now / ref - 1.0) * 1e4
+
+    def _regime_storm(self, ts: int):
+        """GS-era day classifier: STORM = directional tape. Pauses pure
+        mean-reversion fades (EXTREME) while stress strategies keep working."""
+        cts, con_on = self._regime_cache
+        if ts - cts < 30_000:
+            return con_on
+        liq10 = float(self.con.execute(
+            "SELECT COALESCE(SUM(notional),0) FROM liquidations WHERE ts_ms>=?",
+            (ts - 600_000,),
+        ).fetchone()[0] or 0)
+        on, why = False, ""
+        if liq10 >= STORM_LIQ10M_USD:
+            on, why = True, f"liq10m={liq10/1e6:.1f}M"
+        else:
+            b = self._ret300_bps("BTCUSDT", ts)
+            e = self._ret300_bps("ETHUSDT", ts)
+            if b is not None and e is not None and abs(b) >= STORM_MAJOR_RET_BPS                     and abs(e) >= STORM_MAJOR_RET_BPS and (b > 0) == (e > 0):
+                on, why = True, f"majors {b:+.0f}/{e:+.0f}bps"
+        if on != con_on:
+            self._slog(f"REGIME {'STORM' if on else 'CALM'} ({why or 'normal'}): EXTREME entries {'paused' if on else 'resumed'}")
+        self._regime_cache = (ts, on)
+        return on
+
     def process_row(self, r: sqlite3.Row) -> None:
         symbol, ts, price = r["symbol"], int(r["ts_ms"]), float(r["last_price"])
         self._close_due_extreme(symbol, ts, price)
         self._close_reversion(OI, symbol, ts, price)
         self._close_reversion(LIQ, symbol, ts, price)
         self._append_history(symbol, ts, price)
-        self._maybe_extreme(r)
+        if not self._regime_storm(ts):
+            self._maybe_extreme(r)
+        self._maybe_oi_flush(r)
+        self._maybe_liq_cascade(r)
         self._maybe_oi_flush(r)
         self._maybe_liq_cascade(r)
 
