@@ -16,13 +16,13 @@ from collections import defaultdict, deque
 
 DB = "/var/lib/tradelab/tradelab.sqlite3"
 PID = "GRID_SCALP_ADAPTIVE"
-SPEC_VERSION = "GS2.2-20260824"
-MODE = "REGIME_GATED_GRID_V2"
+SPEC_VERSION = "GS3-20260825"
+MODE = "REGIME_GATED_GRID_V3"
 STATUS_OPEN, STATUS_CLOSED = "G_OPEN", "G_CLOSED"
 
 CFG = {
     "mode": MODE,
-    "step_bps": 25,
+    "step_bps": 40,
     "common_cost_pct": 0.14,
     "requalify_interval_seconds": 900,
     "qualify_path_60m_min_bps": 120,
@@ -31,15 +31,17 @@ CFG = {
     "max_spread_bps": 8,
     "liq_cascade_blackout_5m_notional": 250_000,
     "max_qualified_symbols": 10,
-    "horizon_seconds": 1800,
+    "horizon_seconds": 900,
     "cooldown_seconds": 60,
     "max_open_trades": 3,
     # GS2 risk controls. Full-loop replay (5h window, audit 2026-08-24) showed
     # anchor freeze alone turns PnL positive (-0.65$ -> +0.42$, WR 87->90%);
     # every stop/kill variant tested was net-negative due to close->re-anchor
     # churn. Infrastructure kept, disabled until more data says otherwise.
-    "stop_steps": 5,                 # hard stop when adverse >= N steps
+    "stop_steps": 4,                 # hard stop when adverse >= N steps
     "stop_confirm_seconds": 120,         # breach must persist this long (anti-noise)
+    "storm_liq10m_usd": 2000000.0,   # regime gate: liq notional 10m >= this -> storm
+    "storm_major_ret_bps": 40.0,
     "trend_kill_steps": None,           # adverse >= N steps ...
     "trend_kill_disp_5m_bps": 60,       # ... AND 5m displacement confirms a trend
 }
@@ -197,9 +199,47 @@ def main():
         emit_event(ts, "PAPER_CLOSE", row["symbol_a"], payload)
 
     opens_this_second = {}
+    stop_events = {}  # GS3: symbol cooldown after repeated stops
+    storm_state = {"ts": 0, "on": False}
 
     def cooldown_ok(ts, symbol):
         return ts - opens_this_second.get((PID, symbol), 0) >= cfg["cooldown_seconds"] * 1000
+
+    def ret300_bps(sym, ts):
+        dq = prices.get(sym)
+        if not dq:
+            return None
+        p_now = dq[-1][1]
+        ref = None
+        for t, pp in reversed(dq):
+            if ts - t >= 240_000:
+                ref = pp
+                break
+        if not ref or not p_now:
+            return None
+        return (p_now / ref - 1.0) * 1e4
+
+    def regime_storm(ts):
+        """GS3.1 day classifier: STORM = directional tape (heavy liquidations
+        or majors aligned fast move). Pauses mean-reversion grid entries."""
+        if ts - storm_state["ts"] < 30_000:
+            return storm_state["on"]
+        liq10 = con.execute(
+            "SELECT COALESCE(SUM(notional),0) FROM liquidations WHERE ts_ms>=?",
+            (ts - 600_000,),
+        ).fetchone()[0]
+        on, why = False, ""
+        if liq10 >= cfg["storm_liq10m_usd"]:
+            on, why = True, f"liq10m={liq10/1e6:.1f}M"
+        else:
+            b = ret300_bps("BTCUSDT", ts)
+            e = ret300_bps("ETHUSDT", ts)
+            if b is not None and e is not None and abs(b) >= cfg["storm_major_ret_bps"]                     and abs(e) >= cfg["storm_major_ret_bps"] and (b > 0) == (e > 0):
+                on, why = True, f"majors {b:+.0f}/{e:+.0f}bps"
+        if on != storm_state["on"]:
+            log(f"REGIME {'STORM' if on else 'CALM'} ({why or 'normal'}): grid entries {'paused' if on else 'resumed'}")
+        storm_state.update(ts=ts, on=on)
+        return on
 
     def disp_5m_bps(symbol, ts, px):
         """GS2: 5m log-displacement in bps (+ means price rose over the window)."""
@@ -373,6 +413,9 @@ def main():
                     # GS2: re-anchor the grid where price actually is, so a
                     # closed loser cannot instantly re-trigger an entry.
                     st.last_lvl = lvl_now
+                    if reason == "STOP":
+                        stop_events.setdefault(sym, []).append(ts)
+                        stop_events[sym] = [x for x in stop_events[sym] if ts - x < 3 * 3600 * 1000]
                     if reason == "TREND_KILL":
                         qualified.pop(sym, None)
                         emit_event(ts, "SYMBOL_DISQUALIFIED", sym,
@@ -380,6 +423,10 @@ def main():
 
             if sym not in qualified:
                 continue
+            if sum(1 for x in stop_events.get(sym, ()) if ts - x < 3 * 3600 * 1000) >= 2:
+                continue  # GS3: 2 stops on symbol within 3h -> pause entries
+            if regime_storm(ts):
+                continue  # GS3.1: storm day -> no mean-reversion grid entries
 
             # --- open new legs ---
             cur_open = sum(1 for v in states.values() for f in ("long_entry", "short_entry")
