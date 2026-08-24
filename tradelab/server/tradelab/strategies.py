@@ -156,10 +156,12 @@ class StrategyEngine:
         self.cooldowns[(participant_id, key)] = now_ms
         return True
 
-    def evaluate(self, now_ms: int, universe: list[str], micro: list[str], history, flows, depths, tickers) -> list[Signal]:
+    def evaluate(self, now_ms: int, universe: list[str], micro: list[str], history, flows, depths, tickers, funding=None) -> list[Signal]:
         signals: list[Signal] = []
         signals += self._lead_lag(now_ms, universe, history, tickers)
-        signals += self._momentum(now_ms, universe, history)
+        # REGIME_MOMENTUM retired 2026-08-25: chased extended moves, WR 40%.
+        if "FUNDING_FADE" in CONFIG:
+            signals += self._funding_fade(now_ms, universe, history, funding or {})
         signals += self._absorption(now_ms, micro, history, flows, depths)
         signals += self._stat_arb(now_ms, universe[:14], history)
         return signals

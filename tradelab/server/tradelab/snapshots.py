@@ -52,58 +52,89 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _prepare_snapshot_copy(
-    path: Path,
+def _relocate_ddl(sql: str, target_schema: str) -> str:
+    s = sql.lstrip()
+    for kw in ("CREATE UNIQUE INDEX ", "CREATE INDEX ", "CREATE TABLE ", "CREATE VIEW ", "CREATE TRIGGER "):
+        if s.upper().startswith(kw):
+            return f"{kw}{target_schema}.{s[len(kw):]}"
+    raise RuntimeError(f"unsupported DDL in snapshot source: {s[:60]!r}")
+
+
+def _materialize_snapshot_copy(
+    source_path: Path,
+    target_path: Path,
     created_ms: int,
     *,
     kind: str,
     raw_hours: int | None,
 ) -> None:
-    """Finalize the disposable SQLite backup before gzip.
+    """Build the disposable snapshot DB directly instead of copy+prune.
 
-    Analysis snapshots keep only a recent raw overlap window. Full snapshots do
-    not prune any rows from the consistent backup and therefore contain every
-    raw row still retained by the live server plus all cumulative research
-    tables. Full exports deliberately skip VACUUM because compacting a multi-GB
-    72-hour DB would double I/O for no analytical benefit.
+    Copying the whole live file and deleting old raw rows needs a rollback
+    journal comparable to the DB size plus a VACUUM pass, which does not fit
+    on the small VPS disk. Materializing only retained rows into a fresh file
+    keeps transient usage near the final snapshot size and yields an
+    already-compact result without VACUUM.
     """
-    conn = sqlite3.connect(path, timeout=30)
+    cutoff = None
+    hours = 0
+    if kind == "analysis":
+        hours = max(1, int(raw_hours or 1))
+        cutoff = created_ms - hours * 3600_000
+    else:
+        hours = int(raw_hours or 0)
+
+    conn = sqlite3.connect(source_path, timeout=30)
+    conn.isolation_level = None
     try:
         conn.execute("PRAGMA busy_timeout=30000")
-        conn.execute("PRAGMA journal_mode=DELETE")
-        existing = {
-            row[0]
-            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-        }
+        conn.execute("ATTACH DATABASE ? AS snap", (str(target_path),))
+        try:
+            conn.execute("PRAGMA snap.journal_mode=DELETE")
+            objects = conn.execute(
+                "SELECT type, name, sql FROM sqlite_master "
+                "WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY rowid"
+            ).fetchall()
+            tables = [obj for obj in objects if obj[0] == "table"]
+            others = [obj for obj in objects if obj[0] != "table"]
 
-        cutoff = None
-        if kind == "analysis":
-            hours = max(1, int(raw_hours or 1))
-            cutoff = created_ms - hours * 3600_000
-            for table in RAW_TABLES:
-                if table in existing:
-                    conn.execute(f"DELETE FROM {table} WHERE ts_ms < ?", (cutoff,))
-        else:
-            hours = int(raw_hours or 0)
+            conn.execute("BEGIN")
+            try:
+                for _, name, sql in tables:
+                    conn.execute(_relocate_ddl(sql, "snap"))
+                    has_ts = any(
+                        col[1] == "ts_ms" for col in conn.execute(f'PRAGMA main.table_info("{name}")')
+                    )
+                    if cutoff is not None and name in RAW_TABLES and has_ts:
+                        conn.execute(
+                            f'INSERT INTO snap."{name}" SELECT * FROM main."{name}" WHERE ts_ms >= ?',
+                            (cutoff,),
+                        )
+                    else:
+                        conn.execute(f'INSERT INTO snap."{name}" SELECT * FROM main."{name}"')
 
-        if "meta" in existing:
-            meta = [
-                ("snapshot_kind", kind),
-                ("snapshot_created_at_ms", str(created_ms)),
-            ]
-            if hours > 0:
-                meta.append(("snapshot_raw_hours", str(hours)))
-            if cutoff is not None:
-                meta.append(("snapshot_cutoff_ms", str(cutoff)))
-            conn.executemany("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", meta)
+                for _, name, sql in others:
+                    conn.execute(_relocate_ddl(sql, "snap"))
 
-        conn.commit()
-        if kind == "analysis":
-            conn.execute("VACUUM")
-            conn.commit()
-        check = conn.execute("PRAGMA quick_check").fetchone()[0]
-        if check != "ok":
-            raise RuntimeError(f"{kind} snapshot quick_check failed: {check}")
+                meta = [
+                    ("snapshot_kind", kind),
+                    ("snapshot_created_at_ms", str(created_ms)),
+                ]
+                if hours > 0:
+                    meta.append(("snapshot_raw_hours", str(hours)))
+                if cutoff is not None:
+                    meta.append(("snapshot_cutoff_ms", str(cutoff)))
+                conn.executemany('INSERT OR REPLACE INTO snap."meta"(key,value) VALUES(?,?)', meta)
+
+                check = conn.execute("PRAGMA snap.quick_check").fetchone()[0]
+                if check != "ok":
+                    raise RuntimeError(f"{kind} snapshot quick_check failed: {check}")
+                conn.execute("COMMIT")
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
+        finally:
+            conn.execute("DETACH DATABASE snap")
     finally:
         conn.close()
 
@@ -124,17 +155,24 @@ def _create_snapshot(
     raw = snapshot_dir / base
     gz = snapshot_dir / f"{base}.gz"
 
-    source = sqlite3.connect(db_path, timeout=30)
-    target = sqlite3.connect(raw)
-    try:
-        source.execute("PRAGMA busy_timeout=30000")
-        source.backup(target)
-    finally:
-        target.close()
-        source.close()
+    # Refuse early instead of dying mid-build and leaking partial artifacts
+    # when the disk is nearly full. Analysis copies stay near the retained raw
+    # window, full exports approach the whole live DB.
+    db_bytes = db_path.stat().st_size
+    if kind == "full":
+        required = db_bytes * 2 + 512 * 1024 * 1024
+    else:
+        required = db_bytes + 512 * 1024 * 1024
+    free = shutil.disk_usage(snapshot_dir).free
+    if free < required:
+        raise RuntimeError(
+            f"insufficient disk space for {kind} snapshot: need ~{required} bytes, free {free} bytes"
+        )
 
+    published = False
     try:
-        _prepare_snapshot_copy(
+        _materialize_snapshot_copy(
+            db_path,
             raw,
             created,
             kind=kind,
@@ -142,15 +180,18 @@ def _create_snapshot(
         )
         with raw.open("rb") as src, gzip.open(gz, "wb", compresslevel=6) as dst:
             shutil.copyfileobj(src, dst, length=1024 * 1024)
+
+        snap = Snapshot(sid, created, gz.name, gz.stat().st_size, _sha256(gz))
+        with connect(db_path) as conn:
+            conn.execute(
+                "INSERT INTO snapshots(snapshot_id, created_at_ms, filename, bytes, sha256) VALUES (?, ?, ?, ?, ?)",
+                (snap.snapshot_id, snap.created_at_ms, snap.filename, snap.bytes, snap.sha256),
+            )
+        published = True
     finally:
         raw.unlink(missing_ok=True)
-
-    snap = Snapshot(sid, created, gz.name, gz.stat().st_size, _sha256(gz))
-    with connect(db_path) as conn:
-        conn.execute(
-            "INSERT INTO snapshots(snapshot_id, created_at_ms, filename, bytes, sha256) VALUES (?, ?, ?, ?, ?)",
-            (snap.snapshot_id, snap.created_at_ms, snap.filename, snap.bytes, snap.sha256),
-        )
+        if not published:
+            gz.unlink(missing_ok=True)
 
     # Compact and full exports have separate retention pools. An occasional
     # full research export must never evict the 4-hour compact history used by

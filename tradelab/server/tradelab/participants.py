@@ -62,6 +62,20 @@ PARTICIPANTS = (
         },
     ),
     Participant(
+        "FUNDING_FADE",
+        "Funding Crowd Fade",
+        "E1-20260825",
+        {
+            "warmup_seconds": 600,
+            "min_funding_abs": 0.0015,
+            "stall_window_seconds": 1800,
+            "max_stall_abs_pct": 1.0,
+            "horizon_seconds": 600,
+            "cooldown_seconds": 3600,
+            "max_signals_per_eval": 2,
+        },
+    ),
+    Participant(
         "STAT_ARB",
         "Statistical Arbitrage",
         "D1-20260822",
