@@ -16,7 +16,7 @@ from collections import defaultdict, deque
 
 DB = "/var/lib/tradelab/tradelab.sqlite3"
 PID = "GRID_SCALP_ADAPTIVE"
-SPEC_VERSION = "GS2-20260824"
+SPEC_VERSION = "GS2.1-20260824"
 MODE = "REGIME_GATED_GRID_V2"
 STATUS_OPEN, STATUS_CLOSED = "G_OPEN", "G_CLOSED"
 
@@ -47,7 +47,8 @@ CFG = {
 
 class GridState:
     __slots__ = ("last_lvl", "long_entry", "short_entry",
-                 "long_stop_since", "short_stop_since")
+                 "long_stop_since", "short_stop_since",
+                 "long_mfe", "long_mae", "short_mfe", "short_mae")
 
     def __init__(self):
         self.last_lvl = None
@@ -55,6 +56,11 @@ class GridState:
         self.short_entry = None
         self.long_stop_since = None   # ts_ms when adverse-stop breach began
         self.short_stop_since = None
+        # GS2.1 telemetry: best/worst unrealized gross return (%) since entry
+        self.long_mfe = 0.0
+        self.long_mae = 0.0
+        self.short_mfe = 0.0
+        self.short_mae = 0.0
 
 
 def log(msg):
@@ -168,7 +174,7 @@ def main():
             **payload, "entry_a": px, "trade_id": trade_id, "notional_usdt": notional})
         return trade_id
 
-    def close_trade(row, ts, px, reason):
+    def close_trade(row, ts, px, reason, extra=None):
         gross = (px / row["entry_a"] - 1) * 100
         if row["side_a"] == "SHORT":
             gross = -gross
@@ -183,9 +189,12 @@ def main():
             "UPDATE participants SET equity = equity + ? WHERE participant_id=?",
             (pnl, PID),
         )
-        emit_event(ts, "PAPER_CLOSE", row["symbol_a"], {
+        payload = {
             "trade_id": row["trade_id"], "exit_reason": reason,
-            "gross_return_pct": gross, "net_return_pct": net, "paper_owner": "GRID_SIDECAR"})
+            "gross_return_pct": gross, "net_return_pct": net, "paper_owner": "GRID_SIDECAR"}
+        if extra:
+            payload.update(extra)
+        emit_event(ts, "PAPER_CLOSE", row["symbol_a"], payload)
 
     opens_this_second = {}
 
@@ -266,6 +275,14 @@ def main():
                 epx, oms = ent
                 lvl_ent = math.log(epx) / step_r
                 lvl_now = math.log(px) / step_r
+                # GS2.1 telemetry: unrealized path extremes since entry (%)
+                mfe_f = key[0].lower() + "_mfe"
+                mae_f = key[0].lower() + "_mae"
+                gross_now = (px / epx - 1.0) * 100.0 * (1 if key == "LONG" else -1)
+                if gross_now > getattr(st, mfe_f):
+                    setattr(st, mfe_f, gross_now)
+                if gross_now < getattr(st, mae_f):
+                    setattr(st, mae_f, gross_now)
                 # GS2: adverse move expressed in grid steps (positive = against)
                 adverse = (lvl_ent - lvl_now) if key == "LONG" else (lvl_now - lvl_ent)
                 hit_target = (key == "LONG" and lvl_now >= lvl_ent + 1) or \
@@ -312,10 +329,16 @@ def main():
                             (PID, sym, key, STATUS_OPEN),
                         ).fetchone()
                     if row is not None:
-                        close_trade(row, ts, px, reason)
+                        close_trade(row, ts, px, reason, {
+                            "mfe_pct": round(getattr(st, mfe_f), 4),
+                            "mae_pct": round(getattr(st, mae_f), 4),
+                            "hold_seconds": int((ts - oms) / 1000),
+                        })
                         con.commit()
                     setattr(st, st_field, None)
                     setattr(st, tm_field, None)
+                    setattr(st, mfe_f, 0.0)
+                    setattr(st, mae_f, 0.0)
                     # GS2: re-anchor the grid where price actually is, so a
                     # closed loser cannot instantly re-trigger an entry.
                     st.last_lvl = lvl_now
@@ -351,6 +374,8 @@ def main():
                 open_rows[sym + "LONG"] = con.execute(
                     "SELECT * FROM paper_trades WHERE trade_id=?", (tid,)).fetchone()
                 st.long_entry = (px, ts)
+                st.long_mfe = 0.0
+                st.long_mae = 0.0
                 st.last_lvl = lvl
                 opens_this_second[(PID, sym)] = ts
                 con.commit()
@@ -359,6 +384,8 @@ def main():
                 open_rows[sym + "SHORT"] = con.execute(
                     "SELECT * FROM paper_trades WHERE trade_id=?", (tid,)).fetchone()
                 st.short_entry = (px, ts)
+                st.short_mfe = 0.0
+                st.short_mae = 0.0
                 st.last_lvl = lvl
                 opens_this_second[(PID, sym)] = ts
                 con.commit()
