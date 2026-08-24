@@ -44,7 +44,7 @@ OI_CONFIG = {
 }
 
 LIQ_CONFIG = {
-    "mode": "LIQ_CASCADE_REVERSAL_V1",
+    "mode": "LIQ_CASCADE_REVERSAL_V2",
     "window_seconds": 60,
     "same_side_notional_min_usd": 20_000,
     "side_dominance_min": 0.75,
@@ -54,6 +54,8 @@ LIQ_CONFIG = {
     "max_spread_bps": 10.0,
     "horizon_seconds": 180,
     "stop_bps_past_extreme": 40.0,
+    "hard_max_stop_pct": 1.5,
+    "adverse_symbol_lock_seconds": 300,
     "cooldown_seconds": 300,
     "max_open_trades": 2,
     "common_cost_pct": base.COMMON_ROUND_TRIP_COST_PCT,
@@ -325,6 +327,11 @@ class IsolatedSidecar(base.Sidecar):
             stopped = (trade["side_a"] == "LONG" and price <= stop_price) or (trade["side_a"] == "SHORT" and price >= stop_price)
             if stopped:
                 self._close_trade(trade, ts, price, "ADVERSE_STOP")
+                lock_s = int(CONFIGS.get(participant, {}).get("adverse_symbol_lock_seconds") or 0)
+                if lock_s:
+                    if not hasattr(self, "symbol_lock_until"):
+                        self.symbol_lock_until = {}
+                    self.symbol_lock_until[(participant, symbol)] = ts + lock_s * 1000
             elif ts >= int(trade["exit_due_ms"]):
                 self._close_trade(trade, ts, price, "FIXED_HORIZON")
 
@@ -423,6 +430,8 @@ class IsolatedSidecar(base.Sidecar):
         ts, symbol, price = int(r["ts_ms"]), r["symbol"], float(r["last_price"])
         if ts < self._score_start(LIQ) or ts < self.cooldown_until.get((LIQ, symbol), 0):
             return
+        if ts < getattr(self, "symbol_lock_until", {}).get((LIQ, symbol), 0):
+            return
         spread = self._market_gate(r, LIQ_CONFIG)
         if spread is None:
             return
@@ -466,6 +475,13 @@ class IsolatedSidecar(base.Sidecar):
             return
         stop_bps = float(LIQ_CONFIG["stop_bps_past_extreme"])
         stop_price = extreme * (1.0 - stop_bps / 10_000.0) if side == "LONG" else extreme * (1.0 + stop_bps / 10_000.0)
+        # F2 hard cap: absolute max distance of stop from entry, so a far
+        # pre-entry extreme can never turn "40bps past extreme" into -5..-7%
+        # of entry.
+        hard_pct = float(LIQ_CONFIG.get("hard_max_stop_pct") or 0)
+        if hard_pct > 0:
+            capped = price * (1.0 - hard_pct / 100.0) if side == "LONG" else price * (1.0 + hard_pct / 100.0)
+            stop_price = max(stop_price, capped) if side == "LONG" else min(stop_price, capped)
         payload = {"features": {
             "liq_buy_notional_60s": buy_n,
             "liq_sell_notional_60s": sell_n,
