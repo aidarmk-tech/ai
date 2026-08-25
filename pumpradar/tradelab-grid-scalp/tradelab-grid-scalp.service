@@ -1,0 +1,14 @@
+[Unit]
+Description=TradeLab Grid Scalp Adaptive Sidecar
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/tradelab/venv/bin/python /opt/tradelab/grid-scalp/tradelab_grid_scalp.py
+Restart=on-failure
+RestartSec=5
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

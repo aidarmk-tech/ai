@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import signal
 import sqlite3
 import sys
 import time
@@ -22,6 +23,8 @@ CLEAN_KEY = "r4_isolation_hotfix_started_at_ms"
 HFT_RETIRED_KEY = "retired_at_ms_HFT_GRID"
 OI = "OI_FLUSH_REVERSION"
 LIQ = "LIQ_CASCADE_REVERSION"
+STORM_LIQ10M_USD = 2_000_000.0   # regime gate: 10m liquidation notional
+STORM_MAJOR_RET_BPS = 40.0       # majors ~4m aligned move
 LEGACY_ACTIVE5 = (*base.EXISTING_ACTIVE, base.HFT, base.EXTREME)
 ACTIVE6 = (*base.EXISTING_ACTIVE, base.EXTREME, OI, LIQ)
 
@@ -44,7 +47,18 @@ OI_CONFIG = {
 }
 
 LIQ_CONFIG = {
-    "mode": "LIQ_CASCADE_REVERSAL_V1",
+    "mode": "LIQ_CASCADE_REVERSAL_V3",
+    "symbol_blacklist": ["PROMUSDT", "TUTUSDT", "SNDKUSDT", "BTCUSDT"],
+    "exhaust_window_s": 300,
+    "exhaust_lookback_s": 900,
+    "exhaust_ratio_max": 0.40,
+    "exhaust_min_total_usd": 30_000,
+    "wick_anchor_s": 600,
+    "wick_bps": 30,
+    "wick_confirm_checks": 2,
+    "tranche_scale": 0.5,
+    "retest_bps": 10,
+    "retest_window_s": 300,
     "window_seconds": 60,
     "same_side_notional_min_usd": 20_000,
     "side_dominance_min": 0.75,
@@ -54,6 +68,8 @@ LIQ_CONFIG = {
     "max_spread_bps": 10.0,
     "horizon_seconds": 180,
     "stop_bps_past_extreme": 40.0,
+    "hard_max_stop_pct": 1.5,
+    "adverse_symbol_lock_seconds": 300,
     "cooldown_seconds": 300,
     "max_open_trades": 2,
     "common_cost_pct": base.COMMON_ROUND_TRIP_COST_PCT,
@@ -256,7 +272,7 @@ class IsolatedSidecar(base.Sidecar):
             (participant, symbol, R4_OPEN),
         ).fetchone() is not None
 
-    def _emit_signal_and_open(self, participant: str, ts: int, symbol: str, side: str, price: float, horizon_s: int, payload: dict[str, Any]) -> bool:
+    def _emit_signal_and_open(self, participant: str, ts: int, symbol: str, side: str, price: float, horizon_s: int, payload: dict[str, Any], notional_scale: float = 1.0, allow_same_symbol: bool = False) -> bool:
         if participant not in CONFIGS or ts < self._score_start(participant):
             return False
         payload = dict(payload)
@@ -269,13 +285,13 @@ class IsolatedSidecar(base.Sidecar):
         self.con.execute("INSERT INTO market_states(ts_ms,symbol,source,payload_json) VALUES(?,?,?,?)", (ts, symbol, participant, base.jdump(payload)))
 
         max_open = int(self._participant_config(participant)["max_open_trades"])
-        if self._open_count(participant) >= max_open or self._symbol_open(participant, symbol):
+        if self._open_count(participant) >= max_open or (not allow_same_symbol and self._symbol_open(participant, symbol)):
             base.add_event(self.con, participant, ts, symbol, "PAPER_SKIPPED_CAPACITY", payload)
             self.con.commit()
             return False
 
         trade_id = uuid.uuid4().hex
-        notional = max(0.0, self._equity(participant) / max_open)
+        notional = max(0.0, self._equity(participant) / max_open * notional_scale)
         self.con.execute(
             "INSERT INTO paper_trades(trade_id,participant_id,symbol_a,symbol_b,side_a,side_b,hedge_ratio,opened_at_ms,entry_a,entry_b,exit_due_ms,notional_usdt,status,signal_json) "
             "VALUES(?,?,?,NULL,?,NULL,NULL,?,?,NULL,?,?,?,?)",
@@ -285,7 +301,7 @@ class IsolatedSidecar(base.Sidecar):
         self.con.commit()
         return True
 
-    def _close_trade(self, trade: sqlite3.Row, ts: int, exit_price: float, reason: str) -> bool:
+    def _close_trade(self, trade: sqlite3.Row, ts: int, exit_price: float, reason: str, extra: dict | None = None) -> bool:
         gross = base.pct_return(float(trade["entry_a"]), exit_price, trade["side_a"])
         net = gross - base.COMMON_ROUND_TRIP_COST_PCT
         pnl = float(trade["notional_usdt"]) * net / 100.0
@@ -298,11 +314,14 @@ class IsolatedSidecar(base.Sidecar):
             self.con.rollback()
             return False
         self.con.execute("UPDATE participants SET equity=equity+? WHERE participant_id=?", (pnl, trade["participant_id"]))
-        base.add_event(self.con, trade["participant_id"], ts, trade["symbol_a"], "PAPER_CLOSE", {
+        evt = {
             "trade_id": trade["trade_id"], "exit_reason": reason, "gross_return_pct": gross,
             "net_return_pct": net, "pnl_usdt": pnl, "exit_sample_ms": ts,
             "common_round_trip_cost_pct": base.COMMON_ROUND_TRIP_COST_PCT, "paper_owner": "R4_SIDECAR",
-        })
+        }
+        if extra:
+            evt.update(extra)
+        base.add_event(self.con, trade["participant_id"], ts, trade["symbol_a"], "PAPER_CLOSE", evt)
         self.con.commit()
         return True
 
@@ -325,6 +344,11 @@ class IsolatedSidecar(base.Sidecar):
             stopped = (trade["side_a"] == "LONG" and price <= stop_price) or (trade["side_a"] == "SHORT" and price >= stop_price)
             if stopped:
                 self._close_trade(trade, ts, price, "ADVERSE_STOP")
+                lock_s = int(CONFIGS.get(participant, {}).get("adverse_symbol_lock_seconds") or 0)
+                if lock_s:
+                    if not hasattr(self, "symbol_lock_until"):
+                        self.symbol_lock_until = {}
+                    self.symbol_lock_until[(participant, symbol)] = ts + lock_s * 1000
             elif ts >= int(trade["exit_due_ms"]):
                 self._close_trade(trade, ts, price, "FIXED_HORIZON")
 
@@ -419,9 +443,51 @@ class IsolatedSidecar(base.Sidecar):
         self._emit_signal_and_open(OI, ts, symbol, side, price, int(OI_CONFIG["horizon_seconds"]), payload)
         self.cooldown_until[(OI, symbol)] = ts + int(OI_CONFIG["cooldown_seconds"]) * 1000
 
+    def _process_liq_retest(self, r: sqlite3.Row) -> None:
+        """V3 tranche B: add second half on retest toward the capitulation wick."""
+        ts, symbol, price = int(r["ts_ms"]), r["symbol"], float(r["last_price"])
+        pend = getattr(self, "_liq_retest", {}).get(symbol)
+        if not pend:
+            return
+        if ts > pend["deadline"]:
+            self._liq_retest.pop(symbol, None)
+            return
+        side = pend["side"]
+        trig_ok = price <= pend["trigger"] if side == "LONG" else price >= pend["trigger"]
+        if not trig_ok:
+            return
+        self._liq_retest.pop(symbol, None)
+        payload = dict(pend["payload"])
+        payload["features"] = {**payload.get("features", {}), "tranche": "B", "retest_price": price}
+        ok = self._emit_signal_and_open(LIQ, ts, symbol, side, price, pend["horizon_s"], payload,
+                                        notional_scale=pend["scale"], allow_same_symbol=True)
+        self._slog(f"LIQ_V3 tranche-B {'opened' if ok else 'skipped(capacity)'} {symbol} {side} px={price}")
+
+    def _liq_exhaustion_stats(self, symbol: str, ts: int) -> dict:
+        ew = int(LIQ_CONFIG.get("exhaust_window_s", 300)) * 1000
+        lb = int(LIQ_CONFIG.get("exhaust_lookback_s", 900)) * 1000
+
+        def win(a: int, b: int) -> float:
+            row = self.con.execute(
+                "SELECT COALESCE(SUM(notional),0) FROM liquidations WHERE symbol=? AND ts_ms>? AND ts_ms<=?",
+                (symbol, a, b),
+            ).fetchone()
+            return float(row[0] or 0)
+
+        w0 = win(ts - ew, ts)
+        w1 = win(ts - 2 * ew, ts - ew)
+        w2 = win(ts - lb, ts - 2 * ew)
+        return {"w0": w0, "peak_prior": max(w1, w2), "total": w0 + w1 + w2}
+
     def _maybe_liq_cascade(self, r: sqlite3.Row) -> None:
         ts, symbol, price = int(r["ts_ms"]), r["symbol"], float(r["last_price"])
+        # V3: proven toxic fade symbols stay out entirely
+        if symbol in set(LIQ_CONFIG.get("symbol_blacklist") or []):
+            return
+        self._process_liq_retest(r)
         if ts < self._score_start(LIQ) or ts < self.cooldown_until.get((LIQ, symbol), 0):
+            return
+        if ts < getattr(self, "symbol_lock_until", {}).get((LIQ, symbol), 0):
             return
         spread = self._market_gate(r, LIQ_CONFIG)
         if spread is None:
@@ -461,12 +527,58 @@ class IsolatedSidecar(base.Sidecar):
                 return
             side = "SHORT"
 
+        # --- V3 exhaustion gate: cascade intensity must be FADING ---
+        ex = self._liq_exhaustion_stats(symbol, ts)
+        exh_min_total = float(LIQ_CONFIG.get("exhaust_min_total_usd", 30_000))
+        exh_ratio = float(LIQ_CONFIG.get("exhaust_ratio_max", 0.40))
+        exh_ok = (
+            ex["peak_prior"] > 0
+            and ex["w0"] <= exh_ratio * ex["peak_prior"]
+            and ex["total"] >= exh_min_total
+        )
+        if not exh_ok:
+            return
+
         extreme = self._window_extreme(symbol, start, ts, side)
         if extreme is None:
             return
+
+        # --- V3 wick confirmation: price must hold a bounce off the flush extreme ---
+        anchor_s = int(LIQ_CONFIG.get("wick_anchor_s", 600))
+        anchor = self._window_extreme(symbol, ts - anchor_s * 1000, ts, side)
+        if anchor is None or anchor <= 0:
+            return
+        wb = float(LIQ_CONFIG.get("wick_bps", 30)) / 10_000.0
+        if side == "LONG":
+            bounced = price >= anchor * (1.0 + wb)
+        else:
+            bounced = price <= anchor * (1.0 - wb)
+        st = getattr(self, "_wick_state", {})
+        key = (symbol, side)
+        prev = st.get(key)
+        if bounced and prev and prev[1] == anchor and ts - prev[2] <= 20_000:
+            cnt = prev[0] + 1
+        elif bounced:
+            cnt = 1
+        else:
+            st.pop(key, None)
+            return
+        st[key] = (anchor, cnt, ts)
+        if cnt < int(LIQ_CONFIG.get("wick_confirm_checks", 2)):
+            return
+
         stop_bps = float(LIQ_CONFIG["stop_bps_past_extreme"])
         stop_price = extreme * (1.0 - stop_bps / 10_000.0) if side == "LONG" else extreme * (1.0 + stop_bps / 10_000.0)
+        # F2 hard cap: absolute max distance of stop from entry, so a far
+        # pre-entry extreme can never turn "40bps past extreme" into -5..-7%
+        # of entry.
+        hard_pct = float(LIQ_CONFIG.get("hard_max_stop_pct") or 0)
+        if hard_pct > 0:
+            capped = price * (1.0 - hard_pct / 100.0) if side == "LONG" else price * (1.0 + hard_pct / 100.0)
+            stop_price = max(stop_price, capped) if side == "LONG" else min(stop_price, capped)
         payload = {"features": {
+            "spec": "LIQ_CASCADE_REVERSAL_V3",
+            "tranche": "A",
             "liq_buy_notional_60s": buy_n,
             "liq_sell_notional_60s": sell_n,
             "dominant_liq_side": dominant_side,
@@ -477,17 +589,127 @@ class IsolatedSidecar(base.Sidecar):
             "quote_volume_24h": r["quote_volume_24h"],
             "pre_entry_extreme": extreme,
             "stop_price": stop_price,
+            "wick_anchor": anchor,
+            "wick_checks": cnt,
+            "exhaust_w0_usd": round(ex["w0"]),
+            "exhaust_peak_prior_usd": round(ex["peak_prior"]),
+            "exhaust_total15m_usd": round(ex["total"]),
         }, "score": major / 20_000.0 + abs(ret60)}
-        self._emit_signal_and_open(LIQ, ts, symbol, side, price, int(LIQ_CONFIG["horizon_seconds"]), payload)
+        scale = float(LIQ_CONFIG.get("tranche_scale", 0.5))
+        horizon = int(LIQ_CONFIG["horizon_seconds"])
+        ok_a = self._emit_signal_and_open(LIQ, ts, symbol, side, price, horizon, payload, notional_scale=scale)
+        if ok_a:
+            rb = float(LIQ_CONFIG.get("retest_bps", 10)) / 10_000.0
+            trigger = anchor * (1.0 + rb) if side == "LONG" else anchor * (1.0 - rb)
+            if not hasattr(self, "_liq_retest"):
+                self._liq_retest = {}
+            self._liq_retest[symbol] = {
+                "side": side, "trigger": trigger, "deadline": ts + int(LIQ_CONFIG.get("retest_window_s", 300)) * 1000,
+                "payload": payload, "horizon_s": horizon, "scale": scale,
+            }
         self.cooldown_until[(LIQ, symbol)] = ts + int(LIQ_CONFIG["cooldown_seconds"]) * 1000
 
+    _regime_cache = (0, False)
+
+    def _slog(self, msg: str) -> None:
+        print(time.strftime("[%H:%M:%S]"), msg, flush=True)
+
+    def _ret300_bps(self, symbol: str, ts: int) -> Optional[float]:
+        dq = self.history.get(symbol)
+        if not dq:
+            return None
+        p_now = dq[-1].price
+        ref = None
+        for p in reversed(dq):
+            if ts - p.ts_ms >= 240_000:
+                ref = p.price
+                break
+        if not ref or not p_now:
+            return None
+        return (p_now / ref - 1.0) * 1e4
+
+    def _regime_storm(self, ts: int):
+        """GS-era day classifier: STORM = directional tape. Pauses pure
+        mean-reversion fades (EXTREME) while stress strategies keep working."""
+        cts, con_on = self._regime_cache
+        if ts - cts < 30_000:
+            return con_on
+        liq10 = float(self.con.execute(
+            "SELECT COALESCE(SUM(notional),0) FROM liquidations WHERE ts_ms>=?",
+            (ts - 600_000,),
+        ).fetchone()[0] or 0)
+        on, why = False, ""
+        if liq10 >= STORM_LIQ10M_USD:
+            on, why = True, f"liq10m={liq10/1e6:.1f}M"
+        else:
+            b = self._ret300_bps("BTCUSDT", ts)
+            e = self._ret300_bps("ETHUSDT", ts)
+            if b is not None and e is not None and abs(b) >= STORM_MAJOR_RET_BPS                     and abs(e) >= STORM_MAJOR_RET_BPS and (b > 0) == (e > 0):
+                on, why = True, f"majors {b:+.0f}/{e:+.0f}bps"
+        if on != con_on:
+            self._slog(f"REGIME {'STORM' if on else 'CALM'} ({why or 'normal'}): EXTREME entries {'paused' if on else 'resumed'}")
+        self._regime_cache = (ts, on)
+        return on
+
+    WATCHDOG_GRACE_MS = 60_000
+
+    def _last_price_any_age(self, symbol: str) -> Optional[sqlite3.Row]:
+        return self.con.execute(
+            "SELECT * FROM market_samples WHERE symbol=? ORDER BY ts_ms DESC LIMIT 1", (symbol,)
+        ).fetchone()
+
+    def _watchdog_sweep(self) -> None:
+        """TTL watchdog (GS2.2 parity): closes overdue R4_OPEN legs even when a
+        symbol's sample stream died and the tick-driven closer never fires."""
+        now = int(time.time() * 1000)
+        if getattr(self, "_wd_last_ms", 0) > now - 30_000:
+            return
+        self._wd_last_ms = now
+        rows = self.con.execute(
+            "SELECT * FROM paper_trades WHERE status=? AND exit_due_ms IS NOT NULL AND exit_due_ms<=?",
+            (R4_OPEN, now - self.WATCHDOG_GRACE_MS),
+        ).fetchall()
+        for trade in rows:
+            m = self._last_price_any_age(trade["symbol_a"])
+            if not m:
+                self._slog(f"WATCHDOG skip {trade['participant_id']} {trade['symbol_a']}: no price at all")
+                continue
+            overdue_ms = now - int(trade["exit_due_ms"])
+            ok = self._close_trade(
+                trade, now, float(m["last_price"]), "FIXED_HORIZON",
+                {"watchdog": True, "watchdog_overdue_ms": overdue_ms, "watchdog_price_age_ms": now - int(m["ts_ms"])},
+            )
+            if ok:
+                self._slog(
+                    f"WATCHDOG closed {trade['participant_id']} {trade['symbol_a']} "
+                    f"overdue={overdue_ms / 3_600_000:.1f}h px={m['last_price']}"
+                )
+
+    def run(self) -> None:
+        def handle(*_: Any) -> None:
+            self.stop = True
+        signal.signal(signal.SIGTERM, handle)
+        signal.signal(signal.SIGINT, handle)
+        while not self.stop:
+            n = self.step()
+            try:
+                self._watchdog_sweep()
+            except Exception as exc:
+                self._slog(f"WATCHDOG error: {exc}")
+            if n == 0:
+                time.sleep(base.POLL_SECONDS)
+
     def process_row(self, r: sqlite3.Row) -> None:
+        self._watchdog_sweep()
         symbol, ts, price = r["symbol"], int(r["ts_ms"]), float(r["last_price"])
         self._close_due_extreme(symbol, ts, price)
         self._close_reversion(OI, symbol, ts, price)
         self._close_reversion(LIQ, symbol, ts, price)
         self._append_history(symbol, ts, price)
-        self._maybe_extreme(r)
+        if not self._regime_storm(ts):
+            self._maybe_extreme(r)
+        self._maybe_oi_flush(r)
+        self._maybe_liq_cascade(r)
         self._maybe_oi_flush(r)
         self._maybe_liq_cascade(r)
 
