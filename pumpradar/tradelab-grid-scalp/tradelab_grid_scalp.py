@@ -16,8 +16,8 @@ from collections import defaultdict, deque
 
 DB = "/var/lib/tradelab/tradelab.sqlite3"
 PID = "GRID_SCALP_ADAPTIVE"
-SPEC_VERSION = "GS3-20260825"
-MODE = "REGIME_GATED_GRID_V3"
+SPEC_VERSION = "GS4-20260825"
+MODE = "REGIME_GATED_GRID_V4"
 STATUS_OPEN, STATUS_CLOSED = "G_OPEN", "G_CLOSED"
 
 CFG = {
@@ -28,7 +28,7 @@ CFG = {
     "qualify_path_60m_min_bps": 120,
     "qualify_efficiency_ratio_60m_max": 0.06,
     "min_quote_volume_24h": 5_000_000,
-    "max_spread_bps": 8,
+    "max_spread_bps": 5,
     "liq_cascade_blackout_5m_notional": 250_000,
     "max_qualified_symbols": 10,
     "horizon_seconds": 900,
@@ -39,9 +39,14 @@ CFG = {
     # every stop/kill variant tested was net-negative due to close->re-anchor
     # churn. Infrastructure kept, disabled until more data says otherwise.
     "stop_steps": 4,                 # hard stop when adverse >= N steps
-    "stop_confirm_seconds": 120,         # breach must persist this long (anti-noise)
+    "stop_confirm_seconds": 20,          # GS4: 120s confirm let price gap -2..-6% past intended stop
     "storm_liq10m_usd": 2000000.0,   # regime gate: liq notional 10m >= this -> storm
     "storm_major_ret_bps": 40.0,
+    "atr_window_s": 900,             # GS4: vol-scaled per-symbol grid step
+    "atr_step_mult": 0.25,
+    "max_step_bps": 150,
+    "trend_ret_bps": 60,             # GS4: majors 15m aligned move -> TRENDING
+    "trend_exit_bps": 35,
     "trend_kill_steps": None,           # adverse >= N steps ...
     "trend_kill_disp_5m_bps": 60,       # ... AND 5m displacement confirms a trend
 }
@@ -50,7 +55,8 @@ CFG = {
 class GridState:
     __slots__ = ("last_lvl", "long_entry", "short_entry",
                  "long_stop_since", "short_stop_since",
-                 "long_mfe", "long_mae", "short_mfe", "short_mae")
+                 "long_mfe", "long_mae", "short_mfe", "short_mae",
+                 "step_bps")
 
     def __init__(self):
         self.last_lvl = None
@@ -58,6 +64,7 @@ class GridState:
         self.short_entry = None
         self.long_stop_since = None   # ts_ms when adverse-stop breach began
         self.short_stop_since = None
+        self.step_bps = None          # GS4: per-leg vol-scaled step (bps)
         # GS2.1 telemetry: best/worst unrealized gross return (%) since entry
         self.long_mfe = 0.0
         self.long_mae = 0.0
@@ -200,7 +207,7 @@ def main():
 
     opens_this_second = {}
     stop_events = {}  # GS3: symbol cooldown after repeated stops
-    storm_state = {"ts": 0, "on": False}
+    regime_state = {"ts": 0, "mode": "CALM"}
 
     def cooldown_ok(ts, symbol):
         return ts - opens_this_second.get((PID, symbol), 0) >= cfg["cooldown_seconds"] * 1000
@@ -219,27 +226,40 @@ def main():
             return None
         return (p_now / ref - 1.0) * 1e4
 
-    def regime_storm(ts):
-        """GS3.1 day classifier: STORM = directional tape (heavy liquidations
-        or majors aligned fast move). Pauses mean-reversion grid entries."""
-        if ts - storm_state["ts"] < 30_000:
-            return storm_state["on"]
+    def regime_now(ts):
+        """GS4 three-state day classifier. STORM = liquidation shock or majors
+        aligned fast move. TRENDING = majors sustained 15m directional move
+        (hysteresis exit). Grid mean-reversion entries run ONLY in CALM."""
+        if ts - regime_state["ts"] < 30_000:
+            return regime_state["mode"]
+        mode, why = "CALM", "normal"
         liq10 = con.execute(
             "SELECT COALESCE(SUM(notional),0) FROM liquidations WHERE ts_ms>=?",
             (ts - 600_000,),
         ).fetchone()[0]
-        on, why = False, ""
+        b = ret300_bps("BTCUSDT", ts)
+        e = ret300_bps("ETHUSDT", ts)
         if liq10 >= cfg["storm_liq10m_usd"]:
-            on, why = True, f"liq10m={liq10/1e6:.1f}M"
+            mode, why = "STORM", f"liq10m={liq10/1e6:.1f}M"
+        elif b is not None and e is not None and abs(b) >= cfg["storm_major_ret_bps"]                     and abs(e) >= cfg["storm_major_ret_bps"] and (b > 0) == (e > 0):
+            mode, why = "STORM", f"majors {b:+.0f}/{e:+.0f}bps"
         else:
-            b = ret300_bps("BTCUSDT", ts)
-            e = ret300_bps("ETHUSDT", ts)
-            if b is not None and e is not None and abs(b) >= cfg["storm_major_ret_bps"]                     and abs(e) >= cfg["storm_major_ret_bps"] and (b > 0) == (e > 0):
-                on, why = True, f"majors {b:+.0f}/{e:+.0f}bps"
-        if on != storm_state["on"]:
-            log(f"REGIME {'STORM' if on else 'CALM'} ({why or 'normal'}): grid entries {'paused' if on else 'resumed'}")
-        storm_state.update(ts=ts, on=on)
-        return on
+            b15 = trend15_bps("BTCUSDT", ts)
+            e15 = trend15_bps("ETHUSDT", ts)
+            prev = regime_state["mode"]
+            if b15 is None or e15 is None:
+                mode = "CALM"
+                why = "no majors data"
+            elif (b15 >= cfg["trend_ret_bps"] and e15 >= cfg["trend_exit_bps"]) or \
+                 (b15 <= -cfg["trend_ret_bps"] and e15 <= -cfg["trend_exit_bps"]):
+                mode, why = "TRENDING", f"majors15m {b15:+.0f}/{e15:+.0f}bps"
+            elif prev == "TRENDING" and abs(b15) >= cfg["trend_exit_bps"] \
+                    and abs(e15) >= cfg["trend_exit_bps"] and (b15 > 0) == (e15 > 0):
+                mode, why = "TRENDING", f"trend holds {b15:+.0f}/{e15:+.0f}bps"
+        if mode != regime_state["mode"]:
+            log(f"REGIME {mode} ({why}): grid entries {'PAUSED' if mode != 'CALM' else 'resumed'}")
+        regime_state.update(ts=ts, mode=mode)
+        return mode
 
     def disp_5m_bps(symbol, ts, px):
         """GS2: 5m log-displacement in bps (+ means price rose over the window)."""
@@ -256,6 +276,44 @@ def main():
             return None
         return math.log(px / ref) * 10_000
 
+    def sym_step_bps(symbol, px):
+        """GS4: per-symbol volatility-scaled grid step. Step = clamp(
+        range_15m_bps * atr_step_mult, step_bps, max_step_bps)."""
+        base_bps = float(cfg["step_bps"])
+        dq = prices.get(symbol)
+        if not dq or not px:
+            return base_bps
+        t_cut = dq[-1][0] - cfg["atr_window_s"] * 1000
+        lo = hi = None
+        for t, p in reversed(dq):
+            if t < t_cut:
+                break
+            if p > 0:
+                lo = p if lo is None or p < lo else lo
+                hi = p if hi is None or p > hi else hi
+        if not lo or not hi or not px:
+            return base_bps
+        rng_bps = (hi - lo) / px * 1e4
+        return max(base_bps, min(float(cfg["max_step_bps"]), rng_bps * float(cfg["atr_step_mult"])))
+
+    def leg_step_r(st):
+        sb = getattr(st, "step_bps", None)
+        return math.log(1 + sb / 10000.0) if sb else step_r
+
+    def trend15_bps(symbol, ts):
+        dq = prices.get(symbol)
+        if not dq:
+            return None
+        p_now = dq[-1][1]
+        ref = None
+        for t, pp in reversed(dq):
+            if ts - t >= 900_000:
+                ref = pp
+                break
+        if not ref or not p_now:
+            return None
+        return (p_now / ref - 1.0) * 1e4
+
     # restore open positions across restarts
     states = defaultdict(GridState)
     open_rows = {}
@@ -264,7 +322,14 @@ def main():
     ):
         open_rows[row["symbol_a"] + row["side_a"]] = row
         st = states[row["symbol_a"]]
-        lvl = math.log(float(row["entry_a"])) / step_r
+        try:
+            _sj = json.loads(row["signal_json"] or "{}")
+            _sb = (_sj.get("features") or {}).get("step_bps_used")
+        except Exception:
+            _sb = None
+        if _sb:
+            st.step_bps = float(_sb)
+        lvl = math.log(float(row["entry_a"])) / leg_step_r(st)
         st.last_lvl = lvl
         if row["side_a"] == "LONG":
             st.long_entry = (float(row["entry_a"]), int(row["opened_at_ms"]))
@@ -306,7 +371,7 @@ def main():
             })
             con.commit()
             setattr(wst, "long_entry" if wside == "LONG" else "short_entry", None)
-            wst.last_lvl = math.log(wpx) / step_r
+            wst.last_lvl = math.log(wpx) / leg_step_r(wst)
             log(f"watchdog TTL close {wsym} {wside} px={wpx}")
 
         fresh = con.execute(
@@ -344,8 +409,12 @@ def main():
                 if ent is None:
                     continue
                 epx, oms = ent
-                lvl_ent = math.log(epx) / step_r
-                lvl_now = math.log(px) / step_r
+                sr_leg = leg_step_r(st)
+                lvl_ent = math.log(epx) / sr_leg
+                pm = r["mark_price"]
+                p_stop = float(pm) if pm and float(pm) > 0 else px
+                lvl_now = math.log(px) / sr_leg          # executed-price levels
+                lvl_stop = math.log(p_stop) / sr_leg     # GS4: stop trigger on mark price
                 # GS2.1 telemetry: unrealized path extremes since entry (%)
                 mfe_f = key.lower() + "_mfe"
                 mae_f = key.lower() + "_mae"
@@ -355,7 +424,7 @@ def main():
                 if gross_now < getattr(st, mae_f):
                     setattr(st, mae_f, gross_now)
                 # GS2: adverse move expressed in grid steps (positive = against)
-                adverse = (lvl_ent - lvl_now) if key == "LONG" else (lvl_now - lvl_ent)
+                adverse = (lvl_ent - lvl_stop) if key == "LONG" else (lvl_stop - lvl_ent)
                 hit_target = (key == "LONG" and lvl_now >= lvl_ent + 1) or \
                              (key == "SHORT" and lvl_now <= lvl_ent - 1)
                 hit_ttl = ts - oms >= cfg["horizon_seconds"] * 1000
@@ -413,6 +482,7 @@ def main():
                     # GS2: re-anchor the grid where price actually is, so a
                     # closed loser cannot instantly re-trigger an entry.
                     st.last_lvl = lvl_now
+                    st.step_bps = sym_step_bps(sym, px)
                     if reason == "STOP":
                         stop_events.setdefault(sym, []).append(ts)
                         stop_events[sym] = [x for x in stop_events[sym] if ts - x < 3 * 3600 * 1000]
@@ -425,8 +495,8 @@ def main():
                 continue
             if sum(1 for x in stop_events.get(sym, ()) if ts - x < 3 * 3600 * 1000) >= 2:
                 continue  # GS3: 2 stops on symbol within 3h -> pause entries
-            if regime_storm(ts):
-                continue  # GS3.1: storm day -> no mean-reversion grid entries
+            if regime_now(ts) != "CALM":
+                continue  # GS4: STORM/TRENDING -> no mean-reversion grid entries
 
             # --- open new legs ---
             cur_open = sum(1 for v in states.values() for f in ("long_entry", "short_entry")
@@ -442,11 +512,15 @@ def main():
                 continue
             if spread > cfg["max_spread_bps"]:
                 continue
-            lvl = math.log(px) / step_r
+            sb_new = sym_step_bps(sym, px)
+            sr_new = math.log(1 + sb_new / 10000.0)
+            st.step_bps = sb_new
+            lvl = math.log(px) / sr_new
             if st.last_lvl is None:
                 st.last_lvl = lvl
                 continue
-            feats = {**(er_cache.get(sym) or {}), "spread_bps": round(spread, 2)}
+            feats = {**(er_cache.get(sym) or {}), "spread_bps": round(spread, 2),
+                     "step_bps_used": round(sb_new, 1)}
             if lvl <= st.last_lvl - 1 and st.long_entry is None:
                 tid = open_trade(ts, sym, "LONG", px, "GRID_BUY_DIP", feats)
                 open_rows[sym + "LONG"] = con.execute(
@@ -480,9 +554,17 @@ def register(con):
         "VALUES(?,?, 'ACTIVE',20.0,20.0,NULL,'CANDIDATE',?)",
         (PID, "Grid Scalp Adaptive", int(time.time() * 1000)),
     )
+    # GS3.2: keep frozen spec == runtime; archive every used version
+    con.execute("CREATE TABLE IF NOT EXISTS participant_specs_history AS SELECT * FROM participant_specs WHERE 0")
+    _cur = con.execute("SELECT spec_version, frozen_at_ms FROM participant_specs WHERE participant_id=?", (PID,)).fetchone()
+    _hist = con.execute("SELECT MAX(frozen_at_ms) FROM participant_specs_history WHERE participant_id=?", (PID,)).fetchone()
+    if _cur and ((_hist is None or _hist[0] is None) or _cur[1] != _hist[0]):
+        con.execute("INSERT INTO participant_specs_history SELECT * FROM participant_specs WHERE participant_id=?", (PID,))
     con.execute(
-        "INSERT OR IGNORE INTO participant_specs(participant_id,spec_version,config_json,frozen_at_ms,active_effect) "
-        "VALUES(?,?,?,?, 'SHADOW_ONLY')",
+        "INSERT INTO participant_specs(participant_id,spec_version,config_json,frozen_at_ms,active_effect) "
+        "VALUES(?,?,?,?, 'SHADOW_ONLY') "
+        "ON CONFLICT(participant_id) DO UPDATE SET spec_version=excluded.spec_version, "
+        "config_json=excluded.config_json, frozen_at_ms=excluded.frozen_at_ms",
         (PID, SPEC_VERSION, jdump(CFG), int(time.time() * 1000)),
     )
     con.commit()
