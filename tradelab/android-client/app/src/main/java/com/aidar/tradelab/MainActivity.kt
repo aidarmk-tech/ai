@@ -29,10 +29,18 @@ class MainActivity : ComponentActivity() {
     private lateinit var freshButton: Button
     private lateinit var fullButton: Button
     private lateinit var cancelButton: Button
+    private lateinit var mlgateButton: Button
+    private lateinit var mlgateStatus: TextView
+    private var mlgateRepo: MlgateRepository? = null
+    private var mlgateEvents: List<MlgateEvent> = emptyList()
+    private var mlgateStats: MlgateStats? = null
     private val uiHandler = Handler(Looper.getMainLooper())
     private val refreshRunnable = object : Runnable {
+        private var frames = 0
         override fun run() {
             renderStatus()
+            frames++
+            if (frames % 240 == 0) refreshMlgate()
             uiHandler.postDelayed(this, 500L)
         }
     }
@@ -106,11 +114,21 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        mlgateStatus = TextView(this).apply { textSize = 14f }
+        mlgateButton = Button(this).apply {
+            text = "Обновить ML gate (EXTREME_ML_GATE_V1)"
+            setOnClickListener {
+                if (!saveConnection()) return@setOnClickListener
+                mlgateStatus.text = "Загрузка…"
+                refreshMlgate()
+            }
+        }
+
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(40, 70, 40, 40)
             addView(TextView(this@MainActivity).apply {
-                text = "TradeLab client 0.2.5\nA/B/C/D shadow tournament"
+                text = "TradeLab client 0.3.0\nA/B/C/D shadow tournament"
                 textSize = 22f
             })
             addView(serverUrl)
@@ -124,12 +142,26 @@ class MainActivity : ComponentActivity() {
             addView(freshButton)
             addView(fullButton)
             addView(cancelButton)
+            addView(TextView(this@MainActivity).apply {
+                text = "───── ML Gate (EXTREME_ML_GATE_V1) ─────"
+                textSize = 18f
+            })
+            addView(mlgateButton)
+            addView(mlgateStatus)
         }
         setContentView(root)
 
         WorkManager.getInstance(this).cancelUniqueWork(LEGACY_MANUAL_WORK)
         scheduleSnapshots()
+
+        val c = getSharedPreferences("connection", MODE_PRIVATE)
+        val savedUrl = c.getString("server_url", "") ?: ""
+        val savedToken = c.getString("read_token", "") ?: ""
+        if (savedUrl.isNotBlank() && savedToken.isNotBlank()) {
+            mlgateRepo = MlgateRepository(savedUrl, savedToken)
+        }
         renderStatus()
+        refreshMlgate()
     }
 
     override fun onResume() {
@@ -158,6 +190,8 @@ class MainActivity : ComponentActivity() {
             .putString("server_url", url)
             .putString("read_token", token)
             .apply()
+        mlgateRepo = MlgateRepository(url, token)
+        refreshMlgate()
         return true
     }
 
@@ -255,6 +289,61 @@ class MainActivity : ComponentActivity() {
             append("\nСвежий 6ч — обычный компактный файл для регулярного анализа.")
             append("\nПолная 72ч — ручной глубокий экспорт всей raw-истории, которую ещё хранит VPS.")
         }
+    }
+
+    private fun refreshMlgate() {
+        val repo = mlgateRepo ?: return
+        Thread {
+            val events = repo.fetchEvents(10)
+            val stats = repo.fetchStats()
+            uiHandler.post {
+                mlgateEvents = events
+                mlgateStats = stats
+                renderMlgate()
+            }
+        }.start()
+    }
+
+    private fun renderMlgate() {
+        val stats = mlgateStats
+        val events = mlgateEvents
+        mlgateStatus.text = buildString {
+            if (mlgateRepo == null) {
+                append("\nНажмите «Сохранить подключение» для инициализации.")
+                return@buildString
+            }
+            if (stats == null) {
+                append("\nНет данных или ошибка соединения.")
+                return@buildString
+            }
+            val rate = stats.acceptanceRate ?: -1.0
+            append("ACCEPT: ").append(stats.accepts)
+            append("   VETO: ").append(stats.vetos)
+            append("\nAcceptance rate: ").append(if (rate >= 0) "%.1f%%".format(rate * 100) else "n/a")
+            val pt = stats.avgPTail
+            if (pt != null) append("\navg p_tail: ").append("%.3f".format(pt))
+            val erm = stats.avgExpectedReturn
+            if (erm != null) append("   avg exp.ret: ").append("%.2f".format(erm))
+            val ms = stats.avgMlScore
+            if (ms != null) append("   avg ml_score: ").append("%.2f".format(ms))
+            if (events.isNotEmpty()) {
+                append("\n\nПоследние решения:")
+                for (e in events) {
+                    val tag = if (e.eventType.contains("ACCEPT")) "✅ ACCEPT" else "⛔ VETO"
+                    append("\n• ").append(e.symbol).append(" ").append(e.side).append(" ").append(tag)
+                    if (e.pTail != null) append("  p_tail=").append("%.3f".format(e.pTail))
+                    if (e.mlScore != null) append("  score=").append("%.2f".format(e.mlScore))
+                    append("\n    ").append(formatMlgateTime(e.tsMs))
+                }
+            }
+        }
+    }
+
+    private fun formatMlgateTime(tsMs: Long): String {
+        if (tsMs <= 0L) return "?"
+        val f = java.text.SimpleDateFormat("dd.MM HH:mm:ss", java.util.Locale.getDefault())
+        f.timeZone = java.util.TimeZone.getDefault()
+        return f.format(java.util.Date(tsMs))
     }
 
     private fun stageText(stage: String?): String = when (stage) {
