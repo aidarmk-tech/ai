@@ -1269,6 +1269,12 @@ class PlayerViewModel @Inject constructor(
                 title = if (wasIptv) episode.title else (currentCard?.title ?: ""),
                 seasonNumber = if (wasIptv) null else (episode.season ?: currentCard?.seasonNumber),
                 episodeNumber = if (wasIptv) null else (episode.episode ?: currentCard?.episodeNumber),
+                // Lampa's launch timeline belongs to the episode we are leaving.
+                // A new episode uses its own saved position, or starts at zero.
+                timelineTime = null,
+                timelineDuration = null,
+                startPositionMs = null,
+                fromStart = false,
                 // scraped EPG was for the launched channel only — clear on switch.
                 iptvEpg = if (wasIptv) null else currentCard?.iptvEpg,
             )
