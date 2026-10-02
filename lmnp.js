@@ -126,6 +126,15 @@
                /torrserv|torrserver|:8090|:8091/i.test(u);
     }
 
+    // Lampa's torrent file list contains &preload URLs. Its own Android launcher
+    // changes them to &play before opening the player; our serialized playlist
+    // must do the same for every episode, without changing Lampa's source list.
+    function playablePlaylistUrl(url) {
+        return isTorrentUrl(url)
+            ? url.replace(/([?&])preload(?=&|#|$)/i, '$1play')
+            : url;
+    }
+
     function launchWithTimelineResult(videoUrl, packedTitle, cardMeta, sourceObj) {
         try {
             if (!timecodeReturn()) return false;
@@ -713,8 +722,8 @@
         var items = [], seen = {}, pi = 0;
         for (var i = start; i < end; i++) {
             var it = list[i] || {};
-            var url = (typeof it.url === 'string') ? it.url
-                    : (typeof it.file === 'string') ? it.file : '';
+            var url = playablePlaylistUrl((typeof it.url === 'string') ? it.url
+                    : (typeof it.file === 'string') ? it.file : '');
             // Дубли (один поток дважды — варианты качества и т.п.) не плодим.
             if (url && seen[url] !== undefined) {
                 if (i === pos) pi = seen[url];
@@ -817,8 +826,8 @@
         var items = [];
         for (var i = start; i < end; i++) {
             var it = list[i] || {};
-            var url = (typeof it.url === 'string') ? it.url
-                    : (typeof it.file === 'string') ? it.file : '';
+            var url = playablePlaylistUrl((typeof it.url === 'string') ? it.url
+                    : (typeof it.file === 'string') ? it.file : '');
             if (!url || !/^https?:|^rtsp:|^udp:/.test(url)) continue;
             items.push({
                 u: url,
@@ -886,8 +895,8 @@
             var eps = playlist.slice(start, start + 50).map(function (item, i) {
                 // Балансеры (online_mod и др.) хранят URL как функцию для ленивой загрузки.
                 // Такие URL нельзя сериализовать в JSON — передаём только строковые URL.
-                var url = (typeof item.url === 'string') ? item.url
-                        : (typeof item.file === 'string') ? item.file : '';
+                var url = playablePlaylistUrl((typeof item.url === 'string') ? item.url
+                        : (typeof item.file === 'string') ? item.file : '');
                 return {
                     title:   item.title || item.name || ('Серия ' + (start + i + 1)),
                     url:     url,
@@ -962,8 +971,14 @@
     function doLaunch(videoUrl, data, file) {
         var rawCard  = findCard(data, file);
         var pl       = getPlaylist();
+        if (isTorrentUrl(videoUrl) && data && Array.isArray(data.playlist) && data.playlist.length > 1) {
+            pl = { list: data.playlist, pos: 0 };
+            for (var i = 0; i < pl.list.length; i++) {
+                if (pl.list[i] && pl.list[i].url === videoUrl) { pl.pos = i; break; }
+            }
+        }
         var cardData = buildCard(rawCard, file, data, pl.list, pl.pos);
-        return launch(videoUrl, cardData);
+        return launch(playablePlaylistUrl(videoUrl), cardData);
     }
 
     function stopWebViewPlayer() {
@@ -1132,12 +1147,18 @@
                     var displayTitle = String(origTitle || video.lmnp_title || 'VK Видео').trim().slice(0, 140);
                     var g = getPlaylist();
                     var list = null, pos = 0;
-                    if (g.list && g.list.length > 1)                      { list = g.list; pos = g.pos || 0; }
-                    else if (video.playlist && video.playlist.length > 1) {
+                    // Torrent files already carry their complete playlist on the
+                    // clicked item. PlayerPlaylist is filled only *after* play(),
+                    // so its previous value may belong to another release.
+                    if (isTorrentUrl(video.url) && video.playlist && video.playlist.length > 1) {
                         list = video.playlist;
-                        // Позиция запущенного канала — по URL, а не всегда 0: иначе
-                        // плеер получает имя/подсветку первого канала категории.
-                        pos = 0;
+                    } else if (g.list && g.list.length > 1) {
+                        list = g.list; pos = g.pos || 0;
+                    } else if (video.playlist && video.playlist.length > 1) {
+                        list = video.playlist;
+                    }
+                    if (list === video.playlist) {
+                        // Find the clicked file even when Lampa has a stale position.
                         for (var vp = 0; vp < list.length; vp++) {
                             var vu = list[vp] && (list[vp].url || list[vp].file);
                             if (vu && vu === video.url) { pos = vp; break; }
