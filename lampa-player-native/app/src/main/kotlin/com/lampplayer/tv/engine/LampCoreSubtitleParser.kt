@@ -40,7 +40,7 @@ internal object LampCoreSubtitleParser {
                 if (start < 0 || end < 0 || body < 0 || fields.size != columns.size) continue
                 runCatching {
                     val rendered = fields[body].replace(Regex("\\{[^}]*}"), "").replace("\\N", "\n").replace("\\n", "\n").replace("\\h", " ")
-                    cues += CoreTextCue(timeUs(fields[start]) + offsetUs, timeUs(fields[end]) + offsetUs, rendered)
+                    cues += CoreTextCue(timeUs(fields[start]) + offsetUs, timeUs(fields[end]) + offsetUs, rendered.trim())
                 }
             }
         } else {
@@ -54,7 +54,7 @@ internal object LampCoreSubtitleParser {
                     val body = lines.drop(index + 1).joinToString("\n")
                         .replace(Regex("</?(?:c(?:\\.[^ >]+)?|v|lang|ruby|rt)(?:[ \t]+[^>]*)?>"), "")
                         .replace(Regex("<\\d{2}:\\d{2}(?::\\d{2})?\\.\\d+>"), "")
-                    cues += CoreTextCue(timeUs(times[0].trim()) + offsetUs, timeUs(times[1].trim().substringBefore(' ')) + offsetUs, body)
+                    cues += CoreTextCue(timeUs(times[0].trim()) + offsetUs, timeUs(times[1].trim().substringBefore(' ')) + offsetUs, body.trim())
                 }
             }
         }
