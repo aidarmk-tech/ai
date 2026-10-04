@@ -105,7 +105,9 @@ internal class LampCoreHlsLoader(
                     if (group != segment.discontinuity || init != segment.init || extractor == null) {
                         extractor?.close()
                         bridge.reset()
-                        val adjuster = if (!audioOnly) adjusters.computeIfAbsent(segment.discontinuity) { TimestampAdjuster(segment.startUs) }
+                        val adjuster = if (!audioOnly) adjusters[segment.discontinuity] ?: TimestampAdjuster(segment.startUs).let {
+                            adjusters.putIfAbsent(segment.discontinuity, it) ?: it
+                        }
                         else {
                             while (running() && adjusters[segment.discontinuity]?.timestampOffsetUs.let { it == null || it == C.TIME_UNSET }) Thread.sleep(5)
                             if (!running()) return
