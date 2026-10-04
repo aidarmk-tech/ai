@@ -11,6 +11,7 @@ import android.os.Looper
 import android.view.KeyEvent
 import android.view.View
 import androidx.media3.common.util.UnstableApi
+import androidx.test.platform.app.InstrumentationRegistry
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.lampplayer.tv.R
@@ -21,6 +22,7 @@ import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
+import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.annotation.LooperMode
@@ -34,6 +36,12 @@ import java.util.concurrent.TimeUnit
 @LooperMode(LooperMode.Mode.PAUSED)
 @UnstableApi
 class InfoOverlayNavigationTest {
+    private fun startHost(): ActivityController<Host> {
+        // Direct Activity key dispatch bypasses ViewRoot's switch out of touch mode.
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        return Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+    }
+
     class Host : Activity() {
         lateinit var b: ActivityPlayerBinding
         internal lateinit var navigation: InfoOverlayNavigation
@@ -114,15 +122,22 @@ class InfoOverlayNavigationTest {
             file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
             bitmap.recycle()
         }
+
+        fun diagnose(name: String) {
+            println("UI: focus=$currentFocus touch=${b.root.isInTouchMode} window=${b.root.hasWindowFocus()} " +
+                "shown=${b.infoOverlay.isShown} rows=${b.rvInfoList.childCount} meta=${b.svOverlayMeta.width}x${b.svOverlayMeta.height}")
+            screenshot(name)
+        }
     }
 
     @Test fun openingSeriesThenDownAndOkSelectsTheNextEpisodeWithoutVisitingActors() {
-        val controller = Robolectric.buildActivity(Host::class.java).setup().visible()
+        val controller = startHost()
         try {
             val host = controller.get()
             host.frame()
             host.navigation.open(2)
             host.frame()
+            host.diagnose("info-open")
             assertEquals(2, host.focusedEpisode())
             host.key(KeyEvent.KEYCODE_DPAD_DOWN)
             assertEquals(3, host.focusedEpisode())
@@ -134,7 +149,7 @@ class InfoOverlayNavigationTest {
     }
 
     @Test fun rightOpensDescriptionAndLeftOrBackReturnsToTheSameEpisode() {
-        val controller = Robolectric.buildActivity(Host::class.java).setup().visible()
+        val controller = startHost()
         try {
             val host = controller.get()
             host.frame(); host.navigation.open(2); host.frame()
@@ -162,7 +177,7 @@ class InfoOverlayNavigationTest {
     }
 
     @Test fun unchangedPlaybackUpdatesDoNotResetTheListOrFocusedRow() {
-        val controller = Robolectric.buildActivity(Host::class.java).setup().visible()
+        val controller = startHost()
         try {
             val host = controller.get()
             host.frame(); host.navigation.open(2); host.frame()
@@ -180,7 +195,7 @@ class InfoOverlayNavigationTest {
     }
 
     @Test fun movieWithoutAPlaylistOpensItsDescriptionAndDetailsRender() {
-        val controller = Robolectric.buildActivity(Host::class.java).setup().visible()
+        val controller = startHost()
         try {
             val host = controller.get()
             host.b.episodesPanel.visibility = View.GONE
@@ -190,6 +205,7 @@ class InfoOverlayNavigationTest {
             host.b.tvOverlayDetails.visibility = View.VISIBLE
             host.b.tvOverlayDetails.text = "Режиссёр · Алексей Миронов\nЖанры · Драма, детектив"
             host.navigation.open(0); host.frame()
+            host.diagnose("info-movie-open")
             assertTrue(host.b.svOverlayMeta.hasFocus())
             host.b.svOverlayMeta.scrollTo(0, 120); host.frame()
             host.screenshot("info-movie-details")

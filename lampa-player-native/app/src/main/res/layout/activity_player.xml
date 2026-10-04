@@ -264,13 +264,16 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:scrollbars="none"
+                android:paddingVertical="8dp"
+                android:clipToPadding="false"
                 android:fillViewport="true">
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
-                    android:gravity="center">
+                    android:gravity="center"
+                    android:clipChildren="false">
 
                     <ImageButton android:id="@+id/btn_night"
                         android:layout_width="44dp" android:layout_height="44dp"
@@ -643,7 +646,7 @@
 
                 <androidx.recyclerview.widget.RecyclerView
                     android:id="@+id/rv_cast"
-                    android:layout_width="match_parent" android:layout_height="148dp"
+                    android:layout_width="match_parent" android:layout_height="156dp"
                     android:layout_marginTop="8dp" android:paddingVertical="4dp"
                     android:clipToPadding="false" android:focusable="true"
                     android:descendantFocusability="afterDescendants" android:visibility="gone" />
