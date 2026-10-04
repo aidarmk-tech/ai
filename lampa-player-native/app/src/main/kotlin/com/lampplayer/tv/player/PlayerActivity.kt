@@ -177,6 +177,13 @@ class PlayerActivity : AppCompatActivity() {
 
     /** Attach the render surface for the engine the ViewModel actually started. */
     private fun bindEngineSurface() {
+        if (!vm.isEngineReady) {
+            binding.playerView.player = null
+            binding.playerView.isVisible = false
+            binding.vlcLayout.isVisible = false
+            binding.lampcoreContainer.isVisible = false
+            return
+        }
         binding.lampcoreContainer.isVisible = vm.isUsingLampCore
         if (vm.isUsingLampCore) {
             binding.playerView.player = null
