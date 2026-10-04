@@ -104,10 +104,19 @@ class LampCoreHlsExtractorTest {
     }
 
     @Test(timeout = 15000) fun masterWithSeparateAudioUsesOneSharedClock() {
+        masterSeparateAudio(false)
+    }
+
+    @Test(timeout = 15000) fun mismatchedAudioDiscontinuityFailsInsteadOfWaitingForever() {
+        masterSeparateAudio(true)
+    }
+
+    private fun masterSeparateAudio(mismatched: Boolean) {
         MockWebServer().use { server ->
             server.dispatcher = object : Dispatcher() {
                 override fun dispatch(request: RecordedRequest): MockResponse = when (request.path) {
-                    "/video.m3u8", "/audio.m3u8" -> MockResponse().setBody("#EXTM3U\n#EXTINF:1,\nts0.ts\n#EXTINF:1,\nts1.ts\n#EXT-X-ENDLIST")
+                    "/video.m3u8", "/audio.m3u8" -> MockResponse().setBody("#EXTM3U\n#EXTINF:1,\nts0.ts\n" +
+                        (if (mismatched && request.path == "/audio.m3u8") "#EXT-X-DISCONTINUITY\n" else "") + "#EXTINF:1,\nts1.ts\n#EXT-X-ENDLIST")
                     "/ts0.ts" -> MockResponse().setBody(Buffer().write(data("ts0.ts")))
                     "/ts1.ts" -> MockResponse().setBody(Buffer().write(data("ts1.ts")))
                     else -> MockResponse().setResponseCode(404)
@@ -117,8 +126,9 @@ class LampCoreHlsExtractorTest {
             try {
                 val p = LampCoreHlsPlaylist.parse(server.url("/master.m3u8").toString(), "#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"a\",NAME=\"Russian\",LANGUAGE=\"ru\",DEFAULT=YES,URI=\"audio.m3u8\"\n#EXT-X-STREAM-INF:BANDWIDTH=2000000,AUDIO=\"a\"\nvideo.m3u8")
                 val capture = Capture()
-                LampCoreHlsLoader(LampCoreHlsHttp(emptyMap()), p, dir, 0, capture, { _, _ -> }, { throw it }, { true }).read()
-                verify(capture)
+                val loader = LampCoreHlsLoader(LampCoreHlsHttp(emptyMap()), p, dir, 0, capture, { _, _ -> }, { }, { true })
+                if (mismatched) assertThrows(HlsException::class.java) { loader.read() }
+                else { loader.read(); verify(capture) }
                 assertTrue(dir.listFiles()!!.isEmpty())
             } finally { dir.deleteRecursively() }
         }
