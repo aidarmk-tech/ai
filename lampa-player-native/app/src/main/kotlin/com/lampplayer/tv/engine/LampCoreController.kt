@@ -99,7 +99,7 @@ class LampCoreController(context: Context, private val listener: EngineListener)
 
     override fun play() { if (!released) { acquireFocus(); requestedPlay = true } }
     override fun pause() { pausedByFocus = false; requestedPlay = false }
-    override fun seekTo(ms: Long) { seekRequest.set(ms.coerceAtLeast(0)) }
+    override fun seekTo(ms: Long) { seekRequest.set(if (durationMs > 0) ms.coerceIn(0, durationMs) else ms.coerceAtLeast(0)) }
     override fun setRate(rate: Float) { this.rate = rate.coerceIn(0.5f, 2f) }
     override fun audioTracks(): List<EngineTrack> = tracks
     override fun subtitleTracks(): List<EngineTrack> = listOf(EngineTrack(-1, "Выкл · LampCore"))
@@ -202,6 +202,7 @@ class LampCoreController(context: Context, private val listener: EngineListener)
             var wallBaseUs = startMs * 1000
             var wallBaseNs = System.nanoTime()
             var wallStarted = false
+            var wallRate = rate
             var videoInputEnd = false
             var audioInputEnd = audio == null
             var videoEnd = false
@@ -238,6 +239,11 @@ class LampCoreController(context: Context, private val listener: EngineListener)
                     appliedRate = rate
                 }
                 sink?.setVolume(volume)
+                if (wallRate != rate) {
+                    val changeNs = System.nanoTime()
+                    if (wallStarted) wallBaseUs += ((changeNs - wallBaseNs) / 1000 * wallRate).toLong()
+                    wallBaseNs = changeNs; wallRate = rate
+                }
 
                 // Separate queues prevent a full video decoder from starving audio.
                 fun feed(codec: MediaCodec, queue: ArrayBlockingQueue<Sample>) {
@@ -273,6 +279,7 @@ class LampCoreController(context: Context, private val listener: EngineListener)
                         val index = audio.dequeueOutputBuffer(audioInfo, 0)
                         when {
                             index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                                if (sink != null) throw CoreException("Смена формата звука внутри потока пока не поддерживается")
                                 val fmt = audio.outputFormat
                                 sampleRate = fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE)
                                 val channels = fmt.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
@@ -332,7 +339,7 @@ class LampCoreController(context: Context, private val listener: EngineListener)
                 }
                 val clockUs = if (audio != null && !audioTailClock && audioBaseUs != Long.MIN_VALUE)
                     audioBaseUs + frames * 1_000_000 / sampleRate.coerceAtLeast(1)
-                else if ((audio == null || audioTailClock) && wallStarted) wallBaseUs + ((now - wallBaseNs) / 1000 * rate).toLong()
+                else if ((audio == null || audioTailClock) && wallStarted) wallBaseUs + ((now - wallBaseNs) / 1000 * wallRate).toLong()
                 else startMs * 1000
                 positionMs = (clockUs / 1000).coerceAtLeast(startMs)
                 if (Build.VERSION.SDK_INT >= 24) underruns = sink?.underrunCount ?: 0
@@ -387,7 +394,7 @@ class LampCoreController(context: Context, private val listener: EngineListener)
             return positionMs
         } finally {
             input.close()
-            runCatching { sink?.pause(); sink?.flush(); sink?.release() }
+            runCatching { sink?.pause() }; runCatching { sink?.flush() }; runCatching { sink?.release() }
             runCatching { audio?.stop() }; runCatching { audio?.release() }
             runCatching { video?.stop() }; runCatching { video?.release() }
             if (demux === input) demux = null
