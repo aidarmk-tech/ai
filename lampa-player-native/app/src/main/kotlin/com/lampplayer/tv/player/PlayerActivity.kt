@@ -105,6 +105,11 @@ class PlayerActivity : AppCompatActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         binding = ActivityPlayerBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        binding.lampcoreSurface.holder.addCallback(object : android.view.SurfaceHolder.Callback {
+            override fun surfaceCreated(holder: android.view.SurfaceHolder) { vm.lampCore?.setSurface(holder.surface) }
+            override fun surfaceChanged(holder: android.view.SurfaceHolder, format: Int, width: Int, height: Int) { vm.lampCore?.setSurface(holder.surface) }
+            override fun surfaceDestroyed(holder: android.view.SurfaceHolder) { vm.lampCore?.setSurface(null) }
+        })
 
         val (url, card) = IntentParser.parse(intent) ?: run {
             Toast.makeText(this, getString(R.string.error_no_url), Toast.LENGTH_LONG).show()
@@ -125,6 +130,7 @@ class PlayerActivity : AppCompatActivity() {
 
     /** Once-a-day background update check → unobtrusive toast (install from Settings). */
     private fun maybeCheckUpdate() {
+        if (com.lampplayer.tv.BuildConfig.LAMPCORE_PREVIEW) return
         val prefs = getSharedPreferences("update", MODE_PRIVATE)
         if (System.currentTimeMillis() - prefs.getLong("last", 0) < 24 * 3600_000L) return
         prefs.edit().putLong("last", System.currentTimeMillis()).apply()
@@ -171,7 +177,20 @@ class PlayerActivity : AppCompatActivity() {
 
     /** Attach the render surface for the engine the ViewModel actually started. */
     private fun bindEngineSurface() {
-        if (vm.isUsingVlc) {
+        if (!vm.isEngineReady) {
+            binding.playerView.player = null
+            binding.playerView.isVisible = false
+            binding.vlcLayout.isVisible = false
+            binding.lampcoreContainer.isVisible = false
+            return
+        }
+        binding.lampcoreContainer.isVisible = vm.isUsingLampCore
+        if (vm.isUsingLampCore) {
+            binding.playerView.player = null
+            binding.playerView.isVisible = false
+            binding.vlcLayout.isVisible = false
+            binding.lampcoreSurface.holder.surface.takeIf { it.isValid }?.let { vm.lampCore?.setSurface(it) }
+        } else if (vm.isUsingVlc) {
             binding.playerView.player = null
             binding.playerView.isVisible = false
             binding.vlcLayout.isVisible = true
@@ -307,6 +326,11 @@ class PlayerActivity : AppCompatActivity() {
                         androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
                     com.lampplayer.tv.player.VideoScaleMode.AUTO -> autoResizeMode(s.videoAspect)
                     else -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                }
+
+                if (vm.isUsingLampCore) {
+                    binding.lampcoreContainer.setAspectRatio(s.videoAspect)
+                    binding.lampcoreContainer.resizeMode = binding.playerView.resizeMode
                 }
 
                 // AFR: switch the panel to the content frame rate once it's known.

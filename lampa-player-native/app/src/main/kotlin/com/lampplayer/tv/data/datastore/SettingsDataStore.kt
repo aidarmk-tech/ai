@@ -15,7 +15,7 @@ import javax.inject.Singleton
 private val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(name = "lampa_settings")
 
 data class AppSettings(
-    // Player engine: "auto" | "exoplayer" | "vlc" (see engine.EngineType)
+    // Player engine: "auto" | "exoplayer" | "vlc" | "lampcore" (see engine.EngineType)
     val engine: String = "auto",
     val buffer: BufferProfileType = BufferProfileType.MEDIUM,
     val autonext: Boolean = true,

@@ -11,7 +11,10 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.lampplayer.tv"
+        val preview = project.findProperty("lampCorePreview") == "true"
+        applicationId = if (preview) "com.lampplayer.tv.lampcore" else "com.lampplayer.tv"
+        manifestPlaceholders["appLabel"] = if (preview) "LampPlayer · LampCore" else "@string/app_name"
+        buildConfigField("boolean", "LAMPCORE_PREVIEW", preview.toString())
         minSdk = 21
         targetSdk = 34
         // Overridable from CI (-PverCode / -PverName) so each build is upgradeable.
@@ -64,6 +67,9 @@ android {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("org.robolectric:robolectric:4.12.2")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.fragment.ktx)

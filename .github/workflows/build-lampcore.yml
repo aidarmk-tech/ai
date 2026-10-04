@@ -1,0 +1,40 @@
+name: Build LampCore preview
+
+on:
+  push:
+    branches: ["codex/lampcore-native-engine"]
+  pull_request:
+    paths:
+      - "lampa-player-native/**"
+      - ".github/workflows/build-lampcore.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lampcore-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+      - uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: "8.7"
+      - name: Test and build independent preview APK
+        working-directory: lampa-player-native
+        run: gradle testDebugUnitTest assembleDebug --no-daemon --stacktrace -PlampCorePreview=true -PverCode=${{ github.run_number }} -PverName=1.0.${{ github.run_number }}-lampcore-hls
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: LampCore-preview-${{ github.run_number }}
+          path: |
+            lampa-player-native/app/build/outputs/apk/debug/app-debug.apk
+            lampa-player-native/app/build/reports/tests/testDebugUnitTest/
+          retention-days: 30

@@ -25,6 +25,7 @@ import com.lampplayer.tv.engine.EngineListener
 import com.lampplayer.tv.engine.EngineTrack
 import com.lampplayer.tv.engine.EngineType
 import com.lampplayer.tv.engine.VlcController
+import com.lampplayer.tv.engine.LampCoreController
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
@@ -175,14 +176,19 @@ class PlayerViewModel @Inject constructor(
     // Guard external/internal access with [usingVlc]; in VLC mode it is never created.
     lateinit var player: ExoPlayer
         private set
+    private var exoReady = false
+    private var engineInitJob: Job? = null
 
     // libVLC fallback engine (non-null only while usingVlc).
     var vlc: VlcController? = null
         private set
     private var usingVlc = false
+    var lampCore: LampCoreController? = null
+        private set
+    private var corePollJob: Job? = null
 
     /** Emitted when AUTO mode hands playback over to libVLC; the Activity rebinds surfaces. */
-    private val _engineSwitched = MutableSharedFlow<Unit>()
+    private val _engineSwitched = MutableSharedFlow<Unit>(replay = 1)
     val engineSwitched: SharedFlow<Unit> = _engineSwitched.asSharedFlow()
 
     private var currentUrl = ""
@@ -217,6 +223,8 @@ class PlayerViewModel @Inject constructor(
     private var didAutoFallback = false
 
     val isUsingVlc: Boolean get() = usingVlc
+    val isUsingLampCore: Boolean get() = lampCore != null
+    val isEngineReady: Boolean get() = usingVlc || isUsingLampCore || exoReady
     val currentMediaUrl: String get() = currentUrl
 
     /**
@@ -238,14 +246,17 @@ class PlayerViewModel @Inject constructor(
                 positionDataStore.savePosition(url, card, PlaybackPosition(time = p, duration = d, percent = pct, watched = pct >= 90))
             }
         }
+        engineInitJob?.cancel()
         autoNextManager.cancel(); sleepJob?.cancel()
         programmeJob?.cancel(); loadJob?.cancel()
         saveJob?.cancel(); diagJob?.cancel(); vlcPollJob?.cancel(); osdHideJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel(); epgJob?.cancel(); schedJob?.cancel(); retryJob?.cancel()
         archiveProg = null; liveUrl = null
         releaseLoudness()
         runCatching { nightModeCtl.release() }
-        if (::player.isInitialized) runCatching { player.release() }
+        if (exoReady) runCatching { player.release() }
+        exoReady = false
         runCatching { vlc?.release() }; vlc = null
+        corePollJob?.cancel(); lampCore?.release(); lampCore = null
         usingVlc = false
         didAutoFallback = false
         everReady = false; weakHintShown = false; rebufferTimes.clear()
@@ -292,8 +303,9 @@ class PlayerViewModel @Inject constructor(
         val s = _uiState.value
         if (!s.reconnecting && !s.hasError) return     // healthy → nothing to do
         retryJob?.cancel()
-        if (usingVlc) retryVlc()
-        else if (::player.isInitialized) runCatching { player.prepare(); player.playWhenReady = true }
+        if (isUsingLampCore) lampCore?.retry()
+        else if (usingVlc) retryVlc()
+        else if (exoReady) runCatching { player.prepare(); player.playWhenReady = true }
     }
 
     private var lastNightMode: Boolean? = null
@@ -386,17 +398,33 @@ class PlayerViewModel @Inject constructor(
             )
         }
 
-        // Restore remembered playback prefs: volume boost + scale mode survive restarts.
-        currentBoost = settings.volumeBoost.coerceIn(100, 200)
-        val savedScale = runCatching { VideoScaleMode.valueOf(settings.scaleMode) }.getOrDefault(VideoScaleMode.AUTO)
-        _uiState.update { it.copy(volumeBoost = currentBoost, scaleMode = savedScale) }
+        // DataStore is asynchronous. Select the engine only after persisted settings
+        // arrive, otherwise a cold launch always starts the default ExoPlayer.
+        engineInitJob?.cancel()
+        engineInitJob = viewModelScope.launch {
+            settings = settingsDataStore.settings.first()
+            _uiState.update { it.copy(settings = settings) }
+            // Restore remembered playback prefs: volume boost + scale mode survive restarts.
+            currentBoost = settings.volumeBoost.coerceIn(100, 200)
+            val savedScale = runCatching { VideoScaleMode.valueOf(settings.scaleMode) }.getOrDefault(VideoScaleMode.AUTO)
+            _uiState.update { it.copy(volumeBoost = currentBoost, scaleMode = savedScale) }
 
-        // Engine selection (see EngineType). "vlc" → libVLC immediately;
-        // "exoplayer"/"auto" → ExoPlayer (AUTO falls back to libVLC on fatal decode errors).
-        if (settings.engine == EngineType.VLC) {
-            startVlc(context, url, card, useIntentStart = true)
-        } else {
-            initExo(context, url, card)
+            // Engine selection (see EngineType). "vlc" → libVLC immediately;
+            // "exoplayer"/"auto" → ExoPlayer (AUTO falls back to libVLC on fatal decode errors).
+            if (settings.engine == EngineType.LAMPCORE) {
+                startLampCore(url, card)
+            } else if (settings.engine == EngineType.VLC) {
+                startVlc(context, url, card, useIntentStart = true)
+            } else {
+                initExo(context, url, card)
+            }
+
+            _engineSwitched.emit(Unit)
+            // Каталог попросил открыть канал сразу на записи конкретной передачи.
+            if (card.iptv) card.archiveStartSec?.takeIf { it > 0 }?.let { st ->
+                val en = (card.archiveEndSec ?: (st + 3600)).coerceAtLeast(st + 60)
+                playProgramme(EpgProgramme(st * 1000, en * 1000, card.archiveTitle ?: "Архив", ""))
+            }
         }
 
         // Show card metadata immediately from intent data, enhance with TMDB if available
@@ -407,11 +435,7 @@ class PlayerViewModel @Inject constructor(
         updateMediaSession()
         fetchIntroFromDb(card)
         detectIntroFromSubs(card)
-        // Каталог попросил открыть канал сразу на записи конкретной передачи.
-        if (card.iptv) card.archiveStartSec?.takeIf { it > 0 }?.let { st ->
-            val en = (card.archiveEndSec ?: (st + 3600)).coerceAtLeast(st + 60)
-            playProgramme(EpgProgramme(st * 1000, en * 1000, card.archiveTitle ?: "Архив", ""))
-        }
+
     }
 
     /** Fetch crowdsourced intro + credits timecodes (Firebase) for this episode, if any. */
@@ -643,7 +667,10 @@ class PlayerViewModel @Inject constructor(
         currentUrl = url
         lastVlcPositionMs = 0L
         val card = currentCard ?: return
-        if (usingVlc) {
+        if (isUsingLampCore) {
+            lampCore?.setMedia(url, card.headers, 0L)
+            reapplyRate()
+        } else if (usingVlc) {
             vlc?.setMedia(appContext, url, card.headers, 0L, emptyList(), hardwareDecode = true, nightMode = settings.nightMode)
             reapplyRate()
         } else {
@@ -791,10 +818,63 @@ class PlayerViewModel @Inject constructor(
             )
             .build()
             .also { setupPlayerListener(it) }
+        exoReady = true
 
         loadUrl(url, card, useIntentStart = true)
         startAutoSave()
         if (settings.diag) startDiag()
+    }
+
+    // LampCore is opt-in; AUTO keeps its established ExoPlayer/libVLC policy.
+    private fun startLampCore(url: String, card: CardMeta) {
+        usingVlc = false
+        val controller = LampCoreController(appContext, object : EngineListener {
+            override fun onPlaying() {
+                _uiState.update { it.copy(isPlaying = true, hasError = false,
+                    videoFps = lampCore?.videoFps ?: 0f, videoAspect = lampCore?.videoAspect ?: 16f / 9f) }
+                updateMediaSession()
+            }
+            override fun onPaused() { _uiState.update { it.copy(isPlaying = false) }; updateMediaSession() }
+            override fun onBuffering(percent: Float) { _uiState.update { it.copy(isLoading = percent < 100f) } }
+            override fun onTracksChanged() {
+                _uiState.update { it.copy(videoFps = lampCore?.videoFps ?: 0f, videoAspect = lampCore?.videoAspect ?: 16f / 9f) }
+                if (_uiState.value.tracksOverlayVisible) refreshTracks()
+            }
+            override fun onError(message: String) {
+                _uiState.update { it.copy(isPlaying = false, isLoading = false, hasError = true, errorMessage = message) }
+            }
+            override fun onEnded() {
+                _uiState.update { it.copy(isPlaying = false, isLoading = false) }
+                updateMediaSession()
+                viewModelScope.launch { saveCurrentPosition(ended = true) }
+                if (hasInPlayerNext()) viewModelScope.launch { navigateNext() }
+                else _uiState.update { it.copy(osdVisible = true) }
+            }
+        })
+        lampCore = controller
+        loadJob = viewModelScope.launch {
+            val saved = positionDataStore.getPosition(url, card)
+            val startMs = when {
+                card.fromStart -> 0L
+                card.startPositionMs != null -> card.startPositionMs
+                saved == null -> ((card.timelineTime ?: 0.0) * 1000).toLong()
+                saved.watched -> 0L
+                else -> (saved.time * 1000).toLong()
+            }
+            controller.setMedia(url, card.headers, startMs.coerceAtLeast(0))
+            reapplyRate()
+            restoreShowMarks(card)
+            if (card.subtitles.isNotEmpty()) _notice.tryEmit("LampCore v1: субтитры пока не поддерживаются")
+            corePollJob = viewModelScope.launch {
+                var ticks = 0
+                while (isActive && lampCore === controller) {
+                    delay(1000)
+                    if (settings.diag) _uiState.update { it.copy(diagText = controller.diagnostics()) }
+                    if (++ticks % 5 == 0 && controller.isPlaying) saveCurrentPosition()
+                }
+            }
+            if (!card.iptv && startMs > 60_000) _resumedFromMs.tryEmit(startMs)
+        }
     }
 
     // ─── libVLC engine ─────────────────────────────────────────────
@@ -927,6 +1007,7 @@ class PlayerViewModel @Inject constructor(
         usingVlc = true
         releaseLoudness()   // Exo effect is bound to the Exo session we're releasing
         runCatching { nightModeCtl.release() }
+        exoReady = false
         runCatching { player.release() }
         saveJob?.cancel(); diagJob?.cancel(); retryJob?.cancel()
         _uiState.update { it.copy(hasError = false, isLoading = true) }
@@ -1041,43 +1122,48 @@ class PlayerViewModel @Inject constructor(
 
     // ─── Engine-agnostic accessors (route to ExoPlayer or libVLC) ──
     private fun engPositionMs(): Long = when {
+        isUsingLampCore -> lampCore?.positionMs ?: 0L
         usingVlc -> vlc?.positionMs ?: 0L
-        ::player.isInitialized -> player.currentPosition
+        exoReady -> player.currentPosition
         else -> 0L
     }
     private fun engDurationMs(): Long = when {
+        isUsingLampCore -> (lampCore?.durationMs ?: -1L).coerceAtLeast(0)
         usingVlc -> (vlc?.durationMs ?: -1L).takeIf { it > 0 } ?: 0L
-        ::player.isInitialized -> player.duration.takeIf { it != C.TIME_UNSET } ?: 0L
+        exoReady -> player.duration.takeIf { it != C.TIME_UNSET } ?: 0L
         else -> 0L
     }
     private fun engIsPlaying(): Boolean = when {
+        isUsingLampCore -> lampCore?.isPlaying ?: false
         usingVlc -> vlc?.isPlaying ?: false
-        ::player.isInitialized -> player.isPlaying
+        exoReady -> player.isPlaying
         else -> false
     }
     private fun engSeekTo(ms: Long) {
-        if (usingVlc) vlc?.seekTo(ms) else if (::player.isInitialized) player.seekTo(ms)
+        if (isUsingLampCore) lampCore?.seekTo(ms) else if (usingVlc) vlc?.seekTo(ms) else if (exoReady) player.seekTo(ms)
     }
 
     // Public unified controls for the Activity (engine-agnostic).
     fun positionMs(): Long = engPositionMs()
     fun durationMs(): Long = engDurationMs()
     fun bufferedMs(): Long = when {
+        isUsingLampCore -> lampCore?.bufferedMs ?: 0L
         usingVlc -> vlc?.bufferedMs ?: 0L
-        ::player.isInitialized -> player.bufferedPosition
+        exoReady -> player.bufferedPosition
         else -> 0L
     }
     fun isPlayingNow(): Boolean = engIsPlaying()
     fun seekToMs(ms: Long) { engSeekTo(ms); updateMediaSession() }
-    fun pausePlayback() { if (usingVlc) vlc?.pause() else if (::player.isInitialized) player.pause() }
-    fun resumePlayback() { if (usingVlc) vlc?.play() else if (::player.isInitialized) player.play() }
+    fun pausePlayback() { if (isUsingLampCore) lampCore?.pause() else if (usingVlc) vlc?.pause() else if (exoReady) player.pause() }
+    fun resumePlayback() { if (isUsingLampCore) lampCore?.play() else if (usingVlc) vlc?.play() else if (exoReady) player.play() }
 
     // ─── Playback speed (engine-agnostic) ──────────────────────────
     private var currentRate = 1f
     private fun applyRate(rate: Float) {
         currentRate = rate
-        if (usingVlc) vlc?.setRate(rate)
-        else if (::player.isInitialized) player.setPlaybackSpeed(rate)
+        if (isUsingLampCore) lampCore?.setRate(rate)
+        else if (usingVlc) vlc?.setRate(rate)
+        else if (exoReady) player.setPlaybackSpeed(rate)
     }
     /** Re-apply rate + sizing after (re)loading media — VLC resets them per media. */
     private fun reapplyRate() {
@@ -1100,6 +1186,7 @@ class PlayerViewModel @Inject constructor(
     private val nightModeCtl = NightModeController()
 
     fun cycleVolumeBoost() {
+        if (isUsingLampCore) { _notice.tryEmit("LampCore v1: усиление громкости пока не поддерживается"); return }
         val idx = boostSteps.indexOf(currentBoost).coerceAtLeast(0)
         val next = boostSteps[(idx + 1) % boostSteps.size]
         applyBoost(next)
@@ -1109,8 +1196,9 @@ class PlayerViewModel @Inject constructor(
 
     private fun applyBoost(percent: Int) {
         currentBoost = percent
+        if (isUsingLampCore) { lampCore?.setVolume(percent); return }
         if (usingVlc) { vlc?.setVolume(percent); return }
-        if (!::player.isInitialized) return
+        if (!exoReady) return
         if (percent <= 100) {
             runCatching { loudness?.enabled = false }
             return
@@ -1133,9 +1221,13 @@ class PlayerViewModel @Inject constructor(
 
     /** Apply night mode to the active engine (ExoPlayer: live; libVLC: re-open at position). */
     private fun applyNightMode(enabled: Boolean) {
+        if (isUsingLampCore) {
+            if (enabled) _notice.tryEmit("LampCore v1: ночной режим пока не поддерживается")
+            return
+        }
         if (usingVlc) {
             retryVlc()   // libVLC needs the media re-opened to add/remove the compressor filter
-        } else if (::player.isInitialized) {
+        } else if (exoReady) {
             runCatching { nightModeCtl.apply(player.audioSessionId, enabled) }
         }
     }
@@ -1213,6 +1305,13 @@ class PlayerViewModel @Inject constructor(
     private var vlcSubs: List<EngineTrack> = emptyList()
 
     private fun refreshTracks() {
+        if (isUsingLampCore) {
+            val core = lampCore ?: return
+            vlcAudio = core.audioTracks()
+            _uiState.update { it.copy(audioTracks = vlcAudio.map { t -> t.name },
+                subtitleTracks = listOf("Выкл · LampCore v1"), selectedSubtitleIndex = 0) }
+            return
+        }
         if (usingVlc) {
             val v = vlc ?: return
             vlcAudio = v.audioTracks()
@@ -1295,7 +1394,12 @@ class PlayerViewModel @Inject constructor(
             // see two overlapping streams and stall, so close the old one first and
             // give it a beat to free the file before requesting the next.
             val torrentSwitch = isTorrentStream(episode.url) || isTorrentStream(currentUrl)
-            if (usingVlc) {
+            if (isUsingLampCore) {
+                val card = currentCard ?: return@launch
+                lampCore?.setMedia(episode.url, card.headers, 0L)
+                reapplyRate()
+                restoreShowMarks(card)
+            } else if (usingVlc) {
                 val card = currentCard ?: return@launch
                 if (torrentSwitch) { runCatching { vlc?.stop() }; delay(600) }
                 vlc?.setMedia(appContext, episode.url, card.headers, 0L, emptyList(), hardwareDecode = true, nightMode = settings.nightMode)
@@ -1312,7 +1416,9 @@ class PlayerViewModel @Inject constructor(
 
     fun selectAudio(index: Int) {
         val card = currentCard ?: return
-        if (usingVlc) {
+        if (isUsingLampCore) {
+            vlcAudio.getOrNull(index)?.let { lampCore?.selectAudio(it.id) }
+        } else if (usingVlc) {
             val v = vlc; val track = vlcAudio.getOrNull(index)
             if (v != null && track != null) {
                 // libVLC builds disagree on whether setAudioTrack takes the track id or
@@ -1331,6 +1437,10 @@ class PlayerViewModel @Inject constructor(
 
     fun selectSubtitle(index: Int) {
         val card = currentCard ?: return
+        if (isUsingLampCore) {
+            _uiState.update { it.copy(selectedSubtitleIndex = 0) }
+            return
+        }
         if (usingVlc) {
             val v = vlc; val track = vlcSubs.getOrNull(index)
             if (v != null && track != null) {
@@ -1626,7 +1736,7 @@ class PlayerViewModel @Inject constructor(
         retryJob?.cancel()
         errorRecovery.reset()
         _uiState.update { it.copy(hasError = false) }
-        if (usingVlc) vlc?.play() else { player.prepare(); player.play() }
+        if (isUsingLampCore) lampCore?.retry() else if (usingVlc) vlc?.play() else { player.prepare(); player.play() }
     }
 
     data class LampaResult(val posMs: Long, val durMs: Long, val percent: Int, val url: String)
@@ -1796,7 +1906,7 @@ class PlayerViewModel @Inject constructor(
         saveJob = viewModelScope.launch {
             while (isActive) {
                 delay(5000)
-                if (usingVlc || !::player.isInitialized) continue
+                if (isUsingLampCore || usingVlc || !exoReady) continue
                 if (player.isPlaying && player.currentPosition > 0 && player.duration != C.TIME_UNSET)
                     saveCurrentPosition()
             }
@@ -1807,7 +1917,7 @@ class PlayerViewModel @Inject constructor(
         diagJob = viewModelScope.launch {
             while (isActive) {
                 delay(1000)
-                if (usingVlc || !::player.isInitialized) continue
+                if (isUsingLampCore || usingVlc || !exoReady) continue
                 val buf = (player.bufferedPosition - player.currentPosition) / 1000.0
                 val fmt = player.videoFormat
                 _uiState.update {
@@ -1846,8 +1956,11 @@ class PlayerViewModel @Inject constructor(
         runCatching { nightModeCtl.release() }
         stopNetworkMonitor()
         releaseMediaSession()
-        if (::player.isInitialized) player.release()
+        engineInitJob?.cancel()
+        if (exoReady) player.release()
+        exoReady = false
         vlc?.release(); vlc = null
+        corePollJob?.cancel(); lampCore?.release(); lampCore = null
         super.onCleared()
     }
 

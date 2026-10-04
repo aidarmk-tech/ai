@@ -66,6 +66,10 @@ class SettingsActivity : AppCompatActivity() {
 
         binding.tvUpdateStatus.text = "Версия ${com.lampplayer.tv.BuildConfig.VERSION_NAME}"
         binding.btnUpdate.setOnClickListener { checkAndUpdate() }
+        if (com.lampplayer.tv.BuildConfig.LAMPCORE_PREVIEW) {
+            binding.btnUpdate.isEnabled = false
+            binding.tvUpdateStatus.text = "Тестовая версия LampCore · ${com.lampplayer.tv.BuildConfig.VERSION_NAME}"
+        }
     }
 
     private fun checkAndUpdate() {
@@ -95,7 +99,7 @@ class SettingsActivity : AppCompatActivity() {
     private fun setupSpinners() {
         val engineAdapter = ArrayAdapter(
             this, android.R.layout.simple_spinner_item,
-            listOf("Авто (ExoPlayer + libVLC)", "Только ExoPlayer", "Только libVLC"),
+            listOf("Авто (ExoPlayer + libVLC)", "Только ExoPlayer", "Только libVLC", "LampCore — экспериментальный"),
         ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
         binding.spinnerEngine.adapter = engineAdapter
         binding.spinnerEngine.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
