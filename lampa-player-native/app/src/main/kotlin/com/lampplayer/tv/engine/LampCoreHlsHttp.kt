@@ -27,6 +27,7 @@ internal class LampCoreHlsHttp(private val headers: Map<String, String>, private
     companion object {
         private val client = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.SECONDS).callTimeout(20, TimeUnit.SECONDS).build()
+        private val quickClient = client.newBuilder().connectTimeout(3, TimeUnit.SECONDS).readTimeout(3, TimeUnit.SECONDS).callTimeout(5, TimeUnit.SECONDS).build()
         private const val PLAYLIST_LIMIT = 1024 * 1024
         private const val INIT_LIMIT = 2 * 1024 * 1024
         private const val SEGMENT_LIMIT = 16 * 1024 * 1024
@@ -74,6 +75,13 @@ internal class LampCoreHlsHttp(private val headers: Map<String, String>, private
         response.body?.byteStream()?.use { copy(it, out, PLAYLIST_LIMIT) } ?: throw HlsException("Пустой HLS-плейлист")
         LampCoreHlsPlaylist.parse(response.request.url.toString(), out.toString("UTF-8"))
     } }
+
+    /** A failed optional quality candidate must not consume the recovery budget of playing AV. */
+    fun candidatePlaylist(url: String): HlsPlaylist = withResponse(url, null, true) { response ->
+        val out = ByteArrayOutputStream()
+        response.body?.byteStream()?.use { copy(it, out, PLAYLIST_LIMIT) } ?: throw HlsException("Пустой HLS-плейлист")
+        LampCoreHlsPlaylist.parse(response.request.url.toString(), out.toString("UTF-8"))
+    }
 
     fun text(url: String, limit: Int = 2 * 1024 * 1024): String = retry { withResponse(url, null) { response ->
         val out = ByteArrayOutputStream()
@@ -159,13 +167,13 @@ internal class LampCoreHlsHttp(private val headers: Map<String, String>, private
         }
     }
 
-    private fun <T> withResponse(url: String, range: HlsRange?, action: (Response) -> T): T {
+    private fun <T> withResponse(url: String, range: HlsRange?, quick: Boolean = false, action: (Response) -> T): T {
         val builder = Request.Builder().url(url)
         headers.forEach { (k, v) -> if (!k.equals("Range", true) && !k.equals("Accept-Encoding", true)) builder.header(k, v) }
         if (headers.keys.none { it.equals("User-Agent", true) }) builder.header("User-Agent", "LampPlayer/LampCore")
         builder.header("Accept-Encoding", "identity")
         range?.let { builder.header("Range", "bytes=${it.offset}-${it.offset + it.length - 1}") }
-        val call = client.newCall(builder.build())
+        val call = (if (quick) quickClient else client).newCall(builder.build())
         calls.add(call)
         if (closed) call.cancel()
         try {
