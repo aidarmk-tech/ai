@@ -44,8 +44,9 @@ object EngineType {
     const val AUTO = "auto"
     const val EXOPLAYER = "exoplayer"
     const val VLC = "vlc"
+    const val LAMPCORE = "lampcore"
 
-    val ALL = listOf(AUTO, EXOPLAYER, VLC)
+    val ALL = listOf(AUTO, EXOPLAYER, VLC, LAMPCORE)
     fun normalize(value: String?): String = if (value in ALL) value!! else AUTO
 }
 
