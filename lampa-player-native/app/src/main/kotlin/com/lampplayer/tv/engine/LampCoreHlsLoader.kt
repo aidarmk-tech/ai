@@ -95,7 +95,7 @@ internal class LampCoreHlsLoader(
             control.supportedSize(it) && (it.videoMime == null || it.videoMime == control.videoMime) && (blockedVariants[it.uri] ?: 0) <= now }
         val next = control.abr.choose(variants, current, maxOf(control.bufferedUs(), cachedAheadUs))
         if (next.uri == current.uri) return null
-        val aligned = try { HlsAlignment.switchAt(playlist, boundaryUs, http.playlist(next.uri)) }
+        val aligned = try { HlsAlignment.switchAt(playlist, boundaryUs, http.candidatePlaylist(next.uri)) }
         catch (e: Exception) { if (!running()) throw e; null }
         if (aligned == null) { blockedVariants[next.uri] = now + 60_000; return null }
         control.variantUri = next.uri; control.switches++
