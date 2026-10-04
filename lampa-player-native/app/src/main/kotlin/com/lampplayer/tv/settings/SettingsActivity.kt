@@ -104,7 +104,7 @@ class SettingsActivity : AppCompatActivity() {
         fun subtitleSpinner(spinner: android.widget.Spinner, labels: List<String>, selected: (Int) -> Unit) {
             spinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, labels).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
             spinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(p: AdapterView<*>?, v: android.view.View?, pos: Int, id: Long) { if (!ignoreSpinnerEvent) selected(pos) }
+                override fun onItemSelected(p: AdapterView<*>?, v: android.view.View?, pos: Int, id: Long) { if (!ignoreSpinnerEvent && pos == spinner.selectedItemPosition) selected(pos) }
                 override fun onNothingSelected(p: AdapterView<*>?) {}
             }
         }
