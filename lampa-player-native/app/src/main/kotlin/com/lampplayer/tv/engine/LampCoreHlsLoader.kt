@@ -30,6 +30,7 @@ internal class LampCoreHlsLoader(
     private val passedGroups = ConcurrentHashMap<Boolean, Long>()
     private val failure = AtomicReference<Exception?>()
     @Volatile private var closed = false
+    @Volatile private var videoFinished = false
     @Volatile private var audioThread: Thread? = null
     val downloadedBytes: Long get() = http.downloadedBytes
 
@@ -51,7 +52,8 @@ internal class LampCoreHlsLoader(
                     catch (e: Exception) { if (running()) fail(e) }
                 }, "LampCore-HLS-audio").also { it.start() }
             }
-            stream(resolved.video, begin, false, resolved.audio != null)
+            try { stream(resolved.video, begin, false, resolved.audio != null) }
+            finally { videoFinished = true }
             while (running() && audioThread?.isAlive == true) audioThread?.join(50)
             failure.get()?.let { throw it }
         } finally { close() }
@@ -109,7 +111,10 @@ internal class LampCoreHlsLoader(
                             adjusters.putIfAbsent(segment.discontinuity, it) ?: it
                         }
                         else {
-                            while (running() && adjusters[segment.discontinuity]?.timestampOffsetUs.let { it == null || it == C.TIME_UNSET }) Thread.sleep(5)
+                            while (running() && adjusters[segment.discontinuity]?.timestampOffsetUs.let { it == null || it == C.TIME_UNSET }) {
+                                if (videoFinished) throw HlsException("HLS AUDIO discontinuity не совпадает с видео")
+                                Thread.sleep(5)
+                            }
                             if (!running()) return
                             adjusters[segment.discontinuity] ?: throw HlsException("Нет временной базы HLS-аудио")
                         }
