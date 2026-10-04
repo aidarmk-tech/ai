@@ -96,7 +96,7 @@ class LampCoreHlsRecoveryTest {
             }
             val audio = capture.formats.filter { it.second.sampleMimeType?.startsWith("audio/") == true }.distinctBy { it.first }
             assertEquals(2, audio.size)
-            assertEquals(setOf("rus", "eng"), audio.map { it.second.language }.toSet())
+            assertEquals(setOf("ru", "en"), audio.map { it.second.language }.toSet())
         } finally { dir.deleteRecursively() }
     }
 
