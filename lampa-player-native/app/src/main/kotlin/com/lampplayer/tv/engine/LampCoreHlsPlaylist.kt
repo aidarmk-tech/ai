@@ -182,9 +182,12 @@ internal object LampCoreHlsPlaylist {
     }
     private fun dateUs(text: String): Long {
         val normalized = Regex("(\\.\\d+)(Z|[+-]\\d\\d:\\d\\d)$").replace(text) { m -> m.groupValues[1].take(4).padEnd(4, '0') + m.groupValues[2] }
-        val pattern = if (normalized.contains('.')) "yyyy-MM-dd'T'HH:mm:ss.SSSXXX" else "yyyy-MM-dd'T'HH:mm:ssXXX"
+        // ISO X patterns require API 24. Normalize to RFC822 Z for Android 6.
+        val compatible = normalized.replace(Regex("Z$"), "+0000")
+            .replace(Regex("([+-]\\d\\d):(\\d\\d)$"), "$1$2")
+        val pattern = if (compatible.contains('.')) "yyyy-MM-dd'T'HH:mm:ss.SSSZ" else "yyyy-MM-dd'T'HH:mm:ssZ"
         val format = java.text.SimpleDateFormat(pattern, java.util.Locale.US).apply { isLenient = false }
-        return try { (format.parse(normalized)?.time ?: throw HlsException("Некорректный PROGRAM-DATE-TIME")) * 1000 }
+        return try { (format.parse(compatible)?.time ?: throw HlsException("Некорректный PROGRAM-DATE-TIME")) * 1000 }
         catch (_: Exception) { throw HlsException("Некорректный PROGRAM-DATE-TIME") }
     }
     private fun resolve(base: String, relative: String): String {
