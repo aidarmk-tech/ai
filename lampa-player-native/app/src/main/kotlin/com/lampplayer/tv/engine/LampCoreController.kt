@@ -7,6 +7,10 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.Surface
+import androidx.media3.common.C
+import androidx.media3.common.Format
+import androidx.media3.common.util.MediaFormatUtil
+import androidx.media3.common.util.UnstableApi
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.util.concurrent.ArrayBlockingQueue
@@ -16,10 +20,11 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Experimental progressive-file player. Own demux/decode loops, audio clock and scheduling;
- * no ExoPlayer/libVLC inside. Platform extractors/codecs determine format support.
+ * Own loading/decode loops, audio clock and scheduling; no ExoPlayer/libVLC playback.
+ * Android extracts files; Media3 container extractors demux HLS packets only.
  * HTTP reads happen on a separate, bounded demux thread, not the rendering thread.
  */
+@UnstableApi
 class LampCoreController(context: Context, private val listener: EngineListener) : MediaEngine {
     private val context = context.applicationContext
     private val main = Handler(Looper.getMainLooper())
@@ -90,11 +95,11 @@ class LampCoreController(context: Context, private val listener: EngineListener)
     fun retry() { request?.let { setMedia(it.url, it.headers, positionMs) } }
     fun stop() { generation.incrementAndGet(); demux?.close(); isPlaying = false }
     fun setVolume(percent: Int) { volume = percent.coerceIn(0, 100) / 100f }
-    fun diagnostics(): String = "LampCore · $decoderName\n" +
+    fun diagnostics(): String = "LampCore · ${demux?.mode ?: "файл"} · $decoderName\n" +
         "Кадры $rendered · пропущено $dropped · сбои звука $underruns\n" +
         "Очередь %.1fс · HTTP %.1f МБ".format(
             ((bufferedMs - positionMs).coerceAtLeast(0)) / 1000.0,
-            (demux?.source?.downloadedBytes ?: 0) / 1048576.0,
+            (demux?.downloadedBytes ?: 0) / 1048576.0,
         )
 
     override fun play() { if (!released) { acquireFocus(); requestedPlay = true } }
@@ -139,8 +144,8 @@ class LampCoreController(context: Context, private val listener: EngineListener)
             event(token) { listener.onError("LampCore требует Android 6.0 или новее") }; return
         }
         val path = Uri.parse(media.url).path.orEmpty().lowercase()
-        if (path.endsWith(".m3u8") || path.endsWith(".mpd")) {
-            event(token) { listener.onError("LampCore v1: только прямые файлы; для HLS/DASH выберите ExoPlayer") }; return
+        if (path.endsWith(".mpd")) {
+            event(token) { listener.onError("LampCore: DASH пока не поддерживается; выберите ExoPlayer") }; return
         }
         var startMs = media.startMs
         try {
@@ -148,7 +153,9 @@ class LampCoreController(context: Context, private val listener: EngineListener)
                 seekRequest.getAndSet(null)?.let { startMs = it }
                 while (alive(token) && surface?.isValid != true) Thread.sleep(20)
                 if (!alive(token)) break
-                startMs = playSession(media, token, startMs, surface!!)
+                val target = surface ?: continue
+                if (!target.isValid) continue
+                startMs = playSession(media, token, startMs, target)
             }
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
@@ -156,7 +163,7 @@ class LampCoreController(context: Context, private val listener: EngineListener)
             // Do not expose signed media URLs/tokens through platform exception text.
             event(token) {
                 isPlaying = false
-                val message = if (e is CoreException) e.message else "${e.javaClass.simpleName}: поток не поддержан или соединение прервано"
+                val message = if (e is CoreException || e is HlsException) e.message else "${e.javaClass.simpleName}: поток не поддержан или соединение прервано"
                 listener.onError("LampCore: $message. Можно выбрать ExoPlayer/libVLC.")
             }
         }
@@ -186,7 +193,7 @@ class LampCoreController(context: Context, private val listener: EngineListener)
             decoderName = name
             audio = desc.audio?.let { fmt -> MediaCodec.createDecoderByType(fmt.getString(MediaFormat.KEY_MIME)!!)
                 .also { it.configure(fmt, null, null, 0); it.start() } }
-            durationMs = formatDuration(desc.video) / 1000
+            durationMs = input.durationOverrideUs?.let { if (it < 0) -1 else it / 1000 } ?: (formatDuration(desc.video) / 1000)
             videoFps = runCatching { desc.video.getInteger(MediaFormat.KEY_FRAME_RATE).toFloat() }.getOrDefault(0f)
             videoAspect = desc.video.getInteger(MediaFormat.KEY_WIDTH).toFloat() / desc.video.getInteger(MediaFormat.KEY_HEIGHT).coerceAtLeast(1)
             tracks = input.audioTracks
@@ -426,6 +433,11 @@ class LampCoreController(context: Context, private val listener: EngineListener)
         private val bytes = AtomicLong()
         @Volatile private var closed = false
         @Volatile var source: LampCoreHttpSource? = null
+        @Volatile private var hlsHttp: LampCoreHlsHttp? = null
+        @Volatile private var hls: LampCoreHlsLoader? = null
+        @Volatile var mode = "файл"
+        @Volatile var durationOverrideUs: Long? = null
+        val downloadedBytes: Long get() = hlsHttp?.downloadedBytes ?: source?.downloadedBytes ?: 0
         @Volatile var description: Description? = null
         @Volatile var error: Exception? = null
         @Volatile var ended = false
@@ -435,14 +447,82 @@ class LampCoreController(context: Context, private val listener: EngineListener)
         val thread = Thread({ read() }, "LampCore-demux")
 
         fun remove(queue: ArrayBlockingQueue<Sample>) { queue.poll()?.let { bytes.addAndGet(-it.bytes.size.toLong()) } }
-        fun close() { closed = true; source?.close(); thread.interrupt() }
-        private fun running() = !closed && alive(token)
+        fun close() { closed = true; source?.close(); hlsHttp?.close(); hls?.cancel(); thread.interrupt() }
+        private fun running() = !closed && alive(token) && error == null
+
+        private fun enqueue(id: Int, data: ByteArray, timeUs: Long, flags: Int) {
+            if (data.size > 4 * 1024 * 1024) throw CoreException("Слишком большой кадр")
+            val queue = if (id == 0 && hls != null || hls == null && id == description?.videoId) videoSamples else audioSamples
+            while (running()) {
+                val current = bytes.get()
+                if (queue.remainingCapacity() > 0 && current + data.size <= 4 * 1024 * 1024 && bytes.compareAndSet(current, current + data.size)) {
+                    try { queue.put(Sample(id, data, timeUs, flags)) }
+                    catch (e: Exception) { bytes.addAndGet(-data.size.toLong()); throw e }
+                    synchronized(this) {
+                        if (queue === videoSamples) videoUntilUs = maxOf(videoUntilUs, timeUs) else audioUntilUs = maxOf(audioUntilUs, timeUs)
+                        queuedUntilUs = if (description?.audio == null) videoUntilUs else minOf(videoUntilUs, audioUntilUs)
+                    }
+                    return
+                }
+                Thread.sleep(5)
+            }
+        }
+
+        private fun readHls(http: LampCoreHlsHttp, playlist: HlsPlaylist) {
+            val formats = mutableMapOf<Int, Format>()
+            var expectedAudio: Boolean? = null
+            fun publish() {
+                if (description != null) return
+                val video = formats[0] ?: return
+                val withAudio = expectedAudio ?: return
+                val audio = if (withAudio) formats[1] ?: return else null
+                audioTracks = if (audio == null) emptyList() else listOf(EngineTrack(1, "${audio.language ?: "HLS"} · ${audio.sampleMimeType}"))
+                description = Description(0, MediaFormatUtil.createMediaFormatFromFormat(video), if (audio == null) -1 else 1,
+                    audio?.let { MediaFormatUtil.createMediaFormatFromFormat(it) })
+            }
+            val output = object : HlsPacketOutput {
+                override fun format(id: Int, type: Int, format: Format) {
+                    synchronized(formats) {
+                        val old = formats[id]
+                        if (old != null && (old.sampleMimeType != format.sampleMimeType || old.width != format.width || old.height != format.height ||
+                                old.channelCount != format.channelCount || old.sampleRate != format.sampleRate ||
+                                old.initializationData.size != format.initializationData.size ||
+                                old.initializationData.indices.any { !old.initializationData[it].contentEquals(format.initializationData[it]) }))
+                            throw HlsException("Смена кодека/разрешения внутри HLS пока не поддерживается")
+                        formats[id] = format; publish()
+                    }
+                }
+                override fun packet(id: Int, type: Int, bytes: ByteArray, timeUs: Long, flags: Int) { enqueue(id, bytes, timeUs, flags) }
+                override fun endTracks(audioPresent: Boolean) { synchronized(formats) {
+                    if (expectedAudio != null && expectedAudio != audioPresent) throw HlsException("Смена состава дорожек внутри HLS пока не поддерживается")
+                    expectedAudio = audioPresent; publish()
+                } }
+            }
+            val loader = LampCoreHlsLoader(http, playlist, context.cacheDir, startMs * 1000, output,
+                { resolved, _ -> durationOverrideUs = if (resolved.video.endList) resolved.video.durationUs else -1; mode = resolved.label },
+                { e -> if (!closed && alive(token)) error = e }, ::running)
+            hls = loader
+            if (!running()) { loader.close(); return }
+            loader.read()
+            if (running()) {
+                if (description == null) throw HlsException("В HLS не найдены поддерживаемые видео/аудиодорожки")
+                ended = true
+            }
+        }
 
         private fun read() {
             val extractor = MediaExtractor()
             try {
                 val uri = Uri.parse(media.url)
                 if (uri.scheme == "http" || uri.scheme == "https") {
+                    val hlsTransport = LampCoreHlsHttp(media.headers)
+                    hlsHttp = hlsTransport
+                    val playlist = try { hlsTransport.probe(media.url) } catch (e: Exception) {
+                        if (uri.path.orEmpty().endsWith(".m3u8", true) || !running()) throw e
+                        null // A progressive server may reject the non-range probe.
+                    }
+                    if (playlist != null) { readHls(hlsTransport, playlist); return }
+                    hlsTransport.close(); hlsHttp = null
                     val http = LampCoreHttpSource(media.url, media.headers)
                     source = http
                     if (!running()) { http.close(); return }
@@ -470,21 +550,13 @@ class LampCoreController(context: Context, private val listener: EngineListener)
                     val size = extractor.readSampleData(scratch, 0)
                     if (size < 0) { ended = true; break }
                     if (size > scratch.capacity()) throw CoreException("Слишком большой видеокадр")
-                    val queue = if (id == desc.videoId) videoSamples else audioSamples
-                    while (running() && (bytes.get() + size > 4 * 1024 * 1024 || queue.remainingCapacity() == 0)) Thread.sleep(5)
-                    if (!running()) break
                     val data = ByteArray(size)
                     scratch.position(0); scratch.get(data)
-                    val sample = Sample(id, data, extractor.sampleTime, extractor.sampleFlags)
-                    bytes.addAndGet(size.toLong())
-                    queue.put(sample)
-                    if (id == desc.videoId) videoUntilUs = maxOf(videoUntilUs, sample.ptsUs)
-                    else audioUntilUs = maxOf(audioUntilUs, sample.ptsUs)
-                    queuedUntilUs = if (desc.audio == null) videoUntilUs else minOf(videoUntilUs, audioUntilUs)
+                    enqueue(id, data, extractor.sampleTime, extractor.sampleFlags)
                     extractor.advance()
                 }
             } catch (e: Exception) { if (running()) error = source?.lastError?.let { CoreException(it) } ?: e }
-            finally { runCatching { extractor.release() }; source?.close() }
+            finally { runCatching { extractor.release() }; source?.close(); hlsHttp?.close() }
         }
     }
 }
