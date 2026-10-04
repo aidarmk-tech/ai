@@ -14,8 +14,10 @@ class EpisodeRowAdapter(
 
     private val items = mutableListOf<PlayerUiState.EpisodeRow>()
 
-    fun setItems(list: List<PlayerUiState.EpisodeRow>) {
+    fun setItems(list: List<PlayerUiState.EpisodeRow>): Boolean {
+        if (items == list) return false
         items.clear(); items.addAll(list); notifyDataSetChanged()
+        return true
     }
 
     fun currentIndex(): Int = items.indexOfFirst { it.current }.coerceAtLeast(0)
@@ -42,7 +44,7 @@ class EpisodeRowAdapter(
         holder.b.root.setOnFocusChangeListener { _, focused ->
             holder.b.tvEpName.isSelected = focused
             holder.b.tvEpOverview.isSelected = focused
-            val s = if (focused) 1.04f else 1f
+            val s = if (focused) 1.015f else 1f
             holder.b.root.animate().scaleX(s).scaleY(s).setDuration(120).start()
         }
     }

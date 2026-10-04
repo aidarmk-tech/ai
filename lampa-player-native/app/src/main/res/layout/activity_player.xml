@@ -90,7 +90,7 @@
         <LinearLayout
             android:id="@+id/top_bar"
             android:layout_width="match_parent"
-            android:layout_height="160dp"
+            android:layout_height="120dp"
             android:layout_gravity="top"
             android:background="@drawable/bg_osd_gradient_top"
             android:orientation="horizontal"
@@ -199,13 +199,13 @@
 
                         <ProgressBar android:id="@+id/progress_bar"
                             style="?android:attr/progressBarStyleHorizontal"
-                            android:layout_width="match_parent" android:layout_height="8dp"
+                            android:layout_width="match_parent" android:layout_height="5dp"
                             android:layout_gravity="center_vertical"
                             android:max="1000" android:progressDrawable="@drawable/bg_progress_track" />
 
                         <ProgressBar android:id="@+id/seek_indicator"
                             style="?android:attr/progressBarStyleHorizontal"
-                            android:layout_width="match_parent" android:layout_height="8dp"
+                            android:layout_width="match_parent" android:layout_height="5dp"
                             android:layout_gravity="center_vertical"
                             android:max="1000"
                             android:progressTint="#88FFFFFF"
@@ -264,13 +264,16 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:scrollbars="none"
+                android:paddingVertical="8dp"
+                android:clipToPadding="false"
                 android:fillViewport="true">
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
-                    android:gravity="center">
+                    android:gravity="center"
+                    android:clipChildren="false">
 
                     <ImageButton android:id="@+id/btn_night"
                         android:layout_width="44dp" android:layout_height="44dp"
@@ -518,156 +521,143 @@
         android:lineSpacingMultiplier="1.1"
         android:padding="@dimen/space_sm" android:visibility="gone" />
 
-    <!-- ═══ INFO OVERLAY (↓): компактная нижняя карточка, видео видно сверху ═══ -->
+    <!-- Info panel: series first on the left, optional metadata on the right. -->
     <LinearLayout
         android:id="@+id/info_overlay"
         android:layout_width="match_parent"
-        android:layout_height="320dp"
+        android:layout_height="340dp"
         android:layout_gravity="bottom"
-        android:layout_marginHorizontal="@dimen/safe_margin"
-        android:layout_marginBottom="@dimen/space_md"
+        android:layout_marginHorizontal="32dp"
+        android:layout_marginBottom="20dp"
         android:orientation="horizontal"
-        android:gravity="center_vertical"
         android:background="@drawable/bg_info_panel"
-        android:padding="@dimen/space_md"
+        android:elevation="12dp"
+        android:padding="20dp"
         android:visibility="gone">
 
-        <!-- Постер -->
-        <ImageView android:id="@+id/iv_overlay_poster"
-            android:layout_width="186dp"
-            android:layout_height="match_parent"
-            android:scaleType="centerCrop"
-            android:background="@color/bg_surface"
-            android:layout_marginEnd="@dimen/space_md" />
-
-        <!-- Текстовый блок: название + мета + описание + (раскрываемые) детали -->
-        <ScrollView
-            android:id="@+id/sv_overlay_meta"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:scrollbars="none"
-            android:fadeScrollbars="false">
-
-            <LinearLayout
-                android:id="@+id/overlay_meta_section"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical">
-
-                <TextView android:id="@+id/tv_overlay_meta_title"
-                    android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:textColor="@color/text_primary" android:textSize="26sp"
-                    android:fontFamily="sans-serif-medium"
-                    android:maxLines="2" android:ellipsize="end"
-                    android:layout_marginBottom="@dimen/space_xs" />
-
-                <TextView android:id="@+id/tv_overlay_meta_info"
-                    android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:textColor="@color/accent_primary" android:textSize="15sp"
-                    android:layout_marginBottom="@dimen/space_sm" />
-
-                <TextView android:id="@+id/tv_overlay_meta_overview"
-                    android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:textColor="@color/text_secondary" android:textSize="15sp"
-                    android:lineSpacingMultiplier="1.2" />
-
-                <!-- EPG -->
-                <TextView android:id="@+id/tv_overlay_epg"
-                    android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:layout_marginTop="@dimen/space_sm"
-                    android:textColor="@color/text_primary" android:textSize="15sp"
-                    android:visibility="gone" />
-
-                <!-- Подсказка: раскрыть детали -->
-                <TextView android:id="@+id/tv_overlay_more"
-                    android:layout_width="wrap_content" android:layout_height="wrap_content"
-                    android:layout_marginTop="@dimen/space_sm"
-                    android:text="▼ Актёры и создатели"
-                    android:textColor="@color/accent_primary" android:textSize="14sp"
-                    android:visibility="gone" />
-
-                <!-- Лента актёров с фото (раскрывается на ↓) -->
-                <TextView android:id="@+id/tv_cast_header"
-                    android:layout_width="wrap_content" android:layout_height="wrap_content"
-                    android:layout_marginTop="@dimen/space_sm"
-                    android:text="В ролях"
-                    android:textColor="@color/text_primary" android:textSize="15sp"
-                    android:fontFamily="sans-serif-medium"
-                    android:visibility="gone" />
-
-                <androidx.recyclerview.widget.RecyclerView
-                    android:id="@+id/rv_cast"
-                    android:layout_width="match_parent"
-                    android:layout_height="148dp"
-                    android:layout_marginTop="6dp"
-                    android:clipToPadding="false"
-                    android:focusable="true"
-                    android:descendantFocusability="afterDescendants"
-                    android:visibility="gone" />
-
-                <!-- Раскрываемые детали: Режиссёр / Сценарий / Жанры -->
-                <TextView android:id="@+id/tv_overlay_details"
-                    android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:layout_marginTop="@dimen/space_sm"
-                    android:textColor="@color/text_secondary" android:textSize="14sp"
-                    android:lineSpacingMultiplier="1.25"
-                    android:visibility="gone" />
-
-                <!-- Формат видео — чистый чип качества -->
-                <TextView android:id="@+id/tv_overlay_video_info"
-                    android:layout_width="wrap_content" android:layout_height="wrap_content"
-                    android:layout_marginTop="@dimen/space_sm"
-                    android:background="@drawable/bg_pill"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="13sp"
-                    android:paddingHorizontal="12dp" android:paddingVertical="6dp"
-                    android:visibility="gone" />
-            </LinearLayout>
-        </ScrollView>
-
-        <!-- Панель «Серии/Каналы» — только когда есть список -->
         <LinearLayout
             android:id="@+id/episodes_panel"
-            android:layout_width="360dp"
+            android:layout_width="320dp"
             android:layout_height="match_parent"
-            android:layout_marginStart="@dimen/space_md"
+            android:layout_marginEnd="24dp"
             android:orientation="vertical"
-            android:background="@color/bg_elevated"
+            android:background="@drawable/bg_episode_panel"
+            android:padding="8dp"
             android:visibility="gone">
 
-            <TextView
-                android:id="@+id/tv_episodes_header"
-                android:layout_width="match_parent"
-                android:layout_height="44dp"
-                android:text="@string/tab_episodes"
-                android:gravity="center_vertical"
-                android:paddingHorizontal="@dimen/space_md"
-                android:textColor="@color/accent_primary"
-                android:textSize="15sp"
-                android:fontFamily="sans-serif-medium"
-                android:background="@color/bg_surface" />
+            <LinearLayout
+                android:layout_width="match_parent" android:layout_height="44dp"
+                android:orientation="horizontal" android:gravity="center_vertical"
+                android:paddingHorizontal="8dp">
+                <TextView android:id="@+id/tv_episodes_header"
+                    android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:text="@string/tab_episodes"
+                    android:textColor="@color/text_primary" android:textSize="19sp"
+                    android:fontFamily="sans-serif-medium" />
+                <TextView android:id="@+id/tv_episodes_count"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:textColor="@color/text_secondary" android:textSize="13sp" />
+            </LinearLayout>
 
             <androidx.recyclerview.widget.RecyclerView
                 android:id="@+id/rv_info_list"
-                android:layout_width="match_parent"
-                android:layout_height="0dp"
-                android:layout_weight="1"
-                android:padding="@dimen/space_xs"
-                android:focusable="true"
-                android:descendantFocusability="afterDescendants" />
+                android:layout_width="match_parent" android:layout_height="0dp"
+                android:layout_weight="1" android:padding="4dp"
+                android:clipToPadding="false"
+                android:focusable="true" android:descendantFocusability="afterDescendants" />
 
-            <!-- EPG content (только для IPTV когда нет серий) -->
-            <TextView
-                android:id="@+id/tv_epg_content"
-                android:layout_width="match_parent"
-                android:layout_height="0dp"
-                android:layout_weight="1"
-                android:padding="@dimen/space_md"
-                android:textColor="@color/text_primary"
-                android:textSize="15sp"
+            <TextView android:id="@+id/tv_epg_content"
+                android:layout_width="match_parent" android:layout_height="0dp"
+                android:layout_weight="1" android:padding="12dp"
+                android:textColor="@color/text_primary" android:textSize="15sp"
                 android:visibility="gone" />
+
+            <TextView android:id="@+id/tv_episode_hint"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:padding="8dp"
+                android:text="↑ ↓ Выбор · OK Смотреть · → Описание"
+                android:textColor="@color/text_secondary" android:textSize="11sp" />
         </LinearLayout>
+
+        <ScrollView
+            android:id="@+id/sv_overlay_meta"
+            android:layout_width="0dp" android:layout_height="match_parent"
+            android:layout_weight="1" android:scrollbars="none"
+            android:focusable="true" android:descendantFocusability="beforeDescendants"
+            android:fillViewport="true">
+
+            <LinearLayout android:id="@+id/overlay_meta_section"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <LinearLayout
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="horizontal" android:gravity="top">
+                    <ImageView android:id="@+id/iv_overlay_poster"
+                        android:layout_width="96dp" android:layout_height="140dp"
+                        android:layout_marginEnd="16dp" android:scaleType="centerCrop"
+                        android:background="@drawable/bg_episode_panel" android:clipToOutline="true" />
+                    <LinearLayout
+                        android:layout_width="0dp" android:layout_height="wrap_content"
+                        android:layout_weight="1" android:orientation="vertical">
+                        <TextView android:id="@+id/tv_overlay_meta_title"
+                            android:layout_width="match_parent" android:layout_height="wrap_content"
+                            android:textColor="@color/text_primary" android:textSize="24sp"
+                            android:fontFamily="sans-serif-medium"
+                            android:maxLines="2" android:ellipsize="end" />
+                        <TextView android:id="@+id/tv_overlay_meta_info"
+                            android:layout_width="match_parent" android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:textColor="@color/text_secondary" android:textSize="14sp" />
+                        <TextView android:id="@+id/tv_overlay_video_info"
+                            android:layout_width="wrap_content" android:layout_height="wrap_content"
+                            android:layout_marginTop="12dp" android:background="@drawable/bg_pill"
+                            android:textColor="@color/accent_primary" android:textSize="12sp"
+                            android:paddingHorizontal="10dp" android:paddingVertical="5dp"
+                            android:visibility="gone" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <TextView android:id="@+id/tv_overlay_meta_overview"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:textColor="@color/text_secondary" android:textSize="15sp"
+                    android:lineSpacingMultiplier="1.25" />
+
+                <TextView android:id="@+id/tv_overlay_epg"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:textColor="@color/text_primary" android:textSize="15sp"
+                    android:visibility="gone" />
+
+                <TextView android:id="@+id/tv_overlay_more"
+                    android:layout_width="wrap_content" android:layout_height="40dp"
+                    android:layout_marginTop="16dp" android:gravity="center"
+                    android:paddingHorizontal="14dp" android:background="@drawable/bg_button"
+                    android:text="Актёры и детали"
+                    android:textColor="@color/text_primary" android:textSize="14sp"
+                    android:focusable="true" android:clickable="true" android:visibility="gone" />
+
+                <TextView android:id="@+id/tv_cast_header"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp" android:text="В ролях"
+                    android:textColor="@color/text_primary" android:textSize="15sp"
+                    android:fontFamily="sans-serif-medium" android:visibility="gone" />
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/rv_cast"
+                    android:layout_width="match_parent" android:layout_height="156dp"
+                    android:layout_marginTop="8dp" android:paddingVertical="4dp"
+                    android:clipToPadding="false" android:focusable="true"
+                    android:descendantFocusability="afterDescendants" android:visibility="gone" />
+
+                <TextView android:id="@+id/tv_overlay_details"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:textColor="@color/text_secondary" android:textSize="14sp"
+                    android:lineSpacingMultiplier="1.25" android:visibility="gone" />
+            </LinearLayout>
+        </ScrollView>
     </LinearLayout>
 
     <!-- ═══ TRACKS OVERLAY (↑): аудио + субтитры ═══ -->

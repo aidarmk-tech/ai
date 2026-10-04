@@ -4,20 +4,21 @@
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_focused="true">
         <shape>
-            <solid android:color="@color/accent_primary" />
-            <corners android:radius="28dp" />
+            <solid android:color="@color/focus_surface" />
+            <stroke android:width="2dp" android:color="@color/focus_outline" />
+            <corners android:radius="14dp" />
         </shape>
     </item>
     <item android:state_pressed="true">
         <shape>
             <solid android:color="@color/accent_pressed" />
-            <corners android:radius="28dp" />
+            <corners android:radius="14dp" />
         </shape>
     </item>
     <item>
         <shape>
-            <solid android:color="#1FFFFFFF" />
-            <corners android:radius="28dp" />
+            <solid android:color="#242C38" />
+            <corners android:radius="14dp" />
         </shape>
     </item>
 </selector>
