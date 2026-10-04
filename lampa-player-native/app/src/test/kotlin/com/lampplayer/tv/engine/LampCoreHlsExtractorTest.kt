@@ -123,4 +123,31 @@ class LampCoreHlsExtractorTest {
             } finally { dir.deleteRecursively() }
         }
     }
+
+    @Test(timeout = 15000) fun liveReloadDoesNotReplayOverlappingSegments() {
+        MockWebServer().use { server ->
+            val paths = Collections.synchronizedList(mutableListOf<String>())
+            server.dispatcher = object : Dispatcher() {
+                override fun dispatch(request: RecordedRequest): MockResponse {
+                    paths += request.path.orEmpty()
+                    return when (request.path) {
+                        "/live.m3u8" -> MockResponse().setBody("#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:11\n#EXTINF:1,\nts1.ts\n#EXTINF:0.133333,\nts2.ts\n#EXT-X-ENDLIST")
+                        "/ts0.ts", "/ts1.ts", "/ts2.ts" -> MockResponse().setBody(Buffer().write(data(request.path!!.removePrefix("/"))))
+                        else -> MockResponse().setResponseCode(404)
+                    }
+                }
+            }
+            val dir = Files.createTempDirectory("hls-live").toFile()
+            try {
+                val p = LampCoreHlsPlaylist.parse(server.url("/live.m3u8").toString(), "#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:10\n#EXTINF:1,\nts0.ts\n#EXTINF:1,\nts1.ts\n")
+                val capture = Capture()
+                LampCoreHlsLoader(LampCoreHlsHttp(emptyMap()), p, dir, 0, capture, { _, _ -> }, { throw it }, { true }).read()
+                verify(capture)
+                assertEquals(1, paths.count { it == "/ts1.ts" })
+                assertEquals(1, paths.count { it == "/ts2.ts" })
+                assertTrue(paths.contains("/live.m3u8"))
+                assertTrue(dir.listFiles()!!.isEmpty())
+            } finally { dir.deleteRecursively() }
+        }
+    }
 }
