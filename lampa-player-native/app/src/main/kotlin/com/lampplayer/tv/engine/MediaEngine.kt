@@ -58,4 +58,5 @@ interface EngineListener {
     fun onEnded() {}
     fun onError(message: String) {}
     fun onTracksChanged() {}
+    fun onNotice(message: String) {}
 }
