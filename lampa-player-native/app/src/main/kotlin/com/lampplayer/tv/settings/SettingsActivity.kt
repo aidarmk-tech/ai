@@ -27,6 +27,8 @@ class SettingsViewModel @Inject constructor(
 ) : ViewModel() {
     val settings = store.settings.stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())
 
+    fun setSubtitleSize(v: Int) = viewModelScope.launch { store.setSubtitleSize(v) }
+    fun setSubtitleDelay(v: Int) = viewModelScope.launch { store.setSubtitleDelay(v) }
     fun setEngine(v: String) = viewModelScope.launch { store.setEngine(v) }
     fun setBuffer(v: BufferProfileType) = viewModelScope.launch { store.setBuffer(v) }
     fun setAutonext(v: Boolean) = viewModelScope.launch { store.setAutonext(v) }
@@ -40,6 +42,8 @@ class SettingsViewModel @Inject constructor(
     fun setOsdTimeout(sec: Int) = viewModelScope.launch { store.setOsdTimeout(sec) }
 }
 
+private val SUBTITLE_SIZES = listOf(22, 28, 36)
+private val SUBTITLE_DELAYS = (-5000..5000 step 500).toList()
 private val SLEEP_OPTIONS = listOf(0, 15, 30, 45, 60, 90)
 private val OSD_OPTIONS = listOf(5, 10, 15, 30, 60)
 
@@ -97,6 +101,16 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun setupSpinners() {
+        fun subtitleSpinner(spinner: android.widget.Spinner, labels: List<String>, selected: (Int) -> Unit) {
+            spinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, labels).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+            spinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(p: AdapterView<*>?, v: android.view.View?, pos: Int, id: Long) { if (!ignoreSpinnerEvent && pos == spinner.selectedItemPosition) selected(pos) }
+                override fun onNothingSelected(p: AdapterView<*>?) {}
+            }
+        }
+        subtitleSpinner(binding.spinnerSubtitleSize, listOf("Маленький", "Средний", "Крупный")) { vm.setSubtitleSize(SUBTITLE_SIZES[it]) }
+        subtitleSpinner(binding.spinnerSubtitleDelay, SUBTITLE_DELAYS.map { if (it == 0) "Без сдвига" else "%+.1f с".format(it / 1000.0) }) { vm.setSubtitleDelay(SUBTITLE_DELAYS[it]) }
+
         val engineAdapter = ArrayAdapter(
             this, android.R.layout.simple_spinner_item,
             listOf("Авто (ExoPlayer + libVLC)", "Только ExoPlayer", "Только libVLC", "LampCore — экспериментальный"),
@@ -169,6 +183,8 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun applySettings(s: AppSettings) {
         ignoreSpinnerEvent = true
+        binding.spinnerSubtitleSize.setSelection(SUBTITLE_SIZES.indexOf(s.subtitleSizeSp).coerceAtLeast(0))
+        binding.spinnerSubtitleDelay.setSelection(SUBTITLE_DELAYS.indexOf(s.subtitleDelayMs).coerceAtLeast(0))
         binding.spinnerEngine.setSelection(EngineType.ALL.indexOf(EngineType.normalize(s.engine)).coerceAtLeast(0))
         binding.spinnerBuffer.setSelection(s.buffer.ordinal)
         val delayIndex = ((s.autonextDelay / 5) - 1).coerceIn(0, 5)

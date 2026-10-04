@@ -80,6 +80,7 @@ data class PlayerUiState(
     val episodes: List<EpisodeItem> = emptyList(),
     val currentEpisodeIndex: Int = 0,
     val audioTracks: List<String> = emptyList(),
+    val coreSubtitleText: String = "",
     val subtitleTracks: List<String> = emptyList(),
     val selectedAudioIndex: Int = -1,
     val selectedSubtitleIndex: Int = -1,
@@ -314,7 +315,7 @@ class PlayerViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             settingsDataStore.settings.collect { s ->
-                settings = s; _uiState.update { it.copy(settings = s) }
+                settings = s; lampCore?.setSubtitleDelayMs(s.subtitleDelayMs.toLong()); _uiState.update { it.copy(settings = s) }
                 // Restart the sleep timer only when its value actually changes — every
                 // settings emission (volume, scale, night mode) otherwise reset it to full.
                 if (lastSleepMin != s.sleepTimerMin) { restartSleepTimer(s.sleepTimerMin); lastSleepMin = s.sleepTimerMin }
@@ -668,7 +669,7 @@ class PlayerViewModel @Inject constructor(
         lastVlcPositionMs = 0L
         val card = currentCard ?: return
         if (isUsingLampCore) {
-            lampCore?.setMedia(url, card.headers, 0L)
+            lampCore?.setMedia(url, card.headers, 0L, card.subtitles)
             reapplyRate()
         } else if (usingVlc) {
             vlc?.setMedia(appContext, url, card.headers, 0L, emptyList(), hardwareDecode = true, nightMode = settings.nightMode)
@@ -829,6 +830,7 @@ class PlayerViewModel @Inject constructor(
     private fun startLampCore(url: String, card: CardMeta) {
         usingVlc = false
         val controller = LampCoreController(appContext, object : EngineListener {
+            override fun onNotice(message: String) { _notice.tryEmit(message) }
             override fun onPlaying() {
                 _uiState.update { it.copy(isPlaying = true, hasError = false,
                     videoFps = lampCore?.videoFps ?: 0f, videoAspect = lampCore?.videoAspect ?: 16f / 9f) }
@@ -861,16 +863,18 @@ class PlayerViewModel @Inject constructor(
                 saved.watched -> 0L
                 else -> (saved.time * 1000).toLong()
             }
-            controller.setMedia(url, card.headers, startMs.coerceAtLeast(0))
+            controller.setMedia(url, card.headers, startMs.coerceAtLeast(0), card.subtitles)
+            controller.setSubtitleDelayMs(settings.subtitleDelayMs.toLong())
             reapplyRate()
             restoreShowMarks(card)
-            if (card.subtitles.isNotEmpty()) _notice.tryEmit("LampCore v1: субтитры пока не поддерживаются")
             corePollJob = viewModelScope.launch {
                 var ticks = 0
                 while (isActive && lampCore === controller) {
-                    delay(1000)
-                    if (settings.diag) _uiState.update { it.copy(diagText = controller.diagnostics()) }
-                    if (++ticks % 5 == 0 && controller.isPlaying) saveCurrentPosition()
+                    delay(100)
+                    val caption = controller.subtitleText
+                    if (_uiState.value.coreSubtitleText != caption) _uiState.update { it.copy(coreSubtitleText = caption) }
+                    if (++ticks % 10 == 0 && settings.diag) _uiState.update { it.copy(diagText = controller.diagnostics()) }
+                    if (ticks % 50 == 0 && controller.isPlaying) saveCurrentPosition()
                 }
             }
             if (!card.iptv && startMs > 60_000) _resumedFromMs.tryEmit(startMs)
@@ -1308,8 +1312,11 @@ class PlayerViewModel @Inject constructor(
         if (isUsingLampCore) {
             val core = lampCore ?: return
             vlcAudio = core.audioTracks()
+            vlcSubs = core.subtitleTracks()
             _uiState.update { it.copy(audioTracks = vlcAudio.map { t -> t.name },
-                subtitleTracks = listOf("Выкл · LampCore v1"), selectedSubtitleIndex = 0) }
+                selectedAudioIndex = vlcAudio.indexOfFirst { t -> t.id == core.currentAudioTrackId }.coerceAtLeast(0),
+                subtitleTracks = vlcSubs.map { t -> t.name },
+                selectedSubtitleIndex = vlcSubs.indexOfFirst { t -> t.id == core.currentSubtitleTrackId }.coerceAtLeast(0)) }
             return
         }
         if (usingVlc) {
@@ -1396,7 +1403,7 @@ class PlayerViewModel @Inject constructor(
             val torrentSwitch = isTorrentStream(episode.url) || isTorrentStream(currentUrl)
             if (isUsingLampCore) {
                 val card = currentCard ?: return@launch
-                lampCore?.setMedia(episode.url, card.headers, 0L)
+                lampCore?.setMedia(episode.url, card.headers, 0L, card.subtitles)
                 reapplyRate()
                 restoreShowMarks(card)
             } else if (usingVlc) {
@@ -1438,7 +1445,8 @@ class PlayerViewModel @Inject constructor(
     fun selectSubtitle(index: Int) {
         val card = currentCard ?: return
         if (isUsingLampCore) {
-            _uiState.update { it.copy(selectedSubtitleIndex = 0) }
+            vlcSubs.getOrNull(index)?.let { lampCore?.selectSubtitle(it.id) }
+            _uiState.update { it.copy(selectedSubtitleIndex = index) }
             return
         }
         if (usingVlc) {

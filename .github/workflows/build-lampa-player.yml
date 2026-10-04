@@ -90,7 +90,8 @@ jobs:
           PY
           new_cert=$("$build_tools/apksigner" verify --print-certs "$apk" | sed -n 's/^Signer #[0-9]* certificate SHA-256 digest: //p')
           old_cert=$("$build_tools/apksigner" verify --print-certs previous-update/app.apk | sed -n 's/^Signer #[0-9]* certificate SHA-256 digest: //p')
-          test -n "$new_cert" && test "$new_cert" = "$old_cert"
+          test -n "$new_cert"
+          test "$new_cert" = "$old_cert"
           echo 'Signing certificate matches the existing LampPlayer release'
 
       - name: Stage APK
@@ -121,7 +122,7 @@ jobs:
             "versionName": "1.0.${{ github.run_number }}",
             "url": "https://github.com/${{ github.repository }}/releases/download/auto/LampPlayer-${{ github.run_number }}.apk",
             "sha256": "$SHA256",
-            "notes": "Обновление #${{ github.run_number }}: LampCore с HLS (TS/fMP4, AES-128, перемотка, live). Выбор движка: Настройки → LampCore."
+            "notes": "Обновление #${{ github.run_number }}: LampCore: восстановление HLS, автокачество, выбор звука и сведение 5.1/7.1, текстовые субтитры с размером и синхронизацией. Выбор движка: Настройки → LampCore."
           }
           EOF
           cat dist/version.json

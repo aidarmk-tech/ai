@@ -34,6 +34,13 @@
             android:focusable="false" />
     </androidx.media3.ui.AspectRatioFrameLayout>
 
+    <androidx.media3.ui.SubtitleView
+        android:id="@+id/lampcore_subtitles"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:focusable="false"
+        android:visibility="gone" />
+
     <!-- Buffering -->
     <ProgressBar
         android:id="@+id/progress_buffering"
