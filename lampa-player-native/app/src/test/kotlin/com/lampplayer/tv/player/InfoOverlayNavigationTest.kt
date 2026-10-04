@@ -29,7 +29,7 @@ import java.util.concurrent.TimeUnit
 
 /** Real view-tree focus/key tests, without a stream, native decoder or network. */
 @RunWith(RobolectricTestRunner::class)
-@Config(application = Application::class, sdk = [28], qualifiers = "land-w960dp-h540dp-mdpi")
+@Config(application = Application::class, sdk = [28], qualifiers = "w960dp-h540dp-land-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @LooperMode(LooperMode.Mode.PAUSED)
 @UnstableApi
@@ -149,6 +149,15 @@ class InfoOverlayNavigationTest {
             assertEquals(0, host.closed)
             host.key(KeyEvent.KEYCODE_BACK)
             assertEquals(1, host.closed)
+            host.b.osdContainer.visibility = View.VISIBLE
+            host.b.osdContainer.descendantFocusability = android.view.ViewGroup.FOCUS_AFTER_DESCENDANTS
+            host.b.tvTitle.text = "Тихий город · Серия 3"
+            host.b.tvCurrentTime.text = "18:24"
+            host.b.tvDuration.text = "44:10"
+            host.b.progressBar.progress = 420
+            host.b.btnPlayPause.requestFocus()
+            host.frame()
+            host.screenshot("player-controls")
         } finally { controller.pause().stop().destroy() }
     }
 
