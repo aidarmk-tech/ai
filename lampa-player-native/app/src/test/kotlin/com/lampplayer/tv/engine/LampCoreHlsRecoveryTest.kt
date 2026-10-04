@@ -25,7 +25,7 @@ import java.util.concurrent.TimeUnit
 @UnstableApi
 class LampCoreHlsRecoveryTest {
     private fun data(name: String, fresh: Boolean = false): ByteArray {
-        val props = Properties().apply { javaClass.getResourceAsStream(if (fresh) "/hls-new-fixtures.properties" else "/hls-fixtures.properties")!!.use { load(it) } }
+        val props = Properties().apply { LampCoreHlsRecoveryTest::class.java.getResourceAsStream(if (fresh) "/hls-new-fixtures.properties" else "/hls-fixtures.properties")!!.use { load(it) } }
         return Base64.getDecoder().decode(props.getProperty(name))
     }
     private class Capture : HlsPacketOutput {
