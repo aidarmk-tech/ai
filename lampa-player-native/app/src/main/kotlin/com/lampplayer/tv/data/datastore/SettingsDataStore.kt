@@ -34,6 +34,8 @@ data class AppSettings(
     val afr: Boolean = false,
     // Night mode: compress loud sounds and lift dialogue.
     val nightMode: Boolean = false,
+    val subtitleSizeSp: Int = 28,
+    val subtitleDelayMs: Int = 0,
 )
 
 @Singleton
@@ -53,6 +55,8 @@ class SettingsDataStore @Inject constructor(
         val VOLUME_BOOST = intPreferencesKey("volume_boost")
         val SCALE_MODE = stringPreferencesKey("scale_mode")
         val AFR = booleanPreferencesKey("afr")
+        val SUBTITLE_SIZE = intPreferencesKey("subtitle_size_sp")
+        val SUBTITLE_DELAY = intPreferencesKey("subtitle_delay_ms")
         val NIGHT_MODE = booleanPreferencesKey("night_mode")
     }
 
@@ -74,6 +78,8 @@ class SettingsDataStore @Inject constructor(
                 scaleMode = prefs[Keys.SCALE_MODE] ?: "AUTO",
                 afr = prefs[Keys.AFR] ?: false,
                 nightMode = prefs[Keys.NIGHT_MODE] ?: false,
+                subtitleSizeSp = (prefs[Keys.SUBTITLE_SIZE] ?: 28).coerceIn(16, 48),
+                subtitleDelayMs = (prefs[Keys.SUBTITLE_DELAY] ?: 0).coerceIn(-5000, 5000),
             )
         }
 
@@ -93,5 +99,7 @@ class SettingsDataStore @Inject constructor(
     suspend fun setVolumeBoost(percent: Int) = update { this[Keys.VOLUME_BOOST] = percent }
     suspend fun setScaleMode(mode: String) = update { this[Keys.SCALE_MODE] = mode }
     suspend fun setAfr(enabled: Boolean) = update { this[Keys.AFR] = enabled }
+    suspend fun setSubtitleSize(sp: Int) = update { this[Keys.SUBTITLE_SIZE] = sp.coerceIn(16, 48) }
+    suspend fun setSubtitleDelay(ms: Int) = update { this[Keys.SUBTITLE_DELAY] = ms.coerceIn(-5000, 5000) }
     suspend fun setNightMode(enabled: Boolean) = update { this[Keys.NIGHT_MODE] = enabled }
 }
