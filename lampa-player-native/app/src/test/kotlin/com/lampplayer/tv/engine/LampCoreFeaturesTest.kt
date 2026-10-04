@@ -103,6 +103,7 @@ class LampCoreFeaturesTest {
         assertNull(HlsAlignment.switchAt(old.copy(endList = false), 1_000_000, next.copy(endList = false)))
     }
 
+    @Config(sdk = [23])
     @Test fun liveVariantsAlignByProgramTimeAndKeepPlaybackTimeline() {
         val old = LampCoreHlsPlaylist.parse("http://x/old", "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:7\n#EXT-X-PROGRAM-DATE-TIME:2026-01-01T00:00:00Z\n#EXTINF:1,\na\n#EXTINF:1,\nb\n")
         val next = LampCoreHlsPlaylist.parse("http://x/new", "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:90\n#EXT-X-PROGRAM-DATE-TIME:2026-01-01T00:00:01.000+00:00\n#EXTINF:1,\nc\n")
