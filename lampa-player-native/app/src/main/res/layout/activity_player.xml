@@ -20,6 +20,20 @@
         android:focusable="false"
         android:visibility="gone" />
 
+    <!-- LampCore uses platform codecs directly; separate Surface, same OSD. -->
+    <androidx.media3.ui.AspectRatioFrameLayout
+        android:id="@+id/lampcore_container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_gravity="center"
+        android:visibility="gone">
+        <SurfaceView
+            android:id="@+id/lampcore_surface"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:focusable="false" />
+    </androidx.media3.ui.AspectRatioFrameLayout>
+
     <!-- Buffering -->
     <ProgressBar
         android:id="@+id/progress_buffering"
