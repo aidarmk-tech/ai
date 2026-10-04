@@ -47,14 +47,19 @@ internal class LampCoreHlsExtractor(
             val input = DefaultExtractorInput(DataReader { buffer, offset, length -> stream.read(buffer, offset, length) }, 0, file.length())
             if (extractor == null) {
                 val mp4 = FragmentedMp4Extractor(0, adjuster)
+                val ts = TsExtractor(TsExtractor.MODE_HLS, adjuster,
+                    DefaultTsPayloadReaderFactory(DefaultTsPayloadReaderFactory.FLAG_IGNORE_SPLICE_INFO_STREAM))
                 val adts = AdtsExtractor()
+                fun sniff(candidate: Extractor): Boolean {
+                    input.resetPeekPosition()
+                    return try { candidate.sniff(input) } catch (_: EOFException) { false }
+                    finally { input.resetPeekPosition() }
+                }
                 extractor = when {
-                    segment.init != null || mp4.sniff(input) -> mp4
-                    else -> {
-                        input.resetPeekPosition()
-                        if (adts.sniff(input)) { packedAudio = true; adts }
-                        else { input.resetPeekPosition(); TsExtractor(TsExtractor.MODE_HLS, adjuster, DefaultTsPayloadReaderFactory(0)) }
-                    }
+                    segment.init != null || sniff(mp4) -> mp4
+                    sniff(ts) -> ts
+                    sniff(adts) -> { packedAudio = true; adts }
+                    else -> throw HlsException("HLS-сегмент не является TS/fMP4/AAC")
                 }
                 input.resetPeekPosition()
                 extractor!!.init(bridge)
