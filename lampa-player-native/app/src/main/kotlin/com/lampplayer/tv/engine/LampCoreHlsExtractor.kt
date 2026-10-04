@@ -35,6 +35,7 @@ internal class LampCoreHlsExtractor(
     private val bridge = object : ExtractorOutput {
         override fun track(id: Int, type: Int): TrackOutput {
             if (type !in listOf(C.TRACK_TYPE_VIDEO, C.TRACK_TYPE_AUDIO) || audioOnly && type == C.TRACK_TYPE_VIDEO) return DummyTrackOutput()
+            if (tracks.values.any { it.type == type && it.id != id }) return DummyTrackOutput()
             return tracks.getOrPut(id) { PacketTrack(id, type) }
         }
         override fun endTracks() { output.endTracks(tracks.values.any { it.type == C.TRACK_TYPE_AUDIO }) }
