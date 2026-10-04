@@ -88,11 +88,34 @@ jobs:
               actual = hashlib.sha256(f.read()).hexdigest()
           assert actual == expected, 'Previous APK checksum mismatch'
           PY
-          new_cert=$("$build_tools/apksigner" verify --print-certs "$apk" | sed -n 's/^Signer #[0-9]* certificate SHA-256 digest: //p')
-          old_cert=$("$build_tools/apksigner" verify --print-certs previous-update/app.apk | sed -n 's/^Signer #[0-9]* certificate SHA-256 digest: //p')
-          test -n "$new_cert"
-          test "$new_cert" = "$old_cert"
-          echo 'Signing certificate matches the existing LampPlayer release'
+          "$build_tools/apksigner" verify --verbose --print-certs "$apk" > previous-update/new-certificate.txt
+          "$build_tools/apksigner" verify --verbose --print-certs previous-update/app.apk > previous-update/old-certificate.txt
+          python - <<'PY_CERT'
+          import pathlib, re
+          def digests(path):
+              output = pathlib.Path(path).read_text()
+              result = set(re.findall(r'certificate SHA-256 digest:\s*([0-9a-fA-F]{64})', output))
+              if not result:
+                  print(output)
+                  raise RuntimeError('apksigner did not provide a signer certificate digest')
+              return {item.lower() for item in result}
+          new = digests('previous-update/new-certificate.txt')
+          old = digests('previous-update/old-certificate.txt')
+          print('New signer SHA256:', ', '.join(sorted(new)))
+          print('Previous signer SHA256:', ', '.join(sorted(old)))
+          assert new == old, 'Signing certificate differs from the installed release'
+          print('Signing certificate matches the existing LampPlayer release')
+          PY_CERT
+
+      - name: Upload signing diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: LampPlayer-signing-diagnostics-${{ github.run_number }}
+          path: |
+            lampa-player-native/app/build/outputs/apk/debug/app-debug.apk
+            previous-update/*certificate.txt
+          retention-days: 3
 
       - name: Stage APK
         run: |
