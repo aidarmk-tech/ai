@@ -51,6 +51,7 @@ internal class LampCoreRangeReader(
     @Volatile var networkReads = 0L
         private set
 
+    @Synchronized
     fun size(): Long {
         if (length < 0) block(0)
         return length
@@ -97,7 +98,7 @@ internal class LampCoreRangeReader(
                 val first = match.groupValues[1].toLong()
                 val last = match.groupValues[2].toLong()
                 val total = match.groupValues[3].toLong()
-                if (first != start || last < first || last > end || total <= last || (length >= 0 && length != total))
+                if (first != start || last < first || last != minOf(end, total - 1) || total <= last || (length >= 0 && length != total))
                     throw IOException("Сервер вернул неверный диапазон видео")
                 length = total
                 val bytes = ByteArray((last - first + 1).toInt())
