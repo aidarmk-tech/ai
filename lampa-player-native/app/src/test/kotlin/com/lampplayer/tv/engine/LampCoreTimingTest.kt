@@ -36,9 +36,9 @@ class LampCoreTimingTest {
         assertEquals(0, current.action)
         timing.rendered(80_000, current.timeNs)
         assertEquals(1, timing.plan(120_000, 104_000, 104_000_000, 1f).action)
-        val next = timing.plan(120_000, 126_000, 126_000_000, 1f)
+        val next = timing.plan(120_000, 130_000, 130_000_000, 1f)
         assertEquals(0, next.action)
-        assertTrue(next.timeNs - current.timeNs >= 36_000_000)
+        assertTrue(next.timeNs - current.timeNs >= 40_000_000)
     }
 
     @Test fun longStallAndCoarseAudioHeadKeepRenderCadenceAtRequestedRates() {
@@ -62,7 +62,7 @@ class LampCoreTimingTest {
             assertTrue("stale frames must be discarded at $rate", drops > 0)
             assertTrue("playback must resume at $rate", times.size > 10)
             times.zipWithNext().forEach { (a, b) ->
-                assertTrue("burst at rate $rate: ${b - a}", b - a >= (36_000_000 / rate).toLong())
+                assertTrue("burst at rate $rate: ${b - a}", b - a >= (40_000_000 / rate).toLong())
             }
         }
     }

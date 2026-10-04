@@ -42,7 +42,7 @@ internal class LampCoreVideoTiming(fps: Float) {
         val dueNs = nowNs + ((ptsUs - clockUs) * 1000 / rate).toLong()
         // Dropped frames do not extend the next interval. Never replay a backlog in a burst.
         val cadenceNs = if (renderedNs == Long.MIN_VALUE) nowNs else renderedNs +
-            (minOf(frameUs, ptsUs - renderedUs) * 900 / rate).toLong()
+            (minOf(frameUs, ptsUs - renderedUs) * 1000 / rate).toLong()
         val targetNs = maxOf(nowNs, dueNs, cadenceNs)
         return if (targetNs - nowNs > 12_000_000) Release(1) else Release(0, targetNs)
     }
