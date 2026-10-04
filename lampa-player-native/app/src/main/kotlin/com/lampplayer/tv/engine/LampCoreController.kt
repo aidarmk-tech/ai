@@ -184,7 +184,11 @@ class LampCoreController(context: Context, private val listener: EngineListener)
         try {
             event(token) { listener.onBuffering(0f) }
             input.thread.start()
-            while (alive(token) && input.description == null && input.error == null) Thread.sleep(5)
+            val startupNs = System.nanoTime()
+            while (alive(token) && input.description == null && input.error == null) {
+                if (System.nanoTime() - startupNs > 90_000_000_000L) throw CoreException("Не удалось получить дорожки за 90 секунд")
+                Thread.sleep(5)
+            }
             input.error?.let { throw it }
             if (!alive(token)) return positionMs
             val desc = input.description ?: throw CoreException("Не удалось прочитать контейнер")
