@@ -67,7 +67,7 @@ internal object LampCoreHlsPlaylist {
                     if (segments.isNotEmpty()) throw HlsException("DISCONTINUITY-SEQUENCE после сегментов")
                     discontinuity = number(line.substringAfter(':'))
                 }
-                line == "#EXT-X-DISCONTINUITY" -> discontinuity = Math.addExact(discontinuity, 1)
+                line == "#EXT-X-DISCONTINUITY" -> discontinuity = add(discontinuity, 1)
                 line.startsWith("#EXTINF:") -> {
                     val seconds = line.substringAfter(':').substringBefore(',').toDoubleOrNull()
                         ?: throw HlsException("Некорректный EXTINF")
@@ -104,9 +104,9 @@ internal object LampCoreHlsPlaylist {
                         }
                         segments += HlsSegment(resolved, d, start, sequence, discontinuity, range, key, init)
                         if (segments.size > 100_000) throw HlsException("Слишком большой HLS-плейлист")
-                        start = Math.addExact(start, d); sequence = Math.addExact(sequence, 1)
+                        start = add(start, d); sequence = add(sequence, 1)
                         previousRangeUri = if (range == null) null else resolved
-                        previousRangeEnd = range?.let { Math.addExact(it.offset, it.length) } ?: -1
+                        previousRangeEnd = range?.let { add(it.offset, it.length) } ?: -1
                         pendingRange = null; duration = null
                     }
                 }
@@ -157,6 +157,10 @@ internal object LampCoreHlsPlaylist {
         return HlsRange(offset, length)
     }
     private fun number(value: String): Long = value.toLongOrNull()?.takeIf { it >= 0 } ?: throw HlsException("Некорректное число HLS")
+    private fun add(a: Long, b: Long): Long {
+        if (a > Long.MAX_VALUE - b) throw HlsException("Переполнение числового поля HLS")
+        return a + b
+    }
     private fun resolve(base: String, relative: String): String {
         val result = try { URI(base).resolve(relative) } catch (_: Exception) { throw HlsException("Некорректный URI HLS") }
         if (result.scheme !in listOf("http", "https")) throw HlsException("HLS поддерживает только HTTP/HTTPS")
