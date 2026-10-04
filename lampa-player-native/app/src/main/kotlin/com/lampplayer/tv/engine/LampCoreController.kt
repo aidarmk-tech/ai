@@ -220,7 +220,7 @@ class LampCoreController(context: Context, private val listener: EngineListener)
             control.supportedSize = { v -> v.width > 0 && v.height > 0 && v.width <= 1920 && v.height <= 1080 &&
                 runCatching { caps.videoCapabilities.isSizeSupported(v.width, v.height) }.getOrDefault(false) }
             // Reconfigure at a segment boundary on codecs without adaptive playback.
-            control.adaptive = caps.isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_AdaptivePlayback)
+            control.adaptive = mime in listOf("video/avc", "video/hevc") && caps.isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_AdaptivePlayback)
             if (control.adaptive) {
                 val maxWidth = maxOf(desc.video.getInteger(MediaFormat.KEY_WIDTH), 1920)
                 val maxHeight = maxOf(desc.video.getInteger(MediaFormat.KEY_HEIGHT), 1080)
