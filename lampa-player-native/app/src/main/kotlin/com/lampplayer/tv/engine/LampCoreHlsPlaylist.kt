@@ -4,7 +4,9 @@ import java.io.IOException
 import java.net.URI
 import java.nio.ByteBuffer
 
-internal class HlsException(message: String) : IOException(message)
+internal open class HlsException(message: String) : IOException(message)
+internal class HlsWindowException(message: String) : HlsException(message)
+internal class HlsMissingException(val status: Int) : HlsException("HLS-сегмент недоступен (HTTP $status)")
 internal data class HlsRange(val offset: Long, val length: Long)
 internal data class HlsKey(val uri: String, val ivHex: String?) {
     fun iv(sequence: Long): ByteArray {
@@ -17,13 +19,23 @@ internal data class HlsKey(val uri: String, val ivHex: String?) {
 internal data class HlsInit(val uri: String, val range: HlsRange?, val key: HlsKey?)
 internal data class HlsSegment(
     val uri: String, val durationUs: Long, val startUs: Long, val sequence: Long,
-    val discontinuity: Long, val range: HlsRange?, val key: HlsKey?, val init: HlsInit?,
+    val discontinuity: Long, val range: HlsRange?, val key: HlsKey?, val init: HlsInit?, val programTimeUs: Long? = null,
 )
-internal data class HlsVariant(val uri: String, val bandwidth: Long, val height: Int, val audioGroup: String?)
+internal data class HlsVariant(val uri: String, val bandwidth: Long, val height: Int, val audioGroup: String?,
+    val width: Int = 0, val codecs: String? = null, val subtitleGroup: String? = null) {
+    val videoMime: String? get() = codecs?.split(',')?.firstNotNullOfOrNull { codec -> when {
+        codec.trim().startsWith("avc") -> "video/avc"
+        codec.trim().startsWith("hvc") || codec.trim().startsWith("hev") -> "video/hevc"
+        codec.trim().startsWith("vp09") -> "video/x-vnd.on2.vp9"
+        codec.trim().startsWith("av01") -> "video/av01"
+        else -> null
+    } }
+}
 internal data class HlsAudio(val uri: String?, val group: String, val name: String, val language: String?, val default: Boolean)
+internal data class HlsSubtitle(val uri: String, val group: String, val name: String, val language: String?)
 internal data class HlsPlaylist(
     val uri: String, val variants: List<HlsVariant>, val audios: List<HlsAudio>,
-    val segments: List<HlsSegment>, val endList: Boolean, val targetUs: Long,
+    val segments: List<HlsSegment>, val endList: Boolean, val targetUs: Long, val subtitles: List<HlsSubtitle> = emptyList(),
 ) {
     val durationUs: Long get() = segments.sumOf { it.durationUs }
     fun initialVariant(): HlsVariant = variants.filter { it.height <= 1080 && it.bandwidth <= 8_000_000 }
@@ -38,6 +50,7 @@ internal object LampCoreHlsPlaylist {
         if (lines.firstOrNull() != "#EXTM3U") throw HlsException("Ответ не является HLS-плейлистом")
         val variants = mutableListOf<HlsVariant>()
         val audios = mutableListOf<HlsAudio>()
+        val subtitles = mutableListOf<HlsSubtitle>()
         val segments = mutableListOf<HlsSegment>()
         var pendingVariant: Map<String, String>? = null
         var duration: Long? = null
@@ -51,6 +64,7 @@ internal object LampCoreHlsPlaylist {
         var init: HlsInit? = null
         var endList = false
         var target = 6_000_000L
+        var programTimeUs: Long? = null
         for (line in lines.drop(1)) {
             when {
                 line.startsWith("#EXT-X-STREAM-INF:") -> pendingVariant = attributes(line.substringAfter(':'))
@@ -58,6 +72,8 @@ internal object LampCoreHlsPlaylist {
                     val a = attributes(line.substringAfter(':'))
                     if (a["TYPE"] == "AUDIO") audios += HlsAudio(a["URI"]?.let { resolve(uri, it) },
                         a["GROUP-ID"] ?: throw HlsException("Нет AUDIO GROUP-ID"), a["NAME"] ?: "Audio", a["LANGUAGE"], a["DEFAULT"] == "YES")
+                    if (a["TYPE"] == "SUBTITLES") subtitles += HlsSubtitle(resolve(uri, a["URI"] ?: throw HlsException("Нет URI субтитров")),
+                        a["GROUP-ID"] ?: throw HlsException("Нет SUBTITLES GROUP-ID"), a["NAME"] ?: "Subtitles", a["LANGUAGE"])
                 }
                 line.startsWith("#EXT-X-MEDIA-SEQUENCE:") -> {
                     if (segments.isNotEmpty()) throw HlsException("MEDIA-SEQUENCE после сегментов")
@@ -75,6 +91,7 @@ internal object LampCoreHlsPlaylist {
                     duration = (seconds * 1_000_000).toLong()
                 }
                 line.startsWith("#EXT-X-TARGETDURATION:") -> target = number(line.substringAfter(':')).coerceIn(1, 3600) * 1_000_000
+                line.startsWith("#EXT-X-PROGRAM-DATE-TIME:") -> programTimeUs = dateUs(line.substringAfter(':'))
                 line.startsWith("#EXT-X-BYTERANGE:") -> pendingRange = line.substringAfter(':')
                 line.startsWith("#EXT-X-KEY:") -> key = parseKey(uri, attributes(line.substringAfter(':')))
                 line.startsWith("#EXT-X-SESSION-KEY:") -> parseKey(uri, attributes(line.substringAfter(':')))
@@ -94,7 +111,8 @@ internal object LampCoreHlsPlaylist {
                     val variant = pendingVariant
                     if (variant != null) {
                         val height = variant["RESOLUTION"]?.substringAfter('x')?.toIntOrNull() ?: 0
-                        variants += HlsVariant(resolved, number(variant["BANDWIDTH"] ?: "0"), height, variant["AUDIO"])
+                        variants += HlsVariant(resolved, number(variant["BANDWIDTH"] ?: "0"), height, variant["AUDIO"],
+                            variant["RESOLUTION"]?.substringBefore('x')?.toIntOrNull() ?: 0, variant["CODECS"], variant["SUBTITLES"])
                         pendingVariant = null
                     } else {
                         val d = duration ?: throw HlsException("URI сегмента без EXTINF")
@@ -102,7 +120,8 @@ internal object LampCoreHlsPlaylist {
                             if (!raw.contains('@') && previousRangeUri != resolved) throw HlsException("Неявный BYTERANGE относится к другому ресурсу")
                             parseRange(raw, previousRangeEnd)
                         }
-                        segments += HlsSegment(resolved, d, start, sequence, discontinuity, range, key, init)
+                        segments += HlsSegment(resolved, d, start, sequence, discontinuity, range, key, init, programTimeUs)
+                        programTimeUs = programTimeUs?.let { add(it, d) }
                         if (segments.size > 100_000) throw HlsException("Слишком большой HLS-плейлист")
                         start = add(start, d); sequence = add(sequence, 1)
                         previousRangeUri = if (range == null) null else resolved
@@ -115,7 +134,7 @@ internal object LampCoreHlsPlaylist {
         if (pendingVariant != null || duration != null) throw HlsException("Оборванный HLS-плейлист")
         if (variants.isEmpty() && segments.isEmpty()) throw HlsException("Нет полных HLS-сегментов; LL-HLS-only пока не поддерживается")
         if (variants.isNotEmpty() && segments.isNotEmpty()) throw HlsException("Смешанный master/media плейлист")
-        return HlsPlaylist(uri, variants, audios, segments, endList, target)
+        return HlsPlaylist(uri, variants, audios, segments, endList, target, subtitles)
     }
 
     fun attributes(value: String): Map<String, String> {
@@ -161,6 +180,13 @@ internal object LampCoreHlsPlaylist {
         if (a > Long.MAX_VALUE - b) throw HlsException("Переполнение числового поля HLS")
         return a + b
     }
+    private fun dateUs(text: String): Long {
+        val normalized = Regex("(\\.\\d+)(Z|[+-]\\d\\d:\\d\\d)$").replace(text) { m -> m.groupValues[1].take(4).padEnd(4, '0') + m.groupValues[2] }
+        val pattern = if (normalized.contains('.')) "yyyy-MM-dd'T'HH:mm:ss.SSSXXX" else "yyyy-MM-dd'T'HH:mm:ssXXX"
+        val format = java.text.SimpleDateFormat(pattern, java.util.Locale.US).apply { isLenient = false }
+        return try { (format.parse(normalized)?.time ?: throw HlsException("Некорректный PROGRAM-DATE-TIME")) * 1000 }
+        catch (_: Exception) { throw HlsException("Некорректный PROGRAM-DATE-TIME") }
+    }
     private fun resolve(base: String, relative: String): String {
         val result = try { URI(base).resolve(relative) } catch (_: Exception) { throw HlsException("Некорректный URI HLS") }
         if (result.scheme !in listOf("http", "https")) throw HlsException("HLS поддерживает только HTTP/HTTPS")
@@ -176,7 +202,7 @@ internal class HlsTimeline(initial: HlsPlaylist) {
         val overlap = next.segments.firstOrNull { fresh -> previous.segments.any { it.sequence == fresh.sequence } }
         offsetUs = if (overlap != null) previous.segments.first { it.sequence == overlap.sequence }.startUs - overlap.startUs
         else if (next.segments.first().sequence == previous.segments.last().sequence + 1) previous.segments.last().let { it.startUs + it.durationUs }
-        else throw HlsException("Live-плейлист потерял непрерывность; переподключитесь к эфиру")
+        else throw HlsWindowException("Live-плейлист потерял непрерывность")
         val adjusted = next.copy(segments = next.segments.map { it.copy(startUs = it.startUs + offsetUs) })
         previous = adjusted
         return adjusted
