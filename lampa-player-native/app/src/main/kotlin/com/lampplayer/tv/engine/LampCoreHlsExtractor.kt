@@ -35,7 +35,8 @@ internal class LampCoreHlsExtractor(
     private val bridge = object : ExtractorOutput {
         override fun track(id: Int, type: Int): TrackOutput {
             if (type !in listOf(C.TRACK_TYPE_VIDEO, C.TRACK_TYPE_AUDIO) || audioOnly && type == C.TRACK_TYPE_VIDEO) return DummyTrackOutput()
-            if (tracks.values.any { it.type == type && it.id != id }) return DummyTrackOutput()
+            if (type == C.TRACK_TYPE_VIDEO && tracks.values.any { it.type == type && it.id != id }) return DummyTrackOutput()
+            if (tracks.size >= 16 && id !in tracks) return DummyTrackOutput()
             return tracks.getOrPut(id) { PacketTrack(id, type) }
         }
         override fun endTracks() { output.endTracks(tracks.values.any { it.type == C.TRACK_TYPE_AUDIO }) }
@@ -44,10 +45,10 @@ internal class LampCoreHlsExtractor(
 
     fun read(file: File, segment: HlsSegment) {
         FileInputStream(file).use { stream ->
-            val input = DefaultExtractorInput(DataReader { buffer, offset, length -> stream.read(buffer, offset, length) }, 0, file.length())
+            val input = DefaultExtractorInput(DataReader { buffer, offset, length -> stream.read(buffer, offset, length) }, 0, C.LENGTH_UNSET.toLong())
             if (extractor == null) {
                 val mp4 = FragmentedMp4Extractor(0, adjuster)
-                val ts = TsExtractor(TsExtractor.MODE_HLS, adjuster,
+                val ts = TsExtractor(TsExtractor.MODE_SINGLE_PMT, adjuster,
                     DefaultTsPayloadReaderFactory(DefaultTsPayloadReaderFactory.FLAG_IGNORE_SPLICE_INFO_STREAM))
                 val adts = AdtsExtractor()
                 fun sniff(candidate: Extractor): Boolean {
