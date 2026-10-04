@@ -95,6 +95,7 @@ class PlayerActivity : AppCompatActivity() {
     private val skipHintAlpha = 0.32f
 
     // True while shown as a Picture-in-Picture window (suppress all on-screen controls).
+    private var lastCoreCaption: String? = null
     private var inPip = false
 
     // Seek-bar-only mode: ←/→ shows just the progress scrubber, not the full button row.
@@ -289,6 +290,15 @@ class PlayerActivity : AppCompatActivity() {
     private fun observeState() {
         lifecycleScope.launch {
             vm.uiState.collectLatest { s ->
+                binding.lampcoreSubtitles.isVisible = vm.isUsingLampCore
+                binding.lampcoreSubtitles.setFixedTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, s.settings.subtitleSizeSp.toFloat())
+                binding.playerView.subtitleView?.setFixedTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, s.settings.subtitleSizeSp.toFloat())
+                if (lastCoreCaption != s.coreSubtitleText) {
+                    lastCoreCaption = s.coreSubtitleText
+                    val text = if (android.os.Build.VERSION.SDK_INT >= 24) android.text.Html.fromHtml(s.coreSubtitleText.replace("\n", "<br>"), android.text.Html.FROM_HTML_MODE_LEGACY)
+                        else @Suppress("DEPRECATION") android.text.Html.fromHtml(s.coreSubtitleText.replace("\n", "<br>"))
+                    binding.lampcoreSubtitles.setCues(if (s.coreSubtitleText.isEmpty()) emptyList() else listOf(androidx.media3.common.text.Cue.Builder().setText(text).build()))
+                }
                 if (inPip) return@collectLatest   // no controls while in a PiP window
                 // Intent diagnostic — once per launch, after settings (diag flag) loaded.
                 if (!intentDebugDone && s.card != null && s.settings.diag) {
