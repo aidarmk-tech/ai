@@ -254,6 +254,7 @@ class LampCoreController(context: Context, private val listener: EngineListener)
             val videoInfo = MediaCodec.BufferInfo()
             val audioInfo = MediaCodec.BufferInfo()
             val head = AudioFrameCounter()
+            val videoTiming = LampCoreVideoTiming(videoFps)
             var sampleRate = 0
             var frameBytes = 0
             var submittedFrames = 0L
@@ -288,7 +289,7 @@ class LampCoreController(context: Context, private val listener: EngineListener)
                 if (playing != requestedPlay) {
                     playing = requestedPlay
                     if (playing) {
-                        sink?.play(); sinkStarted = sink != null
+                        if (sinkStarted) sink?.play()
                         wallBaseUs = positionMs * 1000; wallBaseNs = System.nanoTime()
                         event(token) { listener.onPlaying() }
                     } else { sink?.pause(); event(token) { listener.onPaused() } }
@@ -297,9 +298,15 @@ class LampCoreController(context: Context, private val listener: EngineListener)
                 if (!playing) { Thread.sleep(10); continue }
                 if (sink != null && appliedRate != rate) {
                     sink.playbackParams = PlaybackParams().setSpeed(rate).setPitch(1f)
+                    // setPlaybackParams can start a paused track. Keep the refill gate closed.
+                    if (!sinkStarted) sink.pause()
                     appliedRate = rate
                 }
                 sink?.setVolume(volume)
+                val drainedFrames = sink?.let { head.update(it.playbackHeadPosition) } ?: 0L
+                if (sinkStarted && !audioEnd && submittedFrames > 0 && drainedFrames >= submittedFrames) {
+                    sink?.pause(); sinkStarted = false
+                }
                 if (wallRate != rate) {
                     val changeNs = System.nanoTime()
                     if (wallStarted) wallBaseUs += ((changeNs - wallBaseNs) / 1000 * wallRate).toLong()
@@ -381,7 +388,6 @@ class LampCoreController(context: Context, private val listener: EngineListener)
                         val buffer = pendingAudioBuffer ?: throw CoreException("Нет сохранённого аудиобуфера")
                         if (buffer.hasRemaining()) {
                             val target = sink ?: throw CoreException("Аудиодекодер не сообщил выходной формат")
-                            if (!sinkStarted) { target.play(); sinkStarted = true }
                             val written = target.write(buffer, buffer.remaining(), AudioTrack.WRITE_NON_BLOCKING)
                             if (written < 0) throw CoreException("Ошибка аудиовыхода ($written)")
                             submittedBytes += written
@@ -397,12 +403,17 @@ class LampCoreController(context: Context, private val listener: EngineListener)
                 val now = System.nanoTime()
                 val frames = sink?.let { head.update(it.playbackHeadPosition) } ?: 0L
                 if (frames != lastFrames) { lastProgressNs = now; lastFrames = frames }
-                val audioWaiting = audio != null && !audioEnd && (audioBaseUs == Long.MIN_VALUE || frames >= submittedFrames)
+                val target = sink
+                if (target != null && !sinkStarted && LampCoreTiming.audioReady(
+                        submittedFrames - frames, sampleRate, target.bufferSizeInFrames, rate, audioEnd)) {
+                    target.play(); sinkStarted = true
+                }
+                val audioWaiting = audio != null && !audioEnd && (!sinkStarted || audioBaseUs == Long.MIN_VALUE || frames >= submittedFrames)
                 if (audio != null && audioEnd && frames >= submittedFrames && !audioTailClock) {
                     wallBaseUs = if (audioBaseUs != Long.MIN_VALUE) audioBaseUs + frames * 1_000_000 / sampleRate.coerceAtLeast(1) else startMs * 1000
                     wallBaseNs = now; wallStarted = true; audioTailClock = true
                 }
-                val clockUs = if (audio != null && !audioTailClock && audioBaseUs != Long.MIN_VALUE)
+                var clockUs = if (audio != null && !audioTailClock && audioBaseUs != Long.MIN_VALUE)
                     audioBaseUs + frames * 1_000_000 / sampleRate.coerceAtLeast(1)
                 else if ((audio == null || audioTailClock) && wallStarted) wallBaseUs + ((now - wallBaseNs) / 1000 * wallRate).toLong()
                 else startMs * 1000
@@ -429,11 +440,18 @@ class LampCoreController(context: Context, private val listener: EngineListener)
                     } else if (pts < startMs * 1000) {
                         video.releaseOutputBuffer(pendingVideo, false); pendingVideo = -1
                     } else if (!audioWaiting) {
-                        if (audio == null && !wallStarted) { wallBaseUs = pts; wallBaseNs = now; wallStarted = true }
-                        val action = LampCoreTiming.frameAction(pts, if (audio == null && !wallStarted) pts else clockUs)
-                        if (action <= 0) {
-                            video.releaseOutputBuffer(pendingVideo, action == 0)
-                            if (action < 0) dropped++ else { rendered++; videoLastUs = pts }
+                        if (audio == null && !wallStarted) {
+                            wallBaseUs = pts; wallBaseNs = now; wallStarted = true
+                            clockUs = pts; positionMs = pts / 1000
+                        }
+                        val release = videoTiming.plan(pts, clockUs, now, rate)
+                        if (release.action <= 0) {
+                            if (release.action < 0) { video.releaseOutputBuffer(pendingVideo, false); dropped++ }
+                            else {
+                                video.releaseOutputBuffer(pendingVideo, release.timeNs)
+                                videoTiming.rendered(pts, release.timeNs)
+                                rendered++; videoLastUs = pts
+                            }
                             pendingVideo = -1; videoEnd = eos; lastOutputNs = now
                             signalBuffering(false)
                         }

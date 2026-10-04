@@ -145,7 +145,7 @@ jobs:
             "versionName": "1.0.${{ github.run_number }}",
             "url": "https://github.com/${{ github.repository }}/releases/download/auto/LampPlayer-${{ github.run_number }}.apk",
             "sha256": "$SHA256",
-            "notes": "Обновление #${{ github.run_number }}: LampCore: восстановление HLS, автокачество, выбор звука и сведение 5.1/7.1, текстовые субтитры с размером и синхронизацией. Выбор движка: Настройки → LampCore."
+            "notes": "Обновление #${{ github.run_number }}: LampCore: исправлен ускоренный вывод кадров после коротких задержек; добавлен запас звука перед стартом и восстановлением. Выбор движка: Настройки → LampCore."
           }
           EOF
           cat dist/version.json
