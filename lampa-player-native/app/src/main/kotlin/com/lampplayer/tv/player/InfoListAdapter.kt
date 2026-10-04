@@ -18,20 +18,21 @@ class InfoListAdapter<T>(
     private val items = mutableListOf<T>()
     private var selectedIndex = -1
 
-    fun setItems(newItems: List<T>, selected: Int = -1) {
+    fun setItems(newItems: List<T>, selected: Int = -1): Boolean {
+        if (items == newItems && selectedIndex == selected) return false
         items.clear()
         items.addAll(newItems)
         selectedIndex = selected
         notifyDataSetChanged()
+        return true
     }
 
     inner class VH(val b: ItemInfoListBinding) : RecyclerView.ViewHolder(b.root) {
         fun bind(item: T, isSelected: Boolean) {
             b.tvLabel.text = labelOf(item)
             val ctx = b.root.context
-            b.root.setBackgroundResource(
-                if (isSelected) R.drawable.bg_button_accent else R.drawable.bg_card
-            )
+            b.root.setBackgroundResource(R.drawable.bg_card)
+            b.root.isActivated = isSelected
             b.tvLabel.setTextColor(
                 ContextCompat.getColor(ctx, if (isSelected) R.color.text_primary else R.color.text_secondary)
             )
@@ -45,8 +46,10 @@ class InfoListAdapter<T>(
             }
             b.root.setOnClickListener { onSelected(item, bindingAdapterPosition) }
             b.root.setOnFocusChangeListener { v, focused ->
-                v.scaleX = if (focused) 1.05f else 1f
-                v.scaleY = if (focused) 1.05f else 1f
+                v.animate().scaleX(if (focused) 1.015f else 1f)
+                    .scaleY(if (focused) 1.015f else 1f).setDuration(120).start()
+                b.tvLabel.setTextColor(ContextCompat.getColor(ctx,
+                    if (focused || isSelected) R.color.text_primary else R.color.text_secondary))
                 b.tvLabel.isSelected = focused   // run the marquee on the focused row
             }
         }

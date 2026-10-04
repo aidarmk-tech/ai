@@ -6,12 +6,13 @@
     android:gravity="center_vertical"
     android:background="@drawable/bg_card"
     android:focusable="true"
-    android:padding="8dp"
-    android:layout_marginBottom="8dp">
+    android:padding="10dp"
+    android:minHeight="76dp"
+    android:layout_marginBottom="6dp">
 
     <ImageView android:id="@+id/ep_still"
-        android:layout_width="148dp"
-        android:layout_height="84dp"
+        android:layout_width="100dp"
+        android:layout_height="56dp"
         android:scaleType="centerCrop"
         android:background="@color/bg_surface"
         android:layout_marginEnd="12dp" />
@@ -24,12 +25,12 @@
 
         <com.lampplayer.tv.player.MarqueeTextView android:id="@+id/tv_ep_name"
             android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:textColor="@color/text_primary" android:textSize="16sp"
+            android:textColor="@color/text_primary" android:textSize="15sp"
             android:fontFamily="sans-serif-medium" />
 
         <com.lampplayer.tv.player.MarqueeTextView android:id="@+id/tv_ep_overview"
             android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:textColor="@color/text_secondary" android:textSize="13sp"
-            android:layout_marginTop="2dp" />
+            android:textColor="@color/text_secondary" android:textSize="12sp"
+            android:layout_marginTop="4dp" />
     </LinearLayout>
 </LinearLayout>

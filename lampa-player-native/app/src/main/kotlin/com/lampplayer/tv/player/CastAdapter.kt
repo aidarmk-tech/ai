@@ -15,6 +15,7 @@ class CastAdapter : RecyclerView.Adapter<CastAdapter.VH>() {
     private val items = mutableListOf<PlayerUiState.CastMember>()
 
     fun setItems(list: List<PlayerUiState.CastMember>) {
+        if (items == list) return
         items.clear(); items.addAll(list); notifyDataSetChanged()
     }
 
@@ -37,7 +38,7 @@ class CastAdapter : RecyclerView.Adapter<CastAdapter.VH>() {
                 .into(holder.b.ivCastPhoto)
         }
         holder.b.root.setOnFocusChangeListener { v, focused ->
-            val s = if (focused) 1.12f else 1f
+            val s = if (focused) 1.04f else 1f
             v.animate().scaleX(s).scaleY(s).setDuration(120).start()
         }
     }

@@ -37,4 +37,5 @@ jobs:
           path: |
             lampa-player-native/app/build/outputs/apk/debug/app-debug.apk
             lampa-player-native/app/build/reports/tests/testDebugUnitTest/
+            lampa-player-native/app/build/ui-preview/
           retention-days: 30

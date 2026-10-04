@@ -1,21 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Background -->
-    <color name="bg_primary">#0A0A0F</color>
+    <color name="bg_primary">#0B0E13</color>
     <color name="ic_launcher_background">#0A0A0F</color>
-    <color name="bg_surface">#14141C</color>
-    <color name="bg_elevated">#1E1E2A</color>
-    <color name="bg_overlay">#D90A0A0F</color>
+    <color name="bg_surface">#141923</color>
+    <color name="bg_elevated">#1C2430</color>
+    <color name="bg_overlay">#E60B0E13</color>
 
     <!-- Text -->
-    <color name="text_primary">#FFFFFF</color>
-    <color name="text_secondary">#A8A8B8</color>
-    <color name="text_disabled">#5A5A6A</color>
+    <color name="text_primary">#F4F7FB</color>
+    <color name="text_secondary">#A9B3C4</color>
+    <color name="text_disabled">#697489</color>
 
     <!-- Accent -->
-    <color name="accent_primary">#3D7EFF</color>
-    <color name="accent_glow">#733D7EFF</color>
-    <color name="accent_pressed">#2A5FD9</color>
+    <color name="accent_primary">#8BB4FF</color>
+    <color name="accent_glow">#408BB4FF</color>
+    <color name="accent_pressed">#254266</color>
+    <color name="accent_surface">#294567</color>
+    <color name="focus_surface">#26374F</color>
+    <color name="focus_outline">#BDD5FF</color>
 
     <!-- Semantic -->
     <color name="color_error">#FF5C5C</color>
