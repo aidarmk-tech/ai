@@ -52,7 +52,7 @@ internal object LampCoreSubtitleParser {
                 val times = lines[index].split("-->", limit = 2)
                 runCatching {
                     val body = lines.drop(index + 1).joinToString("\n")
-                        .replace(Regex("</?(?:c(?:\\.[^ >]+)?|v|lang|ruby|rt)(?:[ >][^>]*)?>"), "")
+                        .replace(Regex("</?(?:c(?:\\.[^ >]+)?|v|lang|ruby|rt)(?:[ \t]+[^>]*)?>"), "")
                         .replace(Regex("<\\d{2}:\\d{2}(?::\\d{2})?\\.\\d+>"), "")
                     cues += CoreTextCue(timeUs(times[0].trim()) + offsetUs, timeUs(times[1].trim().substringBefore(' ')) + offsetUs, body)
                 }
