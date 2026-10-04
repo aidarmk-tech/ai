@@ -9,6 +9,7 @@ import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.os.Looper
 import android.view.KeyEvent
+import android.view.InputEvent
 import android.view.View
 import androidx.media3.common.util.UnstableApi
 import androidx.test.platform.app.InstrumentationRegistry
@@ -26,6 +27,7 @@ import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.annotation.LooperMode
+import org.robolectric.util.ReflectionHelpers
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -37,7 +39,7 @@ import java.util.concurrent.TimeUnit
 @UnstableApi
 class InfoOverlayNavigationTest {
     private fun startHost(): ActivityController<Host> {
-        // Direct Activity key dispatch bypasses ViewRoot's switch out of touch mode.
+        // A TV remote starts in non-touch mode.
         InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
         return Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
     }
@@ -105,8 +107,12 @@ class InfoOverlayNavigationTest {
         }
 
         fun key(code: Int) {
-            dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, code))
-            dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, code))
+            // ViewRoot performs normal D-pad focus navigation after Activity dispatch.
+            val viewRoot = b.root.rootView.parent ?: error("Window is not attached")
+            for (action in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) {
+                ReflectionHelpers.callInstanceMethod<Any?>(viewRoot, "dispatchInputEvent",
+                    ReflectionHelpers.ClassParameter.from(InputEvent::class.java, KeyEvent(action, code)))
+            }
             frame()
         }
 
@@ -124,7 +130,7 @@ class InfoOverlayNavigationTest {
         }
 
         fun diagnose(name: String) {
-            println("UI: focus=$currentFocus touch=${b.root.isInTouchMode} window=${b.root.hasWindowFocus()} " +
+            println("UI: focus=${b.root.findFocus()} touch=${b.root.isInTouchMode} window=${b.root.hasWindowFocus()} " +
                 "shown=${b.infoOverlay.isShown} rows=${b.rvInfoList.childCount} meta=${b.svOverlayMeta.width}x${b.svOverlayMeta.height}")
             screenshot(name)
         }
@@ -182,14 +188,15 @@ class InfoOverlayNavigationTest {
             val host = controller.get()
             host.frame(); host.navigation.open(2); host.frame()
             host.key(KeyEvent.KEYCODE_DPAD_DOWN)
-            val focused = host.currentFocus
+            val focused = host.b.root.findFocus()
             var invalidations = 0
             host.episodes.registerAdapterDataObserver(object : RecyclerView.AdapterDataObserver() {
                 override fun onChanged() { invalidations++ }
             })
             repeat(20) { host.episodes.setItems((1..12).map { "Серия $it · Тихий город" }, 2); host.frame() }
             assertEquals(0, invalidations)
-            assertSame(focused, host.currentFocus)
+            assertNotNull(focused)
+            assertSame(focused, host.b.root.findFocus())
             assertEquals(3, host.focusedEpisode())
         } finally { controller.pause().stop().destroy() }
     }
