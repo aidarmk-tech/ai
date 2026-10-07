@@ -849,7 +849,7 @@ class PlayerViewModel @Inject constructor(
                 _uiState.update { it.copy(isPlaying = false, isLoading = false) }
                 updateMediaSession()
                 viewModelScope.launch { saveCurrentPosition(ended = true) }
-                if (hasInPlayerNext()) viewModelScope.launch { navigateNext() }
+                if (settings.autonext && hasInPlayerNext()) viewModelScope.launch { navigateNext() }
                 else _uiState.update { it.copy(osdVisible = true) }
             }
         })
@@ -932,7 +932,7 @@ class PlayerViewModel @Inject constructor(
             viewModelScope.launch { saveCurrentPosition(ended = true) }
             // Advance only if there's a real in-player next; otherwise stay (don't
             // surprise-exit to Lampa) and show controls.
-            if (hasInPlayerNext()) viewModelScope.launch { navigateNext() }
+            if (settings.autonext && hasInPlayerNext()) viewModelScope.launch { navigateNext() }
             else _uiState.update { it.copy(osdVisible = true) }
         }
         override fun onError(message: String) {
@@ -1600,15 +1600,9 @@ class PlayerViewModel @Inject constructor(
         return next.url.isNotBlank()
     }
 
-    /** The episode after the one currently playing — located by URL so it's robust to
-     *  index/filtering gaps between currentEpisodeIndex and the playlist list. */
-    private fun nextPlayableEpisode(): EpisodeItem? {
-        val eps = _uiState.value.episodes
-        if (eps.isEmpty()) return null
-        val pos = eps.indexOfFirst { it.url == currentUrl }.takeIf { it >= 0 }
-            ?: _uiState.value.currentEpisodeIndex
-        return eps.getOrNull(pos + 1)
-    }
+    /** No index fallback: the previous title's playlist can have the same index. */
+    private fun nextPlayableEpisode(): EpisodeItem? =
+        EpisodeNavigation.next(_uiState.value.episodes, currentUrl)
 
     private fun navigateNext() {
         // Clear the "next episode in N s" overlay — the countdown just fired.
@@ -1618,8 +1612,9 @@ class PlayerViewModel @Inject constructor(
         if (next != null && next.url.isNotBlank()) {
             selectEpisode(next)
         } else {
-            // No resolved next inside the player → hand back to Lampa (it resolves+plays).
-            viewModelScope.launch { _navigateToNext.emit(Unit) }
+            // The playlist may have changed during the countdown. Stay here rather
+            // than marking playback completed and advancing Lampa's stale playlist.
+            _uiState.update { it.copy(osdVisible = true) }
         }
     }
 
@@ -1705,7 +1700,8 @@ class PlayerViewModel @Inject constructor(
 
     fun onNextEpisode() {
         val state = _uiState.value
-        val next = state.episodes.getOrNull(state.currentEpisodeIndex + 1)
+        val next = if (state.card?.iptv == true) state.episodes.getOrNull(state.currentEpisodeIndex + 1)
+                   else nextPlayableEpisode()
         if (next != null) selectEpisode(next) else viewModelScope.launch { _navigateToNext.emit(Unit) }
     }
 
@@ -1782,7 +1778,7 @@ class PlayerViewModel @Inject constructor(
                 if (state == Player.STATE_BUFFERING && everReady) onRebuffer()
                 if (state == Player.STATE_ENDED) {
                     viewModelScope.launch { saveCurrentPosition(ended = true) }
-                    if (hasInPlayerNext()) viewModelScope.launch { navigateNext() }
+                    if (settings.autonext && hasInPlayerNext()) viewModelScope.launch { navigateNext() }
                     else _uiState.update { it.copy(osdVisible = true) }
                 }
             }

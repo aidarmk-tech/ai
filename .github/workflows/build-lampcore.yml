@@ -20,6 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Test companion playlist selection
+        run: node --test lmnp.torrent.test.cjs
       - uses: actions/setup-java@v4
         with:
           java-version: "17"

@@ -20,6 +20,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Test companion playlist selection
+        run: node --test lmnp.torrent.test.cjs
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -145,7 +148,7 @@ jobs:
             "versionName": "1.0.${{ github.run_number }}",
             "url": "https://github.com/${{ github.repository }}/releases/download/auto/LampPlayer-${{ github.run_number }}.apk",
             "sha256": "$SHA256",
-            "notes": "Обновление #${{ github.run_number }}: список серий слева, сразу в фокусе; описание и актёры справа. Обновлены карточки, цвета и управление с пульта. Включена правка тайминга LampCore после коротких задержек."
+            "notes": "Обновление #${{ github.run_number }}: исправлен автопереход на чужое видео. Плейлист проверяется по текущему потоку; при неподтверждённой следующей серии плеер остаётся на месте."
           }
           EOF
           cat dist/version.json

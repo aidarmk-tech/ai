@@ -21,11 +21,12 @@ object IntentParser {
     fun parse(intent: Intent): Pair<String, CardMeta>? {
         val uri = intent.data ?: return null
 
-        return if (uri.scheme == "lmnp") {
+        val parsed = if (uri.scheme == "lmnp") {
             parseLmnpUri(uri)
         } else {
             parseStandardIntent(intent)
         }
+        return parsed?.let { (url, card) -> url to EpisodeNavigation.validateCard(card, url) }
     }
 
     // ─── lmnp://play?url=VIDEO_URL&d=JSON ─────────────────────────
