@@ -455,6 +455,27 @@
         return { list: list, pos: pos };
     }
 
+    // PlayerPlaylist can still belong to the previous title when play() is called.
+    // Only a matching stream (or the actual clicked object) proves membership.
+    function playlistForVideo(video, videoUrl, candidate) {
+        var lists = [video && video.playlist, candidate && candidate.list];
+        var target = typeof videoUrl === 'string' ? playablePlaylistUrl(videoUrl) : '';
+        for (var n = 0; n < lists.length; n++) {
+            var list = lists[n];
+            if (!Array.isArray(list) || list.length < 2) continue;
+            for (var i = 0; i < list.length; i++) {
+                var item = list[i];
+                if (!item) continue;
+                var u = typeof item.url === 'string' ? item.url
+                        : typeof item.file === 'string' ? item.file : '';
+                if ((target && u && playablePlaylistUrl(u) === target) || item === video) {
+                    return { list: list, pos: i };
+                }
+            }
+        }
+        return { list: null, pos: 0 };
+    }
+
     function isIptvList(list) {
         return !!(list && list[0] && (list[0].tv || list[0].iptv));
     }
@@ -823,12 +844,16 @@
         var WINDOW = 12, BEFORE = 2;
         var start = Math.max(0, (pos || 0) - BEFORE);
         var end   = Math.min(list.length, start + WINDOW);
-        var items = [];
+        var items = [], pi = -1;
         for (var i = start; i < end; i++) {
             var it = list[i] || {};
             var url = playablePlaylistUrl((typeof it.url === 'string') ? it.url
                     : (typeof it.file === 'string') ? it.file : '');
-            if (!url || !/^https?:|^rtsp:|^udp:/.test(url)) continue;
+            if (!url || !/^https?:|^rtsp:|^udp:/.test(url)) {
+                if (i > pos) break; // never skip an unresolved next episode
+                continue;
+            }
+            if (i === pos) pi = items.length;
             items.push({
                 u: url,
                 e: it.episode || (i + 1),
@@ -836,8 +861,8 @@
                 t: (it.title || it.name || '').toString().slice(0, 40) || null,
             });
         }
-        if (items.length < 2) return null;
-        return { items: items, pi: Math.max(0, (pos || 0) - start) };
+        if (items.length < 2 || pi < 0) return null;
+        return { items: items, pi: pi };
     }
 
     // Резолвим «ленивые» URL серий в окне (balancer'ы хранят url как функцию,
@@ -891,19 +916,19 @@
     function buildEpisodes(playlist, idx) {
         if (!playlist || playlist.length < 2) return null;
         try {
-            var start = Math.max(0, (idx || 0) - 25);
-            var eps = playlist.slice(start, start + 50).map(function (item, i) {
-                // Балансеры (online_mod и др.) хранят URL как функцию для ленивой загрузки.
-                // Такие URL нельзя сериализовать в JSON — передаём только строковые URL.
+            var pos = idx || 0;
+            var start = Math.max(0, pos - 25), eps = [];
+            for (var i = start; i < Math.min(playlist.length, start + 50); i++) {
+                var item = playlist[i] || {};
                 var url = playablePlaylistUrl((typeof item.url === 'string') ? item.url
                         : (typeof item.file === 'string') ? item.file : '');
-                return {
-                    title:   item.title || item.name || ('Серия ' + (start + i + 1)),
-                    url:     url,
-                    season:  item.season  || null,
-                    episode: item.episode || null,
-                };
-            }).filter(function (e) { return !!e.url; });
+                if (!url) {
+                    if (i > pos) break;
+                    continue;
+                }
+                eps.push({ title: item.title || item.name || ('Серия ' + (i + 1)),
+                    url: url, season: item.season || null, episode: item.episode || null });
+            }
             return eps.length > 1 ? JSON.stringify(eps) : null;
         } catch (_) { return null; }
     }
@@ -970,13 +995,7 @@
 
     function doLaunch(videoUrl, data, file) {
         var rawCard  = findCard(data, file);
-        var pl       = getPlaylist();
-        if (isTorrentUrl(videoUrl) && data && Array.isArray(data.playlist) && data.playlist.length > 1) {
-            pl = { list: data.playlist, pos: 0 };
-            for (var i = 0; i < pl.list.length; i++) {
-                if (pl.list[i] && pl.list[i].url === videoUrl) { pl.pos = i; break; }
-            }
-        }
+        var pl       = playlistForVideo(data || file, videoUrl, getPlaylist());
         var cardData = buildCard(rawCard, file, data, pl.list, pl.pos);
         return launch(playablePlaylistUrl(videoUrl), cardData);
     }
@@ -1056,17 +1075,20 @@
         try {
             Lampa.PlayerPlaylist.listener.follow('change', function () {
                 if (!enabled() || !_pendingUrl) return;
-                var pl = getPlaylist();
-                if (!pl.list || pl.list.length < 2) return;
+                var pl = playlistForVideo(_pendingData || _savedFile, _pendingUrl, getPlaylist());
+                if (!pl.list) return;
 
+                var snapGen = _playGen;
+                var snapCard = findCard(_pendingData || {}, _savedFile || {});
                 var snapUrl  = _pendingUrl;
                 var snapData = _pendingData;
                 var snapFile = _savedFile;
 
                 function sendUpdate(list) {
-                    if (snapUrl !== _pendingUrl) return;   // уже запустили другое видео
-                    var rawCard  = findCard(snapData || {}, snapFile || {});
-                    var cardData = buildCard(rawCard, snapFile || {}, snapData || {}, list, pl.pos);
+                    if (snapUrl !== _pendingUrl || snapGen !== _playGen) return;
+                    var checked = playlistForVideo(null, snapUrl, { list: list });
+                    if (!checked.list) return;
+                    var cardData = buildCard(snapCard, snapFile || {}, snapData || {}, checked.list, checked.pos);
                     launch(snapUrl, cardData);
                 }
 
@@ -1145,25 +1167,8 @@
                     var origTitle = (typeof video.title === 'string') ? video.title : '';
                     var forcePlainTitle = !!video.lmnp_plain_title || !!video.vk_video;
                     var displayTitle = String(origTitle || video.lmnp_title || 'VK Видео').trim().slice(0, 140);
-                    var g = getPlaylist();
-                    var list = null, pos = 0;
-                    // Torrent files already carry their complete playlist on the
-                    // clicked item. PlayerPlaylist is filled only *after* play(),
-                    // so its previous value may belong to another release.
-                    if (isTorrentUrl(video.url) && video.playlist && video.playlist.length > 1) {
-                        list = video.playlist;
-                    } else if (g.list && g.list.length > 1) {
-                        list = g.list; pos = g.pos || 0;
-                    } else if (video.playlist && video.playlist.length > 1) {
-                        list = video.playlist;
-                    }
-                    if (list === video.playlist) {
-                        // Find the clicked file even when Lampa has a stale position.
-                        for (var vp = 0; vp < list.length; vp++) {
-                            var vu = list[vp] && (list[vp].url || list[vp].file);
-                            if (vu && vu === video.url) { pos = vp; break; }
-                        }
-                    }
+                    var g = playlistForVideo(video, video.url, getPlaylist());
+                    var list = g.list, pos = g.pos;
                     var iptvish = isIptvList(list) || !!video.iptv ||
                                   !!(list && list[pos] && (list[pos].tv || list[pos].iptv));
 

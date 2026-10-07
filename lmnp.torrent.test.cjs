@@ -77,3 +77,57 @@ test('browser launch also uses the torrent file list and play URL', () => {
     assert.deepEqual(JSON.parse(data.episodes).map((x) => x.url), files.map((x) => x.url.replace('&preload', '&play')));
     assert.equal(data.episode_index, undefined);
 });
+
+test('new online series must use its own playlist instead of a previous Marvel playlist', () => {
+    const stale = [1, 2].map((n) => ({ url: `https://marvel.test/e${n}.mp4`, episode: n }));
+    const current = [1, 2].map((n) => ({ url: `https://carrie.test/e${n}.mp4`, episode: n }));
+    const { lampa, played } = loadPlugin(stale);
+    lampa.Player.play({ ...current[0], playlist: current, card: { id: 45, title: 'Кэрри' } });
+    const meta = unpack(played[0]);
+    assert.deepEqual(meta.pl.items.map((x) => x.u), current.map((x) => x.url));
+    assert.equal(meta.pl.pi, 0);
+});
+
+test('an unrelated global playlist must not be attached to a standalone series launch', () => {
+    const stale = [1, 2].map((n) => ({ url: `https://marvel.test/e${n}.mp4`, episode: n }));
+    const { lampa, played } = loadPlugin(stale);
+    lampa.Player.play({ url: 'https://carrie.test/e1.mp4', episode: 1, card: { id: 45, title: 'Кэрри' } });
+    assert.equal(unpack(played[0]).pl, undefined);
+    assert.equal(played[0].headers && played[0].headers['X-Lmnp-Pl'], undefined);
+});
+
+test('global position is ignored when it points away from the stream being launched', () => {
+    const current = [1, 2, 3].map((n) => ({ url: `https://carrie.test/e${n}.mp4`, episode: n }));
+    const { lampa, played } = loadPlugin(current);
+    lampa.Player.play({ ...current[0], card: { id: 45, title: 'Кэрри' } });
+    assert.equal(unpack(played[0]).pl.pi, 0);
+});
+
+test('compact playlist position accounts for unresolved items before the current episode', () => {
+    const current = [{ episode: 1 }, { url: 'https://carrie.test/e2.mp4', episode: 2 },
+        { url: 'https://carrie.test/e3.mp4', episode: 3 }];
+    const { lampa, played } = loadPlugin(current);
+    lampa.Player.play({ ...current[1], card: { id: 45, title: 'Кэрри' } });
+    assert.equal(unpack(played[0]).pl.pi, 0);
+    assert.equal(unpack(played[0]).pl.items[1].u, current[2].url);
+});
+
+test('browser launch also rejects the previous online titles playlist', () => {
+    const stale = [1, 2].map((n) => ({ url: `https://marvel.test/e${n}.mp4`, episode: n }));
+    const { lampa, window } = loadPlugin(stale, true);
+    lampa.Player.play({ url: 'https://carrie.test/e1.mp4', card: { id: 45, title: 'Кэрри' } });
+    const intent = window.location.href;
+    const query = new URLSearchParams(intent.slice(intent.indexOf('?') + 1, intent.indexOf('#Intent')));
+    const data = JSON.parse(Buffer.from(query.get('d'), 'base64').toString('utf8'));
+    assert.equal(data.episodes, undefined);
+});
+
+test('unresolved next episode must not turn episode three into an automatic next', () => {
+    const current = [{ url: 'https://carrie.test/e1.mp4', episode: 1 }, { episode: 2 },
+        { url: 'https://carrie.test/e3.mp4', episode: 3 }];
+    const { lampa, played } = loadPlugin(current);
+    lampa.Player.play({ ...current[0], card: { id: 45, title: 'Кэрри' } });
+    assert.equal(unpack(played[0]).pl, undefined);
+    const full = JSON.parse(Buffer.from(played[0].headers['X-Lmnp-Pl'], 'base64').toString());
+    assert.equal(full.items[1].u, ''); // full playlist preserves the unavailable episode
+});
