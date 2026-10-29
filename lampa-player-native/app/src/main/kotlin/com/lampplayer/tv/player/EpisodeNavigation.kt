@@ -11,7 +11,10 @@ internal object EpisodeNavigation {
         if (current < 0) return null
         val playing = episodes[current]
         return episodes.getOrNull(current + 1)?.takeIf {
-            it.url.isNotBlank() && it.url != currentUrl && it.index == playing.index + 1
+            it.url.isNotBlank() && it.url != currentUrl && it.index == playing.index + 1 &&
+                (playing.episode == null || it.episode == null ||
+                    (it.season == playing.season && it.episode == playing.episode + 1) ||
+                    (playing.season != null && it.season == playing.season + 1 && it.episode == 1))
         }
     }
 
