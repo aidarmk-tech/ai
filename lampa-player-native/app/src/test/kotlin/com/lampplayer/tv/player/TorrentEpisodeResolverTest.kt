@@ -31,7 +31,7 @@ class TorrentEpisodeResolverTest {
         val source = episode(2, 4)
         val list = TorrentEpisodeResolver.parse(source, m3u(episode(10, 20), episode(3, 8), source,
             episode(1, 1), stream("Ilnga.S01E02.ru.srt", 5), stream("Ilnga.S01E03.sample.mkv", 9),
-            stream("Marvel.S01E03.mkv", 30)))!!
+            stream("Marvel.S01E03.mkv", 30), stream("Ilnga.S02E01.mkv", 80)))!!
         assertEquals(listOf(1, 2, 3, 10), list.episodes.map { it.episode })
         assertEquals(1, list.currentIndex)
         assertEquals(source, list.episodes[list.currentIndex].url)

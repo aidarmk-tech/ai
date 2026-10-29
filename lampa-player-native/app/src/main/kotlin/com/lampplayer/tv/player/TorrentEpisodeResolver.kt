@@ -65,7 +65,9 @@ internal class TorrentEpisodeResolver {
                     !hash.equals(url.queryParameter("link"), true) ||
                     (url.queryParameter("index")?.toIntOrNull() ?: -1) < 0) continue
                 val n = number(url.pathSegments.last()) ?: continue
-                if (n.group == currentNumber.group) entries += Entry(url, n)
+                // The info panel numbers rows within one season; don't mix equal episode
+                // numbers from different seasons of a multi-season torrent pack.
+                if (n.group == currentNumber.group && n.season == currentNumber.season) entries += Entry(url, n)
                 if (entries.size > 1000) return null
             }
             val unique = entries.distinctBy { it.url.toString() }
