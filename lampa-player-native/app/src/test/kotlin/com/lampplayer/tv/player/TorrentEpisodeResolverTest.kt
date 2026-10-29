@@ -19,9 +19,10 @@ class TorrentEpisodeResolverTest {
     @Test fun requestTargetsWholeCurrentTorrentWithoutStartingAnotherFile() {
         val source = episode(2, 4) + "&preload&fromlast&token=secret"
         val request = TorrentEpisodeResolver.playlistUrl(source)!!
-        assertEquals(hash, request.queryParameter("link"))
+        assertEquals(hash, request.queryParameter("hash"))
+        assertEquals("/playlist", request.encodedPath)
         assertEquals("secret", request.queryParameter("token"))
-        assertTrue("m3u" in request.queryParameterNames)
+        assertFalse("m3u" in request.queryParameterNames)
         for (key in listOf("play", "preload", "fromlast", "index")) assertFalse(key in request.queryParameterNames)
         assertNull(TorrentEpisodeResolver.playlistUrl("https://cdn.test/movie.mp4"))
         assertNull(TorrentEpisodeResolver.playlistUrl("$base/stream/a.mkv?link=not-a-torrent-hash"))
@@ -91,7 +92,8 @@ class TorrentEpisodeResolverTest {
                 mapOf("Authorization" to "Basic abc", "Range" to "bytes=0-", "X-Lmnp-Pl" to "stale"))!!
             val request = server.takeRequest()
             assertEquals("GET", request.method)
-            assertTrue("m3u" in request.requestUrl!!.queryParameterNames)
+            assertEquals("/playlist", request.requestUrl!!.encodedPath)
+            assertEquals(hash, request.requestUrl!!.queryParameter("hash"))
             assertFalse("play" in request.requestUrl!!.queryParameterNames)
             assertNull(request.getHeader("Range"))
             assertNull(request.getHeader("X-Lmnp-Pl"))

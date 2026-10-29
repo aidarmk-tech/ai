@@ -31,9 +31,13 @@ internal class TorrentEpisodeResolver {
             val source = url.toHttpUrlOrNull() ?: return null
             if (!source.encodedPath.contains("/stream/") ||
                 !hashPattern.matches(source.queryParameter("link").orEmpty())) return null
-            val builder = source.newBuilder()
+            // Use the metadata-only endpoint. An unknown server might ignore &m3u
+            // on /stream and start serving video instead of returning a playlist.
+            val prefix = source.encodedPath.substringBeforeLast("/stream/")
+            val builder = source.newBuilder().encodedPath("$prefix/playlist")
             controls.forEach { builder.removeAllQueryParameters(it) }
-            return builder.addQueryParameter("m3u", null).build()
+            return builder.removeAllQueryParameters("link")
+                .setQueryParameter("hash", source.queryParameter("link")).build()
         }
 
         private fun number(name: String): Numbered? {
