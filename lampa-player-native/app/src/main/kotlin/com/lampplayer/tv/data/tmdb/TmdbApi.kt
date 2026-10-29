@@ -5,6 +5,11 @@ import retrofit2.http.Path
 import retrofit2.http.Query
 
 interface TmdbApi {
+    @GET("search/tv")
+    suspend fun searchTv(@Query("query") query: String,
+        @Query("language") language: String = "ru-RU",
+        @Query("api_key") apiKey: String = TmdbRepository.API_KEY): TmdbSearch
+
     @GET("movie/{id}")
     suspend fun getMovie(
         @Path("id") id: Int,
@@ -34,6 +39,7 @@ data class TmdbMetadata(
     val id: Int = 0,
     val title: String? = null,
     val name: String? = null,
+    val original_name: String? = null,
     val overview: String? = null,
     val poster_path: String? = null,
     val backdrop_path: String? = null,
@@ -45,6 +51,7 @@ data class TmdbMetadata(
     val credits: TmdbCredits? = null,
 )
 
+data class TmdbSearch(val results: List<TmdbMetadata> = emptyList(), val total_pages: Int = 0)
 data class TmdbGenre(val id: Int = 0, val name: String? = null)
 
 data class TmdbCredits(

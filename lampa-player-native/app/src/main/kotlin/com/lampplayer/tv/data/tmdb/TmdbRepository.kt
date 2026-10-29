@@ -15,6 +15,11 @@ class TmdbRepository @Inject constructor(
 ) {
     private val gson = Gson()
 
+    suspend fun findTv(title: String, year: Int?): Int? = runCatching {
+        val result = api.searchTv(title)
+        com.lampplayer.tv.player.ExternalMetadataResolver.chooseTv(result, title, year)
+    }.getOrNull()
+
     suspend fun getMetadata(tmdbId: Int, isSerial: Boolean): TmdbMetadata? {
         val type = if (isSerial) "tv" else "movie"
 

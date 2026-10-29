@@ -204,6 +204,7 @@ class PlayerViewModel @Inject constructor(
     private var metaJob: Job? = null
     private var episodesJob: Job? = null
     private var torrentEpisodesJob: Job? = null
+    private var externalMetadataJob: Job? = null
     private var epgJob: Job? = null
     private var schedJob: Job? = null
     private var programmeJob: Job? = null   // archive catch-up URL probe + switch
@@ -250,7 +251,7 @@ class PlayerViewModel @Inject constructor(
         }
         engineInitJob?.cancel()
         autoNextManager.cancel(); sleepJob?.cancel()
-        programmeJob?.cancel(); loadJob?.cancel(); torrentEpisodesJob?.cancel()
+        programmeJob?.cancel(); loadJob?.cancel(); torrentEpisodesJob?.cancel(); externalMetadataJob?.cancel()
         saveJob?.cancel(); diagJob?.cancel(); vlcPollJob?.cancel(); osdHideJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel(); epgJob?.cancel(); schedJob?.cancel(); retryJob?.cancel()
         archiveProg = null; liveUrl = null
         releaseLoudness()
@@ -434,11 +435,42 @@ class PlayerViewModel @Inject constructor(
         card.tmdbId?.let { loadMetadata(it, card.isSerial, card) }
         loadEpisodes(card)
         loadTorrentEpisodes(url, card)
+        loadExternalMetadata(url, card)
         loadEpg(card)
         updateMediaSession()
         fetchIntroFromDb(card)
         detectIntroFromSubs(card)
 
+    }
+
+    private fun loadExternalMetadata(url: String, card: CardMeta) {
+        externalMetadataJob?.cancel()
+        if (card.iptv || card.tmdbId != null || !card.overview.isNullOrBlank()) return
+        val identity = ExternalMetadataResolver.identity(url, card.title) ?: return
+        externalMetadataJob = viewModelScope.launch {
+            val local = ExternalMetadataResolver().resolve(url, identity.title, card.headers)
+            if (!isActive || currentUrl != url) return@launch
+            val id = local?.tmdbId ?: withTimeoutOrNull(8000) {
+                tmdbRepository.findTv(identity.title, card.releaseYear)
+            }
+            if (!isActive || currentUrl != url) return@launch
+            val existing = currentCard ?: return@launch
+            if (existing.iptv || existing.tmdbId != null) return@launch
+            if (local == null && id == null) {
+                if (settings.diag) _notice.emit("Описание: однозначного совпадения нет")
+                return@launch
+            }
+            // Read the current card after suspension: episode discovery may already have filled it.
+            val updated = existing.copy(title = identity.title,
+                seasonNumber = existing.seasonNumber ?: identity.season,
+                episodeNumber = existing.episodeNumber ?: identity.episode,
+                tmdbId = id, overview = existing.overview?.takeIf { it.isNotBlank() } ?: local?.overview,
+                posterUrl = existing.posterUrl ?: local?.posterUrl)
+            currentCard = updated
+            _uiState.update { it.copy(card = updated, title = buildTitle(updated)) }
+            populateMetadataFromCard(updated)
+            if (id != null) { loadMetadata(id, true, updated); loadEpisodes(updated) }
+        }
     }
 
     /** Flux and other external launchers may supply a single TorrServer URL, without episodes. */
@@ -1538,7 +1570,7 @@ class PlayerViewModel @Inject constructor(
                 s.copy(
                     metadata = PlayerUiState.MetadataDisplay(
                         title = title, info = info,
-                        overview = meta.overview ?: s.metadata?.overview ?: "",
+                        overview = meta.overview?.takeIf { it.isNotBlank() } ?: s.metadata?.overview ?: "",
                         cast = castLine,
                         posterUrl = TmdbRepository.posterUrl(meta.poster_path) ?: card.posterUrl,
                         details = details,
@@ -1986,6 +2018,7 @@ class PlayerViewModel @Inject constructor(
         saveJob?.cancel(); diagJob?.cancel(); osdHideJob?.cancel(); vlcPollJob?.cancel(); sleepJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel(); epgJob?.cancel(); schedJob?.cancel(); programmeJob?.cancel(); loadJob?.cancel(); retryJob?.cancel()
         autoNextManager.cancel()
         torrentEpisodesJob?.cancel()
+        externalMetadataJob?.cancel()
         releaseLoudness()
         runCatching { nightModeCtl.release() }
         stopNetworkMonitor()
