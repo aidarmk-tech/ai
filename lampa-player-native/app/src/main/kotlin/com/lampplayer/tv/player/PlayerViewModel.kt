@@ -203,6 +203,7 @@ class PlayerViewModel @Inject constructor(
     private var retryJob: Job? = null
     private var metaJob: Job? = null
     private var episodesJob: Job? = null
+    private var torrentEpisodesJob: Job? = null
     private var epgJob: Job? = null
     private var schedJob: Job? = null
     private var programmeJob: Job? = null   // archive catch-up URL probe + switch
@@ -249,7 +250,7 @@ class PlayerViewModel @Inject constructor(
         }
         engineInitJob?.cancel()
         autoNextManager.cancel(); sleepJob?.cancel()
-        programmeJob?.cancel(); loadJob?.cancel()
+        programmeJob?.cancel(); loadJob?.cancel(); torrentEpisodesJob?.cancel()
         saveJob?.cancel(); diagJob?.cancel(); vlcPollJob?.cancel(); osdHideJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel(); epgJob?.cancel(); schedJob?.cancel(); retryJob?.cancel()
         archiveProg = null; liveUrl = null
         releaseLoudness()
@@ -432,11 +433,39 @@ class PlayerViewModel @Inject constructor(
         populateMetadataFromCard(card)
         card.tmdbId?.let { loadMetadata(it, card.isSerial, card) }
         loadEpisodes(card)
+        loadTorrentEpisodes(url, card)
         loadEpg(card)
         updateMediaSession()
         fetchIntroFromDb(card)
         detectIntroFromSubs(card)
 
+    }
+
+    /** Flux and other external launchers may supply a single TorrServer URL, without episodes. */
+    private fun loadTorrentEpisodes(url: String, card: CardMeta) {
+        torrentEpisodesJob?.cancel()
+        if (card.iptv || card.episodes.size > 1 || TorrentEpisodeResolver.playlistUrl(url) == null) return
+        torrentEpisodesJob = viewModelScope.launch {
+            val playlist = TorrentEpisodeResolver().resolve(url, card.headers)
+            if (!isActive || currentUrl != url || _uiState.value.episodes.size > 1) return@launch
+            if (playlist == null) {
+                if (settings.diag) _notice.emit("Сервер не выдал подтверждённый список серий раздачи")
+                return@launch
+            }
+            val playing = playlist.episodes[playlist.currentIndex]
+            val existing = currentCard ?: return@launch
+            if (existing.iptv) return@launch
+            val updated = existing.copy(
+                title = TorrentEpisodeResolver.showTitle(existing.title, playing.season!!, playing.episode!!),
+                seasonNumber = playing.season, episodeNumber = playing.episode,
+                episodes = playlist.episodes, currentEpisodeIndex = playlist.currentIndex,
+            )
+            currentCard = updated
+            _uiState.update { it.copy(card = updated, title = buildTitle(updated),
+                episodes = updated.episodes, currentEpisodeIndex = updated.currentEpisodeIndex) }
+            loadEpisodes(updated)
+            if (settings.diag) _notice.emit("Загружены серии раздачи: ${updated.episodes.size}")
+        }
     }
 
     /** Fetch crowdsourced intro + credits timecodes (Firebase) for this episode, if any. */
@@ -1956,6 +1985,7 @@ class PlayerViewModel @Inject constructor(
         }
         saveJob?.cancel(); diagJob?.cancel(); osdHideJob?.cancel(); vlcPollJob?.cancel(); sleepJob?.cancel(); metaJob?.cancel(); episodesJob?.cancel(); epgJob?.cancel(); schedJob?.cancel(); programmeJob?.cancel(); loadJob?.cancel(); retryJob?.cancel()
         autoNextManager.cancel()
+        torrentEpisodesJob?.cancel()
         releaseLoudness()
         runCatching { nightModeCtl.release() }
         stopNetworkMonitor()

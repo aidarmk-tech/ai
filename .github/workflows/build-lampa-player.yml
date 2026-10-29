@@ -148,7 +148,7 @@ jobs:
             "versionName": "1.0.${{ github.run_number }}",
             "url": "https://github.com/${{ github.repository }}/releases/download/auto/LampPlayer-${{ github.run_number }}.apk",
             "sha256": "$SHA256",
-            "notes": "Обновление #${{ github.run_number }}: исправлен автопереход на чужое видео. Плейлист проверяется по текущему потоку; при неподтверждённой следующей серии плеер остаётся на месте."
+            "notes": "Обновление #${{ github.run_number }}: добавлена загрузка списка серий из текущей торрент-раздачи для Flux и TorrServer. Список и автопереход доступны, если сервер отдаёт плейлист; проверяются раздача и номера серий."
           }
           EOF
           cat dist/version.json
