@@ -97,7 +97,7 @@ jobs:
           data={'versionCode':${{ github.run_number }},'versionName':'0.1.${{ github.run_number }}',
             'url':'https://github.com/${{ github.repository }}/releases/download/media-center/'+p.name,
             'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),
-            'notes':'LampMedia: каталоги Киновод, Filmix и TMDB; новинки, новые серии, русские и казахстанские фильмы/сериалы; закрепление на главной. Новый интерфейс, история, возврат фокуса и настройка торрент-буфера.'}
+            'notes':'LampMedia: выбор сезона, озвучки, серии и качества внутри приложения; запуск онлайн-потока в нашем плеере и проверенный автопереход. Каталоги Киновод, Filmix и TMDB, закрепления, история и настройка торрент-буфера.'}
           pathlib.Path('dist/version.json').write_text(json.dumps(data,ensure_ascii=False,indent=2))
           PY
       - uses: softprops/action-gh-release@v2
@@ -108,7 +108,8 @@ jobs:
           body: |
             Own native media-center preview, installed alongside LampPlayer.
             Native TMDB / KinoVod / Filmix catalogs, country sections, episode-update badges and pinned titles.
-            Website playback opens inside WebView; detected HLS/MP4 may be explicitly opened in our player.
+            Online metadata resolves in the background; native season/voice/episode/quality selection opens our player.
+            Manual website fallback remains explicit. Source availability, account and regional restrictions are respected.
             Native torrent playback, series/episodes, favorites, history, TV back/focus restoration and engine cache controls.
             Configure your own JacRed host or full Torznab endpoint in Sources.
             Engine: TorrServer MatriX.148 (GPL-3.0). Corresponding upstream source:

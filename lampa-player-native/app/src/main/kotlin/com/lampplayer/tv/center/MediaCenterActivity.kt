@@ -42,6 +42,7 @@ open class MediaCenterActivity : AppCompatActivity() {
     protected open val backend = CenterBackend()
     private lateinit var store: CenterStore
     private val catalogs = CenterCatalog()
+    private val onlineCache = linkedMapOf<String, Pair<Long, OnlineVideo>>()
     private lateinit var content: LinearLayout
     private lateinit var navigation: LinearLayout
     private lateinit var scroll: ScrollView
@@ -410,7 +411,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         val copy = column().apply { setPadding(dp(24), 0, 0, 0) }
         copy.addView(text(facts(movie), 15, accent)); space(copy, 15)
         if (movie.provider != null) {
-            copy.addView(button("Смотреть онлайн · ${CenterCatalog.name(movie.provider)}") { website(movie) })
+            copy.addView(button("Смотреть онлайн · ${CenterCatalog.name(movie.provider)}") { enter { online(movie) } })
             copy.addView(button("Найти торрент-раздачу") { enter { find(movie, null) } })
             movie.updateLabel?.let { copy.addView(text(it, 15, accent)); space(copy, 10) }
         } else if (movie.type == "tv") {
@@ -429,12 +430,78 @@ open class MediaCenterActivity : AppCompatActivity() {
         copy.addView(button(if (store.isPinned(movie)) "Открепить с главной" else "Закрепить на главной") {
             store.pin(movie); showDetails(details); content.post { findTag(content, "pin")?.requestFocus() }
         }.apply { tag = "pin" })
+        if (movie.provider != null) copy.addView(button("Открыть страницу источника вручную") { website(movie) })
         copy.addView(button("Открыть свою magnet-ссылку / .torrent") { magnet(movie, null) })
         space(copy, 12)
         copy.addView(text("Описание", 18)); space(copy, 9)
         copy.addView(text(movie.overview.ifBlank { "Описание пока отсутствует" }, 16, muted))
         if (details.actors.isNotBlank()) { space(copy, 18); copy.addView(text("В ролях", 18)); space(copy, 8); copy.addView(text(details.actors, 15, muted)) }
         body.addView(copy, LinearLayout.LayoutParams(0, -2, 1f)); content.addView(body)
+    }
+    private fun online(item: CenterTitle, resume: CardMeta? = null, refresh: Boolean = false) {
+        work("Получаю список серий · ${CenterCatalog.name(item.provider)}…") {
+            val cached = onlineCache[item.key]?.takeIf { System.currentTimeMillis() - it.first < 180000 && !refresh }?.second
+            val video = cached ?: CenterOnline(this@MediaCenterActivity).resolve(item).also {
+                if (onlineCache.size >= 4) onlineCache.remove(onlineCache.keys.first())
+                onlineCache[item.key] = System.currentTimeMillis() to it
+            }
+            if (resume != null) {
+                val matches = video.episodes.filter { it.season == (resume.seasonNumber ?: 0) && it.number == (resume.episodeNumber ?: 0) &&
+                    (resume.translator == null || it.voice == resume.translator) }
+                val entry = matches.singleOrNull()
+                val quality = resume.quality?.toIntOrNull()
+                if (entry != null && quality != null && entry.sources.containsKey(quality)) { playOnline(video, entry, quality); return@work }
+            }
+            showOnline(video)
+        }
+    }
+    protected fun showOnline(video: OnlineVideo, season: Int? = null, voice: String? = null) {
+        currentScreen = { showOnline(video, season, voice) }; page = "online"; clear(video.item.title)
+        content.addView(text("${CenterCatalog.name(video.item.provider)} · Выбери серию для нашего плеера", 15, muted)); space(content, 16)
+        val seasons = video.episodes.map { it.season }.distinct().sorted()
+        if (video.item.type == "tv" && season == null) {
+            seasons.forEach { value -> content.addView(button("Сезон $value") { enter { showOnline(video, value) } }) }
+        } else {
+            val entries = video.episodes.filter { season == null || it.season == season }
+            val voices = entries.map { it.voice }.distinct()
+            if (voice == null && voices.size > 1) {
+                section("Озвучка")
+                voices.forEach { value -> content.addView(button(value) { enter { showOnline(video, season, value) } }) }
+            } else {
+                val selectedVoice = voice ?: voices.firstOrNull()
+                entries.filter { it.voice == selectedVoice }.forEach { episode ->
+                    val label = if (episode.number > 0) "Серия ${episode.number} · ${episode.title}" else "Смотреть · ${episode.voice}"
+                    content.addView(button(label) { chooseOnlineQuality(video, episode) }.apply {
+                        tag = "online:${episode.season}:${episode.number}:${episode.voice}"; maxLines = 2; layoutParams.height = dp(62)
+                    })
+                }
+            }
+        }
+        content.addView(button("Обновить список и ссылки") { online(video.item, refresh = true) })
+    }
+    private fun chooseOnlineQuality(video: OnlineVideo, episode: OnlineEpisode) {
+        val qualities = episode.sources.keys.sortedDescending()
+        if (qualities.size == 1) { playOnline(video, episode, qualities.single()); return }
+        AlertDialog.Builder(this).setTitle("Качество · ${episode.voice}")
+            .setItems(qualities.map { if (it == 0) "Авто" else "${it}p" }.toTypedArray()) { _, index -> playOnline(video, episode, qualities[index]) }
+            .setNegativeButton("Отмена", null).show()
+    }
+    private fun playOnline(video: OnlineVideo, episode: OnlineEpisode, quality: Int) {
+        val url = episode.sources[quality] ?: return
+        val candidates = video.episodes.filter { it.season == episode.season && it.voice == episode.voice && it.number > 0 && it.sources.containsKey(quality) }.sortedBy { it.number }
+        val playlist = if (candidates.groupBy { it.number }.all { it.value.size == 1 }) candidates.mapIndexed { index, entry ->
+            com.lampplayer.tv.domain.model.EpisodeItem(index, entry.title, entry.sources.getValue(quality), entry.season, entry.number)
+        } else emptyList()
+        val meta = metadata(video.item).apply {
+            if (episode.number > 0) { addProperty("season_number", episode.season); addProperty("episode_number", episode.number) }
+            addProperty("translator", episode.voice); addProperty("quality", quality.toString())
+            addProperty("headers", Gson().toJson(video.headers))
+            if (playlist.isNotEmpty()) {
+                addProperty("episodes", Gson().toJson(playlist))
+                addProperty("episode_index", playlist.indexOfFirst { it.url == url }.coerceAtLeast(0))
+            }
+        }
+        launchPlayer(url, meta.toString())
     }
     private fun episodeList(item: CenterTitle, season: Int) {
         work("Загружаю серии…") { showEpisodes(item, season, backend.episodes(item, season)) }
@@ -538,7 +605,13 @@ open class MediaCenterActivity : AppCompatActivity() {
     private fun resume(saved: CenterHistory) {
         work("Продолжаю ${saved.card.title}…") {
             if (saved.card.sourcePage != null && !localTorrent(saved.url)) {
-                launchWebsite(saved.card.sourcePage, metadata(saved.card).toString()); return@work
+                val key = saved.card.contentKey?.split(':').orEmpty()
+                val provider = key.getOrNull(0); val type = key.getOrNull(1); val id = key.getOrNull(2)?.toIntOrNull()
+                check(provider in listOf("kinovod", "filmix") && type in listOf("movie", "tv") && id != null) { "Открой карточку фильма в каталоге" }
+                // Launch a fresh resolver outside this work coroutine; never reuse an expired website stream.
+                content.post { online(CenterTitle(id!!, type!!, saved.card.title, overview = saved.card.overview.orEmpty(),
+                    poster = saved.card.posterUrl, provider = provider, sourceUrl = saved.card.sourcePage), saved.card) }
+                return@work
             }
             val base = CenterEngineService.ensure(this@MediaCenterActivity)
             val url = CenterStore.rebase(saved.url, base)

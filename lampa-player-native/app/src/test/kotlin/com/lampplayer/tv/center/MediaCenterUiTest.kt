@@ -46,6 +46,7 @@ class MediaCenterUiTest {
                 overview="Истории, к которым хочется возвращаться. Каталог, серии и просмотр в одном приложении.", year="2026",rating="8.2")
         }; showDashboard(CenterSection.all.map { section -> section to items.filter { it.type == section.type } }) }
         fun calls()=backend.detailCalls to backend.episodeCalls
+        fun nativeFixture(video:OnlineVideo) { showOnline(video) }
     }
     private fun all(view:View):List<View> = listOf(view) + if(view is ViewGroup)
         (0 until view.childCount).flatMap { all(view.getChildAt(it)) } else emptyList()
@@ -103,4 +104,29 @@ class MediaCenterUiTest {
             assertEquals(1 to 1,host.calls())
         } finally { controller.pause().stop().destroy() }
     }
+    @Test fun nativeEpisodePickerStartsOurPlayerWithOnlyTheSelectedSeasonAndVoice() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(17,"tv","Мой сериал",provider="kinovod",sourceUrl="https://source.test/serial/17-show")
+            val entries=listOf(
+                OnlineEpisode(1,1,"Первая","Дубляж",mapOf(720 to "https://cdn.test/1.m3u8")),
+                OnlineEpisode(1,2,"Вторая","Дубляж",mapOf(720 to "https://cdn.test/2.m3u8")),
+                OnlineEpisode(1,4,"Четвёртая","Дубляж",mapOf(720 to "https://cdn.test/4.m3u8")),
+                OnlineEpisode(1,2,"Second","Оригинал",mapOf(720 to "https://cdn.test/en2.m3u8")),
+                OnlineEpisode(2,1,"Другой сезон","Дубляж",mapOf(720 to "https://cdn.test/s2.m3u8")))
+            host.nativeFixture(OnlineVideo(item,entries,mapOf("Referer" to item.sourceUrl!!)));frame(root)
+            label(root,"Сезон 1").performClick();frame(root);label(root,"Дубляж").performClick();frame(root)
+            screenshot(root,"media-center-native-episodes")
+            all(root).first { it.tag=="online:1:2:Дубляж" }.performClick()
+            val intent=shadowOf(host).nextStartedActivity
+            assertEquals("com.lampplayer.tv.player.PlayerActivity",intent.component!!.className)
+            val parsed=com.lampplayer.tv.player.IntentParser.parse(intent)!!
+            assertEquals("https://cdn.test/2.m3u8",parsed.first)
+            assertEquals(listOf(1,2,4),parsed.second.episodes.map { it.episode })
+            assertEquals("Дубляж",parsed.second.translator)
+            assertNull(com.lampplayer.tv.player.EpisodeNavigation.next(parsed.second.episodes,parsed.first))
+        } finally { controller.pause().stop().destroy() }
+    }
+
 }
