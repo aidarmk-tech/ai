@@ -71,21 +71,21 @@ class CenterCatalog {
         }
         private fun Element.absolute(attr: String) = absUrl(attr).takeIf { it.toHttpUrlOrNull() != null }
         fun parse(document: Document, provider: String): List<CenterTitle> {
-            val rows = if(provider == "kinovod") document.select("ul.items > li.item") else document.select("article.shortstory")
+            val rows = if(provider == "kinovod") document.select("ul.items > li.item") else document.select("article.shortstory, article.movie[id^=movie-]")
             val items = rows.mapNotNull { row ->
-                val link=if(provider == "kinovod") row.selectFirst(".title a") else row.selectFirst("h2.name a, h2 a[itemprop=url]")
+                val link=if(provider == "kinovod") row.selectFirst(".title a") else row.selectFirst("h2.name a, h2 a[itemprop=url], a.m-movie-item")
                 val url=link?.absolute("href")?.toHttpUrlOrNull() ?: return@mapNotNull null
                 val origin=document.location().toHttpUrlOrNull() ?: return@mapNotNull null
                 if(url.host != origin.host || url.scheme !in listOf("https","http")) return@mapNotNull null
                 val id=(if(provider == "kinovod") Regex("^/(?:film|serial)/([0-9]+)-").find(url.encodedPath)?.groupValues?.get(1)
-                    else row.attr("data-id")).orEmpty().toIntOrNull()?.takeIf { it > 0 } ?: return@mapNotNull null
-                val title=link.text().trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                    else row.attr("data-id").ifBlank { row.id().removePrefix("movie-") }).orEmpty().toIntOrNull()?.takeIf { it > 0 } ?: return@mapNotNull null
+                val title=(if(provider == "filmix") row.selectFirst("h2[itemprop=name], h2.name")?.text() else link.text())?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
                 val type=if(url.encodedPath.startsWith("/serial/") || url.encodedPath.startsWith("/seria/")) "tv" else "movie"
-                val year=Regex("(?:19|20)[0-9]{2}").find(row.selectFirst(if(provider == "kinovod") ".year" else "[itemprop=copyrightYear]")?.text().orEmpty())?.value.orEmpty()
-                CenterTitle(id,type,title,row.selectFirst(".origin-name")?.text().orEmpty(),
-                    row.selectFirst("[itemprop=description]")?.text().orEmpty(),row.selectFirst("img.poster, .poster img")?.absolute("src"),
+                val year=Regex("(?:19|20)[0-9]{2}").find(row.selectFirst(if(provider == "kinovod") ".year" else "[itemprop=copyrightYear], .grid-item")?.text().orEmpty())?.value.orEmpty()
+                CenterTitle(id,type,title,row.selectFirst(".origin-name, .m-movie-original")?.text().orEmpty(),
+                    row.selectFirst("[itemprop=description]")?.text().orEmpty(),row.selectFirst("img.poster, .poster img, img[itemprop=image]")?.absolute("src"),
                     year=year,rating=if(provider == "kinovod") row.selectFirst(".rating")?.text().orEmpty() else "",
-                    provider=provider,sourceUrl=url.toString(),updateLabel=row.selectFirst(if(provider == "kinovod") ".poster .label" else ".added-info")?.text())
+                    provider=provider,sourceUrl=url.toString(),updateLabel=row.selectFirst(if(provider == "kinovod") ".poster .label" else ".m-movie-add .serials, .added-info")?.text())
             }.distinctBy { it.key }.take(60)
             check(items.isNotEmpty() || (rows.isEmpty() && (document.selectFirst(".result-title .count")?.text() == "0" || document.text().contains("не найден",true) || document.text().contains("ничего не",true)))) {
                 "${name(provider)}: структура страницы изменилась или сайт запросил проверку. Проверь адрес каталога"

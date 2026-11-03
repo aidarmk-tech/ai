@@ -54,6 +54,15 @@ class CenterCatalogTest {
         val details=CenterCatalog.details(doc,CenterTitle(17,"tv","Series",provider="kinovod"))
         assertEquals("Сюжет",details.title.overview);assertEquals("Актёр",details.actors);assertTrue(details.seasons.isEmpty())
     }
+    @Test fun filmixMobileCardsUseTheMovieElementIdAndEpisodeBadgeNotQualityText() {
+        val doc=Jsoup.parse("""<article class="movie article line" id="movie-17"><a class="m-movie-item" href="/seria/drama/17-show.html">
+            <img itemprop="image" src="/poster.jpg"><h2 class="m-movie-title" itemprop="name">Мой сериал</h2>
+            <div class="m-movie-original">My show</div><div class="m-movie-add">Добавлена: <span class="serials">1-15 серия (1 сезон)</span></div>
+            <div class="added-info">WEBRip 1080</div><div class="grid-item">2023</div></a></article>""","https://catalog.test/seria/c14/")
+        val item=CenterCatalog.parse(doc,"filmix").single()
+        assertEquals("filmix:tv:17",item.key);assertEquals("Мой сериал",item.title);assertEquals("2023",item.year)
+        assertEquals("1-15 серия (1 сезон)",item.updateLabel);assertEquals("https://catalog.test/poster.jpg",item.poster)
+    }
     @Test fun filmixSearchUsesNativeSiteSuggestionIdsLinksAndUpdateLabels() {
         val items=CenterCatalog.suggestions("""{"posts":[{"id":17,"title":"Мой &amp; сериал","link":"/seria/drama/17-test.html","poster":"/poster.jpg","year":2026,"last_serie":"3 серия"}],"persons":[]}""","https://catalog.test/api/v2/suggestions")
         val item=items.single();assertEquals("filmix:tv:17",item.key);assertEquals("Мой & сериал",item.title)
