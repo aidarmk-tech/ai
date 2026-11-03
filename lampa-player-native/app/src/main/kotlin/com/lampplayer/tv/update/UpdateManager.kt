@@ -30,7 +30,9 @@ data class UpdateInfo(
  */
 object UpdateManager {
     // Served as an asset of the rolling 'auto' release (no repo commits needed).
-    private const val VERSION_URL = "https://github.com/aidarmk-tech/ai/releases/download/auto/version.json"
+    private val VERSION_URL get() = if (com.lampplayer.tv.BuildConfig.MEDIA_CENTER)
+        "https://github.com/aidarmk-tech/ai/releases/download/media-center/version.json"
+        else "https://github.com/aidarmk-tech/ai/releases/download/auto/version.json"
 
     /** Returns update info if version.json advertises a newer versionCode, else null. */
     suspend fun check(currentCode: Int): UpdateInfo? = withContext(Dispatchers.IO) {
