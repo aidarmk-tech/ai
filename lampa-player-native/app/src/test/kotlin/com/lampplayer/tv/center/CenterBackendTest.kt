@@ -58,6 +58,17 @@ class CenterBackendTest {
         assertEquals(1 to 2, CenterFile(7,"folder/Show.S01.E02.mkv",0).episode())
         assertEquals(2 to 12, CenterFile(4,"Show.2x12.mp4",0).episode())
     }
+    @Test fun genericTorznabUrlDoesNotNeedTorznabInItsPath() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("<rss><channel/></rss>"))
+            CenterBackend().searchReleases(server.url("/1/api").toString(), "secret", CenterTitle(1,"movie","Фильм","Movie"), null, "torznab")
+            val request = server.takeRequest().requestUrl!!
+            assertEquals("/1/api", request.encodedPath)
+            assertEquals("search", request.queryParameter("t"))
+            assertEquals("Movie", request.queryParameter("q"))
+            assertNull(request.queryParameter("search"))
+        }
+    }
     @Test fun streamUsesRealFileIdAndEncodesName() {
         val url = CenterBackend().stream("http://127.0.0.1:9999", "a".repeat(40), CenterFile(17,"folder/Серия 2.mkv",2)).toHttpUrl()
         assertEquals("17",url.queryParameter("index"))

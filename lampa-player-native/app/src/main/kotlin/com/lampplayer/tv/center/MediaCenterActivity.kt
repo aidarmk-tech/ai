@@ -249,7 +249,7 @@ open class MediaCenterActivity : AppCompatActivity() {
     private fun find(item: CenterTitle, episode: CenterEpisode?) {
         if (store.indexer.isBlank()) { sources { find(item, episode) }; return }
         work("Ищу раздачи…") {
-            val releases = backend.searchReleases(store.indexer, store.apiKey, item, episode)
+            val releases = backend.searchReleases(store.indexer, store.apiKey, item, episode, store.indexerType)
             releaseList(item, episode, releases)
         }
     }
@@ -329,6 +329,11 @@ open class MediaCenterActivity : AppCompatActivity() {
     private fun sources(after: (() -> Unit)? = null) {
         val form = column().apply { setPadding(dp(24), dp(8), dp(24), 0) }
         form.addView(text("Адрес JacRed или полный адрес Torznab API. Можно использовать свой сервер поиска.", 16, muted))
+        val type = Spinner(this).apply {
+            adapter = ArrayAdapter(this@MediaCenterActivity, android.R.layout.simple_spinner_dropdown_item, listOf("JacRed", "Torznab / Jackett / Prowlarr"))
+            setSelection(if (store.indexerType == "torznab") 1 else 0)
+        }
+        form.addView(type)
         val endpoint = EditText(this).apply { hint = "https://…"; setText(store.indexer); isSingleLine = true; setTextColor(ink) }
         val key = EditText(this).apply { hint = "API-ключ, если нужен"; setText(store.apiKey); isSingleLine = true; setTextColor(ink); inputType = 129 }
         form.addView(endpoint); form.addView(key)
@@ -337,7 +342,9 @@ open class MediaCenterActivity : AppCompatActivity() {
         dialog.setOnShowListener { dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
             val value = endpoint.text.toString().trim()
             if (!value.startsWith("https://") && !value.startsWith("http://")) endpoint.error = "Укажи полный адрес с http:// или https://"
-            else { store.indexer = value; store.apiKey = key.text.toString(); dialog.dismiss(); after?.invoke() }
+            else { store.indexer = value; store.apiKey = key.text.toString()
+                store.indexerType = if (type.selectedItemPosition == 1) "torznab" else "jacred"
+                dialog.dismiss(); after?.invoke() }
         } }
         dialog.show()
     }

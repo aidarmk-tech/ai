@@ -16,6 +16,9 @@ class CenterStore(context: Context) {
     var apiKey: String
         get() = prefs.getString("api_key", "").orEmpty()
         set(value) { prefs.edit().putString("api_key", value.trim()).apply() }
+    var indexerType: String
+        get() = prefs.getString("indexer_type", "jacred").orEmpty()
+        set(value) { prefs.edit().putString("indexer_type", value).apply() }
     fun favorites(): List<CenterTitle> = runCatching {
         gson.fromJson<List<CenterTitle>>(prefs.getString("favorites", "[]"), object : TypeToken<List<CenterTitle>>() {}.type)
     }.getOrNull().orEmpty()

@@ -137,9 +137,9 @@ open class CenterBackend {
             val o = it.asJsonObject
             CenterEpisode(season, o.num("episode_number").toInt(), o.str("name"), o.str("overview"))
         }
-    suspend fun searchReleases(endpoint: String, key: String, item: CenterTitle, episode: CenterEpisode?): List<CenterRelease> {
+    suspend fun searchReleases(endpoint: String, key: String, item: CenterTitle, episode: CenterEpisode?, mode: String = "auto"): List<CenterRelease> {
         val input = endpoint.trim().toHttpUrlOrNull() ?: error("Укажи адрес парсера в разделе «Источники»")
-        val torznab = input.encodedPath.contains("torznab", true) || input.queryParameter("t") != null
+        val torznab = mode == "torznab" || input.encodedPath.contains("torznab", true) || input.queryParameter("t") != null
         val builder = input.newBuilder()
         if (key.isNotBlank()) builder.setQueryParameter("apikey", key)
         if (torznab) {
@@ -152,7 +152,8 @@ open class CenterBackend {
             if (item.type == "movie" && item.year.isNotBlank()) builder.setQueryParameter("year", item.year)
             episode?.let { builder.setQueryParameter("season", it.season.toString()) }
         }
-        return parseReleases(request(builder.build()))
+        val response = request(builder.build())
+        return withContext(Dispatchers.IO) { parseReleases(response) }
     }
 
     private suspend fun torrent(base: String, action: String, hash: String = "", link: String = "", item: CenterTitle? = null): JsonObject {
