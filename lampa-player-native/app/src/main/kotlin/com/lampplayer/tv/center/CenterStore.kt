@@ -31,9 +31,13 @@ class CenterStore(context: Context) {
     fun history(): List<CenterHistory> = runCatching {
         gson.fromJson<List<CenterHistory>>(prefs.getString("history", "[]"), object : TypeToken<List<CenterHistory>>() {}.type)
     }.getOrNull().orEmpty()
+    private fun historyKey(card: CardMeta) = "${if (card.seasonNumber != null || card.episodes.isNotEmpty()) "tv" else "movie"}:${card.tmdbId ?: card.title}"
+    fun removeHistory(card: CardMeta) {
+        prefs.edit().putString("history", gson.toJson(history().filterNot { historyKey(it.card) == historyKey(card) })).apply()
+    }
+    fun clearHistory() { prefs.edit().remove("history").apply() }
     fun remember(url: String, card: CardMeta) {
-        fun key(value: CardMeta) = "${if (value.seasonNumber != null || value.episodes.isNotEmpty()) "tv" else "movie"}:${value.tmdbId ?: value.title}"
-        val list = history().filterNot { key(it.card) == key(card) }.toMutableList()
+        val list = history().filterNot { historyKey(it.card) == historyKey(card) }.toMutableList()
         list.add(0, CenterHistory(url, card, System.currentTimeMillis()))
         prefs.edit().putString("history", gson.toJson(list.take(30))).apply()
     }

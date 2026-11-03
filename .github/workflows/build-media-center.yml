@@ -97,7 +97,7 @@ jobs:
           data={'versionCode':${{ github.run_number }},'versionName':'0.1.${{ github.run_number }}',
             'url':'https://github.com/${{ github.repository }}/releases/download/media-center/'+p.name,
             'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),
-            'notes':'LampMedia: каталог, поиск, сезоны и серии, избранное, история и встроенный торрент-движок. Укажи свой JacRed или Torznab в разделе «Источники».'}
+            'notes':'LampMedia: новая главная, отдельная история с прогрессом, удобный выбор серий, возврат к прежнему фокусу, проверка источника и настройка торрент-буфера. Укажи свой JacRed или Torznab в разделе «Источники».'}
           pathlib.Path('dist/version.json').write_text(json.dumps(data,ensure_ascii=False,indent=2))
           PY
       - uses: softprops/action-gh-release@v2

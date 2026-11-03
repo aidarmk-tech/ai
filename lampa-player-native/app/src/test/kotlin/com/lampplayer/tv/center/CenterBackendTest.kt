@@ -2,7 +2,10 @@ package com.lampplayer.tv.center
 
 import android.app.Application
 import com.lampplayer.tv.domain.model.CardMeta
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.*
+import com.google.gson.JsonParser
+import okhttp3.mockwebserver.SocketPolicy
+import java.util.concurrent.TimeUnit
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -89,4 +92,50 @@ class CenterBackendTest {
         val resumed=CenterStore.rebase(store.history().single().url,"http://127.0.0.1:2222").toHttpUrl()
         assertEquals(2222,resumed.port); assertEquals("2",resumed.queryParameter("index")); assertEquals("abc",resumed.queryParameter("link"))
     }
+    @Test fun cacheChangePreservesOtherSettingsAndUsesTheDocumentedPostEnvelope() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"CacheSize":67108864,"PreloadCache":50,"ConnectionsLimit":25,"Custom":{"enabled":true}}"""))
+            server.enqueue(MockResponse().setBody(""))
+            CenterBackend().setEngineCache(server.url("/").toString().trimEnd('/'),128)
+            val get = server.takeRequest()
+            assertEquals("/settings",get.path)
+            assertEquals("get",JsonParser.parseString(get.body.readUtf8()).asJsonObject.get("action").asString)
+            val set = server.takeRequest()
+            assertEquals("POST",set.method)
+            val payload=JsonParser.parseString(set.body.readUtf8()).asJsonObject
+            assertEquals("set",payload.get("action").asString)
+            val values=payload.getAsJsonObject("sets")
+            assertEquals(134217728L,values.get("CacheSize").asLong)
+            assertEquals(50,values.get("PreloadCache").asInt)
+            assertTrue(values.getAsJsonObject("Custom").get("enabled").asBoolean)
+        }
+    }
+    @Test fun returningFromSlowSearchCancelsTheUnderlyingHttpCall() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+            val request=async(Dispatchers.Default) { CenterBackend().searchReleases(server.url("/").toString(),"",CenterTitle(1,"movie","Test"),null) }
+            assertNotNull(withContext(Dispatchers.IO) { server.takeRequest(2,TimeUnit.SECONDS) })
+            withTimeout(1500) { request.cancelAndJoin() }
+            assertTrue(request.isCancelled)
+        }
+    }
+    @Test fun sourceCheckRejectsHtmlAndUnrelatedJsonInsteadOfReportingSuccess() {
+        for (response in listOf("<html><body>Login</body></html>","{\"status\":\"ok\"}","{\"error\":\"bad key\"}")) {
+            try { CenterBackend.parseReleases(response); fail("Accepted $response") } catch (_: IllegalStateException) {}
+        }
+        assertTrue(CenterBackend.parseReleases("<rss><channel/></rss>").isEmpty())
+    }
+    @Test fun removingHistoryDoesNotRemoveAFilmWithTheSameNumericIdOrFavorites() {
+        val context=RuntimeEnvironment.getApplication()
+        context.getSharedPreferences("media_center",0).edit().clear().commit()
+        val store=CenterStore(context)
+        val movie=CardMeta("Movie",tmdbId=3)
+        val series=CardMeta("Series",tmdbId=3,seasonNumber=1,episodeNumber=1)
+        store.remember("movie",movie);store.remember("series",series)
+        store.toggle(CenterTitle(3,"tv","Series"))
+        store.removeHistory(series)
+        assertEquals(listOf("Movie"),store.history().map { it.card.title })
+        store.clearHistory();assertTrue(store.history().isEmpty());assertEquals(1,store.favorites().size)
+    }
+
 }

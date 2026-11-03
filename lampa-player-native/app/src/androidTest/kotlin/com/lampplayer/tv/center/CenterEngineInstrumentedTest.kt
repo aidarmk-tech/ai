@@ -22,6 +22,11 @@ class CenterEngineInstrumentedTest {
                     assertTrue(response.isSuccessful)
                     assertTrue(response.body!!.string().contains("148"))
                 }
+                val backend=CenterBackend()
+                val original=(backend.engineSettings(base).get("CacheSize").asLong/(1024*1024)).toInt()
+                backend.setEngineCache(base,32)
+                assertEquals(32L*1024*1024,backend.engineSettings(base).get("CacheSize").asLong)
+                backend.setEngineCache(base,if(original in setOf(32,64,128,256)) original else 64)
             } finally { CenterEngineService.stop(context) }
         }
     }

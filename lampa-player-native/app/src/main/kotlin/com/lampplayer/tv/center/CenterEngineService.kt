@@ -44,7 +44,10 @@ class CenterEngineService : Service() {
                 }
             }
         }
-        fun stop(context: Context) { context.stopService(Intent(context, CenterEngineService::class.java)) }
+        fun stop(context: Context) {
+            synchronized(stateLock) { base = null }
+            context.stopService(Intent(context, CenterEngineService::class.java))
+        }
         fun owns(url: String) = base?.let { url.startsWith("$it/") } == true
     }
     override fun onCreate() {
