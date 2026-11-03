@@ -12,6 +12,17 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class CenterEngineInstrumentedTest {
+    @Test fun publicProviderCountryCatalogsLoadOnAndroid() = runBlocking {
+        val catalog=CenterCatalog()
+        for ((provider,base,section) in listOf(
+            Triple("kinovod","https://kinovod.pro","kz_movies"),
+            Triple("filmix","https://filmix.gg","kz_series"))) {
+            val items=catalog.browse(provider,base,CenterSection.all.first { it.id==section })
+            assertTrue("$provider catalog is empty",items.isNotEmpty())
+            assertTrue(items.all { it.provider==provider && it.sourceUrl?.startsWith("https://")==true })
+        }
+        assertTrue(catalog.search("filmix","https://filmix.gg","Интерстеллар").any { it.title.contains("Интерстеллар",true) })
+    }
     @Test fun installedNativeExecutableStartsAndAnswersOnLoopback() = runBlocking {
         val context=InstrumentationRegistry.getInstrumentation().targetContext
         ActivityScenario.launch(MediaCenterActivity::class.java).use {

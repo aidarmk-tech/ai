@@ -97,7 +97,7 @@ jobs:
           data={'versionCode':${{ github.run_number }},'versionName':'0.1.${{ github.run_number }}',
             'url':'https://github.com/${{ github.repository }}/releases/download/media-center/'+p.name,
             'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),
-            'notes':'LampMedia: новая главная, отдельная история с прогрессом, удобный выбор серий, возврат к прежнему фокусу, проверка источника и настройка торрент-буфера. Укажи свой JacRed или Torznab в разделе «Источники».'}
+            'notes':'LampMedia: каталоги Киновод, Filmix и TMDB; новинки, новые серии, русские и казахстанские фильмы/сериалы; закрепление на главной. Новый интерфейс, история, возврат фокуса и настройка торрент-буфера.'}
           pathlib.Path('dist/version.json').write_text(json.dumps(data,ensure_ascii=False,indent=2))
           PY
       - uses: softprops/action-gh-release@v2
@@ -107,7 +107,9 @@ jobs:
           prerelease: true
           body: |
             Own native media-center preview, installed alongside LampPlayer.
-            TMDB catalog, search, series/episodes, favorites, playback history and bundled TorrServer engine.
+            Native TMDB / KinoVod / Filmix catalogs, country sections, episode-update badges and pinned titles.
+            Website playback opens inside WebView; detected HLS/MP4 may be explicitly opened in our player.
+            Native torrent playback, series/episodes, favorites, history, TV back/focus restoration and engine cache controls.
             Configure your own JacRed host or full Torznab endpoint in Sources.
             Engine: TorrServer MatriX.148 (GPL-3.0). Corresponding upstream source:
             https://github.com/YouROK/TorrServer/archive/refs/tags/MatriX.148.tar.gz

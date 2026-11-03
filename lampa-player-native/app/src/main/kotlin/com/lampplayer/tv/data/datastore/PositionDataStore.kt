@@ -33,14 +33,15 @@ class PositionDataStore @Inject constructor(
     }
 
     fun showKey(card: CardMeta): String? {
-        val id = card.tmdbId?.toString() ?: card.imdbId ?: card.title
+        val id = card.contentKey ?: card.tmdbId?.toString() ?: card.imdbId ?: card.title
         return id.let { "s${it.replace(Regex("\\W"), "")}" }
     }
 
     /** Per-episode key that survives balancer URL rotation (tokens change every launch). */
     fun episodeKey(card: CardMeta?): String? {
         if (card == null || card.iptv) return null
-        val id = card.tmdbId?.toString() ?: card.imdbId ?: return null
+        if (card.contentKey?.contains(":tv:") == true && card.episodeNumber == null) return null
+        val id = card.contentKey ?: card.tmdbId?.toString() ?: card.imdbId ?: return null
         return "e${id}_${card.seasonNumber ?: 0}_${card.episodeNumber ?: 0}"
     }
 

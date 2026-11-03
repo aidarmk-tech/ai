@@ -41,10 +41,10 @@ class MediaCenterUiTest {
     }
     class Host : MediaCenterActivity() {
         override val backend=FakeBackend()
-        override fun loadHome() { showHome((1..8).map {
+        override fun loadHome() { val items=(1..8).map {
             CenterTitle(it, if(it%2==0) "tv" else "movie", listOf("Тихий город","За горизонтом","Новый день","На орбите")[(it-1)%4],
                 overview="Истории, к которым хочется возвращаться. Каталог, серии и просмотр в одном приложении.", year="2026",rating="8.2")
-        }) }
+        }; showDashboard(CenterSection.all.map { section -> section to items.filter { it.type == section.type } }) }
         fun calls()=backend.detailCalls to backend.episodeCalls
     }
     private fun all(view:View):List<View> = listOf(view) + if(view is ViewGroup)
@@ -74,7 +74,9 @@ class MediaCenterUiTest {
         try {
             val root=controller.get().findViewById<View>(android.R.id.content);frame(root)
             val home=label(root,"Главная");home.requestFocus();frame(root);key(root,KeyEvent.KEYCODE_DPAD_RIGHT);frame(root)
-            assertFalse(home.hasFocus());assertNotNull(root.findFocus());assertEquals("Открыть фильм   ›",(root.findFocus() as TextView).text.toString())
+            assertFalse(home.hasFocus());assertNotNull(root.findFocus());assertEquals("Каталог: TMDB  ▾",(root.findFocus() as TextView).text.toString())
+            assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Казахстанское кино" })
+            assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Русские сериалы" })
             screenshot(root,"media-center-home")
             label(root,"Поиск").performClick();frame(root)
             assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Найти фильм или сериал" })
@@ -86,7 +88,7 @@ class MediaCenterUiTest {
         val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
         try {
             val host=controller.get();val root=host.findViewById<View>(android.R.id.content);frame(root)
-            val poster=all(root).first { it.tag=="title:tv:2" };poster.requestFocus();frame(root);poster.performClick();frame(root)
+            val poster=all(root).first { it.tag=="new_episodes:title:tv:2" };poster.requestFocus();frame(root);poster.performClick();frame(root)
             val season=label(root,"Сезон 1")
             assertTrue(all(root).indexOf(season)<all(root).indexOf(label(root,"Описание")))
             screenshot(root,"media-center-detail")
@@ -97,7 +99,7 @@ class MediaCenterUiTest {
             host.onBackPressedDispatcher.onBackPressed();frame(root)
             assertEquals("Сезон 1",root.findFocus()?.tag)
             host.onBackPressedDispatcher.onBackPressed();frame(root)
-            assertEquals("title:tv:2",root.findFocus()?.tag)
+            assertEquals("new_episodes:title:tv:2",root.findFocus()?.tag)
             assertEquals(1 to 1,host.calls())
         } finally { controller.pause().stop().destroy() }
     }

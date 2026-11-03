@@ -387,7 +387,7 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun initPlayer(context: Context, url: String, card: CardMeta) {
-        if (com.lampplayer.tv.BuildConfig.MEDIA_CENTER && com.lampplayer.tv.center.CenterEngineService.owns(url))
+        if (com.lampplayer.tv.BuildConfig.MEDIA_CENTER && (com.lampplayer.tv.center.CenterEngineService.owns(url) || card.contentKey != null))
             com.lampplayer.tv.center.CenterStore(appContext).remember(url, card)
         currentUrl = url
         currentCard = card
@@ -1448,7 +1448,7 @@ class PlayerViewModel @Inject constructor(
                 iptvEpg = if (wasIptv) null else currentCard?.iptvEpg,
             )
             if (updated != null) currentCard = updated
-            if (updated != null && com.lampplayer.tv.BuildConfig.MEDIA_CENTER && com.lampplayer.tv.center.CenterEngineService.owns(episode.url))
+            if (updated != null && com.lampplayer.tv.BuildConfig.MEDIA_CENTER && (com.lampplayer.tv.center.CenterEngineService.owns(episode.url) || updated.contentKey != null))
                 com.lampplayer.tv.center.CenterStore(appContext).remember(episode.url, updated.copy(currentEpisodeIndex = episode.index))
             _uiState.update { s ->
                 s.copy(

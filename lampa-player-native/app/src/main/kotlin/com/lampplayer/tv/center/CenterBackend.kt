@@ -17,7 +17,10 @@ import java.util.concurrent.TimeUnit
 
 data class CenterTitle(val id: Int, val type: String, val title: String, val original: String = "",
     val overview: String = "", val poster: String? = null, val backdrop: String? = null,
-    val year: String = "", val rating: String = "")
+    val year: String = "", val rating: String = "", val provider: String? = null,
+    val sourceUrl: String? = null, val updateLabel: String? = null) {
+    val key get() = "${provider ?: "tmdb"}:$type:$id"
+}
 data class CenterEpisode(val season: Int, val number: Int, val name: String, val overview: String,
     val still: String? = null, val airDate: String = "", val runtime: Int = 0)
 data class CenterDetails(val title: CenterTitle, val seasons: List<Int>, val actors: String)
@@ -140,6 +143,17 @@ open class CenterBackend {
         val route = if (query.isNotBlank()) "search/multi" else if (type == "all") "trending/all/week" else "$type/popular"
         val response = tmdb(route, mapOf("page" to page.toString()) + if (query.isNotBlank()) mapOf("query" to query) else emptyMap())
         return response.getAsJsonArray("results").orEmpty().mapNotNull { title(it.asJsonObject, type) }
+    }
+    open suspend fun section(section: CenterSection, page: Int = 1): List<CenterTitle> {
+        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+        val route = when (section.id) { "new_movies" -> "movie/now_playing"; "new_episodes" -> "tv/on_the_air"; else -> "discover/${section.type}" }
+        val query = mutableMapOf("page" to page.toString(), "include_adult" to "false")
+        section.country?.let {
+            query["with_origin_country"] = it
+            query["sort_by"] = if (section.type == "tv") "first_air_date.desc" else "primary_release_date.desc"
+            query[if (section.type == "tv") "first_air_date.lte" else "primary_release_date.lte"] = today
+        }
+        return tmdb(route, query).getAsJsonArray("results").orEmpty().mapNotNull { title(it.asJsonObject, section.type) }
     }
     open suspend fun details(item: CenterTitle): CenterDetails {
         val o = tmdb("${item.type}/${item.id}", mapOf("append_to_response" to "credits"))
