@@ -439,7 +439,8 @@ open class MediaCenterActivity : AppCompatActivity() {
         body.addView(copy, LinearLayout.LayoutParams(0, -2, 1f)); content.addView(body)
     }
     protected open suspend fun resolveOnline(item: CenterTitle): OnlineVideo = CenterOnline(this).resolve(item)
-    private fun online(item: CenterTitle, resume: CardMeta? = null, refresh: Boolean = false, returnTo: Screen? = null) {
+    private fun online(item: CenterTitle, resume: CardMeta? = null, refresh: Boolean = false, returnTo: Screen? = null,
+        selectedSeason: Int? = null, selectedVoice: String? = null) {
         val previous = returnTo ?: if (resume != null && page == "online") snapshot() else null
         work("Получаю список серий · ${CenterCatalog.name(item.provider)}…") {
             val cached = onlineCache[item.key]?.takeIf { System.currentTimeMillis() - it.first < 180000 && !refresh }?.second
@@ -459,7 +460,14 @@ open class MediaCenterActivity : AppCompatActivity() {
                     playOnline(video, entry, quality, refreshedReturn); return@work
                 }
             }
-            showOnline(video)
+            // Keep available context after refresh, but never invent a missing season or voice.
+            val wantedSeason = selectedSeason ?: resume?.let { it.seasonNumber ?: 0 }
+            val season = wantedSeason?.takeIf { value -> video.episodes.any { it.season == value } }
+            val wantedVoice = selectedVoice ?: resume?.translator
+            val voice = wantedVoice?.takeIf { value -> video.episodes.any {
+                (season == null || it.season == season) && it.voice == value
+            } }
+            showOnline(video, season, voice)
         }
     }
     protected fun showOnline(video: OnlineVideo, season: Int? = null, voice: String? = null, focusFirst: Boolean = true) {
@@ -486,7 +494,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                 }
             }
         }
-        content.addView(button("Обновить список и ссылки") { online(video.item, refresh = true) })
+        content.addView(button("Обновить список и ссылки") { online(video.item, refresh = true, selectedSeason = season, selectedVoice = selectedVoice) })
         if (focusFirst && hadFocus) content.post { content.getFocusables(View.FOCUS_FORWARD).firstOrNull()?.requestFocus() }
     }
     private fun chooseOnlineQuality(video: OnlineVideo, episode: OnlineEpisode) {
