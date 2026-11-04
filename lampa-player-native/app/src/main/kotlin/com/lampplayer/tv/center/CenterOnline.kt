@@ -84,9 +84,8 @@ class CenterOnline(private val activity:AppCompatActivity) {
                 }
                 override fun shouldOverrideUrlLoading(view:WebView,request:WebResourceRequest):Boolean {
                     if(!request.isForMainFrame)return false
-                    val target=request.url.toString().toHttpUrlOrNull() ?: return true
                     // Resolver sessions never navigate to a different title, login page or advertising destination.
-                    return target.host!=source.host || target.encodedPath!=source.encodedPath
+                    return !sameTitleNavigation(item,request.url.toString())
                 }
             }
             // Use a real viewport: responsive players may skip initialization in a 1px box.
@@ -113,9 +112,12 @@ class CenterOnline(private val activity:AppCompatActivity) {
                     if(entries.isNotEmpty()) {
                         val signature=Gson().toJson(entries)
                         stable=if(signature==last)stable+1 else 0;last=signature
-                        if(stable>=4) return@withTimeout OnlineVideo(item,entries,mapOf(
-                            "User-Agent" to browser.settings.userAgentString,"Referer" to source.toString(),
-                            "Origin" to "${source.scheme}://${source.host}"))
+                        if(stable>=4) {
+                            val referer=browser.url?.takeIf { sameTitleNavigation(item,it) } ?: source.toString()
+                            return@withTimeout OnlineVideo(item,entries,mapOf(
+                                "User-Agent" to browser.settings.userAgentString,"Referer" to referer,
+                                "Origin" to "${source.scheme}://${source.host}"))
+                        }
                     }
                     delay(300)
                 }
@@ -144,6 +146,12 @@ class CenterOnline(private val activity:AppCompatActivity) {
             check(match!=null&&match.groupValues[2].toIntOrNull()==item.id&&
                 (if(match.groupValues[1]=="film") "movie" else "tv")==item.type) { "Адрес источника не соответствует выбранному фильму или сериалу" }
             return url
+        }
+        fun sameTitleNavigation(item:CenterTitle,target:String):Boolean {
+            val original=runCatching { source(item) }.getOrNull() ?: return false
+            val next=target.toHttpUrlOrNull() ?: return false
+            if(next.scheme!=original.scheme||next.host!=original.host||next.port!=original.port)return false
+            return runCatching { source(item.copy(sourceUrl=next.toString())) }.isSuccess
         }
         private fun JsonObject.text(key:String)=get(key)?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
         fun decode(item:CenterTitle,snapshot:JsonObject):List<OnlineEpisode> {

@@ -11,6 +11,20 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class CenterOnlineInstrumentedTest {
+    @Test fun aCanonicalRedirectForTheSelectedFilmixIdKeepsResolvingAndUpdatesTheReferer() = runBlocking {
+        MockWebServer().use { server ->
+            val canonical=server.url("/seria/17-canonical.html").toString()
+            server.enqueue(MockResponse().setResponseCode(301).setHeader("Location",canonical))
+            server.enqueue(MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody("""<html><body><script>
+                JSON.parse('[{"title":"Сезон 1","folder":[{"title":"2 серия","file":"https://cdn.test/two.m3u8"}]}]');
+                </script></body></html>"""))
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val result=resolver.resolve(CenterTitle(17,"tv","Сериал",provider="filmix",sourceUrl=server.url("/seria/17-old.html").toString()))
+                assertEquals(2,result.episodes.single().number);assertEquals(canonical,result.headers["Referer"])
+            }
+        }
+    }
     @Test fun filmixConstructorPlaylistWinsOverOtherPlayersAndKeepsTheActiveVoice() = runBlocking {
         for (serialized in listOf(false, true)) MockWebServer().use { server ->
             val playlist="[{title:'Сезон 2',folder:[{title:'3 серия',file:'[480p]https://cdn.test/three.m3u8,[1080p]https://cdn.test/high.m3u8'}]}]"

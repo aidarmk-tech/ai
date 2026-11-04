@@ -47,5 +47,16 @@ class CenterOnlineTest {
         catch(_:IllegalStateException) {}
         assertEquals("/serial/17-test",CenterOnline.source(show.copy(sourceUrl="https://site.test/serial/17-test")).encodedPath)
     }
+    @Test fun canonicalPageNavigationKeepsTheOriginAndContentIdentity() {
+        val movie=CenterTitle(17,"movie","Movie",provider="filmix",sourceUrl="https://site.test/film/drama/17-old.html")
+        assertTrue(CenterOnline.sameTitleNavigation(movie,"https://site.test/film/drama/17-canonical.html"))
+        assertFalse(CenterOnline.sameTitleNavigation(movie,"https://site.test/film/drama/999-other.html"))
+        assertFalse(CenterOnline.sameTitleNavigation(movie,"https://site.test/seria/drama/17-other.html"))
+        assertFalse(CenterOnline.sameTitleNavigation(movie,"https://ads.test/film/drama/17-canonical.html"))
+        assertFalse(CenterOnline.sameTitleNavigation(movie,"http://site.test/film/drama/17-canonical.html"))
+        assertFalse(CenterOnline.sameTitleNavigation(movie,"https://site.test:8443/film/drama/17-canonical.html"))
+        assertFalse(CenterOnline.sameTitleNavigation(movie,"https://site.test/login"))
+        assertTrue(CenterOnline.sameTitleNavigation(show.copy(sourceUrl="https://site.test/serial/17-old"),"https://site.test/serial/17-canonical"))
+    }
 
 }
