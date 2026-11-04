@@ -37,4 +37,15 @@ class CenterOnlineTest {
         snapshot.addProperty("cap",2160)
         assertEquals(setOf(480,1080),CenterOnline.decode(movie,snapshot).single().sources.keys)
     }
+    @Test fun aMissingSeasonIsNotInventedAsSeasonOne() {
+        val snapshot=JsonParser.parseString("""{"lists":[[{"title":"7 серия","file":"https://cdn.test/seven.m3u8"}]]}""").asJsonObject
+        val episode=CenterOnline.decode(show,snapshot).single()
+        assertEquals(0,episode.season);assertEquals(7,episode.number)
+    }
+    @Test fun aDifferentTitleIdCannotBeResolvedUnderTheSelectedCard() {
+        try { CenterOnline.source(show.copy(sourceUrl="https://site.test/serial/999-other"));fail("Accepted a foreign title") }
+        catch(_:IllegalStateException) {}
+        assertEquals("/serial/17-test",CenterOnline.source(show.copy(sourceUrl="https://site.test/serial/17-test")).encodedPath)
+    }
+
 }

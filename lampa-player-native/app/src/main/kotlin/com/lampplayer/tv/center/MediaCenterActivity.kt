@@ -360,7 +360,7 @@ open class MediaCenterActivity : AppCompatActivity() {
             override fun onBindViewHolder(holder: HistoryHolder, position: Int) {
                 val saved = history[position]; holder.url = saved.url; val card = saved.card
                 holder.title.text = card.title
-                val episode = card.episodeNumber?.let { "S${card.seasonNumber ?: 1} · Серия $it" } ?: if (card.contentKey?.contains(":tv:") == true) "Сериал" else "Фильм"
+                val episode = card.episodeNumber?.let { number -> (card.seasonNumber?.let { "S$it · " } ?: "") + "Серия $number" } ?: if (card.contentKey?.contains(":tv:") == true) "Сериал" else "Фильм"
                 holder.time.text = episode; holder.progress.progress = 0
                 holder.art.removeAllViews(); holder.art.addView(artFrame(card.title, 220, 110, card.backdropUrl ?: card.posterUrl), FrameLayout.LayoutParams(-1, -1))
                 holder.itemView.tag = "history:${card.contentKey ?: card.tmdbId}:${card.seasonNumber}:${card.title}"
@@ -455,12 +455,13 @@ open class MediaCenterActivity : AppCompatActivity() {
             showOnline(video)
         }
     }
-    protected fun showOnline(video: OnlineVideo, season: Int? = null, voice: String? = null) {
-        currentScreen = { showOnline(video, season, voice) }; page = "online"; clear(video.item.title)
+    protected fun showOnline(video: OnlineVideo, season: Int? = null, voice: String? = null, focusFirst: Boolean = true) {
+        val hadFocus = content.hasFocus()
+        currentScreen = { showOnline(video, season, voice, false) }; page = "online"; clear(video.item.title)
         content.addView(text("${CenterCatalog.name(video.item.provider)} · Выбери серию для нашего плеера", 15, muted)); space(content, 16)
         val seasons = video.episodes.map { it.season }.distinct().sorted()
         if (video.item.type == "tv" && season == null) {
-            seasons.forEach { value -> content.addView(button("Сезон $value") { enter { showOnline(video, value) } }) }
+            seasons.forEach { value -> content.addView(button(if(value>0) "Сезон $value" else "Серии") { enter { showOnline(video, value) } }) }
         } else {
             val entries = video.episodes.filter { season == null || it.season == season }
             val voices = entries.map { it.voice }.distinct()
@@ -478,6 +479,7 @@ open class MediaCenterActivity : AppCompatActivity() {
             }
         }
         content.addView(button("Обновить список и ссылки") { online(video.item, refresh = true) })
+        if (focusFirst && hadFocus) content.post { content.getFocusables(View.FOCUS_FORWARD).firstOrNull()?.requestFocus() }
     }
     private fun chooseOnlineQuality(video: OnlineVideo, episode: OnlineEpisode) {
         val qualities = episode.sources.keys.sortedDescending()
@@ -487,13 +489,18 @@ open class MediaCenterActivity : AppCompatActivity() {
             .setNegativeButton("Отмена", null).show()
     }
     private fun playOnline(video: OnlineVideo, episode: OnlineEpisode, quality: Int) {
+        val cachedAt = onlineCache[video.item.key]?.first
+        if (cachedAt != null && System.currentTimeMillis() - cachedAt > 180000) {
+            online(video.item, CardMeta(video.item.title, seasonNumber = episode.season.takeIf { it>0 }, episodeNumber = episode.number,
+                translator = episode.voice, quality = quality.toString()), refresh = true); return
+        }
         val url = episode.sources[quality] ?: return
         val candidates = video.episodes.filter { it.season == episode.season && it.voice == episode.voice && it.number > 0 && it.sources.containsKey(quality) }.sortedBy { it.number }
         val playlist = if (candidates.groupBy { it.number }.all { it.value.size == 1 }) candidates.mapIndexed { index, entry ->
-            com.lampplayer.tv.domain.model.EpisodeItem(index, entry.title, entry.sources.getValue(quality), entry.season, entry.number)
+            com.lampplayer.tv.domain.model.EpisodeItem(index, entry.title, entry.sources.getValue(quality), entry.season.takeIf { it>0 }, entry.number)
         } else emptyList()
         val meta = metadata(video.item).apply {
-            if (episode.number > 0) { addProperty("season_number", episode.season); addProperty("episode_number", episode.number) }
+            if (episode.number > 0) { if(episode.season>0)addProperty("season_number", episode.season); addProperty("episode_number", episode.number) }
             addProperty("translator", episode.voice); addProperty("quality", quality.toString())
             addProperty("headers", Gson().toJson(video.headers))
             if (playlist.isNotEmpty()) {

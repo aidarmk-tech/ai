@@ -116,7 +116,10 @@ class MediaCenterUiTest {
                 OnlineEpisode(1,2,"Second","Оригинал",mapOf(720 to "https://cdn.test/en2.m3u8")),
                 OnlineEpisode(2,1,"Другой сезон","Дубляж",mapOf(720 to "https://cdn.test/s2.m3u8")))
             host.nativeFixture(OnlineVideo(item,entries,mapOf("Referer" to item.sourceUrl!!)));frame(root)
-            label(root,"Сезон 1").performClick();frame(root);label(root,"Дубляж").performClick();frame(root)
+            label(root,"Сезон 1").requestFocus();label(root,"Сезон 1").performClick();frame(root)
+            assertEquals("Дубляж",root.findFocus()?.tag)
+            label(root,"Дубляж").performClick();frame(root)
+            assertEquals("online:1:1:Дубляж",root.findFocus()?.tag)
             screenshot(root,"media-center-native-episodes")
             all(root).first { it.tag=="online:1:2:Дубляж" }.performClick()
             val intent=shadowOf(host).nextStartedActivity
