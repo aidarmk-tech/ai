@@ -3,6 +3,7 @@ package com.lampplayer.tv.player
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.HttpDataSource
 
 @UnstableApi
 class ErrorRecoveryManager {
@@ -24,10 +25,24 @@ class ErrorRecoveryManager {
     /**
      * Classify the error and prepare the player for a retry. The caller schedules
      * `player.prepare()` after [retryDelayMs]. Network errors retry **indefinitely**
-     * (with capped backoff) — a dropped/мобильный connection should reconnect, not
+     * (with capped backoff); permanent HTTP/access failures stop and other 4xx responses are bounded
+     * (408/429 remain retryable) — a dropped/мобильный connection should reconnect, not
      * give up; decode/parse errors are bounded to [maxRetries] before going fatal.
      */
     fun onError(error: PlaybackException, player: Player): Action {
+        val status = httpFailure(error)?.responseCode
+        val permanent = status in listOf(401, 403, 410) ||
+            error.errorCode == PlaybackException.ERROR_CODE_IO_NO_PERMISSION ||
+            error.errorCode == PlaybackException.ERROR_CODE_IO_CLEARTEXT_NOT_PERMITTED
+        // A missing HLS segment can be temporary, but retrying the same missing URL forever cannot recover.
+        val boundedHttp = error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS &&
+            (status == null || (status in 400..499 && status !in listOf(408, 429)))
+        if (permanent || boundedHttp) {
+            lastWasNetwork = false
+            if (permanent || retryCount >= maxRetries) return Action.SHOW_FATAL
+            retryCount++
+            return Action.RETRY
+        }
         lastWasNetwork = isNetwork(error)
         if (lastWasNetwork) {
             retryCount = (retryCount + 1).coerceAtMost(4)   // unbounded retries, capped delay
@@ -55,7 +70,24 @@ class ErrorRecoveryManager {
         PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
         PlaybackException.ERROR_CODE_IO_UNSPECIFIED,
         PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
-        PlaybackException.ERROR_CODE_IO_NO_PERMISSION,
-        PlaybackException.ERROR_CODE_IO_CLEARTEXT_NOT_PERMITTED,
     )
+
+    companion object {
+        fun httpFailure(error: Throwable): HttpDataSource.InvalidResponseCodeException? {
+            var cause: Throwable? = error
+            repeat(12) {
+                val current = cause ?: return null
+                if (current is HttpDataSource.InvalidResponseCodeException) return current
+                cause = current.cause?.takeUnless { it === current }
+            }
+            return null
+        }
+        fun httpMessage(error: Throwable): String? = httpFailure(error)?.responseCode?.let { code ->
+            when (code) {
+                404, 410 -> "Видео или часть потока не найдены (HTTP $code). Вернись к списку, обнови ссылки или выбери другое качество."
+                401, 403 -> "Источник отказал в доступе (HTTP $code). Проверь доступ к видео на странице источника."
+                else -> "Сервер видео вернул HTTP $code"
+            }
+        }
+    }
 }
