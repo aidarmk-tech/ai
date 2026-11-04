@@ -11,6 +11,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.doOnLayout
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.google.gson.*
@@ -87,8 +88,10 @@ class CenterOnline(private val activity:AppCompatActivity) {
                     return target.host!=source.host || target.encodedPath!=source.encodedPath
                 }
             }
-            (activity.findViewById<android.view.View>(android.R.id.content) as ViewGroup).addView(browser,FrameLayout.LayoutParams(1,1))
-            browser.loadUrl(source.toString())
+            // Use a real viewport: responsive players may skip initialization in a 1px box.
+            // The catalog stays above this transparent, non-focusable metadata view.
+            (activity.findViewById<android.view.View>(android.R.id.content) as ViewGroup).addView(browser,0,FrameLayout.LayoutParams(-1,-1))
+            browser.doOnLayout { if(active.get())browser.loadUrl(source.toString()) }
             var last="";var stable=0;var filmixRequested=false
             withTimeout(30000) {
                 while(true) {
