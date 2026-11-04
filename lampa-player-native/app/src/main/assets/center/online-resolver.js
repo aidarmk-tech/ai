@@ -2,21 +2,31 @@
 'use strict';
 if(window!==window.top||window.__lampOnline)return;
 HTMLMediaElement.prototype.play=function(){return Promise.reject(new DOMException('Metadata only','NotAllowedError'));};
-var state=window.__lampOnline={files:[],lists:[],seen:{},errors:[],cap:480,ids:[],instances:[],xhr:[]};
+var state=window.__lampOnline={files:[],lists:[],playerFiles:[],playerLists:[],seen:{},errors:[],cap:480,ids:[],instances:[],xhr:[]};
 var originalParse=JSON.parse,originalStringify=JSON.stringify;
-function remember(value,kind){
+function remember(value,kind,bound){
  try{
   if(value==null)return;
   var data=originalStringify(value);if(!data||data.length>900000)return;
-  if(state.seen[kind+data])return;
-  state.seen[kind+data]=1;
-  var target=kind==='file'?state.files:state.lists;
+  var key=(bound?'player:':'')+kind+data;
+  if(state.seen[key])return;
+  state.seen[key]=1;
+  var target=bound?(kind==='file'?state.playerFiles:state.playerLists):(kind==='file'?state.files:state.lists);
   if(target.length<16)target.push(value);
  }catch(e){}
 }
-function playlist(value){
+function playlist(value,bound,voice){
  if(!Array.isArray(value)||!value.length||value.length>1000)return;
- if(value.some(function(v){return v&&typeof v==='object'&&(v.file||v.folder)}))remember(value,'list');
+ if(value.some(function(v){return v&&typeof v==='object'&&(v.file||v.folder)}))remember(voice?[{title:voice,folder:value}]:value,'list',bound);
+}
+function playerFile(value,voice){
+ if(value==null||value==='')return;
+ remember(voice&&!Array.isArray(value)?{title:voice,file:value}:value,'file',true);
+ playlist(value,true,voice);
+ if(typeof value==='string'&&value.length<900000&&/^\s*\[/.test(value)){try{playlist(originalParse(value),true,voice);}catch(e){}}
+}
+function activeVoice(){
+ try{var label=document.querySelector('.player-main-block .translations li.active span[data-name]');return label?label.getAttribute('data-name')||'':'';}catch(e){return '';}
 }
 JSON.parse=function(){var result=originalParse.apply(JSON,arguments);playlist(result);return result;};
 var open=XMLHttpRequest.prototype.open,send=XMLHttpRequest.prototype.send;
@@ -32,15 +42,15 @@ function wrapPlayer(){
   var wrapped=function(options){
    var id=typeof options==='string'?options:options&&options.id;
    if(state.ids.length<12&&id)state.ids.push(String(id));
-   var main=typeof id==='string'&&/^(?:video)?player(?:[_-][a-z0-9]+)?$/i.test(id);
-   if(main&&options&&typeof options==='object')remember(options.file,'file');
+   var main=typeof id==='string'&&/^(?:video)?player$/i.test(id),voice=main?activeVoice():'';
+   if(main&&options&&typeof options==='object')playerFile(options.file,voice);
    var instance=Reflect.construct(original,Array.prototype.slice.call(arguments));
    if(main&&instance&&typeof instance.api==='function'){
-    if(state.instances.length<4)state.instances.push(instance);
+    if(state.instances.length<4)state.instances.push({player:instance,voice:voice});
     var api=instance.api;
     try{instance.api=function(command,value){
      if(arguments.length>1&&/^(file|playlist|preload|play)$/.test(command)){
-      remember(value,'file');playlist(value);
+      playerFile(value,voice);
      }
      return api.apply(instance,arguments);
     };}catch(e){}
@@ -50,8 +60,7 @@ function wrapPlayer(){
   wrapped.prototype=original.prototype;Object.setPrototypeOf(wrapped,original);
   wrapped.__lampWrapped=true;window.Playerjs=wrapped;
  }
- var players=state.instances.slice();if(window.player)players.push(window.player);
- players.forEach(function(player){try{if(typeof player.api==='function')playlist(player.api('playlist_folders'));}catch(e){}});
+ state.instances.forEach(function(entry){try{playlist(entry.player.api('playlist_folders'),true,entry.voice);}catch(e){}});
  if(window.user_data){state.cap=(user_data.is_user_pro_plus||user_data.is_user_loyal)?2160:(user_data.is_user_pro?720:480);}
 }
 window.__lampInstallPlayer=wrapPlayer;
@@ -73,7 +82,9 @@ window.__lampSnapshot=function(){
  wrapPlayer();
  var text=providerMessage();
  var blocked=/(недоступно[\s\S]{0,70}стране|заблокировано[\s\S]{0,90}правообладателя|нет видео файла)/i.exec(text);
- var result={files:state.files,lists:state.lists,cap:state.cap,blocked:blocked?blocked[0]:null,playerType:typeof window.Playerjs,ids:state.ids,xhr:state.xhr};
+ // Once a player is observed, unrelated page JSON cannot stand in for its playlist.
+ var bound=state.ids.length||state.playerFiles.length||state.playerLists.length;
+ var result={files:bound?state.playerFiles:state.files,lists:bound?state.playerLists:state.lists,cap:state.cap,blocked:blocked?blocked[0]:null,playerType:typeof window.Playerjs,ids:state.ids,xhr:state.xhr};
  var json=originalStringify(result);return json.length<1000000?json:'{}';
 };
 })();

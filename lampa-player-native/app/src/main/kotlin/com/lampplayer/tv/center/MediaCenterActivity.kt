@@ -438,10 +438,12 @@ open class MediaCenterActivity : AppCompatActivity() {
         if (details.actors.isNotBlank()) { space(copy, 18); copy.addView(text("В ролях", 18)); space(copy, 8); copy.addView(text(details.actors, 15, muted)) }
         body.addView(copy, LinearLayout.LayoutParams(0, -2, 1f)); content.addView(body)
     }
-    private fun online(item: CenterTitle, resume: CardMeta? = null, refresh: Boolean = false) {
+    protected open suspend fun resolveOnline(item: CenterTitle): OnlineVideo = CenterOnline(this).resolve(item)
+    private fun online(item: CenterTitle, resume: CardMeta? = null, refresh: Boolean = false, returnTo: Screen? = null) {
+        val previous = returnTo ?: if (resume != null && page == "online") snapshot() else null
         work("Получаю список серий · ${CenterCatalog.name(item.provider)}…") {
             val cached = onlineCache[item.key]?.takeIf { System.currentTimeMillis() - it.first < 180000 && !refresh }?.second
-            val video = cached ?: CenterOnline(this@MediaCenterActivity).resolve(item).also {
+            val video = cached ?: resolveOnline(item).also {
                 if (onlineCache.size >= 4) onlineCache.remove(onlineCache.keys.first())
                 onlineCache[item.key] = System.currentTimeMillis() to it
             }
@@ -450,7 +452,12 @@ open class MediaCenterActivity : AppCompatActivity() {
                     (resume.translator == null || it.voice == resume.translator) }
                 val entry = matches.singleOrNull()
                 val quality = resume.quality?.toIntOrNull()
-                if (entry != null && quality != null && entry.sources.containsKey(quality)) { playOnline(video, entry, quality); return@work }
+                if (entry != null && quality != null && entry.sources.containsKey(quality)) {
+                    val refreshedReturn = previous?.copy(draw = {
+                        showOnline(video, entry.season.takeIf { item.type == "tv" }, entry.voice, false)
+                    })
+                    playOnline(video, entry, quality, refreshedReturn); return@work
+                }
             }
             showOnline(video)
         }
@@ -458,18 +465,19 @@ open class MediaCenterActivity : AppCompatActivity() {
     protected fun showOnline(video: OnlineVideo, season: Int? = null, voice: String? = null, focusFirst: Boolean = true) {
         val hadFocus = content.hasFocus()
         currentScreen = { showOnline(video, season, voice, false) }; page = "online"; clear(video.item.title)
-        content.addView(text("${CenterCatalog.name(video.item.provider)} · Выбери серию для нашего плеера", 15, muted)); space(content, 16)
+        val entries = video.episodes.filter { season == null || it.season == season }
+        val voices = entries.map { it.voice }.distinct()
+        val selectedVoice = voice ?: voices.singleOrNull()
+        content.addView(text(listOfNotNull(CenterCatalog.name(video.item.provider),
+            season?.takeIf { it > 0 }?.let { "Сезон $it" }, selectedVoice).joinToString(" · "), 15, muted)); space(content, 16)
         val seasons = video.episodes.map { it.season }.distinct().sorted()
         if (video.item.type == "tv" && season == null) {
             seasons.forEach { value -> content.addView(button(if(value>0) "Сезон $value" else "Серии") { enter { showOnline(video, value) } }) }
         } else {
-            val entries = video.episodes.filter { season == null || it.season == season }
-            val voices = entries.map { it.voice }.distinct()
             if (voice == null && voices.size > 1) {
                 section("Озвучка")
                 voices.forEach { value -> content.addView(button(value) { enter { showOnline(video, season, value) } }) }
             } else {
-                val selectedVoice = voice ?: voices.firstOrNull()
                 entries.filter { it.voice == selectedVoice }.forEach { episode ->
                     val label = if (episode.number > 0) "Серия ${episode.number} · ${episode.title}" else "Смотреть · ${episode.voice}"
                     content.addView(button(label) { chooseOnlineQuality(video, episode) }.apply {
@@ -484,14 +492,14 @@ open class MediaCenterActivity : AppCompatActivity() {
     private fun chooseOnlineQuality(video: OnlineVideo, episode: OnlineEpisode) {
         val qualities = episode.sources.keys.sortedDescending()
         if (qualities.size == 1) { playOnline(video, episode, qualities.single()); return }
-        AlertDialog.Builder(this).setTitle("Качество · ${episode.voice}")
+        AlertDialog.Builder(this).setTitle(listOfNotNull(episode.number.takeIf { it > 0 }?.let { "Серия $it" }, episode.voice, "Качество").joinToString(" · "))
             .setItems(qualities.map { if (it == 0) "Авто" else "${it}p" }.toTypedArray()) { _, index -> playOnline(video, episode, qualities[index]) }
             .setNegativeButton("Отмена", null).show()
     }
-    private fun playOnline(video: OnlineVideo, episode: OnlineEpisode, quality: Int) {
+    private fun playOnline(video: OnlineVideo, episode: OnlineEpisode, quality: Int, returnTo: Screen? = null) {
         if (System.currentTimeMillis() - video.fetchedAt > 180000) {
             online(video.item, CardMeta(video.item.title, seasonNumber = episode.season.takeIf { it>0 }, episodeNumber = episode.number,
-                translator = episode.voice, quality = quality.toString()), refresh = true); return
+                translator = episode.voice, quality = quality.toString()), refresh = true, returnTo = returnTo ?: snapshot()); return
         }
         val url = episode.sources[quality] ?: return
         val candidates = video.episodes.filter { it.season == episode.season && it.voice == episode.voice && it.number > 0 && it.sources.containsKey(quality) }.sortedBy { it.number }
@@ -507,7 +515,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                 addProperty("episode_index", playlist.indexOfFirst { it.url == url }.coerceAtLeast(0))
             }
         }
-        launchPlayer(url, meta.toString())
+        launchPlayer(url, meta.toString(), returnTo)
     }
     private fun episodeList(item: CenterTitle, season: Int) {
         work("Загружаю серии…") { showEpisodes(item, season, backend.episodes(item, season)) }
@@ -651,8 +659,8 @@ open class MediaCenterActivity : AppCompatActivity() {
         playerReturn = if (page == "loading" && backStack.isNotEmpty()) backStack.removeLast() else snapshot()
         startActivity(Intent(this, CenterWebActivity::class.java).putExtra("url", url).putExtra("lampa_data", metadata))
     }
-    private fun launchPlayer(url: String, metadata: String) {
-        playerReturn = if (page == "loading" && backStack.isNotEmpty()) backStack.removeLast() else snapshot()
+    private fun launchPlayer(url: String, metadata: String, returnTo: Screen? = null) {
+        playerReturn = returnTo ?: if (page == "loading" && backStack.isNotEmpty()) backStack.removeLast() else snapshot()
         startActivity(Intent(this, PlayerActivity::class.java).setAction(Intent.ACTION_VIEW)
             .setDataAndType(android.net.Uri.parse(url), "video/*").putExtra("lampa_data", metadata))
     }

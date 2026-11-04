@@ -97,7 +97,7 @@ jobs:
           data={'versionCode':${{ github.run_number }},'versionName':'0.1.${{ github.run_number }}',
             'url':'https://github.com/${{ github.repository }}/releases/download/media-center/'+p.name,
             'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),
-            'notes':'LampMedia: выбор сезона, озвучки, серии и качества внутри приложения; запуск онлайн-потока в нашем плеере и проверенный автопереход. Каталоги Киновод, Filmix и TMDB, закрепления, история и настройка торрент-буфера.'}
+            'notes':'LampMedia: исправлен приём плейлиста при создании плеера; сохранены выбранная озвучка и серия при возврате, в том числе после обновления ссылки. Выбор сезона, серии и качества внутри приложения, запуск в плеере, каталоги Киновод / Filmix / TMDB.'}
           pathlib.Path('dist/version.json').write_text(json.dumps(data,ensure_ascii=False,indent=2))
           PY
       - uses: softprops/action-gh-release@v2

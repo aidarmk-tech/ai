@@ -41,6 +41,9 @@ class MediaCenterUiTest {
     }
     class Host : MediaCenterActivity() {
         override val backend=FakeBackend()
+        var nextOnline:OnlineVideo?=null
+        var onlineCalls=0
+        override suspend fun resolveOnline(item:CenterTitle):OnlineVideo { onlineCalls++;return requireNotNull(nextOnline) }
         override fun loadHome() { val items=(1..8).map {
             CenterTitle(it, if(it%2==0) "tv" else "movie", listOf("Тихий город","За горизонтом","Новый день","На орбите")[(it-1)%4],
                 overview="Истории, к которым хочется возвращаться. Каталог, серии и просмотр в одном приложении.", year="2026",rating="8.2")
@@ -122,7 +125,8 @@ class MediaCenterUiTest {
             label(root,"Дубляж").performClick();frame(root)
             assertEquals("online:1:1:Дубляж",root.findFocus()?.tag)
             screenshot(root,"media-center-native-episodes")
-            all(root).first { it.tag=="online:1:2:Дубляж" }.performClick()
+            assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Киновод · Сезон 1 · Дубляж" })
+            all(root).first { it.tag=="online:1:2:Дубляж" }.apply { requestFocus();performClick() }
             val intent=shadowOf(host).nextStartedActivity
             assertEquals("com.lampplayer.tv.player.PlayerActivity",intent.component!!.className)
             val parsed=com.lampplayer.tv.player.IntentParser.parse(intent)!!
@@ -130,6 +134,37 @@ class MediaCenterUiTest {
             assertEquals(listOf(1,2,4),parsed.second.episodes.map { it.episode })
             assertEquals("Дубляж",parsed.second.translator)
             assertNull(com.lampplayer.tv.player.EpisodeNavigation.next(parsed.second.episodes,parsed.first))
+            controller.pause().resume();frame(root)
+            assertEquals("online:1:2:Дубляж",root.findFocus()?.tag)
+        } finally { controller.pause().stop().destroy() }
+    }
+    @Test fun refreshingAnExpiredLinkReturnsToTheSameEpisodeWithoutPoppingTheVoiceScreen() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(17,"tv","Сериал",provider="kinovod",sourceUrl="https://source.test/serial/17-show")
+            val old=OnlineVideo(item,listOf(
+                OnlineEpisode(1,1,"Первая","Дубляж",mapOf(720 to "https://cdn.test/old1.m3u8")),
+                OnlineEpisode(1,2,"Вторая","Дубляж",mapOf(720 to "https://cdn.test/old2.m3u8")),
+                OnlineEpisode(1,2,"Second","Оригинал",mapOf(720 to "https://cdn.test/en2.m3u8"))),emptyMap(),fetchedAt=0)
+            host.nextOnline=old.copy(episodes=old.episodes.map { e -> e.copy(sources=e.sources.mapValues { it.value.replace("old","fresh") }) },fetchedAt=System.currentTimeMillis())
+            host.nativeFixture(old);frame(root)
+            label(root,"Сезон 1").apply { requestFocus();performClick() };frame(root)
+            label(root,"Дубляж").performClick();frame(root)
+            all(root).first { it.tag=="online:1:2:Дубляж" }.apply { requestFocus();performClick() };frame(root)
+            val parsed=com.lampplayer.tv.player.IntentParser.parse(shadowOf(host).nextStartedActivity)!!
+            assertEquals("https://cdn.test/fresh2.m3u8",parsed.first);assertEquals(1,host.onlineCalls)
+            controller.pause().resume();frame(root)
+            assertEquals("online:1:2:Дубляж",root.findFocus()?.tag)
+            all(root).first { it.tag=="online:1:1:Дубляж" }.apply { requestFocus();performClick() };frame(root)
+            assertEquals("https://cdn.test/fresh1.m3u8",com.lampplayer.tv.player.IntentParser.parse(shadowOf(host).nextStartedActivity)!!.first)
+            assertEquals(1,host.onlineCalls)
+            controller.pause().resume();frame(root)
+            host.onBackPressedDispatcher.onBackPressed();frame(root)
+            assertEquals("Дубляж",root.findFocus()?.tag)
+            host.onBackPressedDispatcher.onBackPressed();frame(root)
+            assertEquals("Сезон 1",root.findFocus()?.tag);assertEquals(1,host.onlineCalls)
         } finally { controller.pause().stop().destroy() }
     }
 

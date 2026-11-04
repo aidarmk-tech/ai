@@ -11,6 +11,29 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class CenterOnlineInstrumentedTest {
+    @Test fun filmixConstructorPlaylistWinsOverOtherPlayersAndKeepsTheActiveVoice() = runBlocking {
+        for (serialized in listOf(false, true)) MockWebServer().use { server ->
+            val playlist="[{title:'Сезон 2',folder:[{title:'3 серия',file:'[480p]https://cdn.test/three.m3u8,[1080p]https://cdn.test/high.m3u8'}]}]"
+            val file=if(serialized) "JSON.stringify($playlist)" else playlist
+            server.enqueue(MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody("""<!doctype html><html><body>
+                <div class="player-main-block"><div class="players" data-player="17"><div id="player"></div></div>
+                <ul class="translations"><li class="active"><span data-name="Дубляж">Дубляж</span></li></ul></div>
+                <script src="/playerjs.js"></script><script>
+                JSON.parse('[{"title":"Серия 99","file":"https://cdn.test/unrelated.m3u8"}]');
+                new Playerjs({id:'player',file:$file});
+                window.player=new Playerjs({id:'player_trailer',file:[{title:'Сезон 9',folder:[{title:'1 серия',file:'https://cdn.test/trailer.m3u8'}]}]});
+                </script></body></html>"""))
+            server.enqueue(MockResponse().setHeader("Content-Type","application/javascript")
+                .setBody("function Playerjs(options){this.api=function(){return options.id==='player_trailer'?options.file:[];};}"))
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val result=resolver.resolve(CenterTitle(17,"tv","Сериал",provider="filmix",sourceUrl=server.url("/seria/17-test.html").toString()))
+                val episode=result.episodes.single()
+                assertEquals(2,episode.season);assertEquals(3,episode.number);assertEquals("Дубляж",episode.voice)
+                assertEquals(mapOf(480 to "https://cdn.test/three.m3u8"),episode.sources)
+            }
+        }
+    }
     @Test fun aProviderCountryBlockIsReportedInsteadOfOpeningAnotherVideo() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setHeader("Content-Type","text/html; charset=utf-8")
@@ -68,6 +91,25 @@ class CenterOnlineInstrumentedTest {
                 assertTrue("KinoVod media HTTP ${response.code}",response.isSuccessful)
                 if(media.substringBefore('?').endsWith(".m3u8"))
                     assertTrue("Expected a playable HLS manifest",response.peekBody(4096).string().trimStart('\uFEFF',' ','\r','\n').startsWith("#EXTM3U"))
+            }
+        }
+    }
+    @Test fun filmixPublicMovieResolvesOrReportsItsExplicitCountryRestriction() = runBlocking {
+        ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+            lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+            val result=try {
+                resolver.resolve(CenterTitle(81482,"movie","Интерстеллар",provider="filmix",sourceUrl="https://filmix.gg/film/drama/81482-interstellar-2014.html"))
+            } catch(e:OnlineSourceBlocked) {
+                if(e.reason=="country")org.junit.Assume.assumeNoException("Filmix explicitly blocks this title in the test runner country",e)
+                throw e
+            } catch(e:Exception) { throw AssertionError("Filmix native resolution: ${resolver.diagnostics}",e) }
+            assertTrue(result.episodes.isNotEmpty())
+            val media=result.episodes.first().sources.minByOrNull { it.key }!!.value
+            val request=okhttp3.Request.Builder().url(media).apply { result.headers.forEach { (name,value) -> header(name,value) } }.build()
+            okhttp3.OkHttpClient.Builder().callTimeout(12,java.util.concurrent.TimeUnit.SECONDS).build().newCall(request).execute().use { response ->
+                assertTrue("Filmix media HTTP ${response.code}",response.isSuccessful)
+                if(media.substringBefore('?').endsWith(".m3u8"))
+                    assertTrue("Expected HLS manifest",response.peekBody(4096).string().trimStart('\uFEFF',' ','\r','\n').startsWith("#EXTM3U"))
             }
         }
     }
