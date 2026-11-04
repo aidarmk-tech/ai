@@ -56,9 +56,22 @@ function wrapPlayer(){
 }
 window.__lampInstallPlayer=wrapPlayer;
 setInterval(wrapPlayer,50);
+function providerMessage(){
+ if(!document.body)return '';
+ // Providers can replace the whole player container with an availability notice.
+ // Read visible source text while excluding comments and form/template content.
+ var walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT),node,parts=[],count=0;
+ while((node=walker.nextNode())&&count++<6000){
+  var parent=node.parentElement;
+  if(!parent||parent.closest('script,style,noscript,template,textarea,input,[id^="comment"],[class*="comment"]'))continue;
+  if(!parent.getClientRects().length||getComputedStyle(parent).visibility==='hidden')continue;
+  parts.push(node.nodeValue);
+ }
+ return parts.join(' ');
+}
 window.__lampSnapshot=function(){
  wrapPlayer();
- var text=Array.prototype.slice.call(document.querySelectorAll('#videoplayer,#online,.players,.player-main-block')).filter(function(node){return node.getClientRects().length>0;}).map(function(node){return node.innerText||'';}).join('\n');
+ var text=providerMessage();
  var blocked=/(недоступно[\s\S]{0,70}стране|заблокировано[\s\S]{0,90}правообладателя|нет видео файла)/i.exec(text);
  var result={files:state.files,lists:state.lists,cap:state.cap,blocked:blocked?blocked[0]:null,playerType:typeof window.Playerjs,ids:state.ids,xhr:state.xhr};
  var json=originalStringify(result);return json.length<1000000?json:'{}';

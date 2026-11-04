@@ -14,7 +14,7 @@ class CenterOnlineInstrumentedTest {
     @Test fun aProviderCountryBlockIsReportedInsteadOfOpeningAnotherVideo() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setHeader("Content-Type","text/html; charset=utf-8")
-                .setBody("<html><body><div id='videoplayer'>Видео недоступно для просмотра в вашей стране</div></body></html>"))
+                .setBody("<html><body><div class='source-notice'>Видео недоступно для просмотра в вашей стране</div></body></html>"))
             ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
                 lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
                 try {
