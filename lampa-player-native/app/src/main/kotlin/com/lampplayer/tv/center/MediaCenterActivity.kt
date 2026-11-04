@@ -486,10 +486,12 @@ open class MediaCenterActivity : AppCompatActivity() {
                 section("Озвучка")
                 voices.forEach { value -> content.addView(button(value) { enter { showOnline(video, season, value) } }) }
             } else {
+                content.addView(text("Удерживай ОК на серии или фильме, чтобы изменить качество", 13, muted)); space(content, 8)
                 entries.filter { it.voice == selectedVoice }.forEach { episode ->
                     val label = if (episode.number > 0) "Серия ${episode.number} · ${episode.title}" else "Смотреть · ${episode.voice}"
                     content.addView(button(label) { chooseOnlineQuality(video, episode) }.apply {
                         tag = "online:${episode.season}:${episode.number}:${episode.voice}"; maxLines = 2; layoutParams.height = dp(62)
+                        setOnLongClickListener { chooseOnlineQuality(video, episode, forceChoice = true); true }
                     })
                 }
             }
@@ -497,11 +499,30 @@ open class MediaCenterActivity : AppCompatActivity() {
         content.addView(button("Обновить список и ссылки") { online(video.item, refresh = true, selectedSeason = season, selectedVoice = selectedVoice) })
         if (focusFirst && hadFocus) content.post { content.getFocusables(View.FOCUS_FORWARD).firstOrNull()?.requestFocus() }
     }
-    private fun chooseOnlineQuality(video: OnlineVideo, episode: OnlineEpisode) {
+    private fun chooseOnlineQuality(video: OnlineVideo, episode: OnlineEpisode, forceChoice: Boolean = false) {
         val qualities = episode.sources.keys.sortedDescending()
-        if (qualities.size == 1) { playOnline(video, episode, qualities.single()); return }
-        AlertDialog.Builder(this).setTitle(listOfNotNull(episode.number.takeIf { it > 0 }?.let { "Серия $it" }, episode.voice, "Качество").joinToString(" · "))
-            .setItems(qualities.map { if (it == 0) "Авто" else "${it}p" }.toTypedArray()) { _, index -> playOnline(video, episode, qualities[index]) }
+        if (qualities.isEmpty()) {
+            Toast.makeText(this, "Нет доступного качества. Обнови список и ссылки", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val preferred = store.preferredQuality(video.item.provider)
+        if (!forceChoice && preferred != null && preferred in qualities) {
+            playOnline(video, episode, preferred); return
+        }
+        // A sole fallback still needs confirmation when the saved quality disappeared.
+        if (!forceChoice && preferred == null && qualities.size == 1) {
+            playOnline(video, episode, qualities.single()); return
+        }
+        val labels = qualities.map { (if (it == 0) "Авто" else "${it}p") + if (it == preferred) " ✓" else "" }
+        AlertDialog.Builder(this).setTitle(listOfNotNull(
+            episode.number.takeIf { it > 0 }?.let { "Серия $it" }, episode.voice,
+            if (preferred != null && preferred !in qualities) "Сохранённое качество недоступно" else "Качество"
+        ).joinToString(" · "))
+            .setItems(labels.toTypedArray()) { _, index ->
+                store.setPreferredQuality(video.item.provider, qualities[index])
+                playOnline(video, episode, qualities[index])
+            }
+            .setNeutralButton("Сбросить выбор") { _, _ -> store.setPreferredQuality(video.item.provider, null) }
             .setNegativeButton("Отмена", null).show()
     }
     private fun playOnline(video: OnlineVideo, episode: OnlineEpisode, quality: Int, returnTo: Screen? = null) {
