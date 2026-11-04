@@ -235,4 +235,72 @@ class MediaCenterUiTest {
             }
         } finally { controller.pause().stop().destroy() }
     }
+
+    @Test fun qualityChoicePersistsPerProviderAndCanBeOverriddenOrReset() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(21,"movie","Фильм",provider="kinovod",sourceUrl="https://source.test/film/21-title")
+            val episode=OnlineEpisode(0,0,"Фильм","Дубляж",mapOf(
+                1080 to "https://cdn.test/1080.m3u8",720 to "https://cdn.test/720.m3u8"))
+            val video=OnlineVideo(item,listOf(episode),emptyMap())
+            fun show() { host.nativeFixture(video);frame(root) }
+            fun entry()=all(root).first { it.tag=="online:0:0:Дубляж" }
+            fun dialog()=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
+            fun choose(index:Int) {
+                val list=dialog().listView
+                list.performItemClick(list.getChildAt(index),index,list.adapter.getItemId(index));frame(root)
+            }
+            fun played()=com.lampplayer.tv.player.IntentParser.parse(shadowOf(host).nextStartedActivity)!!
+            show();entry().performClick();frame(root)
+            assertNull(shadowOf(host).nextStartedActivity)
+            choose(1)
+            assertEquals("https://cdn.test/720.m3u8",played().first)
+            assertEquals(720,CenterStore(host).preferredQuality("kinovod"))
+            assertNull(CenterStore(host).preferredQuality("filmix"))
+            controller.pause().resume();frame(root)
+            entry().performClick();frame(root)
+            assertEquals("https://cdn.test/720.m3u8",played().first)
+            controller.pause().resume();frame(root)
+            entry().performLongClick();frame(root)
+            assertNull(shadowOf(host).nextStartedActivity)
+            choose(0)
+            assertEquals("1080",played().second.quality)
+            controller.pause().resume();frame(root)
+            entry().performLongClick();frame(root)
+            dialog().getButton(android.content.DialogInterface.BUTTON_NEUTRAL).performClick();frame(root)
+            assertNull(CenterStore(host).preferredQuality("kinovod"))
+            assertNull(shadowOf(host).nextStartedActivity)
+            entry().performClick();frame(root)
+            assertTrue(dialog().isShowing)
+            dialog().dismiss()
+        } finally { controller.pause().stop().destroy() }
+    }
+    @Test fun unavailablePreferredQualityRequiresConfirmationEvenForOneFallback() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            CenterStore(host).setPreferredQuality("filmix",1080)
+            val item=CenterTitle(21,"movie","Фильм",provider="filmix",sourceUrl="https://source.test/film/21-title")
+            host.nativeFixture(OnlineVideo(item,listOf(OnlineEpisode(0,0,"Фильм","Дубляж",
+                mapOf(480 to "https://cdn.test/480.m3u8"))),emptyMap()));frame(root)
+            all(root).first { it.tag=="online:0:0:Дубляж" }.performClick();frame(root)
+            assertNull(shadowOf(host).nextStartedActivity)
+            val dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
+            assertTrue(dialog.isShowing)
+            dialog.getButton(android.content.DialogInterface.BUTTON_NEGATIVE).performClick();frame(root)
+            assertEquals(1080,CenterStore(host).preferredQuality("filmix"))
+            assertNull(shadowOf(host).nextStartedActivity)
+        } finally { controller.pause().stop().destroy() }
+    }
+    @Test fun autoQualityIsARealPreferenceAndDoesNotLeakToAnotherProvider() {
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        CenterStore(context).setPreferredQuality("kinovod",0)
+        assertEquals(0,CenterStore(context).preferredQuality("kinovod"))
+        assertNull(CenterStore(context).preferredQuality("filmix"))
+        CenterStore(context).setPreferredQuality("kinovod",null)
+        assertNull(CenterStore(context).preferredQuality("kinovod"))
+    }
 }
