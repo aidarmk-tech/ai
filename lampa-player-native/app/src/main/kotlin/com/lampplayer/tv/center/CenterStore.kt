@@ -24,6 +24,17 @@ class CenterStore(context: Context) {
         set(value) { prefs.edit().putString("catalog", value).apply() }
     fun catalogHost(provider: String) = prefs.getString("host_$provider", if (provider == "filmix") "https://filmix.gg" else "https://kinovod.pro").orEmpty()
     fun setCatalogHost(provider: String, host: String) { prefs.edit().putString("host_$provider", host.trim().trimEnd('/')).apply() }
+    fun preferredQuality(provider: String?): Int? =
+        prefs.getInt("quality_${provider.orEmpty()}", -1).takeIf { it >= 0 }
+    fun setPreferredQuality(provider: String?, quality: Int?) {
+        val key = "quality_${provider.orEmpty()}"
+        val editor = prefs.edit()
+        if (quality == null) editor.remove(key) else {
+            require(quality >= 0)
+            editor.putInt(key, quality)
+        }
+        editor.apply()
+    }
     fun pinned(): List<CenterTitle> = runCatching {
         gson.fromJson<List<CenterTitle>>(prefs.getString("pinned", "[]"), object : TypeToken<List<CenterTitle>>() {}.type)
     }.getOrNull().orEmpty()
