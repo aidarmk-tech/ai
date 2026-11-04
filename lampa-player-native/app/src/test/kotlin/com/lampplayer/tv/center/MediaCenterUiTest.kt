@@ -168,4 +168,65 @@ class MediaCenterUiTest {
         } finally { controller.pause().stop().destroy() }
     }
 
+
+    @Test fun manualRefreshKeepsTheSeasonAndVoiceAndUsesFreshLinks() {
+        checkOnlineRefresh("keep")
+    }
+    @Test fun removedVoiceReturnsToVoiceSelectionInTheSameSeason() {
+        checkOnlineRefresh("voice")
+    }
+    @Test fun removedSeasonReturnsToAvailableSeasons() {
+        checkOnlineRefresh("season")
+    }
+    private fun checkOnlineRefresh(change: String) {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(17,"tv","Сериал",provider="kinovod",sourceUrl="https://source.test/serial/17-show")
+            val old=OnlineVideo(item,listOf(
+                OnlineEpisode(1,1,"Первый сезон","Дубляж",mapOf(720 to "https://cdn.test/s1.m3u8")),
+                OnlineEpisode(2,1,"Первая","Дубляж",mapOf(720 to "https://cdn.test/old.m3u8")),
+                OnlineEpisode(2,1,"Original","Оригинал",mapOf(720 to "https://cdn.test/en.m3u8")),
+                OnlineEpisode(2,1,"Other","Другая",mapOf(720 to "https://cdn.test/other.m3u8"))),emptyMap())
+            host.nextOnline=old.copy(episodes=old.episodes.filter {
+                when(change) {
+                    "voice" -> it.season!=2 || it.voice!="Дубляж"
+                    "season" -> it.season!=2
+                    else -> true
+                }
+            }.map { it.copy(sources=it.sources.mapValues { source -> source.value.replace("old","fresh") }) })
+            host.nativeFixture(old);frame(root)
+            label(root,"Сезон 2").apply { requestFocus();performClick() };frame(root)
+            label(root,"Дубляж").performClick();frame(root)
+            label(root,"Обновить список и ссылки").apply { requestFocus();performClick() };frame(root)
+            assertEquals(1,host.onlineCalls)
+            assertNull(shadowOf(host).nextStartedActivity)
+            when(change) {
+                "keep" -> {
+                    assertNotNull(label(root,"Киновод · Сезон 2 · Дубляж"))
+                    all(root).first { it.tag=="online:2:1:Дубляж" }.performClick();frame(root)
+                    val parsed=com.lampplayer.tv.player.IntentParser.parse(shadowOf(host).nextStartedActivity)!!
+                    assertEquals("https://cdn.test/fresh.m3u8",parsed.first)
+                    assertEquals(2,parsed.second.seasonNumber)
+                    assertEquals("Дубляж",parsed.second.translator)
+                    controller.pause().resume();frame(root)
+                    host.onBackPressedDispatcher.onBackPressed();frame(root)
+                    assertNotNull(label(root,"Озвучка"))
+                    host.onBackPressedDispatcher.onBackPressed();frame(root)
+                    assertNotNull(label(root,"Сезон 2"))
+                }
+                "voice" -> {
+                    assertNotNull(label(root,"Киновод · Сезон 2"))
+                    assertNotNull(label(root,"Озвучка"))
+                    assertNotNull(label(root,"Оригинал"))
+                    assertFalse(all(root).any { it.tag=="online:2:1:Дубляж" })
+                }
+                else -> {
+                    assertNotNull(label(root,"Сезон 1"))
+                    assertFalse(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Сезон 2" })
+                }
+            }
+        } finally { controller.pause().stop().destroy() }
+    }
 }
