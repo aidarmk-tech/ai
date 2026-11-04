@@ -105,6 +105,7 @@ class MediaCenterUiTest {
         } finally { controller.pause().stop().destroy() }
     }
     @Test fun nativeEpisodePickerStartsOurPlayerWithOnlyTheSelectedSeasonAndVoice() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
         val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
         try {
             val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
@@ -116,7 +117,7 @@ class MediaCenterUiTest {
                 OnlineEpisode(1,2,"Second","Оригинал",mapOf(720 to "https://cdn.test/en2.m3u8")),
                 OnlineEpisode(2,1,"Другой сезон","Дубляж",mapOf(720 to "https://cdn.test/s2.m3u8")))
             host.nativeFixture(OnlineVideo(item,entries,mapOf("Referer" to item.sourceUrl!!)));frame(root)
-            label(root,"Сезон 1").requestFocus();label(root,"Сезон 1").performClick();frame(root)
+            assertTrue(label(root,"Сезон 1").requestFocus());label(root,"Сезон 1").performClick();frame(root)
             assertEquals("Дубляж",root.findFocus()?.tag)
             label(root,"Дубляж").performClick();frame(root)
             assertEquals("online:1:1:Дубляж",root.findFocus()?.tag)

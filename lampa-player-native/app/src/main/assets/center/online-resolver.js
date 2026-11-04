@@ -58,7 +58,7 @@ window.__lampInstallPlayer=wrapPlayer;
 setInterval(wrapPlayer,50);
 window.__lampSnapshot=function(){
  wrapPlayer();
- var text=document.body?document.body.innerText:'';
+ var text=Array.prototype.slice.call(document.querySelectorAll('#videoplayer,#online,.players,.player-main-block')).filter(function(node){return node.getClientRects().length>0;}).map(function(node){return node.innerText||'';}).join('\n');
  var blocked=/(недоступно[\s\S]{0,70}стране|заблокировано[\s\S]{0,90}правообладателя|нет видео файла)/i.exec(text);
  var result={files:state.files,lists:state.lists,cap:state.cap,blocked:blocked?blocked[0]:null,playerType:typeof window.Playerjs,ids:state.ids,xhr:state.xhr};
  var json=originalStringify(result);return json.length<1000000?json:'{}';

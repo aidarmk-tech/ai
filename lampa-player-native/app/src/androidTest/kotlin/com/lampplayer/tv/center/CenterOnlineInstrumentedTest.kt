@@ -11,6 +11,19 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class CenterOnlineInstrumentedTest {
+    @Test fun aProviderCountryBlockIsReportedInsteadOfOpeningAnotherVideo() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setHeader("Content-Type","text/html; charset=utf-8")
+                .setBody("<html><body><div id='videoplayer'>Видео недоступно для просмотра в вашей стране</div></body></html>"))
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                try {
+                    resolver.resolve(CenterTitle(17,"tv","Сериал",provider="kinovod",sourceUrl=server.url("/serial/17-test").toString()))
+                    fail("Ignored the provider restriction")
+                } catch(e:OnlineSourceBlocked) { assertEquals("country",e.reason) }
+            }
+        }
+    }
     @Test fun playerApiPlaylistSetterIsCollectedBeforeTheSiteInitializes() = runBlocking {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody("""<!doctype html><html><head><meta name="viewport" content="width=device-width"></head><body>
@@ -26,7 +39,7 @@ class CenterOnlineInstrumentedTest {
     }
     @Test fun documentStartCollectorReturnsEpisodesWithoutOpeningAWebsiteActivity() = runBlocking {
         MockWebServer().use { server ->
-            server.enqueue(MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody("""<!doctype html><html><body><div id="videoplayer"></div><script>
+            server.enqueue(MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody("""<!doctype html><html><body><div id="videoplayer"></div><div id="comments">Пользователь пишет: видео недоступно для просмотра в вашей стране</div><script>
                 JSON.parse('[{"title":"Сезон 1","folder":[{"title":"1 серия","file":"https://cdn.test/one.m3u8"},{"title":"2 серия","file":"https://cdn.test/two.m3u8"}]}]');
                 </script></body></html>"""))
             ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
@@ -44,6 +57,9 @@ class CenterOnlineInstrumentedTest {
             scenario.onActivity { resolver=CenterOnline(it) }
             val result=try {
                 resolver.resolve(CenterTitle(255266,"tv","Нейровася",provider="kinovod",sourceUrl="https://kinovod.pro/serial/255266-neyrovasya"))
+            } catch(e:OnlineSourceBlocked) {
+                if(e.reason=="country")org.junit.Assume.assumeNoException("KinoVod explicitly blocks this title in the test runner country",e)
+                throw e
             } catch(e:Exception) { throw AssertionError("KinoVod native resolution: ${resolver.diagnostics}",e) }
             assertTrue(result.episodes.isNotEmpty());assertTrue(result.episodes.all { it.number>0&&it.sources.isNotEmpty() })
             val media=result.episodes.first().sources.minByOrNull { it.key }!!.value

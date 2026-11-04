@@ -489,8 +489,7 @@ open class MediaCenterActivity : AppCompatActivity() {
             .setNegativeButton("Отмена", null).show()
     }
     private fun playOnline(video: OnlineVideo, episode: OnlineEpisode, quality: Int) {
-        val cachedAt = onlineCache[video.item.key]?.first
-        if (cachedAt != null && System.currentTimeMillis() - cachedAt > 180000) {
+        if (System.currentTimeMillis() - video.fetchedAt > 180000) {
             online(video.item, CardMeta(video.item.title, seasonNumber = episode.season.takeIf { it>0 }, episodeNumber = episode.number,
                 translator = episode.voice, quality = quality.toString()), refresh = true); return
         }

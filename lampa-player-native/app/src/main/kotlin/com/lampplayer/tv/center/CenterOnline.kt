@@ -29,7 +29,8 @@ import java.util.Locale
 import kotlin.coroutines.resume
 
 data class OnlineEpisode(val season:Int,val number:Int,val title:String,val voice:String,val sources:Map<Int,String>)
-data class OnlineVideo(val item:CenterTitle,val episodes:List<OnlineEpisode>,val headers:Map<String,String>)
+data class OnlineVideo(val item:CenterTitle,val episodes:List<OnlineEpisode>,val headers:Map<String,String>,val fetchedAt:Long=System.currentTimeMillis())
+class OnlineSourceBlocked(val reason:String,message:String):IllegalStateException(message)
 
 /** Resolves the selected provider's own player metadata, without showing a website or starting video. */
 class CenterOnline(private val activity:AppCompatActivity) {
@@ -99,7 +100,10 @@ class CenterOnline(private val activity:AppCompatActivity) {
                     val raw=evaluate(browser,"window.__lampSnapshot ? window.__lampSnapshot() : '{}' ")
                     val snapshot=runCatching { JsonParser.parseString(JsonParser.parseString(raw).asString).asJsonObject }.getOrElse { JsonObject() }
                     diagnostics="files=${snapshot.getAsJsonArray("files")?.size()} lists=${snapshot.getAsJsonArray("lists")?.size()} player=${snapshot.get("playerType")} ids=${snapshot.get("ids")} xhr=${snapshot.get("xhr")}"
-                    snapshot.get("blocked")?.takeIf { !it.isJsonNull }?.asString?.let { error("${CenterCatalog.name(item.provider)}: $it") }
+                    snapshot.get("blocked")?.takeIf { !it.isJsonNull }?.asString?.let {
+                        throw OnlineSourceBlocked(if(it.contains("стране",true)) "country" else if(it.contains("правообладателя",true)) "rights" else "unavailable",
+                            "${CenterCatalog.name(item.provider)}: $it")
+                    }
                     if(item.provider=="filmix"&&!filmixRequested) {
                         val started=evaluate(browser,"(function(){var el=document.querySelector('.players[data-player]');if(el&&String(el.getAttribute('data-player'))==='${item.id}'&&typeof getDataPlayer==='function'){getDataPlayer(${item.id});return true;}return false;})()")
                         if(started=="true")filmixRequested=true
