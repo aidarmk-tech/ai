@@ -63,6 +63,15 @@ function wrapPlayer(){
  state.instances.forEach(function(entry){try{playlist(entry.player.api('playlist_folders'),true,entry.voice);}catch(e){}});
  if(window.user_data){state.cap=(user_data.is_user_pro_plus||user_data.is_user_loyal)?2160:(user_data.is_user_pro?720:480);}
 }
+// Catch assignment before the page immediately constructs its first player.
+try {
+ var playerValue=window.Playerjs;
+ Object.defineProperty(window,'Playerjs',{configurable:true,enumerable:true,
+  get:function(){return playerValue;},
+  set:function(value){playerValue=value;if(typeof value==='function'&&!value.__lampWrapped)wrapPlayer();}
+ });
+ if(playerValue)wrapPlayer();
+}catch(e){}
 window.__lampInstallPlayer=wrapPlayer;
 setInterval(wrapPlayer,50);
 function providerMessage(){
