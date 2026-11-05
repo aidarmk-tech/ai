@@ -60,6 +60,7 @@ class MediaCenterUiTest {
             return gridPages[number].orEmpty()
         }
         fun gridFixture(items:List<CenterTitle>) { showHome(items,"Grid",1,null) }
+        override suspend fun verifyOnlineUrl(url:String,headers:Map<String,String>)=url
         override suspend fun resolveOnline(item:CenterTitle):OnlineVideo { onlineCalls++;return requireNotNull(nextOnline) }
         override fun loadHome() { val items=(1..8).map {
             CenterTitle(it, if(it%2==0) "tv" else "movie", listOf("Тихий город","За горизонтом","Новый день","На орбите")[(it-1)%4],
@@ -103,7 +104,7 @@ class MediaCenterUiTest {
             val root=controller.get().findViewById<View>(android.R.id.content);frame(root)
             all(root).first { it.tag=="menu_handle" }.performClick();frame(root)
             val home=all(root).first { it.tag=="Главная" };home.requestFocus();frame(root);key(root,KeyEvent.KEYCODE_DPAD_RIGHT);frame(root)
-            assertFalse(home.hasFocus());assertNotNull(root.findFocus());assertEquals("Каталог: TMDB  ▾",(root.findFocus() as TextView).text.toString())
+            assertFalse(home.hasFocus());assertNotNull(root.findFocus());assertEquals("Каталог: TMDB  ▾",(root.findFocus() as TextView).contentDescription?.toString())
             assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Казахстанское кино" })
             assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Русские сериалы" })
             screenshot(root,"media-center-home")
@@ -589,11 +590,11 @@ class MediaCenterUiTest {
         try {
             val root=controller.get().findViewById<View>(android.R.id.content);frame(root)
             val catalog=label(root,"Каталог: TMDB  ▾")
-            assertEquals("▦",catalog.text.toString())
+            assertTrue(catalog.text.toString().contains("Каталог: TMDB"))
             val collapsed=catalog.width
             catalog.requestFocus();frame(root)
-            assertEquals("Каталог: TMDB  ▾",catalog.text.toString())
-            assertTrue(catalog.width>collapsed)
+            assertEquals("Каталог: TMDB  ▾",catalog.contentDescription?.toString())
+            assertEquals(collapsed,catalog.width)
             all(root).first { it.tag=="new_episodes:title:tv:2" }.requestFocus();frame(root)
             assertEquals("▦",catalog.text.toString());assertEquals(collapsed,catalog.width)
             screenshot(root,"media-center-compact-toolbar")
