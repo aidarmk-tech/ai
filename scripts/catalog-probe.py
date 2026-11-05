@@ -127,3 +127,31 @@ except Exception as error:
     # This source is explicitly labelled a test entry in the app. An upstream
     # outage is reported, never treated as successful catalog verification.
     print("HDREZKA_PROBE "+json.dumps({"verified":False,"error":str(error)}))
+
+# Read the selected site's public player declarations; never download full video.
+from html.parser import HTMLParser
+class Players(HTMLParser):
+    def __init__(self,html):
+        super().__init__(convert_charrefs=True);self.frames=[];self.scripts=[];self.current=None;self.feed(html)
+    def handle_starttag(self,tag,attrs):
+        values=dict(attrs)
+        if tag=="iframe":self.frames.append(values)
+        if tag=="script":
+            self.current={"src":values.get("src",""),"code":""};self.scripts.append(self.current)
+    def handle_endtag(self,tag):
+        if tag=="script":self.current=None
+    def handle_data(self,data):
+        if self.current is not None:self.current["code"]+=data
+
+def safe(value):
+    return re.sub(r'https?://[^"\'\s<>]+',lambda m:"<URL:"+urllib.parse.urlparse(m[0]).hostname+">",value)[:1800]
+def inspect_player(url):
+    try:
+        html,final=read(url);page=Players(html)
+        return {"page":final,"frames":[{k:safe(v) for k,v in f.items() if k in ("id","class","src","data-src")} for f in page.frames],
+                "scripts":[{"src":s["src"],"code":safe(s["code"])} for s in page.scripts if any(x in (s["src"]+" "+s["code"]).lower() for x in ("player","iframe","file:","file :","video","playlist"))][:12]}
+    except Exception as error:return {"page":url,"error":str(error)}
+movie=kinogo_cards("https://kz.kinogo.moi/film/")[:2]
+serial=kinogo_cards("https://kz.kinogo.moi/serial/")[:2]
+with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+    for result in pool.map(inspect_player,movie+serial):print("PLAYER_INSPECT "+json.dumps(result,ensure_ascii=False))
