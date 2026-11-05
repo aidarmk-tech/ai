@@ -51,6 +51,16 @@ class CenterStore(context: Context) {
     fun setVoice(key: String, voice: String?) {
         prefs.edit().apply { if (voice == null) remove("voice_$key") else putString("voice_$key", voice) }.apply()
     }
+    fun searches(): List<String> = runCatching {
+        gson.fromJson<List<String>>(prefs.getString("searches", "[]"), object : TypeToken<List<String>>() {}.type)
+    }.getOrNull().orEmpty().filter { it.length in 2..120 }.take(20)
+    fun rememberSearch(value: String) {
+        val term=value.trim().replace(Regex("\\s+"), " ")
+        if(term.length !in 2..120) return
+        prefs.edit().putString("searches",gson.toJson((listOf(term)+searches().filterNot { it.equals(term,true) }).take(20))).apply()
+    }
+    fun removeSearch(value: String) { prefs.edit().putString("searches",gson.toJson(searches().filterNot { it.equals(value,true) })).apply() }
+    fun clearSearches() { prefs.edit().remove("searches").apply() }
     fun followed(): List<CenterTitle> = runCatching {
         gson.fromJson<List<CenterTitle>>(prefs.getString("followed", "[]"), object : TypeToken<List<CenterTitle>>() {}.type)
     }.getOrNull().orEmpty()
