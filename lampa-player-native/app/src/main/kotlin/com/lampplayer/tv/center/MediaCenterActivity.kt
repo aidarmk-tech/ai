@@ -105,7 +105,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         }
     }
     private fun back() {
-        if (menuOpen) { closeMenu(); return }
+        if (navigation.visibility == View.VISIBLE) { closeMenu(); return }
         job?.cancel()
         if (backStack.isNotEmpty()) restore(backStack.removeLast())
         else if (nav != "Главная") navigate("Главная")
