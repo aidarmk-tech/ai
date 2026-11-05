@@ -79,3 +79,11 @@ urls=["https://rezka.ac/films/","https://kazplay.kz/films","https://kazplay.kz/s
       "https://kazplay.kz/search?q=Titanic","https://kazplay.kz/search?query=Titanic"]
 with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
     for result in pool.map(probe,urls): print("CATALOG_PROBE "+result)
+
+try:
+    request=urllib.request.Request("https://kazplay.kz/api/v2/film/search?query="+urllib.parse.quote("Титаник"),headers={"User-Agent":"Mozilla/5.0"})
+    with urllib.request.urlopen(request,timeout=15) as response: data=json.load(response)
+    items=data.get("data",[]) if isinstance(data,dict) else data
+    print("SEARCH_API "+json.dumps({"keys":list(data) if isinstance(data,dict) else [],"items":[{k:v for k,v in x.items() if k not in ("video","url","sources","stream","playlist")} for x in items[:2]]},ensure_ascii=False))
+except Exception as error:
+    print("SEARCH_API "+str(error))
