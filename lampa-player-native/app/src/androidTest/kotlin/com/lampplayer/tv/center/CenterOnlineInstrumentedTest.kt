@@ -158,12 +158,13 @@ class CenterOnlineInstrumentedTest {
     }
     @Test fun kinogoCollectsTheBoundEmbedPlaylistAndUsesItsRefererWithoutTrailerOrPageJson() = runBlocking {
         MockWebServer().use { server ->
-            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+            MockWebServer().use { frameServer ->
+            val dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
                 override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest):MockResponse {
                     val html=when(request.path?.substringBefore('?')) {
                         "/6873-gangsterlend.html" -> """<html><body>
                             <script>JSON.parse('[{"title":"Сезон 9","folder":[{"title":"99 серия","file":"https://cdn.test/unrelated.mp4"}]}]');</script>
-                            <iframe data-src="/embed/movie/81816"></iframe><iframe data-src="/embed/trailer/81816"></iframe>
+                            <iframe data-src="${frameServer.url("/embed/movie/81816")}"></iframe><iframe data-src="/embed/trailer/81816"></iframe>
                             </body></html>"""
                         "/embed/movie/81816" -> """<html><body><div id="player"></div><script>
                             window.Playerjs=function(options){this.api=function(command){return command==='playlist_folders'?options.file:[];};};
@@ -176,14 +177,18 @@ class CenterOnlineInstrumentedTest {
                     return MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody(html)
                 }
             }
+            server.dispatcher=dispatcher
+            frameServer.dispatcher=dispatcher
             ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
                 lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
                 val result=resolver.resolve(CenterTitle(6873,"tv","Гангстерленд",provider="kinogo",
                     sourceUrl=server.url("/6873-gangsterlend.html").toString()))
                 assertEquals(listOf(5,6),result.episodes.map { it.number })
                 assertTrue(result.episodes.all { it.season==2 && it.voice=="Дубляж" })
-                assertEquals(server.url("/embed/movie/81816").toString(),result.headers["Referer"])
+                assertEquals(frameServer.url("/embed/movie/81816").toString(),result.headers["Referer"])
+                assertEquals(frameServer.url("/").toString().trimEnd('/'),result.headers["Origin"])
             }
+        }
         }
     }
 
