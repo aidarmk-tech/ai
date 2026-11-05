@@ -640,21 +640,62 @@ open class MediaCenterActivity : AppCompatActivity() {
         val query = EditText(this).apply {
             hint = "Название"; setText(value); setTextColor(ink); setHintTextColor(muted); isSingleLine = true
             imeOptions = EditorInfo.IME_ACTION_SEARCH; inputType = InputType.TYPE_CLASS_TEXT
+            tag = "search_query"; filters = arrayOf(android.text.InputFilter.LengthFilter(120))
         }
         content.addView(query, LinearLayout.LayoutParams(-1, dp(60)))
         fun search() {
             val term = query.text.toString().trim()
             if (term.length < 2) { query.error = "Введи хотя бы две буквы"; return }
+            store.rememberSearch(term)
+            (getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager)
+                ?.hideSoftInputFromWindow(query.windowToken,0)
+            val provider=store.catalog
             currentScreen = { searchScreen(term) }
             enter { work("Ищу «$term»…") {
                 val spec=CenterBrowse(type="all",query=term)
-                showHome(browsePage(store.catalog,spec,1),"Результаты поиска",1,null,if(store.catalog=="tmdb") spec else null)
+                showHome(browsePage(provider,spec,1),"Результаты поиска",1,null,if(provider=="tmdb") spec else null)
             } }
         }
         query.setOnEditorActionListener { _, action, event ->
             if (action == EditorInfo.IME_ACTION_SEARCH || event?.let { it.keyCode == KeyEvent.KEYCODE_ENTER && it.action == KeyEvent.ACTION_DOWN } == true) { search(); true } else false
         }
-        content.addView(button("Найти") { search() }); query.requestFocus()
+        content.addView(button("Искать в: ${CenterCatalog.name(store.catalog)}") {
+            val providers=listOf("tmdb","kinovod","filmix")
+            AlertDialog.Builder(this).setTitle("Каталог для поиска")
+                .setSingleChoiceItems(providers.map { CenterCatalog.name(it) }.toTypedArray(),providers.indexOf(store.catalog)) { dialog,index ->
+                    store.catalog=providers[index];dialog.dismiss();searchScreen(query.text.toString())
+                    content.post { findTag(content,"search_source")?.requestFocus() }
+                }.setNegativeButton("Отмена",null).show()
+        }.apply { tag="search_source" })
+        content.addView(button("Найти") { search() }.apply { tag="search_submit" })
+        val recent=store.searches()
+        if(recent.isNotEmpty()) {
+            space(content,16);section("Недавние запросы")
+            content.addView(text("ОК — повторить поиск · Удержание ОК — удалить запрос",13,muted))
+            space(content,10)
+            recent.forEach { term ->
+                content.addView(button(term) { query.setText(term);search() }.apply {
+                    tag="search_recent:$term"
+                    setOnLongClickListener {
+                        store.removeSearch(term);searchScreen(query.text.toString())
+                        content.post {
+                            val next=store.searches().firstOrNull()?.let { findTag(content,"search_recent:$it") }
+                            (next ?: findTag(content,"search_submit"))?.requestFocus()
+                        }
+                        true
+                    }
+                })
+            }
+            content.addView(button("Очистить историю поиска") {
+                AlertDialog.Builder(this).setTitle("Очистить историю поиска?")
+                    .setMessage("История просмотра и избранное сохранятся")
+                    .setNegativeButton("Отмена",null).setPositiveButton("Очистить") { _,_->
+                        store.clearSearches();searchScreen(query.text.toString())
+                        content.post { findTag(content,"search_submit")?.requestFocus() }
+                    }.show()
+            })
+        }
+        query.requestFocus()
     }
     private fun detail(item: CenterTitle) {
         selected = item
