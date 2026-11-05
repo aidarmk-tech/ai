@@ -196,10 +196,12 @@ open class MediaCenterActivity : AppCompatActivity() {
             ?: menuHandle.requestFocus()
     }
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT && !menuOpen) {
-            val focused = currentFocus
+        if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT && navigation.visibility != View.VISIBLE) {
+            val focused = window.decorView.findFocus()
+            val point = IntArray(2); val edge = IntArray(2)
+            focused?.getLocationOnScreen(point); content.getLocationOnScreen(edge)
             if (focused === menuHandle || (inside(content, focused) &&
-                !inside(content, focused?.focusSearch(View.FOCUS_LEFT)))) {
+                (point[0] <= edge[0] + dp(24) || !inside(content, focused?.focusSearch(View.FOCUS_LEFT))))) {
                 openMenu(); return true
             }
         }
