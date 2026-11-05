@@ -222,4 +222,27 @@ class CenterBackendTest {
         assertEquals(12,list.getValue("Known").seeds);assertEquals(3,list.getValue("Known").leechers)
         assertTrue(list.getValue("Zero").seedsKnown);assertFalse(list.getValue("Unknown").seedsKnown)
     }
+
+    @Test fun exactReleaseMatchingUsesTitlesYearAndRequestedEpisode() {
+        fun release(title:String)=CenterRelease(title,"magnet:?xt=urn:btih:x",1,100,"A")
+        val movie=CenterTitle(1,"movie","Источник",original="The Source",year="2016")
+        assertTrue(CenterBackend.matchesRelease(release("Источник [2016] WEB-DL 1080p"),movie))
+        assertTrue(CenterBackend.matchesRelease(release("The.Source.2016.HEVC"),movie))
+        assertFalse(CenterBackend.matchesRelease(release("Надежда Румянцева [2021]"),movie))
+        assertFalse(CenterBackend.matchesRelease(release("Источник [2006]"),movie))
+        assertTrue(CenterBackend.matchesRelease(release("IT 2017"),CenterTitle(2,"movie","Оно",original="It",year="2017")))
+        val show=CenterTitle(3,"tv","Мой сериал")
+        val episode=CenterEpisode(2,5,"","")
+        assertTrue(CenterBackend.matchesRelease(release("Мой сериал S02E05 1080p"),show,episode))
+        assertTrue(CenterBackend.matchesRelease(release("Мой сериал S02 сезон целиком"),show,episode))
+        assertFalse(CenterBackend.matchesRelease(release("Мой сериал S01E05"),show,episode))
+        assertFalse(CenterBackend.matchesRelease(release("Мой сериал S02E06"),show,episode))
+    }
+    @Test fun sourceVoicesAndExplicitCodecTagsAreAvailableBeforePlayback() {
+        val result=CenterBackend.parseReleases("""[{"title":"Sorting 1080p HEVC HDR10","magnet":"magnet:?xt=urn:btih:x","voices":["Дубляж","Original","Дубляж"]}]""").single()
+        assertEquals(listOf("Дубляж","Original"),result.voices)
+        assertTrue(CenterBackend.releaseFormat(result).contains("HEVC"))
+        assertTrue(CenterBackend.releaseFormat(result).contains("HDR10"))
+        assertEquals("Не указан",CenterBackend.releaseFormat(result.copy(title="Unknown movie")))
+    }
 }
