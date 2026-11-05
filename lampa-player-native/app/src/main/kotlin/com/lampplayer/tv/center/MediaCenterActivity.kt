@@ -19,6 +19,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.doOnNextLayout
 import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.bumptech.glide.Glide
@@ -58,6 +59,8 @@ open class MediaCenterActivity : AppCompatActivity() {
     private lateinit var menuHandle: TextView
     private var menuOpen = false
     private var job: Job? = null
+    private var gridJob: Job? = null
+    private var gridGeneration = 0
     private var page = "home"
     private var nav = "Главная"
     private var selected: CenterTitle? = null
@@ -239,6 +242,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         }
     }
     private fun clear(title: String) {
+        gridGeneration++; gridJob?.cancel(); gridJob = null
         content.removeAllViews(); scroll.scrollTo(0, 0)
         content.addView(text(title, 27).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) })
         space(content, 16)
@@ -354,25 +358,103 @@ open class MediaCenterActivity : AppCompatActivity() {
         catalogPage = pageNumber
         currentScreen = { showHome(items, heading, pageNumber, category) }; page = "home"; clear(heading)
         if (category != null) catalogTools()
-        if (items.isEmpty()) content.addView(text(if (heading == "Избранное") "Здесь появятся фильмы и сериалы, которые ты добавишь в избранное" else "Ничего не найдено", 17, muted))
-        if (heading == "Популярное сейчас") items.firstOrNull()?.let { featured(it) }
-        if (heading == "Популярное сейчас" && store.history().isNotEmpty()) {
-            section("Продолжить просмотр"); historyCards(store.history().take(8)); space(content, 14)
+        if (items.isEmpty()) {
+            content.addView(text(if (heading == "Избранное") "Здесь появятся фильмы и сериалы из избранного" else "Ничего не найдено", 17, muted))
+            return
         }
-        if (heading == "Популярное сейчас") {
-            listOf("movie" to "Фильмы", "tv" to "Сериалы").forEach { (type, label) ->
-                val part = items.filter { it.type == type }
-                if (part.isNotEmpty()) { section(label, part.size); shelf(part) }
+        titleGrid(items, heading, pageNumber, category, heading !in listOf("Избранное", "Результаты поиска"))
+    }
+    protected open suspend fun nextGridPage(provider: String, category: CenterSection?, type: String, number: Int): List<CenterTitle> =
+        if (category != null) catalogItems(provider, category, number) else backend.browse(type, page = number)
+    private fun titleGrid(initial: List<CenterTitle>, heading: String, firstPage: Int, category: CenterSection?, canLoad: Boolean) {
+        val loaded = initial.distinctBy { it.key }.toMutableList()
+        val provider = store.catalog
+        val type = when (nav) { "Фильмы" -> "movie"; "Сериалы" -> "tv"; else -> "all" }
+        val generation = gridGeneration
+        var number = firstPage
+        var busy = false; var ended = !canLoad; var failed = false
+        val desired = when (store.cardSize) { "compact" -> 116; "large" -> 178; else -> 146 }
+        val columns = ((resources.configuration.screenWidthDp - 110) / desired).coerceIn(2, 10)
+        val grid = RecyclerView(this).apply {
+            tag = "catalog_grid"; layoutManager = GridLayoutManager(this@MediaCenterActivity, columns)
+            itemAnimator = null; clipToPadding = false; setPadding(dp(3), dp(6), dp(3), dp(8))
+            descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+            addOnItemTouchListener(object : RecyclerView.SimpleOnItemTouchListener() {
+                override fun onInterceptTouchEvent(rv: RecyclerView, event: android.view.MotionEvent): Boolean {
+                    if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) rv.parent.requestDisallowInterceptTouchEvent(true)
+                    return false
+                }
+            })
+        }
+        val status = text("", 14, muted).apply { tag = "grid_status"; setPadding(dp(8),dp(8),dp(8),dp(8)) }
+        lateinit var adapter: RecyclerView.Adapter<Poster>
+        fun rememberScreen() { currentScreen = { showHome(loaded.toList(), heading, number, category) } }
+        fun nextPage() {
+            if (busy || ended || failed || generation != gridGeneration || page != "home") return
+            busy = true; status.text = "Загружаю ещё…"; status.isFocusable = false
+            gridJob = lifecycleScope.launch {
+                try {
+                    val batch = nextGridPage(provider, category, type, number + 1)
+                    if (generation != gridGeneration) return@launch
+                    val keys = loaded.mapTo(hashSetOf()) { it.key }
+                    val fresh = batch.filter { keys.add(it.key) }
+                    if (fresh.isEmpty()) ended = true else {
+                        val offset = loaded.size
+                        loaded.addAll(fresh); number++; catalogPage = number
+                        rememberScreen(); adapter.notifyItemRangeInserted(offset, fresh.size)
+                    }
+                    status.text = if (ended) "Все карточки загружены" else ""
+                } catch (e: CancellationException) { throw e }
+                catch (_: Exception) {
+                    if (generation == gridGeneration) {
+                        failed = true; status.text = "Не удалось загрузить продолжение · ОК, чтобы повторить"
+                        status.isFocusable = true; status.isClickable = true
+                    }
+                } finally { busy = false }
             }
-        } else if (items.isNotEmpty()) shelf(items)
-        if (heading != "Избранное" && heading != "Результаты поиска") content.addView(button("Следующая подборка   ›") {
-            val type = when (nav) { "Фильмы" -> "movie"; "Сериалы" -> "tv"; else -> "all" }
-            val nextPage = catalogPage + 1
-            enter {
-                if (category != null) loadCategory(category, nextPage)
-                else work("Загружаю следующую страницу…") { val next = backend.browse(type, page = nextPage); showHome(next, heading, nextPage) }
+        }
+        status.setOnClickListener { failed = false; nextPage() }
+        adapter = object : RecyclerView.Adapter<Poster>() {
+            override fun getItemCount() = loaded.size
+            override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Poster {
+                val card = column().apply {
+                    isFocusable = true; isClickable = true; setPadding(dp(7),dp(7),dp(7),dp(7)); background = bg(panel)
+                    layoutParams = RecyclerView.LayoutParams(-1, dp(desired * 3 / 2 + 55)).apply { setMargins(dp(4),dp(4),dp(4),dp(4)) }
+                }
+                val art = FrameLayout(this@MediaCenterActivity)
+                card.addView(art, LinearLayout.LayoutParams(-1,0,1f))
+                val title = text("",14).apply { maxLines=1; ellipsize=TextUtils.TruncateAt.END }
+                val info = text("",11,muted).apply { maxLines=1; ellipsize=TextUtils.TruncateAt.END }
+                card.addView(title); card.addView(info)
+                return Poster(card,art,title,info)
+            }
+            override fun onBindViewHolder(holder: Poster, position: Int) {
+                val item = loaded[position]
+                holder.itemView.tag = if(item.provider == null) "title:${item.type}:${item.id}" else "title:${item.key}"
+                holder.title.text = item.title
+                holder.info.text = item.updateLabel ?: facts(item)
+                holder.art.removeAllViews()
+                holder.art.addView(artFrame(item.title,desired,desired*3/2,item.poster,item.id),FrameLayout.LayoutParams(-1,-1))
+                holder.itemView.setOnClickListener { enter { detail(item) } }
+                holder.itemView.setOnLongClickListener {
+                    store.toggle(item); Toast.makeText(this@MediaCenterActivity,if(store.isFavorite(item)) "Добавлено в избранное" else "Убрано из избранного",Toast.LENGTH_SHORT).show(); true
+                }
+                holder.itemView.setOnFocusChangeListener { view, focused ->
+                    view.background = bg(if(focused) Color.rgb(34,54,79) else panel,if(focused) accent else Color.TRANSPARENT)
+                    if(focused && holder.bindingAdapterPosition >= loaded.size-columns*2) nextPage()
+                }
+            }
+        }
+        grid.adapter = adapter
+        grid.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) {
+                if (dy > 0 && (rv.layoutManager as GridLayoutManager).findLastVisibleItemPosition() >= loaded.size-columns*2) nextPage()
             }
         })
+        content.addView(grid,LinearLayout.LayoutParams(-1,dp((resources.configuration.screenHeightDp-155).coerceAtLeast(240))))
+        content.addView(status)
+        rememberScreen()
+        grid.post { if (loaded.size <= columns*2) nextPage() }
     }
     private var catalogPage = 1
     private fun rail(adapter: RecyclerView.Adapter<*>, height: Int) {
@@ -733,9 +815,9 @@ open class MediaCenterActivity : AppCompatActivity() {
         content.addView(text("Показано: ${visible.size} из ${releases.size}. Сиды — по данным источника.", 13, muted)); space(content, 10)
         if (visible.isEmpty()) content.addView(text("Нет раздач с выбранными фильтрами. Измени качество или отключи фильтр сидов", 18, muted))
         visible.forEach { release ->
-            content.addView(button("${release.title}\nСиды: ${release.seeds} · ${size(release.size)} · ${release.tracker}") {
+            content.addView(button("${release.title}\nРаздают: ${if (release.seedsKnown) release.seeds.toString() else "—"} · Качают: ${release.leechers?.toString() ?: "—"}\nБитрейт: ${release.bitrate ?: "—"} · ${size(release.size)} · ${release.tracker}") {
                 enter { openRelease(item, episode, release) }
-            }.apply { tag = "release:${release.link}"; layoutParams.height = dp(86); maxLines = 3 })
+            }.apply { tag = "release:${release.link}"; layoutParams.height = dp(112); maxLines = 4 })
         }
         content.addView(button("Открыть свою magnet-ссылку / .torrent") { magnet(item, episode) })
     }
