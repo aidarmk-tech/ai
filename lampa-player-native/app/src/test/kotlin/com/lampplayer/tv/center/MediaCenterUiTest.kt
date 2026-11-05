@@ -485,4 +485,26 @@ class MediaCenterUiTest {
             assertEquals(listOf(2,2),host.gridCalls)
         } finally { controller.pause().stop().destroy() }
     }
+
+    @Test fun exactFilterHidesUnrelatedResultsAndLongPressShowsReleaseDetails() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            host.releaseFixture(listOf(
+                CenterRelease("Unrelated 1080p","other",50,100,"A"),
+                CenterRelease("Sorting 1080p HEVC HDR10","right",2,200,"B",voices=listOf("Дубляж"))))
+            frame(root)
+            val exact=all(root).first { it.tag=="release_exact" }
+            exact.requestFocus();exact.performClick();frame(root)
+            assertEquals("release_exact",root.findFocus()?.tag)
+            assertEquals(1,all(root).count { (it.tag as? String)?.startsWith("release:")==true })
+            all(root).first { it.tag=="release:right" }.performLongClick();frame(root)
+            val dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
+            val message=dialog.findViewById<TextView>(android.R.id.message)!!.text.toString()
+            assertTrue(message.contains("Дубляж"));assertTrue(message.contains("HEVC"));assertTrue(message.contains("HDR10"))
+            assertNull(shadowOf(host).nextStartedActivity)
+            dialog.dismiss()
+        } finally { controller.pause().stop().destroy() }
+    }
 }
