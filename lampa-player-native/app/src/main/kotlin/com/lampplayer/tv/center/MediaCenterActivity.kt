@@ -46,6 +46,8 @@ open class MediaCenterActivity : AppCompatActivity() {
     private lateinit var content: LinearLayout
     private lateinit var navigation: LinearLayout
     private lateinit var scroll: ScrollView
+    private lateinit var menuHandle: TextView
+    private var menuOpen = false
     private var job: Job? = null
     private var page = "home"
     private var nav = "Главная"
@@ -103,6 +105,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         }
     }
     private fun back() {
+        if (menuOpen) { closeMenu(); return }
         job?.cancel()
         if (backStack.isNotEmpty()) restore(backStack.removeLast())
         else if (nav != "Главная") navigate("Главная")
@@ -128,12 +131,12 @@ open class MediaCenterActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         store = CenterStore(this)
-        val root = row().apply { setBackgroundColor(Color.rgb(8, 13, 22)); setPadding(dp(22), dp(22), dp(18), dp(14)) }
+        val root = FrameLayout(this).apply { setBackgroundColor(Color.rgb(8, 13, 22)); setPadding(dp(22), dp(22), dp(18), dp(14)) }
         navigation = column().apply { setPadding(0, 0, dp(22), 0) }
         navigation.addView(text("LampMedia", 24, accent).apply { typeface = Typeface.DEFAULT_BOLD })
         space(navigation, 24)
         listOf("Главная", "Фильмы", "Сериалы", "Поиск", "Избранное", "История", "Источники", "Настройки").forEach { label ->
-            navigation.addView(button(label) { navigate(label) }.apply {
+            navigation.addView(button(label) { navigate(label); closeMenu() }.apply {
                 textSize = 14f
                 layoutParams = LinearLayout.LayoutParams(-1, dp(43)).apply { bottomMargin = dp(6) }
                 setOnKeyListener { _, key, event ->
@@ -143,16 +146,64 @@ open class MediaCenterActivity : AppCompatActivity() {
                 }
             })
         }
-        root.addView(navigation, LinearLayout.LayoutParams(dp(170), -1))
+
         scroll = ScrollView(this).apply { isFillViewport = true; clipToPadding = false; isSmoothScrollingEnabled = true }
         content = column().apply { setPadding(dp(8), 0, dp(8), dp(24)) }
         scroll.addView(content, ViewGroup.LayoutParams(-1, -2))
-        root.addView(scroll, LinearLayout.LayoutParams(0, -1, 1f))
+        root.addView(scroll, FrameLayout.LayoutParams(-1, -1).apply { leftMargin = dp(48) })
+        menuHandle = button("☰") { openMenu() }.apply {
+            tag = "menu_handle"; contentDescription = "Открыть меню"
+            gravity = Gravity.CENTER; setPadding(0, 0, 0, 0)
+        }
+        root.addView(menuHandle, FrameLayout.LayoutParams(dp(42), dp(48)))
+        navigation.setPadding(dp(10), dp(8), dp(10), dp(8))
+        navigation.setBackgroundColor(Color.rgb(13, 22, 36))
+        navigation.elevation = dp(16).toFloat()
+        navigation.visibility = View.GONE
+        root.addView(navigation, FrameLayout.LayoutParams(dp(220), -1))
+        root.viewTreeObserver.addOnGlobalFocusChangeListener { _, focused ->
+            if (menuOpen && focused != null && inside(content, focused)) hideMenu()
+        }
         setContentView(root)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() = back()
         })
-        highlightNavigation(); navigation.getChildAt(2)?.requestFocus(); loadHome()
+        highlightNavigation(); menuHandle.requestFocus(); loadHome()
+    }
+    private fun inside(parent: View, view: View?): Boolean {
+        var current = view
+        while (current != null) {
+            if (current === parent) return true
+            current = current.parent as? View
+        }
+        return false
+    }
+    private fun openMenu() {
+        menuOpen = true; menuHandle.visibility = View.INVISIBLE
+        navigation.visibility = View.VISIBLE
+        navigation.translationX = -dp(220).toFloat()
+        navigation.animate().translationX(0f).setDuration(150).start()
+        findTag(navigation, nav)?.requestFocus()
+    }
+    private fun hideMenu() {
+        menuOpen = false
+        navigation.animate().cancel()
+        navigation.visibility = View.GONE; menuHandle.visibility = View.VISIBLE
+    }
+    private fun closeMenu() {
+        hideMenu()
+        content.getFocusables(View.FOCUS_FORWARD).firstOrNull { it.isShown && it.isEnabled }?.requestFocus()
+            ?: menuHandle.requestFocus()
+    }
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT && !menuOpen) {
+            val focused = currentFocus
+            if (focused === menuHandle || (inside(content, focused) &&
+                !inside(content, focused?.focusSearch(View.FOCUS_LEFT)))) {
+                openMenu(); return true
+            }
+        }
+        return super.dispatchKeyEvent(event)
     }
     override fun onResume() {
         super.onResume()
