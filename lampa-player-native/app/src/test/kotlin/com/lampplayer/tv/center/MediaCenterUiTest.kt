@@ -29,6 +29,7 @@ import java.util.concurrent.TimeUnit
 @LooperMode(LooperMode.Mode.PAUSED)
 class MediaCenterUiTest {
     class FakeBackend : CenterBackend() {
+        override suspend fun genres(type:String)=listOf(18 to "Драма",35 to "Комедия")
         var detailCalls=0; var episodeCalls=0
         override suspend fun details(item:CenterTitle):CenterDetails {
             detailCalls++
@@ -45,6 +46,13 @@ class MediaCenterUiTest {
         var onlineCalls=0
         val gridCalls=mutableListOf<Int>()
         val gridPages=mutableMapOf<Int,List<CenterTitle>>()
+        val browseCalls=mutableListOf<Pair<CenterBrowse,Int>>()
+        val browsePages=mutableMapOf<Int,List<CenterTitle>>()
+        override suspend fun browsePage(provider:String,request:CenterBrowse,number:Int):List<CenterTitle> {
+            browseCalls.add(request to number);return browsePages[number].orEmpty()
+        }
+        fun browseFixture(items:List<CenterTitle>,request:CenterBrowse) { showHome(items,"Результаты поиска",1,null,request) }
+        fun mineFixture() { mySeriesScreen() }
         var failGrid=false
         override suspend fun nextGridPage(provider:String,category:CenterSection?,type:String,number:Int):List<CenterTitle> {
             gridCalls.add(number)
@@ -505,6 +513,38 @@ class MediaCenterUiTest {
             assertTrue(message.contains("Дубляж"));assertTrue(message.contains("HEVC"));assertTrue(message.contains("HDR10"))
             assertNull(shadowOf(host).nextStartedActivity)
             dialog.dismiss()
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun searchGridContinuesTheSameQueryAndPersonalSeriesAreFinite() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val request=CenterBrowse(type="all",query="Источники")
+            host.browsePages[2]=listOf(CenterTitle(2,"tv","Result 2"))
+            host.browseFixture(listOf(CenterTitle(1,"movie","Result 1")),request);repeat(4) { frame(root) }
+            assertEquals(listOf(request to 2),host.browseCalls)
+            var grid=all(root).filterIsInstance<androidx.recyclerview.widget.RecyclerView>().first { it.tag=="catalog_grid" }
+            assertEquals(2,grid.adapter!!.itemCount)
+            CenterStore(host).toggleFollow(CenterTitle(8,"tv","Following",provider="kinovod",sourceUrl="https://source.test/serial/8-show"))
+            host.mineFixture();repeat(3) { frame(root) }
+            grid=all(root).filterIsInstance<androidx.recyclerview.widget.RecyclerView>().first { it.tag=="catalog_grid" }
+            assertEquals(1,grid.adapter!!.itemCount)
+            assertEquals(listOf(request to 2),host.browseCalls)
+            assertTrue(all(root).filterIsInstance<TextView>().any { it.text=="Сериалы из подписок и истории просмотра" })
+        } finally { controller.pause().stop().destroy() }
+    }
+    @Test fun titleCanBeAddedAndRemovedFromMySeriesWithoutStartingPlayback() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(321,"tv","Follow me")
+            host.detailFixture(CenterDetails(item,listOf(1),""));frame(root)
+            all(root).first { it.tag=="follow_series" }.performClick();frame(root)
+            assertTrue(CenterStore(host).isFollowed(item))
+            all(root).first { it.tag=="follow_series" }.performClick();frame(root)
+            assertFalse(CenterStore(host).isFollowed(item));assertNull(shadowOf(host).nextStartedActivity)
         } finally { controller.pause().stop().destroy() }
     }
 }
