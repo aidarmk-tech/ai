@@ -48,6 +48,7 @@ class MediaCenterUiTest {
             CenterTitle(it, if(it%2==0) "tv" else "movie", listOf("Тихий город","За горизонтом","Новый день","На орбите")[(it-1)%4],
                 overview="Истории, к которым хочется возвращаться. Каталог, серии и просмотр в одном приложении.", year="2026",rating="8.2")
         }; showDashboard(CenterSection.all.map { section -> section to items.filter { it.type == section.type } }) }
+        fun releaseFixture(items: List<CenterRelease>) { releaseList(CenterTitle(801,"movie","Sorting"),null,items) }
         fun detailFixture(details: CenterDetails) { showDetails(details) }
         fun calls()=backend.detailCalls to backend.episodeCalls
         fun nativeFixture(video:OnlineVideo) { showOnline(video) }
@@ -403,6 +404,30 @@ class MediaCenterUiTest {
             assertTrue(dialog.isShowing)
             assertNull(shadowOf(host).nextStartedActivity)
             dialog.dismiss()
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun releaseFiltersKeepRemoteFocusAndPersistAcrossStoreInstances() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            host.releaseFixture(listOf(
+                CenterRelease("Film 1080p","magnet:?xt=urn:btih:a",0,100,"A"),
+                CenterRelease("Film 720p","magnet:?xt=urn:btih:b",5,200,"B")))
+            frame(root)
+            all(root).first { it.tag=="release_seeded" }.apply { requestFocus();performClick() };frame(root)
+            assertTrue(CenterStore(host).seededOnly)
+            assertEquals("release_seeded",root.findFocus()?.tag)
+            assertEquals(1,all(root).count { (it.tag as? String)?.startsWith("release:")==true })
+            all(root).first { it.tag=="release_quality:1080" }.performClick();frame(root)
+            assertEquals(0,all(root).count { (it.tag as? String)?.startsWith("release:")==true })
+            all(root).first { it.tag=="release_sort" }.performClick();frame(root)
+            val dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
+            val list=dialog.listView
+            list.performItemClick(list.getChildAt(1),1,list.adapter.getItemId(1));frame(root)
+            assertEquals("small",CenterStore(host).releaseSort)
+            assertEquals("release_sort",root.findFocus()?.tag)
         } finally { controller.pause().stop().destroy() }
     }
 }
