@@ -1,0 +1,16 @@
+name: Inspect public catalogs
+on:
+  push:
+    branches: [codex/media-center]
+    paths: ['scripts/catalog-probe.py', '.github/workflows/catalog-probe.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect public metadata and pagination
+        run: python3 scripts/catalog-probe.py
