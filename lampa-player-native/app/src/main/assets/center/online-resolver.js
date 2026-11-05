@@ -16,7 +16,7 @@ function remember(value,kind,bound){
  }catch(e){}
 }
 function playlist(value,bound,voice){
- if(typeof value==='string'&&value.length<900000&&/^\\s*\\[/.test(value)){try{value=originalParse(value);}catch(e){return;}}
+ if(typeof value==='string'&&value.length<900000&&value.trim().charAt(0)==='['){try{value=originalParse(value);}catch(e){return;}}
  if(!Array.isArray(value)||!value.length||value.length>1000)return;
  if(value.some(function(v){return v&&typeof v==='object'&&(v.file||v.folder)}))remember(voice?[{title:voice,folder:value}]:value,'list',bound);
 }
