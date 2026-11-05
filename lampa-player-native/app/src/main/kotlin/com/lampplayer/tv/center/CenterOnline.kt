@@ -134,6 +134,38 @@ class CenterOnline(private val activity:AppCompatActivity) {
         web.evaluateJavascript(script) { if(continuation.isActive)continuation.resume(it ?: "null") }
     }
     companion object {
+        /** Validate the media URL and only use a direct MP4 fallback after a 404 for its HLS manifest. */
+        suspend fun playableUrl(url:String,headers:Map<String,String>):String {
+            suspend fun probe(target:String):Pair<Int,Boolean> = suspendCancellableCoroutine { continuation ->
+                val call=libraryHttp.newBuilder().followRedirects(true).build().newCall(Request.Builder().url(target)
+                    .apply { headers.forEach { (key,value)->header(key,value) };header("Range","bytes=0-4095") }.build())
+                continuation.invokeOnCancellation { call.cancel() }
+                call.enqueue(object:okhttp3.Callback {
+                    override fun onFailure(call:Call,e:java.io.IOException) { if(continuation.isActive)continuation.resumeWith(Result.failure(e)) }
+                    override fun onResponse(call:Call,response:okhttp3.Response) {
+                        val result=runCatching { response.use {
+                            val body=response.body
+                            val data=body?.byteStream()?.let { stream -> val bytes=ByteArray(4096);val count=stream.read(bytes);if(count>0)bytes.copyOf(count) else byteArrayOf() } ?: byteArrayOf()
+                            val prefix=data.toString(Charsets.UTF_8).trimStart()
+                            val media=prefix.startsWith("#EXTM3U") || (data.size>=8 && String(data,4,4,Charsets.US_ASCII)=="ftyp") ||
+                                (body?.contentType()?.type=="video" && data.isNotEmpty())
+                            response.code to (response.isSuccessful && media)
+                        } }
+                        if(continuation.isActive)continuation.resumeWith(result)
+                    }
+                })
+            }
+            val original=probe(url)
+            if(original.second)return url
+            val parsed=url.toHttpUrlOrNull() ?: error("Некорректный адрес видео")
+            val path=parsed.encodedPath
+            if(original.first==404 && Regex("(?i)\\.mp4/[^/]+\\.m3u8$").containsMatchIn(path)) {
+                val fallback=parsed.newBuilder().encodedPath(path.substringBeforeLast('/')).build().toString()
+                if(probe(fallback).second)return fallback
+            }
+            error(if(original.first==404) "Киновод: видео по этой ссылке не найдено (HTTP 404). Обнови ссылки или выбери другой источник."
+                else "Источник не отдал видео: HTTP ${original.first}")
+        }
         private val libraryHttp=OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
             .connectTimeout(8,TimeUnit.SECONDS).readTimeout(10,TimeUnit.SECONDS).callTimeout(12,TimeUnit.SECONDS).build()
         fun source(item:CenterTitle):okhttp3.HttpUrl {
