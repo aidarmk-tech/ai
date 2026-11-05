@@ -75,3 +75,60 @@ def check(provider):
 with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
     for result in pool.map(check, ("rezka", "kazplay")):
         print("CATALOG_SMOKE " + json.dumps(result, ensure_ascii=False))
+
+# Inspect the user-supplied domains using public metadata only.
+class Element:
+    def __init__(self, tag="", attrs=(), parent=None):
+        self.tag,self.attrs,self.parent,self.children,self.text=tag,dict(attrs),parent,[],""
+    def dump(self,depth=0):
+        allowed={"class","id","href","src","data-src","data-original","data-id","name","type","action","method","placeholder","itemprop","style"}
+        return {"tag":self.tag,"attrs":{k:v for k,v in self.attrs.items() if k in allowed},
+                "text":self.text.strip()[:180],"children":[c.dump(depth+1) for c in self.children[:10] if c.tag not in ("script","style","iframe","svg")] if depth<5 else []}
+class Inspect(HTMLParser):
+    def __init__(self,html):
+        super().__init__(convert_charrefs=True);self.root=Element("root");self.node=self.root;self.nodes=[];self.feed(html)
+    def handle_starttag(self,tag,attrs):
+        node=Element(tag,attrs,self.node);self.node.children.append(node);self.nodes.append(node)
+        if tag not in ("area","base","br","col","embed","hr","img","input","link","meta","param","source","track","wbr"):self.node=node
+    def handle_endtag(self,tag):
+        node=self.node
+        while node.parent:
+            if node.tag==tag:self.node=node.parent;return
+            node=node.parent
+    def handle_data(self,data):self.node.text+=data
+
+def inspect_domain(url):
+    try:
+        html,final=read(url);page=Inspect(html)
+        pattern=r"^/(?:films|series)/(?:[^/]+/)*[0-9]+-[^/]+\.html$|^/[0-9]+-[^/]+\.html$"
+        links=[];samples=[]
+        for node in page.nodes:
+            if node.tag!="a":continue
+            target=urllib.parse.urljoin(final,node.attrs.get("href",""))
+            parsed=urllib.parse.urlparse(target)
+            if parsed.hostname!=urllib.parse.urlparse(final).hostname or not re.match(pattern,parsed.path) or target in links:continue
+            links.append(target)
+            if len(samples)<2:
+                parent=node.parent
+                if parent and parent.parent:parent=parent.parent
+                samples.append(parent.dump() if parent else node.dump())
+        forms=[]
+        for form in (n for n in page.nodes if n.tag=="form"):
+            inputs=[]
+            def walk(n):
+                if n.tag=="input" and n.attrs.get("name") in ("story","do","subaction","search_start","q","query"):
+                    inputs.append({k:v for k,v in n.attrs.items() if k in ("name","value","type")})
+                for child in n.children:walk(child)
+            walk(form)
+            if inputs:forms.append({"attrs":form.attrs,"inputs":inputs})
+        result={"url":url,"final":final,"cards":len(links),"samples":samples,"search_forms":forms,
+                "pages":[n.dump() for n in page.nodes if n.tag=="a" and "/page/2" in n.attrs.get("href","")][:2]}
+        if links:
+            detail_html,detail_url=read(links[0]);detail=Inspect(detail_html)
+            result["detail"]={"url":detail_url,"meta":{k:v for k,v in Metadata(detail_html).meta.items() if k in ("og:title","og:image","og:description")},
+                "description":[n.dump() for n in detail.nodes if n.attrs.get("itemprop")=="description" or any(x in n.attrs.get("class","") for x in ("full-text","fulltext","fullstory","b-post__description_text"))][:2]}
+        return result
+    except Exception as error:return {"url":url,"error":str(error)}
+with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+    for result in pool.map(inspect_domain,("https://lv.hdrezka.inc/","https://kz.kinogo.moi/")):
+        print("CATALOG_INSPECT "+json.dumps(result,ensure_ascii=False))
