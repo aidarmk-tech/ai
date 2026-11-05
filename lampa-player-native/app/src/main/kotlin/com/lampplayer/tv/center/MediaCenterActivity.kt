@@ -467,7 +467,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         val frame = artFrame(item.title,width,height,item.poster,item.id)
         // Some Rezka pages provide covers only on the detail page. Fetch visible cards
         // without blocking the grid; detaching/recycling a card cancels its request.
-        if(item.provider=="rezka" && item.poster==null) {
+        if(item.provider in listOf("rezka","hdrezka") && item.poster==null) {
             var coverJob: Job? = null
             frame.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
                 override fun onViewAttachedToWindow(view: View) {

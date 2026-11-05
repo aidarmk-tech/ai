@@ -688,6 +688,7 @@ class MediaCenterUiTest {
             var dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
             val names=(0 until dialog.listView.adapter.count).map { dialog.listView.adapter.getItem(it).toString() }
             assertTrue(names.contains("Rezka"));assertTrue(names.contains("KazPlay · Қазақша"))
+            assertTrue(names.contains("KinoGo · KZ"));assertTrue(names.contains("HDRezka · LV · тест"))
             val index=names.indexOf("KazPlay · Қазақша")
             dialog.listView.performItemClick(dialog.listView.getChildAt(index),index,index.toLong());frame(root)
             assertEquals("kazplay",CenterStore(host).catalog)
@@ -700,7 +701,7 @@ class MediaCenterUiTest {
             label(root,"Поиск").performClick();frame(root)
             label(root,"Искать в: KazPlay · Қазақша").performClick();frame(root)
             dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
-            assertEquals(5,dialog.listView.adapter.count);dialog.dismiss()
+            assertEquals(CenterCatalog.providers.size,dialog.listView.adapter.count);dialog.dismiss()
         } finally { controller.pause().stop().destroy() }
     }
 

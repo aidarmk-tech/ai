@@ -182,4 +182,50 @@ class CenterCatalogTest {
         assertEquals("https://rezka.test",store.catalogHost("rezka"))
     }
 
+    @Test fun suppliedDomainsHaveIndependentEntriesAndObservedKinogoRoutes() {
+        assertEquals("https://lv.hdrezka.inc",CenterCatalog.defaultHost("hdrezka"))
+        assertEquals("https://kz.kinogo.moi",CenterCatalog.defaultHost("kinogo"))
+        assertTrue(CenterCatalog.name("hdrezka").contains("тест"))
+        val sections=CenterCatalog.sections("kinogo")
+        val kz=sections.single { it.country=="KZ" }
+        assertEquals("all",kz.type);assertEquals("Казахстан · фильмы и сериалы",kz.label)
+        val url=CenterCatalog.route("kinogo","https://catalog.test",kz,2)
+        assertEquals(listOf("xfsearch","country","казахстан","page","2",""),url.pathSegments)
+        assertEquals("/film/russkie-filmy/",CenterCatalog.route("kinogo","https://catalog.test",sections.single { it.type=="movie" && it.country=="RU" }).encodedPath)
+        assertEquals("/serial/russkye_serialy/page/2/",CenterCatalog.route("kinogo","https://catalog.test",sections.single { it.type=="tv" && it.country=="RU" },2).encodedPath)
+        assertEquals("Матрица & фильм",CenterCatalog.searchRoute("kinogo","https://catalog.test","Матрица & фильм").queryParameter("story"))
+        assertEquals("Матрица",CenterCatalog.searchRoute("hdrezka","https://lv.hdrezka.inc","Матрица").queryParameter("q"))
+    }
+    @Test fun kinogoNativeRowsReadRealIdsLazyCoversBadgesYearsAndRatings() {
+        val doc=Jsoup.parse("""<div class="movie" id="62752"><div class="shortstorytitle"><h2><a href="/62752-sintetika.html">Синтетика (2026)</a></h2>
+            <span class="rating__votes">3.2/5</span></div><div class="movie__info-img"><img src="/templates/Kinogo/images/lazy-poster.png" data-src="/uploads/poster.jpg"></div>
+            <div class="movie__info-item">Год выпуска: 2026</div><div class="movie__info-rates"><span class="kp">KP 7.4</span></div>
+            <div class="movie__info-desc">Сюжет фильма</div></div>
+            <div class="movie" id="62687"><div class="shortstorytitle"><h2><a href="/62687-show.html">Сериал (1-2 сезон)</a></h2></div>
+            <div class="movie__info-img"><div class="movie__info-lenta-body">2 сезон 5 серия</div><img data-src="/uploads/show.jpg"></div>
+            <div class="movie__info-item">Год выпуска: 2024</div></div>
+            <div class="movie" id="12"><div class="shortstorytitle"><h2><a href="https://foreign.test/12-other.html">Чужой фильм (2025)</a></h2></div></div>""","https://kz.kinogo.moi/")
+        val items=CenterCatalog.parse(doc,"kinogo")
+        assertEquals(2,items.size)
+        assertEquals("kinogo:movie:62752",items[0].key);assertEquals("Синтетика",items[0].title)
+        assertEquals("2026",items[0].year);assertEquals("https://kz.kinogo.moi/uploads/poster.jpg",items[0].poster)
+        assertEquals("KP 7.4",items[0].rating);assertEquals("Сюжет фильма",items[0].overview)
+        assertEquals("kinogo:tv:62687",items[1].key);assertEquals("Сериал",items[1].title)
+        assertEquals("2024",items[1].year);assertEquals("2 сезон 5 серия",items[1].updateLabel)
+        assertEquals(items.map { it.key },CenterCatalog.parse(Jsoup.parse(doc.outerHtml(),"https://mirror.test"),"kinogo").map { it.key })
+    }
+    @Test fun hdrezkaTestParserKeepsItsIdentitySeparateAndChallengePagesFailHonestly() {
+        val html="""<div class="b-content__inline_item"><div class="b-content__inline_item-link">
+            <a href="/series/drama/17-show.html">Сериал</a><div class="misc">2025, драма</div></div><img src="/poster.jpg"></div>"""
+        val doc=Jsoup.parse(html,"https://lv.hdrezka.inc")
+        val item=CenterCatalog.parse(doc,"hdrezka").single()
+        assertEquals("hdrezka:tv:17",item.key)
+        assertNotEquals(CenterCatalog.parse(doc,"rezka").single().key,item.key)
+        for(provider in listOf("hdrezka","kinogo")) {
+            try { CenterCatalog.parse(Jsoup.parse("<h1>Service unavailable</h1>","https://catalog.test"),provider);fail("Accepted a challenge or outage") }
+            catch(_:IllegalStateException) {}
+        }
+        assertTrue(CenterCatalog.parse(Jsoup.parse("По вашему запросу ничего не найдено","https://catalog.test"),"kinogo").isEmpty())
+    }
+
 }

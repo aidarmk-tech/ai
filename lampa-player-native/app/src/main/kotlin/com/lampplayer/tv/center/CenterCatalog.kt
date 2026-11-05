@@ -37,19 +37,27 @@ class CenterCatalog {
             .readTimeout(20,TimeUnit.SECONDS).callTimeout(30,TimeUnit.SECONDS).build()
         private const val LIMIT = 2 * 1024 * 1024L
         private const val UA = "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"
-        val providers = listOf("tmdb", "kinovod", "filmix", "rezka", "kazplay")
+        val providers = listOf("tmdb", "kinovod", "filmix", "rezka", "kazplay", "hdrezka", "kinogo")
         val sites get() = providers.filter { it != "tmdb" }
         fun name(provider: String?) = when(provider) {
-            "kinovod" -> "Киновод"; "filmix" -> "Filmix"; "rezka" -> "Rezka"; "kazplay" -> "KazPlay · Қазақша"; else -> "TMDB"
+            "kinovod" -> "Киновод"; "filmix" -> "Filmix"; "rezka" -> "Rezka"; "kazplay" -> "KazPlay · Қазақша"; "hdrezka" -> "HDRezka · LV · тест"; "kinogo" -> "KinoGo · KZ"; else -> "TMDB"
         }
         fun defaultHost(provider: String) = when(provider) {
             "kinovod" -> "https://kinovod.pro"; "filmix" -> "https://filmix.gg"
             "rezka" -> "https://rezka.ac"; "kazplay" -> "https://kazplay.kz"
+            "hdrezka" -> "https://lv.hdrezka.inc"; "kinogo" -> "https://kz.kinogo.moi"
             else -> error("Неизвестный каталог")
         }
         fun sections(provider: String): List<CenterSection> = when(provider) {
             "kazplay" -> listOf(CenterSection("kazplay_movies", "Фильмы на казахском", "movie"),
                 CenterSection("kazplay_series", "Сериалы на казахском", "tv"))
+            "hdrezka" -> listOf(CenterSection("hdrezka_movies","Фильмы · HDRezka","movie"),
+                CenterSection("hdrezka_series","Сериалы · HDRezka","tv"))
+            "kinogo" -> listOf(CenterSection("kinogo_movies","Фильмы · KinoGo","movie"),
+                CenterSection("kinogo_series","Сериалы · KinoGo","tv"),
+                CenterSection("kinogo_ru_movies","Русские фильмы","movie","RU"),
+                CenterSection("kinogo_ru_series","Русские сериалы","tv","RU"),
+                CenterSection("kinogo_kz","Казахстан · фильмы и сериалы","all","KZ"))
             "rezka" -> CenterSection.all.filter { it.country != "KZ" }.map {
                 when(it.id) { "new_movies" -> it.copy(label="Фильмы · Rezka"); "new_episodes" -> it.copy(label="Сериалы · Rezka"); else -> it }
             }
@@ -62,6 +70,21 @@ class CenterCatalog {
                 require(section.country == null && section.id in sections(provider).map { it.id })
                 return builder.encodedPath(if(section.type=="tv") "/serials" else "/films")
                     .addQueryParameter("page", page.toString()).build()
+            }
+            if(provider == "kinogo") {
+                require(section.id in sections(provider).map { it.id })
+                val path = when {
+                    section.country=="KZ" -> "/xfsearch/country/казахстан/"
+                    section.type=="tv" && section.country=="RU" -> "/serial/russkye_serialy/"
+                    section.country=="RU" -> "/film/russkie-filmy/"
+                    section.type=="tv" -> "/serial/"
+                    else -> "/film/"
+                }
+                return builder.encodedPath(path + if(page>1) "page/$page/" else "").build()
+            }
+            if(provider == "hdrezka") {
+                require(section.id in sections(provider).map { it.id })
+                return builder.encodedPath("/${if(section.type=="tv") "series" else "films"}/" + if(page>1) "page/$page/" else "").build()
             }
             if(provider == "rezka") {
                 require(section.country in listOf(null, "RU"))
@@ -81,7 +104,9 @@ class CenterCatalog {
         }
         fun searchRoute(provider: String, base: String, query: String): HttpUrl {
             val builder=base.trimEnd('/').toHttpUrl().newBuilder().query(null).fragment(null)
-            if(provider == "rezka") return builder.encodedPath("/index.php").addQueryParameter("do","search")
+            if(provider == "hdrezka") return builder.encodedPath("/search/").addQueryParameter("do","search")
+                .addQueryParameter("subaction","search").addQueryParameter("q",query).build()
+            if(provider in listOf("rezka","kinogo")) return builder.encodedPath("/index.php").addQueryParameter("do","search")
                 .addQueryParameter("subaction","search").addQueryParameter("story",query).build()
             if(provider == "kazplay") return builder.encodedPath("/api/v2/film/search").addQueryParameter("query",query).build()
             return if(provider == "kinovod") builder.encodedPath("/search").addQueryParameter("query",query).build()
@@ -138,21 +163,21 @@ class CenterCatalog {
         }
         private fun parseNew(document: Document, provider: String): List<CenterTitle> {
             val origin = document.location().toHttpUrl()
-            val rows = if(provider=="rezka") document.select(".b-content__inline_item")
+            val rows = if(provider in listOf("rezka","hdrezka")) document.select(".b-content__inline_item")
                 else document.select("a.group[href^=/film/], a.group[href^=/serial/]")
             val items = rows.mapNotNull { row ->
-                val link = if(provider=="rezka") row.selectFirst(".b-content__inline_item-link a") else row
+                val link = if(provider in listOf("rezka","hdrezka")) row.selectFirst(".b-content__inline_item-link a") else row
                 val url = link?.absolute("href")?.toHttpUrlOrNull() ?: return@mapNotNull null
                 if(url.host != origin.host) return@mapNotNull null
                 val rezkaId = Regex("^/(films|series)/(?:[^/]+/)*([0-9]+)-[^/]+\\.html$").find(url.encodedPath)
-                if(provider=="rezka" && rezkaId==null) return@mapNotNull null
+                if(provider in listOf("rezka","hdrezka") && rezkaId==null) return@mapNotNull null
                 if(provider=="kazplay" && !Regex("^/(film|serial)/[^/]+$").matches(url.encodedPath)) return@mapNotNull null
-                val id = if(provider=="rezka") rezkaId!!.groupValues[2].toIntOrNull() ?: return@mapNotNull null
+                val id = if(provider in listOf("rezka","hdrezka")) rezkaId!!.groupValues[2].toIntOrNull() ?: return@mapNotNull null
                     else catalogId(url.encodedPath)
                 val type = if(url.encodedPath.startsWith("/series/") || url.encodedPath.startsWith("/serial/")) "tv" else "movie"
-                val title = (if(provider=="rezka") link.text() else row.selectFirst("p.truncate")?.text()).orEmpty().trim()
+                val title = (if(provider in listOf("rezka","hdrezka")) link.text() else row.selectFirst("p.truncate")?.text()).orEmpty().trim()
                 if(title.isBlank()) return@mapNotNull null
-                val info = if(provider=="rezka") row.selectFirst(".misc")?.text() else row.select("p").lastOrNull()?.text()
+                val info = if(provider in listOf("rezka","hdrezka")) row.selectFirst(".misc")?.text() else row.select("p").lastOrNull()?.text()
                 val year = Regex("(?:19|20)[0-9]{2}").find(info.orEmpty())?.value.orEmpty()
                 val poster = row.poster()?.toHttpUrlOrNull()?.let { image ->
                     if(provider=="kazplay" && image.encodedPath=="/_next/image") image.newBuilder().setQueryParameter("w","384").build().toString()
@@ -160,7 +185,7 @@ class CenterCatalog {
                 }
                 CenterTitle(id,type,title,poster=poster,year=year,provider=provider,sourceUrl=url.toString(),
                     rating=if(provider=="kazplay") row.selectFirst("div.absolute.right-2.top-2 span")?.text().orEmpty() else "",
-                    updateLabel=if(provider=="rezka") row.selectFirst(".info")?.text()?.takeIf { it.contains("сери",true) || it.contains("сезон",true) }
+                    updateLabel=if(provider in listOf("rezka","hdrezka")) row.selectFirst(".info")?.text()?.takeIf { it.contains("сери",true) || it.contains("сезон",true) }
                         else row.selectFirst("div.absolute.bottom-2")?.text())
             }.distinctBy { it.key }.take(60)
             val empty = document.text().let { it.contains("не найден",true) || it.contains("ничего не",true) || it.contains("табылмады",true) }
@@ -170,8 +195,38 @@ class CenterCatalog {
             }
             return items
         }
+        private fun parseKinogo(document: Document): List<CenterTitle> {
+            val origin=document.location().toHttpUrl()
+            val rows=document.select("div.movie[id]")
+            val items=rows.mapNotNull { row ->
+                val link=row.selectFirst(".shortstorytitle h2 a") ?: return@mapNotNull null
+                val url=link.absolute("href")?.toHttpUrlOrNull() ?: return@mapNotNull null
+                if(url.host!=origin.host) return@mapNotNull null
+                val id=Regex("^/([0-9]+)-[^/]+\\.html$").find(url.encodedPath)?.groupValues?.get(1)?.toIntOrNull()
+                    ?.takeIf { it>0 } ?: return@mapNotNull null
+                if(row.id()!=id.toString()) return@mapNotNull null
+                val raw=link.text().trim()
+                val badge=row.selectFirst(".movie__info-lenta-body")?.text()?.takeIf { it.isNotBlank() }
+                val type=if(badge!=null || Regex("\\d+\\s*сезон",RegexOption.IGNORE_CASE).containsMatchIn(raw)) "tv" else "movie"
+                val title=raw.replace(Regex("\\s*\\((?:(?:19|20)[0-9]{2}|[0-9]+(?:[-–][0-9]+)?\\s*сезон(?:а|ов)?)\\)\\s*$"),"").trim()
+                if(title.isBlank()) return@mapNotNull null
+                val info=row.select(".movie__info-item").map { it.text() }
+                val year=info.firstOrNull { it.contains("Год выпуска",true) }?.let { Regex("(?:19|20)[0-9]{2}").find(it)?.value }
+                    ?: Regex("\\(((?:19|20)[0-9]{2})\\)\\s*$").find(raw)?.groupValues?.get(1).orEmpty()
+                val rating=row.selectFirst(".movie__info-rates .kp")?.text()?.takeIf { it.isNotBlank() }
+                    ?: row.selectFirst(".movie__info-rates .imdb")?.text().orEmpty()
+                CenterTitle(id,type,title,overview=row.selectFirst(".movie__info-desc")?.text().orEmpty().take(8000),
+                    poster=row.selectFirst(".movie__info-img")?.poster(),year=year,rating=rating,
+                    provider="kinogo",sourceUrl=url.toString(),updateLabel=badge)
+            }.distinctBy { it.key }.take(60)
+            check(items.isNotEmpty() || (rows.isEmpty() && document.text().let { it.contains("ничего не найден",true) || it.contains("поиск не дал",true) || it.contains("не найдено",true) })) {
+                "KinoGo: структура страницы изменилась или сайт запросил проверку. Проверь адрес каталога"
+            }
+            return items
+        }
         fun parse(document: Document, provider: String): List<CenterTitle> {
-            if(provider in listOf("rezka","kazplay")) return parseNew(document,provider)
+            if(provider=="kinogo") return parseKinogo(document)
+            if(provider in listOf("rezka","kazplay","hdrezka")) return parseNew(document,provider)
             val rows = if(provider == "kinovod") document.select("ul.items > li.item") else document.select("article.shortstory, article.movie[id^=movie-]")
             val items = rows.mapNotNull { row ->
                 val link=if(provider == "kinovod") row.selectFirst(".title a") else row.selectFirst("h2.name a, h2 a[itemprop=url], a.m-movie-item")
@@ -231,7 +286,7 @@ class CenterCatalog {
             override fun onFailure(call: Call,e: IOException) { if(continuation.isActive) continuation.resumeWith(Result.failure(e)) }
             override fun onResponse(call: Call,response: Response) {
                 val result=runCatching { response.use {
-                    check(response.isSuccessful) { "Каталог вернул HTTP ${response.code}" }
+                    check(response.isSuccessful) { if(response.code==503) "Сайт каталога временно недоступен (HTTP 503). Попробуй позднее или выбери другой каталог" else "Каталог вернул HTTP ${response.code}" }
                     val body=response.body ?: error("Пустой ответ каталога")
                     check(body.contentLength() <= LIMIT) { "Слишком большая страница каталога" }
                     val buffer=Buffer()
@@ -256,7 +311,7 @@ class CenterCatalog {
         }
         val document=page(url)
         val items=parse(document,provider)
-        val hasNext = if(provider in listOf("rezka","kazplay")) {
+        val hasNext = if(provider in listOf("rezka","kazplay","hdrezka","kinogo")) {
             val next=route(provider,base,section,number+1)
             document.select("a[href]").any { link ->
                 link.absolute("href")?.toHttpUrlOrNull()?.let { it.host==next.host && it.encodedPath==next.encodedPath &&
@@ -268,7 +323,7 @@ class CenterCatalog {
     }
     suspend fun search(provider:String,base:String,query:String):List<CenterTitle> {
         val url=searchRoute(provider,base,query)
-        if(provider in listOf("kinovod","rezka")) return parse(page(url),provider)
+        if(provider in listOf("kinovod","rezka","hdrezka","kinogo")) return parse(page(url),provider)
         val data=request(url)
         return withContext(Dispatchers.IO) {
             if(provider=="kazplay") kazplaySearch(data.bytes.toString(Charsets.UTF_8),data.url)
