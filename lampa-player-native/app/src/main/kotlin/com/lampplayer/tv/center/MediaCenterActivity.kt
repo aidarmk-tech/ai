@@ -994,7 +994,8 @@ open class MediaCenterActivity : AppCompatActivity() {
     private fun find(item: CenterTitle, episode: CenterEpisode?) {
         if (store.indexer.isBlank()) { sources { find(item, episode) }; return }
         work("Ищу раздачи…") {
-            val releases = backend.searchReleases(store.indexer, store.apiKey, item, episode, store.indexerType)
+            val searchItem = if(item.provider=="kazplay" && item.original.isNotBlank()) item.copy(title=item.original) else item
+            val releases = backend.searchReleases(store.indexer, store.apiKey, searchItem, episode, store.indexerType)
             releaseList(item, episode, releases)
         }
     }
