@@ -62,6 +62,11 @@ class MediaCenterUiTest {
             root.layout(0,0,960,540)
         }
     }
+    private fun awaitUi(root: View, ready: () -> Boolean) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (!ready() && System.nanoTime() < deadline) { Thread.sleep(10); frame(root) }
+        assertTrue("UI did not finish reading saved progress", ready())
+    }
     private fun screenshot(root:View,name:String) {
         val bitmap=Bitmap.createBitmap(960,540,Bitmap.Config.ARGB_8888);root.draw(Canvas(bitmap))
         val file=File("build/ui-preview/$name.png");file.parentFile!!.mkdirs()
@@ -349,11 +354,13 @@ class MediaCenterUiTest {
             CenterStore(host).remember("old-token",card)
             host.detailFixture(CenterDetails(item,listOf(2),""));repeat(8) { frame(root) }
             val resume=all(root).filterIsInstance<TextView>().first { it.tag=="continue_title" }
+            awaitUi(root) { resume.text.toString().contains("Сезон 2 · Серия 5 · 18:32") }
             assertTrue(resume.text.toString().contains("Сезон 2 · Серия 5 · 18:32"))
             val video=OnlineVideo(item,listOf(4,5).map { OnlineEpisode(2,it,"Episode $it","Voice",mapOf(720 to "https://cdn.test/new-$it.m3u8")) },emptyMap())
             host.nativeFixture(video);frame(root);label(root,"Сезон 2").performClick();repeat(8) { frame(root) }
             val watched=all(root).filterIsInstance<TextView>().first { it.tag=="online:2:4:Voice" }
             val current=all(root).filterIsInstance<TextView>().first { it.tag=="online:2:5:Voice" }
+            awaitUi(root) { watched.text.startsWith("✓") && current.text.startsWith("▶") && current.text.contains("46%") }
             assertTrue(watched.text.startsWith("✓"))
             assertTrue(current.text.startsWith("▶"))
             assertTrue(current.text.contains("46%"))
