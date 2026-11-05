@@ -127,4 +127,18 @@ class CenterOnlineInstrumentedTest {
             }
         }
     }
+
+    @Test fun immediatePlayerAssignmentIsCapturedBeforeTheFirstConstructorCall() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setHeader("Content-Type","text/html").setBody("""<html><body><div id="player"></div><script>
+            window.Playerjs=function(options){this.api=function(){return [];};};
+            new window.Playerjs({id:'player',file:'[480p]https://cdn.test/ready.mp4'});
+            </script></body></html>"""))
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val result=resolver.resolve(CenterTitle(17,"movie","Movie",provider="filmix",sourceUrl=server.url("/film/17-test.html").toString()))
+                assertEquals("https://cdn.test/ready.mp4",result.episodes.single().sources[480])
+            }
+        }
+    }
 }
