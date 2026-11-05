@@ -40,6 +40,15 @@ import java.util.ArrayDeque
 /** Native TV catalog; playback and episode navigation use the shared player. */
 open class MediaCenterActivity : AppCompatActivity() {
     protected open val backend = CenterBackend()
+    private var forceQualityOnce = false
+    private var recovery: Pair<String, CardMeta>? = null
+    private val playerLauncher = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_FIRST_USER) {
+            val action = result.data?.getStringExtra("recovery")
+            val card = runCatching { Gson().fromJson(result.data?.getStringExtra("card"), CardMeta::class.java) }.getOrNull()
+            if (action in listOf("refresh", "quality", "torrent") && card != null) recovery = action!! to card
+        }
+    }
     private lateinit var store: CenterStore
     private val catalogs = CenterCatalog()
     private val onlineCache = linkedMapOf<String, Pair<Long, OnlineVideo>>()
@@ -210,6 +219,24 @@ open class MediaCenterActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         playerReturn?.let { playerReturn = null; restore(it) }
+        recovery?.let { (action, card) ->
+            recovery = null
+            content.post {
+                val parts = card.contentKey?.split(':').orEmpty()
+                val provider = parts.firstOrNull()?.takeIf { it in listOf("filmix", "kinovod") }
+                val item = CenterTitle(parts.getOrNull(2)?.toIntOrNull() ?: card.tmdbId ?: 0,
+                    if (card.seasonNumber != null || parts.getOrNull(1) == "tv") "tv" else "movie",
+                    card.title, original = card.originalTitle.orEmpty(), provider = provider, sourceUrl = card.sourcePage)
+                enter {
+                    when {
+                        action == "torrent" -> find(item, card.episodeNumber?.let { CenterEpisode(card.seasonNumber ?: 1, it, "", "") })
+                        provider != null && action == "refresh" -> online(item, card, refresh = true)
+                        provider != null -> { forceQualityOnce = true; online(item, refresh = true, selectedSeason = card.seasonNumber, selectedVoice = card.translator) }
+                        else -> find(item, null)
+                    }
+                }
+            }
+        }
     }
     private fun clear(title: String) {
         content.removeAllViews(); scroll.scrollTo(0, 0)
@@ -355,17 +382,39 @@ open class MediaCenterActivity : AppCompatActivity() {
             descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS; this.adapter = adapter
         }, LinearLayout.LayoutParams(-1, dp(height)))
     }
+    private fun clock(seconds: Double): String {
+        val value = seconds.toLong().coerceAtLeast(0)
+        return "${value / 60}:${(value % 60).toString().padStart(2, '0')}"
+    }
+    private fun progressCard(item: CenterTitle, season: Int?, episode: Int?) = CardMeta(
+        title = item.title, contentKey = item.key.takeIf { item.provider != null }, tmdbId = item.id.takeIf { item.provider == null },
+        seasonNumber = season?.takeIf { it > 0 }, episodeNumber = episode?.takeIf { it > 0 })
+    private fun episodeProgress(view: TextView, item: CenterTitle, season: Int, episode: Int, url: String) {
+        if (episode <= 0) return
+        val label = view.text.toString()
+        val last = store.history().firstOrNull { (it.card.contentKey ?: "tmdb:${if (it.card.seasonNumber != null) "tv" else "movie"}:${it.card.tmdbId}") == item.key }?.card
+        val current = last?.seasonNumber == season && last.episodeNumber == episode
+        lifecycleScope.launch {
+            val position = PositionDataStore(applicationContext).getPosition(url, progressCard(item, season, episode))
+            val prefix = if (position?.watched == true) "✓ " else if (current) "▶ " else ""
+            view.text = prefix + label + if (position != null && position.time > 0) " · ${clock(position.time)} · ${position.percent}%" else ""
+            if (current && position?.watched != true) view.setTextColor(accent)
+        }
+    }
     private fun shelf(items: List<CenterTitle>, prefix: String = "") {
+        val width = when (store.cardSize) { "compact" -> 104; "large" -> 164; else -> 132 }
+        val artHeight = width * 166 / 132
+        val cardHeight = artHeight + 65
         rail(object : RecyclerView.Adapter<Poster>() {
             override fun getItemCount() = items.size
             override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Poster {
                 val view = column().apply {
                     isFocusable = true; isClickable = true; background = bg(panel)
                     setPadding(dp(6), dp(6), dp(6), dp(6))
-                    layoutParams = RecyclerView.LayoutParams(dp(132), dp(231)).apply { rightMargin = dp(14) }
+                    layoutParams = RecyclerView.LayoutParams(dp(width), dp(cardHeight)).apply { rightMargin = dp(14) }
                 }
                 val art = FrameLayout(this@MediaCenterActivity)
-                view.addView(art, LinearLayout.LayoutParams(-1, dp(166)))
+                view.addView(art, LinearLayout.LayoutParams(-1, dp(artHeight)))
                 val title = text("", 14).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END; setPadding(0, dp(7), 0, 0) }
                 val info = text("", 11, muted).apply { setPadding(0, dp(5), 0, 0); maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
                 view.addView(title); view.addView(info)
@@ -373,7 +422,7 @@ open class MediaCenterActivity : AppCompatActivity() {
             }
             override fun onBindViewHolder(holder: Poster, position: Int) {
                 val item = items[position]; holder.title.text = item.title; holder.info.text = item.updateLabel?.takeIf { it.isNotBlank() } ?: listOf(item.year, item.rating.takeIf { it.isNotBlank() }?.let { "★ $it" }).filterNotNull().filter { it.isNotBlank() }.joinToString(" · ")
-                holder.art.removeAllViews(); holder.art.addView(artFrame(item.title, 132, 166, item.poster, item.id), FrameLayout.LayoutParams(-1, -1))
+                holder.art.removeAllViews(); holder.art.addView(artFrame(item.title, width, artHeight, item.poster, item.id), FrameLayout.LayoutParams(-1, -1))
                 holder.itemView.tag = prefix + if (item.provider == null) "title:${item.type}:${item.id}" else "title:${item.key}"
                 holder.itemView.setOnClickListener { enter { detail(item) } }
                 holder.itemView.setOnLongClickListener { store.toggle(item); Toast.makeText(this@MediaCenterActivity,
@@ -383,7 +432,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                     v.animate().scaleX(if (focus) 1.025f else 1f).scaleY(if (focus) 1.025f else 1f).setDuration(100).start()
                 }
             }
-        }, 253)
+        }, cardHeight + 22)
     }
     private class Poster(view: View, val art: FrameLayout, val title: TextView, val info: TextView) : RecyclerView.ViewHolder(view)
     private fun historyScreen() {
@@ -463,6 +512,18 @@ open class MediaCenterActivity : AppCompatActivity() {
         body.addView(artFrame(movie.title, 185, 278, movie.poster, movie.id), LinearLayout.LayoutParams(dp(185), dp(278)))
         val copy = column().apply { setPadding(dp(24), 0, 0, 0) }
         copy.addView(text(facts(movie), 15, accent)); space(copy, 15)
+        val saved = store.history().firstOrNull { (it.card.contentKey ?: "tmdb:${movie.type}:${it.card.tmdbId}") == movie.key }
+        if (saved != null) {
+            val continueButton = button("Продолжить") { enter { resume(saved) } }.apply { tag = "continue_title"; maxLines = 2; layoutParams.height = dp(62) }
+            copy.addView(continueButton)
+            lifecycleScope.launch {
+                val pos = PositionDataStore(applicationContext).getPosition(saved.url, saved.card)
+                continueButton.text = "Продолжить" +
+                    (saved.card.seasonNumber?.let { " · Сезон $it" } ?: "") +
+                    (saved.card.episodeNumber?.let { " · Серия $it" } ?: "") +
+                    (pos?.let { " · ${clock(it.time)}" } ?: "")
+            }
+        }
         if (movie.provider != null) {
             copy.addView(button("Смотреть онлайн · ${CenterCatalog.name(movie.provider)}") { enter { online(movie) } })
             copy.addView(button("Найти торрент-раздачу") { enter { find(movie, null) } })
@@ -520,7 +581,7 @@ open class MediaCenterActivity : AppCompatActivity() {
             val voice = wantedVoice?.takeIf { value -> video.episodes.any {
                 (season == null || it.season == season) && it.voice == value
             } }
-            showOnline(video, season, voice)
+            showOnline(video, season, voice ?: store.voice(video.item.key)?.takeIf { saved -> video.episodes.any { (season == null || it.season == season) && it.voice == saved } })
         }
     }
     protected fun showOnline(video: OnlineVideo, season: Int? = null, voice: String? = null, focusFirst: Boolean = true) {
@@ -533,18 +594,25 @@ open class MediaCenterActivity : AppCompatActivity() {
             season?.takeIf { it > 0 }?.let { "Сезон $it" }, selectedVoice).joinToString(" · "), 15, muted)); space(content, 16)
         val seasons = video.episodes.map { it.season }.distinct().sorted()
         if (video.item.type == "tv" && season == null) {
-            seasons.forEach { value -> content.addView(button(if(value>0) "Сезон $value" else "Серии") { enter { showOnline(video, value) } }) }
+            seasons.forEach { value -> content.addView(button(if(value>0) "Сезон $value" else "Серии") { enter { showOnline(video, value, store.voice(video.item.key)?.takeIf { saved -> video.episodes.any { it.season == value && it.voice == saved } }) } }) }
         } else {
-            if (voice == null && voices.size > 1) {
+            if (selectedVoice == null && voices.size > 1) {
                 section("Озвучка")
-                voices.forEach { value -> content.addView(button(value) { enter { showOnline(video, season, value) } }) }
+                voices.forEach { value -> content.addView(button(value) { store.setVoice(video.item.key, value); enter { showOnline(video, season, value) } }) }
             } else {
+                if (voices.size > 1) content.addView(button("Изменить озвучку") {
+                    AlertDialog.Builder(this).setTitle("Озвучка").setItems(voices.toTypedArray()) { _, index ->
+                        store.setVoice(video.item.key, voices[index]); showOnline(video, season, voices[index])
+                    }.setNeutralButton("Сбросить выбор") { _, _ -> store.setVoice(video.item.key, null); showOnline(video, season) }
+                        .setNegativeButton("Отмена", null).show()
+                })
                 content.addView(text("Удерживай ОК на серии или фильме, чтобы изменить качество", 13, muted)); space(content, 8)
                 entries.filter { it.voice == selectedVoice }.forEach { episode ->
                     val label = if (episode.number > 0) "Серия ${episode.number} · ${episode.title}" else "Смотреть · ${episode.voice}"
                     content.addView(button(label) { chooseOnlineQuality(video, episode) }.apply {
                         tag = "online:${episode.season}:${episode.number}:${episode.voice}"; maxLines = 2; layoutParams.height = dp(62)
                         setOnLongClickListener { chooseOnlineQuality(video, episode, forceChoice = true); true }
+                        episodeProgress(this, video.item, episode.season, episode.number, episode.sources.values.firstOrNull().orEmpty())
                     })
                 }
             }
@@ -553,6 +621,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         if (focusFirst && hadFocus) content.post { content.getFocusables(View.FOCUS_FORWARD).firstOrNull()?.requestFocus() }
     }
     private fun chooseOnlineQuality(video: OnlineVideo, episode: OnlineEpisode, forceChoice: Boolean = false) {
+        if (forceQualityOnce && !forceChoice) { forceQualityOnce = false; chooseOnlineQuality(video, episode, true); return }
         val qualities = episode.sources.keys.sortedDescending()
         if (qualities.isEmpty()) {
             Toast.makeText(this, "Нет доступного качества. Обнови список и ссылки", Toast.LENGTH_SHORT).show()
@@ -618,6 +687,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         }
         episodes.forEach { episode ->
             list.addView(button("${episode.number}. ${episode.name}") { enter { find(item, episode) } }.apply {
+                episodeProgress(this, item, episode.season, episode.number, "")
                 tag = "episode:${episode.season}:${episode.number}"; maxLines = 2; ellipsize = TextUtils.TruncateAt.END
                 layoutParams.height = dp(62)
                 setOnFocusChangeListener { v, focus -> paintButton(v, focus); if (focus) describe(episode) }
@@ -702,6 +772,8 @@ open class MediaCenterActivity : AppCompatActivity() {
         space(card, 12)
         val status = text("Ожидаем ответ раздачи…", 14, muted).apply { tag = "torrent_status" }
         card.addView(status)
+        space(card, 10)
+        card.addView(text("Скорость · пиры · буфер: ожидаем данные движка", 14, muted).apply { tag = "torrent_metrics" })
         space(card, 24)
         card.addView(text("Загружается начало выбранного файла. Полный фильм скачивать не нужно.", 14, muted))
         content.addView(card, LinearLayout.LayoutParams(-1, -2))
@@ -714,7 +786,17 @@ open class MediaCenterActivity : AppCompatActivity() {
         work("Подготавливаю видео…") {
             val (bar, status) = torrentLoading(item, file.name, "Предзагрузка начала видео")
             val preparation = currentCoroutineContext()[Job]
-            backend.prepareStream(backend.stream(base, torrent.hash, file)) { bytes, total ->
+            val poll = lifecycleScope.launch {
+                while (isActive && preparation?.isActive == true && page == "torrent_loading") {
+                    try {
+                        val metrics = backend.torrentMetrics(base, torrent.hash)
+                        (findTag(content, "torrent_metrics") as? TextView)?.text = metrics
+                    } catch (e: CancellationException) { throw e }
+                    catch (_: Exception) { (findTag(content, "torrent_metrics") as? TextView)?.text = "Статистика движка временно недоступна" }
+                    delay(1000)
+                }
+            }
+            try { backend.prepareStream(backend.stream(base, torrent.hash, file)) { bytes, total ->
                 runOnUiThread {
                     if (preparation?.isActive == true && page == "torrent_loading") {
                         bar.isIndeterminate = false
@@ -723,6 +805,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                     }
                 }
             }
+            } finally { poll.cancelAndJoin() }
             currentCoroutineContext().ensureActive()
             launchTorrent(item, requested, base, torrent, file, returnTo)
         }
@@ -788,7 +871,7 @@ open class MediaCenterActivity : AppCompatActivity() {
     }
     private fun launchPlayer(url: String, metadata: String, returnTo: Screen? = null) {
         playerReturn = returnTo ?: if (page == "loading" && backStack.isNotEmpty()) backStack.removeLast() else snapshot()
-        startActivity(Intent(this, PlayerActivity::class.java).setAction(Intent.ACTION_VIEW)
+        playerLauncher.launch(Intent(this, PlayerActivity::class.java).putExtra("media_center", true).setAction(Intent.ACTION_VIEW)
             .setDataAndType(android.net.Uri.parse(url), "video/*").putExtra("lampa_data", metadata))
     }
     private fun sources(after: (() -> Unit)? = null) {
@@ -852,6 +935,13 @@ open class MediaCenterActivity : AppCompatActivity() {
     private fun settings() {
         job?.cancel(); currentScreen = { settings() }; page = "settings"; clear("Настройки")
         content.addView(text("LampMedia · ${BuildConfig.VERSION_NAME}", 16, muted)); space(content, 18)
+        content.addView(button("Размер карточек · " + when (store.cardSize) { "compact" -> "Компактные"; "large" -> "Крупные"; else -> "Обычные" }) {
+            val sizes = listOf("compact", "normal", "large")
+            AlertDialog.Builder(this).setTitle("Размер карточек")
+                .setSingleChoiceItems(arrayOf("Компактные", "Обычные", "Крупные"), sizes.indexOf(store.cardSize)) { dialog, index ->
+                    store.cardSize = sizes[index]; dialog.dismiss(); settings()
+                }.setNegativeButton("Отмена", null).show()
+        })
         content.addView(button("Каталоги · выбор и адреса сайтов") { catalogSettings() })
         content.addView(button("Источники поиска раздач") { sources() })
         content.addView(button("Плеер: движок, звук, субтитры, автопереход") { startActivity(Intent(this, SettingsActivity::class.java)) })
