@@ -224,6 +224,17 @@ open class CenterBackend {
         }
         error("Не удалось получить файлы раздачи. Проверь доступность пиров и попробуй другую раздачу")
     }
+    open suspend fun torrentMetrics(base: String, hash: String): String {
+        val state = torrent(base, "get", hash)
+        fun metric(key: String, format: (Long) -> String): String =
+            state.get(key)?.takeIf { it.isJsonPrimitive }?.asString?.toDoubleOrNull()
+                ?.takeIf { it.isFinite() && it >= 0 }?.toLong()?.let(format) ?: "—"
+        val speed = metric("download_speed") { "%.1f МБ/с".format(java.util.Locale.ROOT, it / 1048576.0) }
+        val peers = metric("active_peers") { it.toString() }
+        val buffer = metric("preloaded_bytes") { "%.1f МБ".format(java.util.Locale.ROOT, it / 1048576.0) }
+        return "Скорость: $speed · Пиры: $peers · Буфер: $buffer"
+    }
+
     /** Read only the opening bytes into TorrServer's cache before handing the stream to the player. */
     open suspend fun prepareStream(url: String, onProgress: (Long, Long) -> Unit) {
         val target = 256 * 1024L
