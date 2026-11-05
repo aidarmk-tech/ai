@@ -89,7 +89,7 @@ class MediaCenterUiTest {
         val file=File("build/ui-preview/$name.png");file.parentFile!!.mkdirs()
         file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG,100,it) };bitmap.recycle()
     }
-    private fun label(root:View,value:String)=all(root).filterIsInstance<TextView>().first { it.text.toString()==value }
+    private fun label(root:View,value:String)=all(root).filterIsInstance<TextView>().first { it.text.toString()==value || it.contentDescription?.toString()==value }
     private fun key(root:View,key:Int) {
         for(action in listOf(KeyEvent.ACTION_DOWN,KeyEvent.ACTION_UP)) {
             ReflectionHelpers.callInstanceMethod<Any?>(root.rootView.parent!!,"dispatchInputEvent",
@@ -337,10 +337,10 @@ class MediaCenterUiTest {
             val handle=all(root).first { it.tag=="menu_handle" }
             val catalog=label(root,"Каталог: TMDB  ▾")
             assertFalse(all(root).first { it.tag=="Главная" }.isShown)
-            val width=catalog.width
+            val width=(catalog.parent as View).width
             handle.performClick();frame(root)
             assertTrue(all(root).first { it.tag=="Главная" }.isShown)
-            assertEquals(width,catalog.width)
+            assertEquals(width,(catalog.parent as View).width)
             assertEquals("Главная",root.findFocus()?.tag)
             screenshot(root,"media-center-drawer-open")
             host.onBackPressedDispatcher.onBackPressed();frame(root)
@@ -351,7 +351,7 @@ class MediaCenterUiTest {
             assertTrue(all(root).first { it.tag=="Главная" }.isShown)
             key(root,KeyEvent.KEYCODE_DPAD_RIGHT);frame(root)
             assertFalse(all(root).first { it.tag=="Главная" }.isShown)
-            assertEquals(width,catalog.width)
+            assertEquals(width,(catalog.parent as View).width)
             screenshot(root,"media-center-drawer-closed")
         } finally { controller.pause().stop().destroy() }
     }
@@ -440,6 +440,7 @@ class MediaCenterUiTest {
                 CenterRelease("Film 1080p","magnet:?xt=urn:btih:a",0,100,"A"),
                 CenterRelease("Film 720p","magnet:?xt=urn:btih:b",5,200,"B")))
             frame(root)
+            all(root).first { it.tag=="release_filters_toggle" }.performClick();frame(root)
             all(root).first { it.tag=="release_seeded" }.apply { requestFocus();performClick() };frame(root)
             assertTrue(CenterStore(host).seededOnly)
             assertEquals("release_seeded",root.findFocus()?.tag)
@@ -503,6 +504,7 @@ class MediaCenterUiTest {
                 CenterRelease("Unrelated 1080p","other",50,100,"A"),
                 CenterRelease("Sorting 1080p HEVC HDR10","right",2,200,"B",voices=listOf("Дубляж"))))
             frame(root)
+            all(root).first { it.tag=="release_filters_toggle" }.performClick();frame(root)
             val exact=all(root).first { it.tag=="release_exact" }
             exact.requestFocus();exact.performClick();frame(root)
             assertEquals("release_exact",root.findFocus()?.tag)
@@ -578,6 +580,38 @@ class MediaCenterUiTest {
             assertEquals(listOf("Первый"),CenterStore(host).searches())
             assertEquals("search_recent:Первый",root.findFocus()?.tag)
             assertTrue(host.browseCalls.isEmpty())
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun toolbarLabelsExpandOnlyOnFocusAndCollapseWhenBrowsingCards() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val root=controller.get().findViewById<View>(android.R.id.content);frame(root)
+            val catalog=label(root,"Каталог: TMDB  ▾")
+            assertEquals("▦",catalog.text.toString())
+            val collapsed=catalog.width
+            catalog.requestFocus();frame(root)
+            assertEquals("Каталог: TMDB  ▾",catalog.text.toString())
+            assertTrue(catalog.width>collapsed)
+            all(root).first { it.tag=="new_episodes:title:tv:2" }.requestFocus();frame(root)
+            assertEquals("▦",catalog.text.toString());assertEquals(collapsed,catalog.width)
+            screenshot(root,"media-center-compact-toolbar")
+        } finally { controller.pause().stop().destroy() }
+    }
+    @Test fun releaseFiltersStartCollapsedAndCanBeOpenedAndClosedWithoutLosingResults() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            host.releaseFixture(listOf(CenterRelease("Sorting 1080p","one",2,100,"A")));frame(root)
+            val panel=all(root).first { it.tag=="release_filters_panel" }
+            assertFalse(panel.isShown)
+            val toggle=all(root).first { it.tag=="release_filters_toggle" }
+            toggle.requestFocus();toggle.performClick();frame(root);assertTrue(panel.isShown)
+            toggle.performClick();frame(root);assertFalse(panel.isShown)
+            assertNotNull(all(root).firstOrNull { it.tag=="release:one" })
+            screenshot(root,"media-center-collapsed-release-filters")
         } finally { controller.pause().stop().destroy() }
     }
 }
