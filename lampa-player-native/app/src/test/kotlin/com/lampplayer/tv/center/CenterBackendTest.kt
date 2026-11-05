@@ -138,4 +138,37 @@ class CenterBackendTest {
         store.clearHistory();assertTrue(store.history().isEmpty());assertEquals(1,store.favorites().size)
     }
 
+
+    @Test fun torrentPreloadReportsRealBytesAndUsesARange() = runBlocking {
+        val server=MockWebServer();server.start()
+        try {
+            val progress=java.util.Collections.synchronizedList(mutableListOf<Pair<Long,Long>>())
+            server.enqueue(MockResponse().setResponseCode(206).setHeader("Content-Type","video/mp4")
+                .setBody(okio.Buffer().write(ByteArray(256*1024))))
+            CenterBackend().prepareStream(server.url("/stream/movie.mp4?play").toString()) { bytes,total -> progress.add(bytes to total) }
+            assertEquals("bytes=0-262143",server.takeRequest().getHeader("Range"))
+            assertEquals(0L,progress.first().first)
+            assertEquals(262144L to 262144L,progress.last())
+            assertTrue(progress.zipWithNext().all { it.first.first <= it.second.first })
+        } finally { server.shutdown() }
+    }
+    @Test fun torrentPreloadRejectsEmptyResponsesAndHttpErrors() = runBlocking {
+        val server=MockWebServer();server.start()
+        try {
+            for(response in listOf(MockResponse().setResponseCode(404),MockResponse().setBody(""))) {
+                server.enqueue(response)
+                assertTrue(runCatching { CenterBackend().prepareStream(server.url("/stream/file").toString()) { _,_ -> } }.isFailure)
+            }
+        } finally { server.shutdown() }
+    }
+    @Test fun torrentPreloadCanBeCancelledWhileWaitingForTheEngine() = runBlocking {
+        val server=MockWebServer();server.start()
+        try {
+            server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+            val pending=launch(Dispatchers.IO) { CenterBackend().prepareStream(server.url("/stream/file").toString()) { _,_ -> } }
+            withContext(Dispatchers.IO) { assertNotNull(server.takeRequest(5,TimeUnit.SECONDS)) }
+            withTimeout(3000) { pending.cancelAndJoin() }
+            assertTrue(pending.isCancelled)
+        } finally { server.shutdown() }
+    }
 }
