@@ -811,13 +811,28 @@ open class MediaCenterActivity : AppCompatActivity() {
         listOf("Все", "2160", "1080", "720", "480").forEach { value -> filters.addView(button(value) { releaseList(item, episode, releases, value); content.post { findTag(content, "release_quality:$value")?.requestFocus() } }.apply { tag = "release_quality:$value"; isActivated = quality == value; paintButton(this, false) },
             LinearLayout.LayoutParams(0, dp(48), 1f).apply { rightMargin = dp(8) }) }
         content.addView(filters); space(content, 12)
+        content.addView(button(if(store.exactReleases) "Точные совпадения · Вкл" else "Точные совпадения · Выкл") {
+            store.exactReleases = !store.exactReleases; redraw("release_exact")
+        }.apply { tag = "release_exact" })
         val visible = CenterBackend.selectReleases(releases, quality, store.releaseSort, store.seededOnly)
+            .filter { !store.exactReleases || CenterBackend.matchesRelease(it, item, episode) }
+            .sortedByDescending { CenterBackend.matchesRelease(it, item, episode) }
         content.addView(text("Показано: ${visible.size} из ${releases.size}. Сиды — по данным источника.", 13, muted)); space(content, 10)
-        if (visible.isEmpty()) content.addView(text("Нет раздач с выбранными фильтрами. Измени качество или отключи фильтр сидов", 18, muted))
+        if (visible.isEmpty()) content.addView(text("Нет раздач с выбранными фильтрами. Измени качество, отключи фильтр сидов или точные совпадения", 18, muted))
         visible.forEach { release ->
             content.addView(button("${release.title}\nРаздают: ${if (release.seedsKnown) release.seeds.toString() else "—"} · Качают: ${release.leechers?.toString() ?: "—"}\nБитрейт: ${release.bitrate ?: "—"} · ${size(release.size)} · ${release.tracker}") {
                 enter { openRelease(item, episode, release) }
-            }.apply { tag = "release:${release.link}"; layoutParams.height = dp(112); maxLines = 4 })
+            }.apply {
+                tag = "release:${release.link}"; layoutParams.height = dp(132); maxLines = 5
+                if(release.voices.isNotEmpty()) text = text.toString() + "\nОзвучка: " + release.voices.joinToString(", ")
+                setOnLongClickListener {
+                    AlertDialog.Builder(this@MediaCenterActivity).setTitle(release.title)
+                        .setMessage("Трекер: ${release.tracker}\nОзвучка: ${release.voices.joinToString(", ").ifBlank { "Не указана" }}\nФормат: ${CenterBackend.releaseFormat(release)}\nБитрейт: ${release.bitrate ?: "Не указан"}\nРазмер: ${size(release.size)}\nРаздают: ${if(release.seedsKnown) release.seeds.toString() else "—"} · Качают: ${release.leechers?.toString() ?: "—"}")
+                        .setPositiveButton("Смотреть") { _, _ -> enter { openRelease(item, episode, release) } }
+                        .setNegativeButton("Закрыть", null).show()
+                    true
+                }
+            })
         }
         content.addView(button("Открыть свою magnet-ссылку / .torrent") { magnet(item, episode) })
     }
