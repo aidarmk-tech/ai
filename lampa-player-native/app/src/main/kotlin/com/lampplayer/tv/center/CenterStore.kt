@@ -35,6 +35,9 @@ class CenterStore(context: Context) {
         }
         editor.apply()
     }
+    var exactReleases: Boolean
+        get() = prefs.getBoolean("exact_releases", false)
+        set(value) { prefs.edit().putBoolean("exact_releases", value).apply() }
     var releaseSort: String
         get() = prefs.getString("release_sort", "seeds").orEmpty().takeIf { it in listOf("seeds", "small", "large") } ?: "seeds"
         set(value) { require(value in listOf("seeds", "small", "large")); prefs.edit().putString("release_sort", value).apply() }
