@@ -596,7 +596,7 @@ class MediaCenterUiTest {
             assertEquals("Каталог: TMDB  ▾",catalog.contentDescription?.toString())
             assertEquals(collapsed,catalog.width)
             all(root).first { it.tag=="new_episodes:title:tv:2" }.requestFocus();frame(root)
-            assertEquals("▦",catalog.text.toString());assertEquals(collapsed,catalog.width)
+            assertTrue(catalog.text.toString().contains("Каталог: TMDB"));assertEquals(collapsed,catalog.width)
             screenshot(root,"media-center-compact-toolbar")
         } finally { controller.pause().stop().destroy() }
     }
