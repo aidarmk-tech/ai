@@ -171,4 +171,16 @@ class CenterBackendTest {
             assertTrue(pending.isCancelled)
         } finally { server.shutdown() }
     }
+
+    @Test fun torrentMetricsUseEngineFieldsAndShowUnknownForMissingValues() = runBlocking {
+        val server=MockWebServer();server.start()
+        try {
+            server.enqueue(MockResponse().setBody("""{"download_speed":2097152,"active_peers":7,"preloaded_bytes":4194304}"""))
+            val metrics=CenterBackend().torrentMetrics(server.url("/").toString().trimEnd('/'),"a".repeat(40))
+            assertTrue(metrics.contains("2.0 МБ/с"));assertTrue(metrics.contains("Пиры: 7"));assertTrue(metrics.contains("4.0 МБ"))
+            assertTrue(server.takeRequest().body.readUtf8().contains("\"action\":\"get\""))
+            server.enqueue(MockResponse().setBody("{}"))
+            assertTrue(CenterBackend().torrentMetrics(server.url("/").toString().trimEnd('/'),"a".repeat(40)).contains("Скорость: —"))
+        } finally { server.shutdown() }
+    }
 }
