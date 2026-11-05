@@ -664,7 +664,9 @@ open class MediaCenterActivity : AppCompatActivity() {
     }
     private fun openRelease(item: CenterTitle, requested: CenterEpisode?, release: CenterRelease) {
         work("Получаю файлы раздачи…") {
+            torrentLoading(item, release.title, "Запускаю торрент-движок…")
             val base = CenterEngineService.ensure(this@MediaCenterActivity)
+            torrentLoading(item, release.title, "Подключаюсь к раздаче и получаю файлы…")
             val torrent = backend.openRelease(base, release, item)
             val matches = if (requested == null) emptyList() else torrent.files.filter { it.episode() == (requested.season to requested.number) }
             if ((requested == null && torrent.files.size == 1) || matches.size == 1) {
@@ -682,7 +684,50 @@ open class MediaCenterActivity : AppCompatActivity() {
             maxLines = 2; ellipsize = TextUtils.TruncateAt.END; layoutParams.height = dp(66)
         }) }
     }
+    protected fun torrentLoading(item: CenterTitle, detail: String, stage: String): Pair<ProgressBar, TextView> {
+        page = "torrent_loading"; clear("Готовим просмотр")
+        val card = column().apply { setPadding(dp(28), dp(24), dp(28), dp(24)); background = bg(panel, Color.rgb(35, 58, 82), 20) }
+        card.addView(text(item.title, 26).apply { maxLines = 2; ellipsize = TextUtils.TruncateAt.END })
+        space(card, 10)
+        card.addView(text(detail, 14, muted).apply { maxLines = 2; ellipsize = TextUtils.TruncateAt.END })
+        space(card, 28)
+        card.addView(text(stage, 18, accent))
+        space(card, 18)
+        val bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            isIndeterminate = true; max = 100; tag = "torrent_progress"
+            progressTintList = android.content.res.ColorStateList.valueOf(accent)
+            indeterminateTintList = android.content.res.ColorStateList.valueOf(accent)
+        }
+        card.addView(bar, LinearLayout.LayoutParams(-1, dp(12)))
+        space(card, 12)
+        val status = text("Ожидаем ответ раздачи…", 14, muted).apply { tag = "torrent_status" }
+        card.addView(status)
+        space(card, 24)
+        card.addView(text("Загружается начало выбранного файла. Полный фильм скачивать не нужно.", 14, muted))
+        content.addView(card, LinearLayout.LayoutParams(-1, -2))
+        space(content, 18)
+        content.addView(button("Отмена") { back() })
+        return bar to status
+    }
     private fun play(item: CenterTitle, requested: CenterEpisode?, base: String, torrent: CenterTorrent, file: CenterFile) {
+        val returnTo = snapshot()
+        work("Подготавливаю видео…") {
+            val (bar, status) = torrentLoading(item, file.name, "Предзагрузка начала видео")
+            val preparation = currentCoroutineContext()[Job]
+            backend.prepareStream(backend.stream(base, torrent.hash, file)) { bytes, total ->
+                runOnUiThread {
+                    if (preparation?.isActive == true && page == "torrent_loading") {
+                        bar.isIndeterminate = false
+                        bar.progress = ((bytes * 100) / total.coerceAtLeast(1)).toInt().coerceIn(0, 100)
+                        status.text = "${bar.progress}% · ${bytes / 1024} / ${total / 1024} КБ"
+                    }
+                }
+            }
+            ensureActive()
+            launchTorrent(item, requested, base, torrent, file, returnTo)
+        }
+    }
+    private fun launchTorrent(item: CenterTitle, requested: CenterEpisode?, base: String, torrent: CenterTorrent, file: CenterFile, returnTo: Screen?) {
         val url = backend.stream(base, torrent.hash, file)
         val number = file.episode() ?: requested?.let { it.season to it.number }
         val playlist = if (item.type == "tv") {
@@ -696,7 +741,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                 if (name.isNullOrBlank()) entry else entry.copy(title = "${entry.episode}. $name")
             })); addProperty("episode_index", playlist.currentIndex) }
         }
-        launchPlayer(url, meta.toString())
+        launchPlayer(url, meta.toString(), returnTo)
     }
     private fun resume(saved: CenterHistory) {
         work("Продолжаю ${saved.card.title}…") {
