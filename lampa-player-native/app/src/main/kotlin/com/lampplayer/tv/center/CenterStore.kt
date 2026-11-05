@@ -10,6 +10,9 @@ data class CenterHistory(val url: String, val card: CardMeta, val at: Long)
 class CenterStore(context: Context) {
     private val prefs = context.getSharedPreferences("media_center", Context.MODE_PRIVATE)
     private val gson = Gson()
+    var autoUpdates: Boolean
+        get() = prefs.getBoolean("auto_updates", true)
+        set(value) { prefs.edit().putBoolean("auto_updates", value).apply() }
     var indexer: String
         get() = prefs.getString("indexer", "").orEmpty()
         set(value) { prefs.edit().putString("indexer", value.trim()).apply() }

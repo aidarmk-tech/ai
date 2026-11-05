@@ -41,6 +41,11 @@ import java.util.ArrayDeque
 /** Native TV catalog; playback and episode navigation use the shared player. */
 open class MediaCenterActivity : AppCompatActivity() {
     protected open val backend = CenterBackend()
+    private var exitPressedAt: Long? = null
+    private var automaticUpdate: com.lampplayer.tv.update.UpdateInfo? = null
+    private var updatePrompt: AlertDialog? = null
+    private var updateBusy = false
+    protected open fun elapsedTime(): Long = android.os.SystemClock.elapsedRealtime()
     private var forceQualityOnce = false
     private var recovery: Pair<String, CardMeta>? = null
     private val playerLauncher = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { result ->
@@ -117,7 +122,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         else if (view is ViewGroup) (0 until view.childCount).flatMap { rails(view.getChildAt(it)) } else emptyList()
     private fun snapshot() = currentScreen?.let { Screen(it, content.findFocus()?.tag as? String, scroll.scrollY,
         rails(content).map { rail -> rail.layoutManager?.onSaveInstanceState() }) }
-    private fun enter(action: () -> Unit) { snapshot()?.let { backStack.addLast(it) }; action() }
+    private fun enter(action: () -> Unit) { exitPressedAt = null; snapshot()?.let { backStack.addLast(it) }; action() }
     private fun restore(screen: Screen) {
         screen.draw()
         rails(content).zip(screen.rails).forEach { (rail, state) -> rail.layoutManager?.onRestoreInstanceState(state) }
@@ -131,7 +136,14 @@ open class MediaCenterActivity : AppCompatActivity() {
         job?.cancel()
         if (backStack.isNotEmpty()) restore(backStack.removeLast())
         else if (nav != "Главная") navigate("Главная")
-        else finish()
+        else {
+            val now = elapsedTime()
+            if (exitPressedAt?.let { now - it in 0L..2000L } == true) finish()
+            else {
+                exitPressedAt = now
+                Toast.makeText(this, "Нажми «Назад» ещё раз для выхода", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
     private fun highlightNavigation() {
         for (i in 0 until navigation.childCount) navigation.getChildAt(i).let {
@@ -139,6 +151,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         }
     }
     private fun navigate(label: String) {
+        exitPressedAt = null
         if (label == "Источники") { sources(); return }
         job?.cancel(); backStack.clear(); currentScreen = null; selected = null; nav = label
         highlightNavigation()
@@ -192,6 +205,7 @@ open class MediaCenterActivity : AppCompatActivity() {
             override fun handleOnBackPressed() = back()
         })
         highlightNavigation(); menuHandle.requestFocus(); loadHome()
+        checkAutomaticUpdates()
     }
     private fun inside(parent: View, view: View?): Boolean {
         var current = view
@@ -202,6 +216,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         return false
     }
     private fun openMenu() {
+        exitPressedAt = null
         menuOpen = true; menuHandle.visibility = View.INVISIBLE
         navigation.visibility = View.VISIBLE
         navigation.translationX = -dp(220).toFloat()
@@ -219,6 +234,8 @@ open class MediaCenterActivity : AppCompatActivity() {
             ?: menuHandle.requestFocus()
     }
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.keyCode == KeyEvent.KEYCODE_BACK && event.repeatCount > 0) return true
+        if (event.action == KeyEvent.ACTION_DOWN && event.keyCode != KeyEvent.KEYCODE_BACK) exitPressedAt = null
         if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT && navigation.visibility != View.VISIBLE) {
             val focused = window.decorView.findFocus()
             val point = IntArray(2); val edge = IntArray(2)
@@ -233,7 +250,8 @@ open class MediaCenterActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         playerReturn?.let { playerReturn = null; restore(it) }
-        recovery?.let { (action, card) ->
+        offerAutomaticUpdate()
+        recovery?.let { (_, card) ->
             recovery = null
             content.post {
                 val parts = card.contentKey?.split(':').orEmpty()
@@ -242,15 +260,48 @@ open class MediaCenterActivity : AppCompatActivity() {
                     if (card.seasonNumber != null || parts.getOrNull(1) == "tv") "tv" else "movie",
                     card.title, original = card.originalTitle.orEmpty(), provider = provider, sourceUrl = card.sourcePage)
                 enter {
-                    when {
-                        action == "torrent" -> find(item, card.episodeNumber?.let { CenterEpisode(card.seasonNumber ?: 1, it, "", "") })
-                        provider != null && action == "refresh" -> online(item, card, refresh = true)
-                        provider != null -> { forceQualityOnce = true; online(item, refresh = true, selectedSeason = card.seasonNumber, selectedVoice = card.translator) }
-                        else -> find(item, null)
-                    }
+                    find(item, card.episodeNumber?.let { CenterEpisode(card.seasonNumber ?: 1, it, "", "") })
                 }
             }
         }
+    }
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra("open_home", false)) {
+            playerReturn = null; recovery = null; hideMenu()
+            navigate("Главная")
+            checkAutomaticUpdates()
+        }
+    }
+    override fun onPause() {
+        exitPressedAt = null
+        updatePrompt?.dismiss(); updatePrompt = null
+        super.onPause()
+    }
+    protected open suspend fun availableUpdate(): com.lampplayer.tv.update.UpdateInfo? = UpdateManager.check(BuildConfig.VERSION_CODE)
+    protected open fun checkAutomaticUpdates() {
+        if (!store.autoUpdates || updateBusy || automaticUpdate != null) return
+        updateBusy = true
+        lifecycleScope.launch {
+            try {
+                automaticUpdate = availableUpdate()
+                offerAutomaticUpdate()
+            } finally { updateBusy = false }
+        }
+    }
+    private fun offerAutomaticUpdate() {
+        val info = automaticUpdate ?: return
+        if (!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) ||
+            playerReturn != null || updatePrompt != null || isFinishing) return
+        updatePrompt = AlertDialog.Builder(this).setTitle("Доступна версия ${info.versionName}")
+            .setMessage("Скачать обновление и открыть установку? Настройки и история сохранятся.")
+            .setNegativeButton("Позже") { _, _ -> automaticUpdate = null }
+            .setPositiveButton("Обновить") { _, _ -> automaticUpdate = null; update(info) }
+            .create().also { dialog ->
+                dialog.setOnDismissListener { updatePrompt = null }
+                dialog.show()
+            }
     }
     private fun clear(title: String) {
         gridGeneration++; gridJob?.cancel(); gridJob = null; compactToolbar = null
@@ -391,7 +442,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         boards.firstOrNull()?.second?.firstOrNull()?.let { featured(it) }
         if (store.history().isNotEmpty()) { section("Продолжить просмотр"); historyCards(store.history().take(8)); space(content, 14) }
         if (store.catalog == "tmdb") {
-            content.addView(text("TMDB показывает сведения о премьерах и эфире. Для обновлений доступных видео выбери Киновод или Filmix.", 13, muted)); space(content, 14)
+            content.addView(text("TMDB, Киновод и Filmix — каталоги описаний. Для просмотра выбери торрент-раздачу.", 13, muted)); space(content, 14)
         }
         boards.forEach { (category, items) ->
             section(category.label, items.size)
@@ -735,7 +786,6 @@ open class MediaCenterActivity : AppCompatActivity() {
             }
         }
         if (movie.provider != null) {
-            copy.addView(button("Смотреть онлайн · ${CenterCatalog.name(movie.provider)}") { enter { online(movie) } })
             copy.addView(button("Найти торрент-раздачу") { enter { find(movie, null) } })
             movie.updateLabel?.let { copy.addView(text(it, 15, accent)); space(copy, 10) }
         } else if (movie.type == "tv") {
@@ -755,7 +805,6 @@ open class MediaCenterActivity : AppCompatActivity() {
         moreActions.addView(iconButton("⌂", if (store.isPinned(movie)) "Открепить с главной" else "Закрепить на главной") {
             store.pin(movie); showDetails(details); content.post { findTag(content, "pin")?.requestFocus() }
         }.apply { tag = "pin" })
-        if (movie.provider != null) moreActions.addView(iconButton("↗", "Открыть страницу источника вручную") { website(movie) })
         moreActions.addView(iconButton("+", "Открыть свою magnet-ссылку / .torrent") { magnet(movie, null) })
         space(copy, 12)
         copy.addView(text("Описание", 18)); space(copy, 9)
@@ -1088,13 +1137,15 @@ open class MediaCenterActivity : AppCompatActivity() {
     }
     private fun resume(saved: CenterHistory) {
         work("Продолжаю ${saved.card.title}…") {
-            if (saved.card.sourcePage != null && !localTorrent(saved.url)) {
-                val key = saved.card.contentKey?.split(':').orEmpty()
-                val provider = key.getOrNull(0); val type = key.getOrNull(1); val id = key.getOrNull(2)?.toIntOrNull()
-                check(provider in listOf("kinovod", "filmix") && type in listOf("movie", "tv") && id != null) { "Открой карточку фильма в каталоге" }
-                // Launch a fresh resolver outside this work coroutine; never reuse an expired website stream.
-                content.post { online(CenterTitle(id!!, type!!, saved.card.title, overview = saved.card.overview.orEmpty(),
-                    poster = saved.card.posterUrl, provider = provider, sourceUrl = saved.card.sourcePage), saved.card) }
+            if (!localTorrent(saved.url)) {
+                val card = saved.card
+                val key = card.contentKey?.split(':').orEmpty()
+                val provider = key.firstOrNull()?.takeIf { it in listOf("kinovod", "filmix") }
+                val item = CenterTitle(key.getOrNull(2)?.toIntOrNull() ?: card.tmdbId ?: 0,
+                    if (card.seasonNumber != null || key.getOrNull(1) == "tv") "tv" else "movie",
+                    card.title, original = card.originalTitle.orEmpty(), overview = card.overview.orEmpty(),
+                    poster = card.posterUrl, provider = provider, sourceUrl = card.sourcePage)
+                content.post { find(item, card.episodeNumber?.let { CenterEpisode(card.seasonNumber ?: 1, it, "", "") }) }
                 return@work
             }
             val base = CenterEngineService.ensure(this@MediaCenterActivity)
@@ -1205,6 +1256,12 @@ open class MediaCenterActivity : AppCompatActivity() {
         content.addView(button("Каталоги · выбор и адреса сайтов") { catalogSettings() })
         content.addView(button("Источники поиска раздач") { sources() })
         content.addView(button("Плеер: движок, звук, субтитры, автопереход") { startActivity(Intent(this, SettingsActivity::class.java)) })
+        content.addView(button("Автообновление · " + if (store.autoUpdates) "Вкл" else "Выкл") {
+            store.autoUpdates = !store.autoUpdates
+            if (!store.autoUpdates) automaticUpdate = null
+            settings()
+        })
+        content.addView(text("При запуске проверяем новую версию. Установку подтверждает Android.", 13, muted))
         content.addView(button("Проверить обновление") { update() })
         content.addView(button("Торрент-движок · состояние и буфер") { enter { engineScreen() } })
         content.addView(button("Очистить историю просмотра") {
@@ -1249,9 +1306,9 @@ open class MediaCenterActivity : AppCompatActivity() {
         content.addView(options); space(content, 20)
         content.addView(button("Остановить движок и освободить буфер") { CenterEngineService.stop(this); engineScreen() })
     }
-    private fun update() {
+    private fun update(available: com.lampplayer.tv.update.UpdateInfo? = null) {
         work("Проверяю обновление…") {
-            val update = UpdateManager.check(BuildConfig.VERSION_CODE)
+            val update = available ?: UpdateManager.check(BuildConfig.VERSION_CODE)
             if (update == null) { settings(); Toast.makeText(this@MediaCenterActivity, "Установлена последняя версия", Toast.LENGTH_SHORT).show() }
             else {
                 val file = UpdateManager.download(this@MediaCenterActivity, update.url, update.sha256) ?: error("Загрузка обновления не удалась")

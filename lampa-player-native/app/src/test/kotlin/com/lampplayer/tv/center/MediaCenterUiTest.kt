@@ -42,6 +42,10 @@ class MediaCenterUiTest {
     }
     class Host : MediaCenterActivity() {
         override val backend=FakeBackend()
+        var updateChecks = 0
+        var uptime = 10000L
+        override fun elapsedTime() = uptime
+        override suspend fun availableUpdate(): com.lampplayer.tv.update.UpdateInfo? { updateChecks++; return null }
         var nextOnline:OnlineVideo?=null
         var onlineCalls=0
         val gridCalls=mutableListOf<Int>()
@@ -410,26 +414,87 @@ class MediaCenterUiTest {
         assertTrue(cardWidth("normal") < cardWidth("large"))
     }
 
-    @Test fun recoveryQualityReturnsToTheSameEpisodeAndDoesNotAutoplay() {
-        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
-        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+    @Test fun legacyOnlineRecoveryOpensTorrentSetupWithoutResolvingOrPlaying() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
         try {
             val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
-            val item=CenterTitle(912,"tv","Recovery",provider="kinovod",sourceUrl="https://source.test/serial/912-show")
-            val card=com.lampplayer.tv.domain.model.CardMeta(item.title,contentKey=item.key,sourcePage=item.sourceUrl,seasonNumber=2,episodeNumber=5,translator="Voice",quality="720")
-            CenterStore(host).setPreferredQuality("kinovod",720)
-            host.nextOnline=OnlineVideo(item,listOf(OnlineEpisode(2,5,"Episode 5","Voice",mapOf(
-                720 to "https://cdn.test/fresh720.m3u8",1080 to "https://cdn.test/fresh1080.m3u8"))),emptyMap())
+            CenterStore(host).indexer=""
+            val card=com.lampplayer.tv.domain.model.CardMeta("Recovery",contentKey="kinovod:tv:912",
+                sourcePage="https://source.test/serial/912-show",seasonNumber=2,episodeNumber=5)
             ReflectionHelpers.setField(host,"recovery","quality" to card)
-            controller.pause().resume();repeat(4) { frame(root) }
-            assertEquals(1,host.onlineCalls)
+            controller.pause().resume();frame(root)
+            assertEquals(0,host.onlineCalls)
             assertNull(shadowOf(host).nextStartedActivity)
-            all(root).first { it.tag=="online:2:5:Voice" }.performClick();frame(root)
             val dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
             assertTrue(dialog.isShowing)
-            assertNull(shadowOf(host).nextStartedActivity)
+            assertTrue(all(dialog.window!!.decorView).filterIsInstance<TextView>().any { it.text.toString()=="Источники" })
             dialog.dismiss()
         } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun backOnHomeNeedsTwoSeparatePressesWithinTwoSeconds() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get()
+            host.onBackPressedDispatcher.onBackPressed()
+            assertFalse(host.isFinishing)
+            host.uptime += 2100
+            host.onBackPressedDispatcher.onBackPressed()
+            assertFalse(host.isFinishing)
+            host.uptime += 500
+            host.onBackPressedDispatcher.onBackPressed()
+            assertTrue(host.isFinishing)
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun launcherReopensHomeWhileOrdinaryResumeKeepsTheCurrentScreen() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            host.detailFixture(CenterDetails(CenterTitle(8,"movie","Launch fixture"),emptyList(),""));frame(root)
+            controller.pause().resume();frame(root)
+            assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Launch fixture" })
+            controller.newIntent(android.content.Intent().putExtra("open_home",true));frame(root)
+            assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Казахстанское кино" })
+            assertFalse(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Launch fixture" })
+            host.onBackPressedDispatcher.onBackPressed();assertFalse(host.isFinishing)
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun providerDetailsAndOldOnlineHistoryOnlyOfferTorrentPlayback() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(947,"tv","Old online",provider="filmix",sourceUrl="https://source.test/seria/947-show")
+            val card=com.lampplayer.tv.domain.model.CardMeta(item.title,contentKey=item.key,sourcePage=item.sourceUrl,
+                seasonNumber=2,episodeNumber=5)
+            CenterStore(host).apply { indexer="";remember("https://cdn.test/expired.m3u8",card) }
+            host.detailFixture(CenterDetails(item,emptyList(),""));frame(root)
+            assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Найти торрент-раздачу" })
+            assertFalse(all(root).filterIsInstance<TextView>().any { it.text.contains("Смотреть онлайн") || it.contentDescription=="Открыть страницу источника вручную" })
+            all(root).first { it.tag=="continue_title" }.performClick();frame(root)
+            assertEquals(0,host.onlineCalls);assertNull(shadowOf(host).nextStartedActivity)
+            val dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog()
+            assertTrue(dialog.isShowing);dialog.dismiss()
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun automaticUpdatePreferencePersistsAndDisabledStartupDoesNotCheck() {
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        val store=CenterStore(context)
+        assertTrue(store.autoUpdates)
+        store.autoUpdates=false
+        assertFalse(CenterStore(context).autoUpdates)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            frame(controller.get().findViewById(android.R.id.content))
+            assertEquals(0,controller.get().updateChecks)
+        } finally { controller.pause().stop().destroy();store.autoUpdates=true }
+        val enabled=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            frame(enabled.get().findViewById(android.R.id.content))
+            assertEquals(1,enabled.get().updateChecks)
+        } finally { enabled.pause().stop().destroy() }
     }
 
     @Test fun releaseFiltersKeepRemoteFocusAndPersistAcrossStoreInstances() {
