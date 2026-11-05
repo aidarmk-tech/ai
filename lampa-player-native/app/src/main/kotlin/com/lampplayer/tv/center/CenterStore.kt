@@ -35,6 +35,12 @@ class CenterStore(context: Context) {
         }
         editor.apply()
     }
+    var releaseSort: String
+        get() = prefs.getString("release_sort", "seeds").orEmpty().takeIf { it in listOf("seeds", "small", "large") } ?: "seeds"
+        set(value) { require(value in listOf("seeds", "small", "large")); prefs.edit().putString("release_sort", value).apply() }
+    var seededOnly: Boolean
+        get() = prefs.getBoolean("seeded_only", false)
+        set(value) { prefs.edit().putBoolean("seeded_only", value).apply() }
     var cardSize: String
         get() = prefs.getString("card_size", "normal").orEmpty().takeIf { it in listOf("compact", "normal", "large") } ?: "normal"
         set(value) { require(value in listOf("compact", "normal", "large")); prefs.edit().putString("card_size", value).apply() }
