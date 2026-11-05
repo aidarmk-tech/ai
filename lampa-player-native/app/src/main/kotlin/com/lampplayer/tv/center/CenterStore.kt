@@ -51,6 +51,25 @@ class CenterStore(context: Context) {
     fun setVoice(key: String, voice: String?) {
         prefs.edit().apply { if (voice == null) remove("voice_$key") else putString("voice_$key", voice) }.apply()
     }
+    fun followed(): List<CenterTitle> = runCatching {
+        gson.fromJson<List<CenterTitle>>(prefs.getString("followed", "[]"), object : TypeToken<List<CenterTitle>>() {}.type)
+    }.getOrNull().orEmpty()
+    fun isFollowed(item: CenterTitle) = followed().any { it.key==item.key }
+    fun toggleFollow(item: CenterTitle) {
+        require(item.type=="tv")
+        val next=followed().filterNot { it.key==item.key }.toMutableList()
+        if(!isFollowed(item)) next.add(0,item)
+        prefs.edit().putString("followed",gson.toJson(next.take(200))).apply()
+    }
+    fun mySeries(): List<CenterTitle> {
+        val recent=history().filter { it.card.contentKey?.contains(":tv:")==true || it.card.seasonNumber!=null || it.card.episodes.isNotEmpty() }.mapNotNull {
+            val card=it.card;val parts=card.contentKey?.split(':').orEmpty()
+            val provider=parts.firstOrNull()?.takeIf { p -> p in listOf("kinovod","filmix") }
+            val id=if(provider!=null) parts.getOrNull(2)?.toIntOrNull() else card.tmdbId
+            id?.let { value -> CenterTitle(value,"tv",card.title,poster=card.posterUrl,provider=provider,sourceUrl=card.sourcePage) }
+        }
+        return (followed()+recent).distinctBy { it.key }
+    }
     fun pinned(): List<CenterTitle> = runCatching {
         gson.fromJson<List<CenterTitle>>(prefs.getString("pinned", "[]"), object : TypeToken<List<CenterTitle>>() {}.type)
     }.getOrNull().orEmpty()
