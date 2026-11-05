@@ -33,6 +33,8 @@ data class CenterFile(val id: Int, val path: String, val size: Long) {
             (m.groups[2]?.value ?: m.groups[4]!!.value).toInt()
     }
 }
+data class CenterBrowse(val type: String = "movie", val mode: String = "popular", val country: String = "",
+    val year: Int? = null, val genre: Int? = null, val genreName: String = "", val query: String = "")
 data class CenterTorrent(val hash: String, val files: List<CenterFile>)
 
 /** HTTP catalog, configurable indexers and the local torrent engine share no UI state. */
@@ -48,6 +50,17 @@ open class CenterBackend {
         }
         private fun bitrateText(value: Double?): String? = value?.takeIf { it.isFinite() && it > 0 }
             ?.let { "%.1f Мбит/с".format(java.util.Locale.ROOT, it / 1000000.0) }
+        fun browseParameters(spec: CenterBrowse, page: Int): Map<String, String> {
+            require(spec.type in listOf("movie", "tv", "all") && page in 1..500)
+            val query = mutableMapOf("page" to page.toString(), "include_adult" to "false")
+            if(spec.query.isNotBlank()) { query["query"]=spec.query; return query }
+            require(spec.type != "all")
+            query["sort_by"] = if(spec.mode=="new") (if(spec.type=="tv") "first_air_date.desc" else "primary_release_date.desc") else "popularity.desc"
+            if(spec.country.isNotBlank()) { require(spec.country in listOf("RU","KZ","US"));query["with_origin_country"]=spec.country }
+            spec.year?.let { require(it in 1888..2200);query[if(spec.type=="tv") "first_air_date_year" else "primary_release_year"]=it.toString() }
+            spec.genre?.let { require(it>0);query["with_genres"]=it.toString() }
+            return query
+        }
         fun video(path: String) = Regex("(?i)\\.(mkv|mp4|avi|m4v|mov|ts|m2ts|webm|mpeg|mpg)$").containsMatchIn(path) &&
             !Regex("(?i)(?:^|[ ._/\\-])(sample|trailer|preview)(?:[ ._/\\-]|$)").containsMatchIn(path)
         fun parseReleases(text: String): List<CenterRelease> {
@@ -191,6 +204,22 @@ open class CenterBackend {
             .addQueryParameter("api_key", TmdbRepository.API_KEY).addQueryParameter("language", "ru-RU")
         query.forEach { (k, v) -> url.addQueryParameter(k, v) }
         return JsonParser.parseString(request(url.build())).asJsonObject
+    }
+    open suspend fun library(spec: CenterBrowse, page: Int = 1): List<CenterTitle> {
+        val query = browseParameters(spec, page).toMutableMap()
+        val route = if(spec.query.isNotBlank()) "search/${if(spec.type=="all") "multi" else spec.type}" else "discover/${spec.type}"
+        if(spec.query.isBlank()) {
+            val today=java.text.SimpleDateFormat("yyyy-MM-dd",java.util.Locale.US).format(java.util.Date())
+            query[if(spec.type=="tv") "first_air_date.lte" else "primary_release_date.lte"]=today
+        }
+        return tmdb(route,query).getAsJsonArray("results").orEmpty().mapNotNull { title(it.asJsonObject,spec.type) }
+    }
+    open suspend fun genres(type: String): List<Pair<Int,String>> {
+        require(type in listOf("movie","tv"))
+        return tmdb("genre/$type/list").getAsJsonArray("genres").orEmpty().mapNotNull {
+            val obj=it.asJsonObject;val id=obj.num("id").toInt();val name=obj.str("name")
+            if(id>0&&name.isNotBlank()) id to name else null
+        }
     }
     open suspend fun browse(type: String = "all", query: String = "", page: Int = 1): List<CenterTitle> {
         val route = if (query.isNotBlank()) "search/multi" else if (type == "all") "trending/all/week" else "$type/popular"
