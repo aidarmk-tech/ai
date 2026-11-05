@@ -10,7 +10,7 @@ def label(url):
 
 def relevant(url):
     host=urlparse(url).hostname or ""
-    return host in ("kz.kinogo.moi","api.nextembed.ws","kinovod.pro") or host.endswith(".stravers.live")
+    return host in ("kz.kinogo.moi","api.nextembed.ws","kinovod.pro") or host.startswith("walking-as.")
 
 
 def probe_media(target,headers):
@@ -45,7 +45,7 @@ def probe_media(target,headers):
 
 async def check(browser,url):
     context=await browser.new_context(locale="ru-RU",viewport={"width":1280,"height":720})
-    await context.add_init_script(script=Path("lampa-player-native/app/src/main/assets/center/online-resolver.js").read_text())
+    await context.add_init_script(script=Path("lampa-player-native/app/src/main/assets/center/online-resolver.js").read_text().replace("if(window!==window.top||window.__lampOnline)return;","if(window.__lampOnline)return;"))
     page=await context.new_page()
     events=[]
     media_requests=[]
@@ -85,7 +85,8 @@ async def check(browser,url):
             if frame==page.main_frame or not relevant(frame.url): continue
             try:
                 body=(await frame.locator("body").inner_text(timeout=1500)).strip()
-                frames.append({**label(frame.url),"text":body[:200]})
+                state=await frame.evaluate("window.__lampSnapshot ? JSON.parse(window.__lampSnapshot()) : {}")
+                frames.append({**label(frame.url),"text":body[:200],"snapshot":{"files":len(state.get("files",[])),"lists":len(state.get("lists",[])),"ids":state.get("ids"),"blocked":state.get("blocked")}})
             except Exception:frames.append(label(frame.url))
         media=[]
         def walk(value):
