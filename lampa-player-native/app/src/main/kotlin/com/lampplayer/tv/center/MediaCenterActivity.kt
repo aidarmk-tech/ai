@@ -272,7 +272,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         job = lifecycleScope.launch {
             try {
                 block()
-                if (focusContent) content.post { content.getFocusables(View.FOCUS_FORWARD).firstOrNull { it.isShown && it.isEnabled }?.requestFocus() }
+                if (focusContent && playerReturn == null && page != "loading") content.post { content.getFocusables(View.FOCUS_FORWARD).firstOrNull { it.isShown && it.isEnabled }?.requestFocus() }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 page = "error"; clear("Не удалось загрузить")
