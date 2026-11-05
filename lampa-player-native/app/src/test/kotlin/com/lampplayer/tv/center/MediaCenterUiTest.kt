@@ -43,6 +43,15 @@ class MediaCenterUiTest {
         override val backend=FakeBackend()
         var nextOnline:OnlineVideo?=null
         var onlineCalls=0
+        val gridCalls=mutableListOf<Int>()
+        val gridPages=mutableMapOf<Int,List<CenterTitle>>()
+        var failGrid=false
+        override suspend fun nextGridPage(provider:String,category:CenterSection?,type:String,number:Int):List<CenterTitle> {
+            gridCalls.add(number)
+            if(failGrid) { failGrid=false;error("temporary") }
+            return gridPages[number].orEmpty()
+        }
+        fun gridFixture(items:List<CenterTitle>) { showHome(items,"Grid",1,null) }
         override suspend fun resolveOnline(item:CenterTitle):OnlineVideo { onlineCalls++;return requireNotNull(nextOnline) }
         override fun loadHome() { val items=(1..8).map {
             CenterTitle(it, if(it%2==0) "tv" else "movie", listOf("Тихий город","За горизонтом","Новый день","На орбите")[(it-1)%4],
@@ -435,6 +444,45 @@ class MediaCenterUiTest {
             list.performItemClick(list.getChildAt(1),1,list.adapter.getItemId(1));frame(root)
             assertEquals("small",CenterStore(host).releaseSort)
             assertEquals("release_sort",root.findFocus()?.tag)
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun gridAutomaticallyAppendsDeduplicatedPagesAndRestoresTheSelectedCard() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            fun item(id:Int)=CenterTitle(id,"movie","Grid movie $id")
+            host.gridPages[2]=(3..8).map { item(it) }
+            host.gridFixture((1..3).map { item(it) });repeat(4) { frame(root) }
+            var grid=all(root).filterIsInstance<androidx.recyclerview.widget.RecyclerView>().first { it.tag=="catalog_grid" }
+            assertTrue(grid.layoutManager is androidx.recyclerview.widget.GridLayoutManager)
+            assertEquals(8,grid.adapter!!.itemCount)
+            assertEquals(listOf(2),host.gridCalls)
+            val poster=all(root).first { it.tag=="title:movie:2" };poster.requestFocus();poster.performClick();frame(root)
+            host.onBackPressedDispatcher.onBackPressed();repeat(3) { frame(root) }
+            assertEquals("title:movie:2",root.findFocus()?.tag)
+            grid=all(root).filterIsInstance<androidx.recyclerview.widget.RecyclerView>().first { it.tag=="catalog_grid" }
+            grid.scrollToPosition(7);repeat(4) { frame(root) }
+            all(root).firstOrNull { it.tag=="title:movie:8" }?.requestFocus();repeat(3) { frame(root) }
+            assertTrue(host.gridCalls.contains(3))
+            assertEquals(8,grid.adapter!!.itemCount)
+            assertFalse(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Следующая подборка   ›" })
+        } finally { controller.pause().stop().destroy() }
+    }
+    @Test fun gridRetryRetainsLoadedCardsAndRequestsTheSamePage() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            host.failGrid=true
+            host.gridFixture(listOf(CenterTitle(1,"movie","One")));repeat(3) { frame(root) }
+            val status=all(root).filterIsInstance<TextView>().first { it.tag=="grid_status" }
+            assertTrue(status.text.startsWith("Не удалось"))
+            host.gridPages[2]=listOf(CenterTitle(2,"movie","Two"))
+            status.performClick();repeat(3) { frame(root) }
+            val grid=all(root).filterIsInstance<androidx.recyclerview.widget.RecyclerView>().first { it.tag=="catalog_grid" }
+            assertEquals(2,grid.adapter!!.itemCount)
+            assertEquals(listOf(2,2),host.gridCalls)
         } finally { controller.pause().stop().destroy() }
     }
 }
