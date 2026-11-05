@@ -723,7 +723,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                     }
                 }
             }
-            ensureActive()
+            currentCoroutineContext().ensureActive()
             launchTorrent(item, requested, base, torrent, file, returnTo)
         }
     }
