@@ -141,4 +141,19 @@ class CenterOnlineInstrumentedTest {
             }
         }
     }
+
+    @Test fun serializedPlaylistFromPlayerApiResolvesSeries() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setHeader("Content-Type","text/html").setBody("""<html><body><div id="player"></div><script>
+            window.Playerjs=function(options){this.api=function(command){return command==='playlist_folders'?JSON.stringify([{title:'Сезон 1',folder:[{title:'2 серия',file:'[480p]https://cdn.test/two.mp4'}]}]):null;};};
+            new window.Playerjs({id:'player'});
+            </script></body></html>"""))
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val result=resolver.resolve(CenterTitle(17,"tv","Series",provider="filmix",sourceUrl=server.url("/seria/17-test.html").toString()))
+                assertEquals(2,result.episodes.single().number)
+                assertEquals("https://cdn.test/two.mp4",result.episodes.single().sources[480])
+            }
+        }
+    }
 }
