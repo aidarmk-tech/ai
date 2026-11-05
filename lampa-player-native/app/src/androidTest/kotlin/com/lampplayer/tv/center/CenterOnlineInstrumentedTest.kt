@@ -165,7 +165,7 @@ class CenterOnlineInstrumentedTest {
                     val html=when(request.path?.substringBefore('?')) {
                         "/6873-gangsterlend.html" -> """<html><body>
                             <script>JSON.parse('[{"title":"Сезон 9","folder":[{"title":"99 серия","file":"https://cdn.test/unrelated.mp4"}]}]');</script>
-                            <iframe data-src="${frameServer.url("/embed/movie/81816")}"></iframe><iframe data-src="/embed/trailer/81816"></iframe>
+                            <iframe data-src="${frameServer.url("/embed/movie/81816").newBuilder().host("127.0.0.1").build()}"></iframe><iframe data-src="/embed/trailer/81816"></iframe>
                             </body></html>"""
                         "/playerjs.js" -> "function Playerjs(options){this.api=function(command){return command==='playlist_folders'?options.file:[];};}"
                         "/embed/movie/81816" -> """<html><body><div id="player"></div><script src="/playerjs.js"></script><script>
@@ -186,8 +186,8 @@ class CenterOnlineInstrumentedTest {
                     sourceUrl=server.url("/6873-gangsterlend.html").toString()))
                 assertEquals(listOf(5,6),result.episodes.map { it.number })
                 assertTrue(result.episodes.all { it.season==2 && it.voice=="Дубляж" })
-                assertEquals(frameServer.url("/embed/movie/81816").toString(),result.headers["Referer"])
-                assertEquals(frameServer.url("/").toString().trimEnd('/'),result.headers["Origin"])
+                assertEquals(frameServer.url("/embed/movie/81816").newBuilder().host("127.0.0.1").build().toString(),result.headers["Referer"])
+                assertEquals(frameServer.url("/").newBuilder().host("127.0.0.1").build().toString().trimEnd('/'),result.headers["Origin"])
             }
         }
         }

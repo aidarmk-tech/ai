@@ -105,7 +105,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
                     var frameReferer: String?=null
                     var frameInfo=""
                     val snapshot=if(item.provider=="kinogo") {
-                        val candidates=observed.getAsJsonArray("candidates").orEmpty().mapNotNull { it.takeIf { it.isJsonObject }?.asJsonObject }
+                        val candidates=observed.getAsJsonArray("candidates")?.toList().orEmpty().mapNotNull { it.takeIf { it.isJsonObject }?.asJsonObject }
                         val usable=candidates.firstOrNull { entry ->
                             val data=entry.get("snapshot")?.takeIf { it.isJsonObject }?.asJsonObject
                             data!=null && (data.get("blocked")==null || data.get("blocked").isJsonNull) && decode(item,data).isNotEmpty()
