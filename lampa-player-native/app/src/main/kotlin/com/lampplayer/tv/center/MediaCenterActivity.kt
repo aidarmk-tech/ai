@@ -600,12 +600,6 @@ open class MediaCenterActivity : AppCompatActivity() {
                 section("Озвучка")
                 voices.forEach { value -> content.addView(button(value) { store.setVoice(video.item.key, value); enter { showOnline(video, season, value) } }) }
             } else {
-                if (voices.size > 1) content.addView(button("Изменить озвучку") {
-                    AlertDialog.Builder(this).setTitle("Озвучка").setItems(voices.toTypedArray()) { _, index ->
-                        store.setVoice(video.item.key, voices[index]); showOnline(video, season, voices[index])
-                    }.setNeutralButton("Сбросить выбор") { _, _ -> store.setVoice(video.item.key, null); showOnline(video, season) }
-                        .setNegativeButton("Отмена", null).show()
-                })
                 content.addView(text("Удерживай ОК на серии или фильме, чтобы изменить качество", 13, muted)); space(content, 8)
                 entries.filter { it.voice == selectedVoice }.forEach { episode ->
                     val label = if (episode.number > 0) "Серия ${episode.number} · ${episode.title}" else "Смотреть · ${episode.voice}"
@@ -615,6 +609,12 @@ open class MediaCenterActivity : AppCompatActivity() {
                         episodeProgress(this, video.item, episode.season, episode.number, episode.sources.values.firstOrNull().orEmpty())
                     })
                 }
+                if (voices.size > 1) content.addView(button("Изменить озвучку") {
+                    AlertDialog.Builder(this).setTitle("Озвучка").setItems(voices.toTypedArray()) { _, index ->
+                        store.setVoice(video.item.key, voices[index]); showOnline(video, season, voices[index])
+                    }.setNeutralButton("Сбросить выбор") { _, _ -> store.setVoice(video.item.key, null); showOnline(video, season) }
+                        .setNegativeButton("Отмена", null).show()
+                })
             }
         }
         content.addView(button("Обновить список и ссылки") { online(video.item, refresh = true, selectedSeason = season, selectedVoice = selectedVoice) })
