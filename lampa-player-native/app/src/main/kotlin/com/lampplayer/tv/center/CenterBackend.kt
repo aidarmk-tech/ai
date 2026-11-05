@@ -24,7 +24,7 @@ data class CenterTitle(val id: Int, val type: String, val title: String, val ori
 data class CenterEpisode(val season: Int, val number: Int, val name: String, val overview: String,
     val still: String? = null, val airDate: String = "", val runtime: Int = 0)
 data class CenterDetails(val title: CenterTitle, val seasons: List<Int>, val actors: String)
-data class CenterRelease(val title: String, val link: String, val seeds: Int, val size: Long, val tracker: String)
+data class CenterRelease(val title: String, val link: String, val seeds: Int, val size: Long, val tracker: String, val leechers: Int? = null, val bitrate: String? = null, val seedsKnown: Boolean = true)
 data class CenterFile(val id: Int, val path: String, val size: Long) {
     val name get() = path.substringAfterLast('/')
     fun episode(): Pair<Int, Int>? {
@@ -43,6 +43,11 @@ open class CenterBackend {
         private const val LIMIT = 4 * 1024 * 1024L
         fun JsonObject.str(key: String): String = get(key)?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
         fun JsonObject.num(key: String): Long = str(key).toDoubleOrNull()?.toLong() ?: 0
+        private fun count(obj: JsonObject, vararg keys: String): Int? = keys.firstNotNullOfOrNull { key ->
+            obj.str(key).toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 && it <= Int.MAX_VALUE && it % 1.0 == 0.0 }?.toInt()
+        }
+        private fun bitrateText(value: Double?): String? = value?.takeIf { it.isFinite() && it > 0 }
+            ?.let { "%.1f Мбит/с".format(java.util.Locale.ROOT, it / 1000000.0) }
         fun video(path: String) = Regex("(?i)\\.(mkv|mp4|avi|m4v|mov|ts|m2ts|webm|mpeg|mpg)$").containsMatchIn(path) &&
             !Regex("(?i)(?:^|[ ._/\\-])(sample|trailer|preview)(?:[ ._/\\-]|$)").containsMatchIn(path)
         fun parseReleases(text: String): List<CenterRelease> {
@@ -52,11 +57,11 @@ open class CenterBackend {
                 parser.setInput(StringReader(text))
                 parser.nextTag()
                 check(parser.name.substringAfter(':') == "rss") { "Источник вернул страницу вместо Torznab RSS. Проверь адрес API" }
-                var title = ""; var link = ""; var seeds = 0; var size = 0L; var inside = false
+                var title = ""; var link = ""; var seeds = 0; var size = 0L; var inside = false; var seedsKnown = false; var leechers: Int? = null; var bitrate: String? = null
                 while (parser.eventType != XmlPullParser.END_DOCUMENT) {
                     if (parser.eventType == XmlPullParser.START_TAG) when (parser.name.substringAfter(':')) {
                         "error" -> error("Источник поиска отклонил запрос. Проверь адрес и API-ключ")
-                        "item" -> { inside = true; title = ""; link = ""; seeds = 0; size = 0 }
+                        "item" -> { inside = true; title = ""; link = ""; seeds = 0; size = 0; seedsKnown = false; leechers = null; bitrate = null }
                         "title" -> if (inside) title = parser.nextText()
                         "link" -> if (inside && link.isBlank()) link = parser.nextText()
                         "enclosure" -> if (inside && !link.startsWith("magnet:")) link = parser.getAttributeValue(null, "url").orEmpty()
@@ -65,13 +70,15 @@ open class CenterBackend {
                             val value = parser.getAttributeValue(null, "value").orEmpty()
                             when (parser.getAttributeValue(null, "name")) {
                                 "magneturl" -> link = value
-                                "seeders" -> seeds = value.toIntOrNull() ?: 0
+                                "seeders" -> { seedsKnown = value.toIntOrNull()?.let { it >= 0 } == true; seeds = value.toIntOrNull()?.coerceAtLeast(0) ?: 0 }
+                                "leechers" -> leechers = value.toIntOrNull()?.takeIf { it >= 0 }
+                                "bit_rate", "bitrate_bps" -> bitrate = bitrateText(value.toDoubleOrNull())
                                 "size" -> size = value.toLongOrNull() ?: 0
                             }
                         }
                     }
                     if (parser.eventType == XmlPullParser.END_TAG && parser.name == "item") {
-                        if (playableSource(link)) results += CenterRelease(title, link, seeds, size, "Torznab")
+                        if (playableSource(link)) results += CenterRelease(title, link, seeds, size, "Torznab", leechers, bitrate, seedsKnown)
                         inside = false
                     }
                     parser.next()
@@ -89,22 +96,29 @@ open class CenterBackend {
                     val o = value.asJsonObject
                     val link = o.str("magnet").ifBlank { o.str("MagnetUri") }.ifBlank { o.str("Link") }
                     val title = o.str("title").ifBlank { o.str("Title") }
+                    val seeds = count(o, "sid", "seeders", "Seeders", "seeds", "Seeds")
+                    val leechers = count(o, "pir", "leechers", "Leechers", "leech", "Leech")
+                    val directBitrate = listOf("bit_rate", "bitrate_bps").firstNotNullOfOrNull { key -> bitrateText(o.str(key).toDoubleOrNull()) }
+                    val videoBitrate = o.get("ffprobe")?.takeIf { it.isJsonArray }?.asJsonArray
+                        ?.firstOrNull { it.isJsonObject && it.asJsonObject.str("codec_type") == "video" }
+                        ?.asJsonObject?.str("bit_rate")?.toDoubleOrNull()?.let { bitrateText(it) }?.let { "Видео $it" }
                     if (title.isNotBlank() && playableSource(link)) results += CenterRelease(title, link,
-                        (o.num("seeders").takeIf { it > 0 } ?: o.num("Seeders")).toInt(),
-                        o.num("size").takeIf { it > 0 } ?: o.num("Size"), o.str("tracker").ifBlank { o.str("Tracker") })
+                        seeds ?: 0, o.num("size").takeIf { it > 0 } ?: o.num("Size"),
+                        o.str("tracker").ifBlank { o.str("trackerName") }.ifBlank { o.str("Tracker") },
+                        leechers, directBitrate ?: videoBitrate, seeds != null)
                 }
             }
             return results.distinctBy { it.link }.sortedByDescending { it.seeds }.take(100)
         }
         fun selectReleases(releases: List<CenterRelease>, quality: String, sort: String, seededOnly: Boolean): List<CenterRelease> {
             val filtered = releases.filter { release ->
-                (!seededOnly || release.seeds > 0) &&
+                (!seededOnly || (release.seedsKnown && release.seeds > 0)) &&
                     (quality == "Все" || Regex("(?<![0-9])" + Regex.escape(quality) + "(?:[pi])?(?![0-9])", RegexOption.IGNORE_CASE).containsMatchIn(release.title))
             }
             return when (sort) {
                 "small" -> filtered.sortedWith(compareBy<CenterRelease> { it.size <= 0 }.thenBy { it.size }.thenByDescending { it.seeds })
                 "large" -> filtered.sortedWith(compareBy<CenterRelease> { it.size <= 0 }.thenByDescending { it.size }.thenByDescending { it.seeds })
-                else -> filtered.sortedByDescending { it.seeds }
+                else -> filtered.sortedWith(compareBy<CenterRelease> { !it.seedsKnown }.thenByDescending { it.seeds })
             }
         }
         fun playableSource(link: String) = link.startsWith("magnet:?xt=urn:btih:", true) || link.toHttpUrlOrNull() != null
