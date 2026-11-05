@@ -39,6 +39,10 @@ async def check(browser,url):
             await page.locator("iframe[data-src]").first.scroll_into_view_if_needed(timeout=4000)
         except Exception: pass
         await page.wait_for_timeout(6000)
+        try:
+            await page.get_by_text("Плеер 2",exact=True).first.click(timeout=4000)
+            await page.wait_for_timeout(6000)
+        except Exception: pass
         attrs=await page.locator("iframe").evaluate_all("(els)=>els.map(e=>({src:e.src,data:e.getAttribute('data-src')}))")
         frames=[]
         for frame in page.frames:
