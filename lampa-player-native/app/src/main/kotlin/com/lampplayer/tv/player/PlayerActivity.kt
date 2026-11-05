@@ -268,6 +268,23 @@ class PlayerActivity : AppCompatActivity() {
         binding.btnNight.setOnClickListener { vm.toggleNightMode(); vm.showOsd() }
         binding.btnSkipIntro.setOnClickListener { vm.skipIntro() }
         binding.btnRetry.setOnClickListener { vm.retryPlayback() }
+        if (intent.getBooleanExtra("media_center", false)) {
+            val actions = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.VERTICAL }
+            // Read current metadata on click: the user may have advanced to another episode.
+            listOf("refresh" to "Обновить ссылку", "quality" to "Выбрать качество", "torrent" to "Другая раздача").forEach { (action, title) ->
+                val button = android.widget.Button(this).apply {
+                    text = title; isFocusable = true; tag = "recovery_$action"
+                    setOnClickListener {
+                        val card = vm.uiState.value.card ?: return@setOnClickListener
+                        setResult(android.app.Activity.RESULT_FIRST_USER, Intent().putExtra("recovery", action)
+                            .putExtra("card", com.google.gson.Gson().toJson(card)))
+                        finish()
+                    }
+                }
+                actions.addView(button)
+            }
+            (binding.errorContainer as? android.view.ViewGroup)?.addView(actions)
+        }
         binding.btnExit.setOnClickListener { finishWithResult() }
         binding.btnCancelAutoNext.setOnClickListener { vm.cancelAutoNext() }
         binding.btnSettings.setOnClickListener {
