@@ -23,9 +23,9 @@ class CenterStore(context: Context) {
         get() = prefs.getString("indexer_type", "jacred").orEmpty()
         set(value) { prefs.edit().putString("indexer_type", value).apply() }
     var catalog: String
-        get() = prefs.getString("catalog", "tmdb").orEmpty().takeIf { it in listOf("tmdb", "kinovod", "filmix") } ?: "tmdb"
+        get() = prefs.getString("catalog", "tmdb").orEmpty().takeIf { it in CenterCatalog.providers } ?: "tmdb"
         set(value) { prefs.edit().putString("catalog", value).apply() }
-    fun catalogHost(provider: String) = prefs.getString("host_$provider", if (provider == "filmix") "https://filmix.gg" else "https://kinovod.pro").orEmpty()
+    fun catalogHost(provider: String) = prefs.getString("host_$provider", CenterCatalog.defaultHost(provider)).orEmpty()
     fun setCatalogHost(provider: String, host: String) { prefs.edit().putString("host_$provider", host.trim().trimEnd('/')).apply() }
     fun preferredQuality(provider: String?): Int? =
         prefs.getInt("quality_${provider.orEmpty()}", -1).takeIf { it >= 0 }

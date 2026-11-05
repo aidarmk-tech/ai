@@ -680,4 +680,28 @@ class MediaCenterUiTest {
             screenshot(root,"media-center-collapsed-release-filters")
         } finally { controller.pause().stop().destroy() }
     }
+    @Test fun newCatalogsAppearInBothSelectorsAndKazakhSectionsKeepTheirMeaning() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content);frame(root)
+            label(root,"Каталог: TMDB  ▾").performClick();frame(root)
+            var dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
+            val names=(0 until dialog.listView.adapter.count).map { dialog.listView.adapter.getItem(it).toString() }
+            assertTrue(names.contains("Rezka"));assertTrue(names.contains("KazPlay · Қазақша"))
+            val index=names.indexOf("KazPlay · Қазақша")
+            dialog.listView.performItemClick(dialog.listView.getChildAt(index),index,index.toLong());frame(root)
+            assertEquals("kazplay",CenterStore(host).catalog)
+            label(root,"Разделы  ▾").performClick();frame(root)
+            dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
+            assertEquals(listOf("Фильмы на казахском","Сериалы на казахском"),
+                (0 until dialog.listView.adapter.count).map { dialog.listView.adapter.getItem(it).toString() })
+            dialog.dismiss()
+            all(root).first { it.tag=="menu_handle" }.performClick();frame(root)
+            label(root,"Поиск").performClick();frame(root)
+            label(root,"Искать в: KazPlay · Қазақша").performClick();frame(root)
+            dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
+            assertEquals(5,dialog.listView.adapter.count);dialog.dismiss()
+        } finally { controller.pause().stop().destroy() }
+    }
+
 }

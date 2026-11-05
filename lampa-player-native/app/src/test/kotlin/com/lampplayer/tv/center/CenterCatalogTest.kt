@@ -97,4 +97,89 @@ class CenterCatalogTest {
         assertFalse(CenterWebActivity.isVideo("https://cdn.test/segment.ts"))
         assertFalse(CenterWebActivity.isVideo("javascript:movie.mp4"))
     }
+    @Test fun newProvidersHaveObservedRoutesAndOnlySupportedSections() {
+        val rezka=CenterCatalog.sections("rezka")
+        assertEquals(4,rezka.size)
+        assertFalse(rezka.any { it.country=="KZ" })
+        assertEquals("/films/page/2/",CenterCatalog.route("rezka","https://catalog.test",rezka.first { it.type=="movie" && it.country==null },2).encodedPath)
+        assertEquals("/series/russkie/",CenterCatalog.route("rezka","https://catalog.test",rezka.first { it.type=="tv" && it.country=="RU" }).encodedPath)
+        assertEquals("/films/russian/",CenterCatalog.route("rezka","https://catalog.test",rezka.first { it.type=="movie" && it.country=="RU" }).encodedPath)
+        val kz=CenterCatalog.sections("kazplay")
+        assertEquals(listOf("Фильмы на казахском","Сериалы на казахском"),kz.map { it.label })
+        assertTrue(kz.all { it.country==null })
+        assertEquals("/serials",CenterCatalog.route("kazplay","https://catalog.test",kz[1],3).encodedPath)
+        assertEquals("3",CenterCatalog.route("kazplay","https://catalog.test",kz[1],3).queryParameter("page"))
+        val search=CenterCatalog.searchRoute("rezka","https://catalog.test","Матрица & фильм")
+        assertEquals("/index.php",search.encodedPath);assertEquals("Матрица & фильм",search.queryParameter("story"))
+        assertEquals("search",search.queryParameter("do"))
+        val kazSearch=CenterCatalog.searchRoute("kazplay","https://catalog.test","Титаник")
+        assertEquals("/api/v2/film/search",kazSearch.encodedPath);assertEquals("Титаник",kazSearch.queryParameter("query"))
+    }
+    @Test fun rezkaCardsReadStableIdsTitlesYearsAndLazyPostersButRejectForeignLinks() {
+        val doc=Jsoup.parse("""<div class="b-content__inline_item" data-id="28626">
+            <div class="b-content__inline_item-cover"><a href="/series/drama/28626-show.html"><img src="/templates/2rezka/images/rezka-img.webp" data-src="/poster.jpg"></a>
+            <span class="info">2 сезон, 5 серия</span></div>
+            <div class="b-content__inline_item-link"><a href="/series/drama/28626-show.html">Сериал</a><div class="misc">2026 драма</div></div></div>
+            <div class="b-content__inline_item"><div class="b-content__inline_item-link"><a href="https://foreign.test/films/12-film.html">Wrong</a></div></div>""","https://catalog.test/series/")
+        val item=CenterCatalog.parse(doc,"rezka").single()
+        assertEquals("rezka:tv:28626",item.key);assertEquals("Сериал",item.title);assertEquals("2026",item.year)
+        assertEquals("https://catalog.test/poster.jpg",item.poster);assertEquals("2 сезон, 5 серия",item.updateLabel)
+    }
+    @Test fun kazplayCardsAndSearchUseTheSameMirrorIndependentIdentityAndRussianSearchTitle() {
+        val html="""<a class="group block" href="/film/titanik-qazaqsha-audarmasy">
+            <img src="/_next/image?url=%2Fmedia%2Fposter.jpg&amp;w=3840&amp;q=68">
+            <div class="absolute right-2 top-2"><span>7.9</span></div>
+            <div class="mt-2"><p class="truncate">Титаник қазақша аудармасы</p><p>1997 · Драма</p></div></a>"""
+        val card=CenterCatalog.parse(Jsoup.parse(html,"https://catalog.test/films"),"kazplay").single()
+        assertEquals("1997",card.year);assertEquals("7.9",card.rating);assertEquals("movie",card.type)
+        assertTrue(card.poster!!.contains("w=384&"))
+        val search=CenterCatalog.kazplaySearch("""{"success":true,"data":[{"id":475,"slug":"titanik-qazaqsha-audarmasy","title":"Титаник қазақша аудармасы",
+            "rus_title":"Титаник","date_release":1997,"is_serial":0,"poster_media_url":"/media/real.jpg","description":"<p>Описание</p>","rating":7.9}]}""","https://mirror.test/api/v2/film/search")
+            .single()
+        assertEquals(card.key,search.key);assertEquals("Титаник",search.original);assertEquals("Описание",search.overview)
+        assertEquals("https://mirror.test/film/titanik-qazaqsha-audarmasy",search.sourceUrl)
+        assertEquals("https://mirror.test/media/real.jpg",search.poster)
+        assertEquals(card.key,CenterCatalog.parse(Jsoup.parse(html,"https://another.test/films"),"kazplay").single().key)
+    }
+    @Test fun kazplaySeriesNeverBecomeMoviesAndMalformedSearchDataIsRejected() {
+        val item=CenterCatalog.kazplaySearch("""{"success":true,"data":[{"slug":"erke-mun-boztorgay","title":"Ерке мұң.","date_release":2013,"is_serial":1},
+            {"slug":"https://foreign.test/title","title":"Wrong"}]}""","https://catalog.test").single()
+        assertEquals("tv",item.type);assertTrue(item.sourceUrl!!.contains("/serial/"))
+        val html="""<a class="group" href="/serial/erke-mun-boztorgay"><img src="/poster.jpg">
+            <div class="absolute bottom-2">71 бөлім</div><p class="truncate">Ерке мұң.</p><p>2013 · Драма</p></a>"""
+        val card=CenterCatalog.parse(Jsoup.parse(html,"https://catalog.test/serials"),"kazplay").single()
+        assertEquals(item.key,card.key);assertEquals("71 бөлім",card.updateLabel)
+        try { CenterCatalog.kazplaySearch("""{"success":false,"data":[]}""","https://catalog.test");fail("Accepted API failure") }
+        catch(_:IllegalStateException) {}
+    }
+    @Test fun newCatalogEmptyPagesAreDistinctFromLoginOrChangedMarkup() {
+        assertTrue(CenterCatalog.parse(Jsoup.parse("<h1>Кинолар</h1>","https://catalog.test/films?page=99"),"kazplay").isEmpty())
+        assertTrue(CenterCatalog.parse(Jsoup.parse("Ничего не найдено","https://catalog.test/index.php"),"rezka").isEmpty())
+        for(provider in listOf("rezka","kazplay")) {
+            try { CenterCatalog.parse(Jsoup.parse("<form>Login</form>","https://catalog.test"),provider);fail("Accepted login page") }
+            catch(_:IllegalStateException) {}
+        }
+    }
+    @Test fun siteDetailsKeepPortraitCoversAndUseMetadataWithoutLoadingPlayback() {
+        val item=CenterTitle(42,"movie","Фильм",poster="https://catalog.test/portrait.jpg",provider="kazplay")
+        val doc=Jsoup.parse("""<meta property="og:description" content="Сюжет"><meta property="og:image" content="/landscape.jpg">""","https://catalog.test")
+        val detail=CenterCatalog.details(doc,item)
+        assertEquals(item.poster,detail.title.poster);assertEquals("https://catalog.test/landscape.jpg",detail.title.backdrop)
+        assertEquals("Сюжет",detail.title.overview);assertTrue(detail.seasons.isEmpty())
+        val rezka=CenterCatalog.details(Jsoup.parse("""<div class="b-post__description_text">Полный сюжет</div>
+            <meta property="og:description" content="Рекламное описание">""","https://catalog.test"),item.copy(provider="rezka"))
+        assertEquals("Полный сюжет",rezka.title.overview)
+    }
+    @Test fun newCatalogSelectionsAndTheirOwnMirrorAddressesPersist() {
+        val app=RuntimeEnvironment.getApplication()
+        val store=CenterStore(app)
+        for(provider in listOf("rezka","kazplay")) {
+            store.catalog=provider;assertEquals(provider,CenterStore(app).catalog)
+            assertTrue(store.catalogHost(provider).startsWith("https://"))
+            store.setCatalogHost(provider,"https://$provider.test")
+            assertEquals("https://$provider.test",CenterStore(app).catalogHost(provider))
+        }
+        assertEquals("https://rezka.test",store.catalogHost("rezka"))
+    }
+
 }

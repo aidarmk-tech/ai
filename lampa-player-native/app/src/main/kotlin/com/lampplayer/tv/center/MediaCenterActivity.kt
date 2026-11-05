@@ -255,7 +255,7 @@ open class MediaCenterActivity : AppCompatActivity() {
             recovery = null
             content.post {
                 val parts = card.contentKey?.split(':').orEmpty()
-                val provider = parts.firstOrNull()?.takeIf { it in listOf("filmix", "kinovod") }
+                val provider = parts.firstOrNull()?.takeIf { it in CenterCatalog.sites }
                 val item = CenterTitle(parts.getOrNull(2)?.toIntOrNull() ?: card.tmdbId ?: 0,
                     if (card.seasonNumber != null || parts.getOrNull(1) == "tv") "tv" else "movie",
                     card.title, original = card.originalTitle.orEmpty(), provider = provider, sourceUrl = card.sourcePage)
@@ -340,7 +340,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         if (nav != "Главная") { loadLibrary(CenterBrowse(type=if(nav=="Сериалы") "tv" else "movie")); return }
         work("Загружаю ${CenterCatalog.name(store.catalog)}…") {
             val provider = store.catalog; val limiter = Semaphore(3)
-            val results = coroutineScope { CenterSection.all.map { section -> async {
+            val results = coroutineScope { CenterCatalog.sections(provider).map { section -> async {
                 section to runCatching {
                     limiter.withPermit { catalogItems(provider, section) }
                 }.also { result -> result.exceptionOrNull()?.let { if (it is CancellationException) throw it } }
@@ -366,7 +366,7 @@ open class MediaCenterActivity : AppCompatActivity() {
     }
     private fun loadLibrary(request: CenterBrowse) {
         if(store.catalog!="tmdb") {
-            val section=CenterSection.all.first { it.type==request.type && it.country==null }
+            val section=CenterCatalog.sections(store.catalog).first { it.type==request.type && it.country==null }
             loadCategory(section); return
         }
         work("Загружаю каталог…") {
@@ -422,14 +422,15 @@ open class MediaCenterActivity : AppCompatActivity() {
         val tools = row(); compactToolbar = tools
         tools.addView(iconButton("▦", "Каталог: ${CenterCatalog.name(store.catalog)}  ▾") { chooseCatalog() })
         tools.addView(iconButton("☰", "Разделы  ▾") {
-            AlertDialog.Builder(this).setTitle("Что посмотреть").setItems(CenterSection.all.map { it.label }.toTypedArray()) { _, index ->
-                enter { loadCategory(CenterSection.all[index]) }
+            val sections = CenterCatalog.sections(store.catalog)
+            AlertDialog.Builder(this).setTitle("Что посмотреть").setItems(sections.map { it.label }.toTypedArray()) { _, index ->
+                enter { loadCategory(sections[index]) }
             }.show()
         })
         content.addView(tools); space(content, 8)
     }
     private fun chooseCatalog() {
-        val ids = listOf("tmdb", "kinovod", "filmix")
+        val ids = CenterCatalog.providers
         AlertDialog.Builder(this).setTitle("Каталог фильмов и сериалов")
             .setSingleChoiceItems(ids.map { CenterCatalog.name(it) }.toTypedArray(), ids.indexOf(store.catalog)) { dialog, index ->
                 store.catalog = ids[index]; dialog.dismiss(); navigate("Главная")
@@ -442,7 +443,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         boards.firstOrNull()?.second?.firstOrNull()?.let { featured(it) }
         if (store.history().isNotEmpty()) { section("Продолжить просмотр"); historyCards(store.history().take(8)); space(content, 14) }
         if (store.catalog == "tmdb") {
-            content.addView(text("TMDB, Киновод и Filmix — каталоги описаний. Для просмотра выбери торрент-раздачу.", 13, muted)); space(content, 14)
+            content.addView(text("Каталоги показывают описания фильмов и сериалов. Для просмотра выбери торрент-раздачу.", 13, muted)); space(content, 14)
         }
         boards.forEach { (category, items) ->
             section(category.label, items.size)
@@ -460,6 +461,28 @@ open class MediaCenterActivity : AppCompatActivity() {
         val image = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
         frame.addView(image, FrameLayout.LayoutParams(-1, -1))
         Glide.with(this).load(url).override(dp(width), dp(height)).dontAnimate().into(image)
+        return frame
+    }
+    private fun catalogArt(item: CenterTitle, width: Int, height: Int): FrameLayout {
+        val frame = artFrame(item.title,width,height,item.poster,item.id)
+        // Some Rezka pages provide covers only on the detail page. Fetch visible cards
+        // without blocking the grid; detaching/recycling a card cancels its request.
+        if(item.provider=="rezka" && item.poster==null) {
+            var coverJob: Job? = null
+            frame.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+                override fun onViewAttachedToWindow(view: View) {
+                    coverJob = lifecycleScope.launch {
+                        try {
+                            val poster = catalogs.detail(item).title.poster
+                            if(frame.isAttachedToWindow) Glide.with(this@MediaCenterActivity).load(poster)
+                                .override(dp(width),dp(height)).dontAnimate().into(frame.getChildAt(1) as ImageView)
+                        } catch(e: CancellationException) { throw e }
+                        catch(_: Exception) { /* Keep the title placeholder; opening the card can retry. */ }
+                    }
+                }
+                override fun onViewDetachedFromWindow(view: View) { coverJob?.cancel(); coverJob=null }
+            })
+        }
         return frame
     }
     private fun featured(item: CenterTitle) {
@@ -565,7 +588,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                     if(saved!=null) holder.info.text=listOfNotNull(saved.card.seasonNumber?.let { "Сезон $it" },saved.card.episodeNumber?.let { "Серия $it" }).joinToString(" · ")
                 }
                 holder.art.removeAllViews()
-                holder.art.addView(artFrame(item.title,desired,desired*3/2,item.poster,item.id),FrameLayout.LayoutParams(-1,-1))
+                holder.art.addView(catalogArt(item,desired,desired*3/2),FrameLayout.LayoutParams(-1,-1))
                 holder.itemView.setOnClickListener { enter { detail(item) } }
                 holder.itemView.setOnLongClickListener {
                     store.toggle(item); Toast.makeText(this@MediaCenterActivity,if(store.isFavorite(item)) "Добавлено в избранное" else "Убрано из избранного",Toast.LENGTH_SHORT).show(); true
@@ -635,7 +658,7 @@ open class MediaCenterActivity : AppCompatActivity() {
             }
             override fun onBindViewHolder(holder: Poster, position: Int) {
                 val item = items[position]; holder.title.text = item.title; holder.info.text = item.updateLabel?.takeIf { it.isNotBlank() } ?: listOf(item.year, item.rating.takeIf { it.isNotBlank() }?.let { "★ $it" }).filterNotNull().filter { it.isNotBlank() }.joinToString(" · ")
-                holder.art.removeAllViews(); holder.art.addView(artFrame(item.title, width, artHeight, item.poster, item.id), FrameLayout.LayoutParams(-1, -1))
+                holder.art.removeAllViews(); holder.art.addView(catalogArt(item, width, artHeight), FrameLayout.LayoutParams(-1, -1))
                 holder.itemView.tag = prefix + if (item.provider == null) "title:${item.type}:${item.id}" else "title:${item.key}"
                 holder.itemView.setOnClickListener { enter { detail(item) } }
                 holder.itemView.setOnLongClickListener { store.toggle(item); Toast.makeText(this@MediaCenterActivity,
@@ -721,7 +744,7 @@ open class MediaCenterActivity : AppCompatActivity() {
             if (action == EditorInfo.IME_ACTION_SEARCH || event?.let { it.keyCode == KeyEvent.KEYCODE_ENTER && it.action == KeyEvent.ACTION_DOWN } == true) { search(); true } else false
         }
         content.addView(button("Искать в: ${CenterCatalog.name(store.catalog)}") {
-            val providers=listOf("tmdb","kinovod","filmix")
+            val providers=CenterCatalog.providers
             AlertDialog.Builder(this).setTitle("Каталог для поиска")
                 .setSingleChoiceItems(providers.map { CenterCatalog.name(it) }.toTypedArray(),providers.indexOf(store.catalog)) { dialog,index ->
                     store.catalog=providers[index];dialog.dismiss();searchScreen(query.text.toString())
@@ -1140,7 +1163,7 @@ open class MediaCenterActivity : AppCompatActivity() {
             if (!localTorrent(saved.url)) {
                 val card = saved.card
                 val key = card.contentKey?.split(':').orEmpty()
-                val provider = key.firstOrNull()?.takeIf { it in listOf("kinovod", "filmix") }
+                val provider = key.firstOrNull()?.takeIf { it in CenterCatalog.sites }
                 val item = CenterTitle(key.getOrNull(2)?.toIntOrNull() ?: card.tmdbId ?: 0,
                     if (card.seasonNumber != null || key.getOrNull(1) == "tv") "tv" else "movie",
                     card.title, original = card.originalTitle.orEmpty(), overview = card.overview.orEmpty(),
@@ -1232,15 +1255,26 @@ open class MediaCenterActivity : AppCompatActivity() {
     }
     private fun catalogSettings() {
         val form = column().apply { setPadding(dp(24), dp(10), dp(24), 0) }
-        form.addView(text("Укажи действующее зеркало сайта. Формат страниц должен соответствовать Киноводу / Filmix.", 15, muted))
-        val kv = EditText(this).apply { hint = "Киновод"; setText(store.catalogHost("kinovod")); isSingleLine = true; setTextColor(ink) }
-        val fx = EditText(this).apply { hint = "Filmix"; setText(store.catalogHost("filmix")); isSingleLine = true; setTextColor(ink) }
-        form.addView(kv); form.addView(fx)
-        val dialog = AlertDialog.Builder(this).setTitle("Адреса каталогов").setView(form).setNegativeButton("Отмена", null).setPositiveButton("Сохранить", null).create()
+        form.addView(text("Адрес сайта для каждого каталога. Зеркало должно сохранять его формат страниц.", 15, muted))
+        val fields = CenterCatalog.sites.associateWith { provider ->
+            EditText(this).apply {
+                hint = CenterCatalog.name(provider); setText(store.catalogHost(provider)); isSingleLine = true
+                setTextColor(ink); contentDescription = CenterCatalog.name(provider)
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+                form.addView(this)
+            }
+        }
+        val container = ScrollView(this).apply { addView(form) }
+        val dialog = AlertDialog.Builder(this).setTitle("Адреса каталогов").setView(container)
+            .setNegativeButton("Отмена", null).setPositiveButton("Сохранить", null).create()
         dialog.setOnShowListener { dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-            if (kv.text.toString().trim().toHttpUrlOrNull() == null) kv.error = "Нужен полный http(s) адрес"
-            else if (fx.text.toString().trim().toHttpUrlOrNull() == null) fx.error = "Нужен полный http(s) адрес"
-            else { store.setCatalogHost("kinovod", kv.text.toString()); store.setCatalogHost("filmix", fx.text.toString()); catalogs.clearCache(); dialog.dismiss() }
+            val invalid = fields.values.filter { it.text.toString().trim().toHttpUrlOrNull() == null }
+            invalid.forEach { it.error = "Нужен полный http(s) адрес" }
+            if (invalid.isNotEmpty()) invalid.first().requestFocus()
+            else {
+                fields.forEach { (provider, field) -> store.setCatalogHost(provider,field.text.toString()) }
+                catalogs.clearCache(); dialog.dismiss()
+            }
         } }; dialog.show()
     }
     private fun settings() {
