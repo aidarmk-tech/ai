@@ -245,4 +245,28 @@ class CenterBackendTest {
         assertTrue(CenterBackend.releaseFormat(result).contains("HDR10"))
         assertEquals("Не указан",CenterBackend.releaseFormat(result.copy(title="Unknown movie")))
     }
+
+    @Test fun libraryFiltersAndSearchKeepTheirParametersAcrossPages() {
+        val movies=CenterBrowse(type="movie",mode="new",country="KZ",year=2024,genre=18)
+        val p=CenterBackend.browseParameters(movies,3)
+        assertEquals("3",p["page"]);assertEquals("KZ",p["with_origin_country"]);assertEquals("2024",p["primary_release_year"])
+        assertEquals("18",p["with_genres"]);assertEquals("primary_release_date.desc",p["sort_by"])
+        val tv=CenterBackend.browseParameters(movies.copy(type="tv"),2)
+        assertEquals("2024",tv["first_air_date_year"]);assertFalse(tv.containsKey("primary_release_year"))
+        val search=CenterBackend.browseParameters(CenterBrowse(type="all",query="Источники"),2)
+        assertEquals("Источники",search["query"]);assertEquals("2",search["page"])
+        assertFalse(search.containsKey("with_genres"))
+        assertTrue(runCatching { CenterBackend.browseParameters(movies,501) }.isFailure)
+    }
+    @Test fun mySeriesCombinesFollowingAndViewingHistoryWithoutMixingProviders() {
+        val store=CenterStore(RuntimeEnvironment.getApplication())
+        val first=CenterTitle(17,"tv","First",provider="kinovod",sourceUrl="https://source.test/serial/17-first")
+        store.toggleFollow(first)
+        store.remember("stream",CardMeta("First",contentKey=first.key,seasonNumber=1,episodeNumber=2))
+        store.remember("other",CardMeta("Other",contentKey="filmix:tv:17",seasonNumber=2,episodeNumber=1))
+        store.remember("movie",CardMeta("Movie",tmdbId=99))
+        assertEquals(setOf("kinovod:tv:17","filmix:tv:17"),store.mySeries().map { it.key }.toSet())
+        store.toggleFollow(first);assertFalse(store.isFollowed(first))
+        assertEquals(2,store.mySeries().size)
+    }
 }
