@@ -61,6 +61,8 @@ open class MediaCenterActivity : AppCompatActivity() {
     private var job: Job? = null
     private var gridJob: Job? = null
     private var gridGeneration = 0
+    private var compactToolbar: LinearLayout? = null
+    private var releaseFiltersExpanded = false
     private var page = "home"
     private var nav = "Главная"
     private var selected: CenterTitle? = null
@@ -97,6 +99,19 @@ open class MediaCenterActivity : AppCompatActivity() {
         setOnClickListener { action() }
         setOnFocusChangeListener { v, focus -> paintButton(v, focus) }
     }
+    private fun iconButton(symbol: String, label: String, action: () -> Unit): TextView =
+        button(label, action).apply {
+            text = symbol; contentDescription = label; tag = label
+            gravity = Gravity.CENTER; maxLines = 1; ellipsize = TextUtils.TruncateAt.END
+            setPadding(dp(10),0,dp(10),0)
+            layoutParams = LinearLayout.LayoutParams(dp(46),dp(44)).apply { rightMargin=dp(8) }
+            setOnFocusChangeListener { view, focused ->
+                text = if(focused) label else symbol
+                gravity = if(focused) Gravity.CENTER_VERTICAL else Gravity.CENTER
+                layoutParams = (layoutParams as LinearLayout.LayoutParams).apply { width=dp(if(focused)210 else 46) }
+                paintButton(view,focused)
+            }
+        }
     private fun space(parent: LinearLayout, n: Int) { parent.addView(View(this), LinearLayout.LayoutParams(1, dp(n))) }
     private fun findTag(view: View, key: String): View? {
         if (view.tag == key) return view
@@ -243,7 +258,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         }
     }
     private fun clear(title: String) {
-        gridGeneration++; gridJob?.cancel(); gridJob = null
+        gridGeneration++; gridJob?.cancel(); gridJob = null; compactToolbar = null
         content.removeAllViews(); scroll.scrollTo(0, 0)
         content.addView(text(title, 27).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) })
         space(content, 16)
@@ -313,9 +328,9 @@ open class MediaCenterActivity : AppCompatActivity() {
         }
     }
     private fun libraryTools(request: CenterBrowse) {
-        content.addView(text(listOf(if(request.mode=="new") "Новые" else "Популярные",
+        if(request.mode!="popular" || request.country.isNotBlank() || request.year!=null || request.genre!=null) content.addView(text(listOf(if(request.mode=="new") "Новые" else "Популярные",
             request.country.takeIf { it.isNotBlank() },request.year?.toString(),request.genreName.takeIf { it.isNotBlank() }).filterNotNull().joinToString(" · "),14,accent))
-        content.addView(button("Подборка и фильтры") {
+        compactToolbar?.addView(iconButton("≡", "Подборка и фильтры") {
             val expected=gridGeneration
             job?.cancel()
             job=lifecycleScope.launch {
@@ -355,17 +370,17 @@ open class MediaCenterActivity : AppCompatActivity() {
                 catch(_:Exception) { Toast.makeText(this@MediaCenterActivity,"Не удалось загрузить жанры. Попробуй ещё раз",Toast.LENGTH_SHORT).show() }
             }
         }.apply { tag="library_filters" })
-        if(request.type=="tv") content.addView(button("Новые серии · эфир") { enter { loadCategory(CenterSection.all.first { it.id=="new_episodes" }) } })
+        if(request.type=="tv") compactToolbar?.addView(iconButton("▷", "Новые серии · эфир") { enter { loadCategory(CenterSection.all.first { it.id=="new_episodes" }) } })
     }
     private fun catalogTools() {
-        val tools = row()
-        tools.addView(button("Каталог: ${CenterCatalog.name(store.catalog)}  ▾") { chooseCatalog() }, LinearLayout.LayoutParams(0, dp(43), 1.2f).apply { rightMargin = dp(9) })
-        tools.addView(button("Разделы  ▾") {
+        val tools = row(); compactToolbar = tools
+        tools.addView(iconButton("▦", "Каталог: ${CenterCatalog.name(store.catalog)}  ▾") { chooseCatalog() })
+        tools.addView(iconButton("☰", "Разделы  ▾") {
             AlertDialog.Builder(this).setTitle("Что посмотреть").setItems(CenterSection.all.map { it.label }.toTypedArray()) { _, index ->
                 enter { loadCategory(CenterSection.all[index]) }
             }.show()
-        }, LinearLayout.LayoutParams(0, dp(43), 1f))
-        content.addView(tools); space(content, 16)
+        })
+        content.addView(tools); space(content, 8)
     }
     private fun chooseCatalog() {
         val ids = listOf("tmdb", "kinovod", "filmix")
@@ -707,9 +722,10 @@ open class MediaCenterActivity : AppCompatActivity() {
         val body = row()
         body.addView(artFrame(movie.title, 185, 278, movie.poster, movie.id), LinearLayout.LayoutParams(dp(185), dp(278)))
         val copy = column().apply { setPadding(dp(24), 0, 0, 0) }
+        val moreActions = row()
         copy.addView(text(facts(movie), 15, accent)); space(copy, 15)
         val saved = store.history().firstOrNull { (it.card.contentKey ?: "tmdb:${movie.type}:${it.card.tmdbId}") == movie.key }
-        if (movie.type=="tv") copy.addView(button(if(store.isFollowed(movie)) "✓ В моих сериалах · убрать" else "+ В мои сериалы") {
+        if (movie.type=="tv") moreActions.addView(iconButton("▤", if(store.isFollowed(movie)) "✓ В моих сериалах · убрать" else "+ В мои сериалы") {
             store.toggleFollow(movie); showDetails(details)
         }.apply { tag="follow_series" })
         if (saved != null) {
@@ -736,15 +752,16 @@ open class MediaCenterActivity : AppCompatActivity() {
             if (details.seasons.isEmpty()) copy.addView(text("Сезоны пока не опубликованы", 15, muted))
         } else copy.addView(button("Смотреть · выбрать раздачу") { enter { find(movie, null) } })
         space(copy, 7)
-        copy.addView(button(if (store.isFavorite(movie)) "★  В избранном · убрать" else "☆  Добавить в избранное") {
+        copy.addView(HorizontalScrollView(this).apply { addView(moreActions); isHorizontalScrollBarEnabled=false }, LinearLayout.LayoutParams(-1,dp(52)))
+        moreActions.addView(iconButton("☆", if (store.isFavorite(movie)) "★  В избранном · убрать" else "☆  Добавить в избранное") {
             store.toggle(movie); showDetails(details)
             content.post { findTag(content, "favorite")?.requestFocus() }
         }.apply { tag = "favorite" })
-        copy.addView(button(if (store.isPinned(movie)) "Открепить с главной" else "Закрепить на главной") {
+        moreActions.addView(iconButton("⌂", if (store.isPinned(movie)) "Открепить с главной" else "Закрепить на главной") {
             store.pin(movie); showDetails(details); content.post { findTag(content, "pin")?.requestFocus() }
         }.apply { tag = "pin" })
-        if (movie.provider != null) copy.addView(button("Открыть страницу источника вручную") { website(movie) })
-        copy.addView(button("Открыть свою magnet-ссылку / .torrent") { magnet(movie, null) })
+        if (movie.provider != null) moreActions.addView(iconButton("↗", "Открыть страницу источника вручную") { website(movie) })
+        moreActions.addView(iconButton("+", "Открыть свою magnet-ссылку / .torrent") { magnet(movie, null) })
         space(copy, 12)
         copy.addView(text("Описание", 18)); space(copy, 9)
         copy.addView(text(movie.overview.ifBlank { "Описание пока отсутствует" }, 16, muted))
@@ -911,6 +928,12 @@ open class MediaCenterActivity : AppCompatActivity() {
             releaseList(item, episode, releases, quality)
             content.post { findTag(content, focus)?.requestFocus() }
         }
+        val controls = column().apply { visibility = if(releaseFiltersExpanded) View.VISIBLE else View.GONE; tag="release_filters_panel" }
+        content.addView(iconButton("≡", "Фильтры раздач") {
+            releaseFiltersExpanded = !releaseFiltersExpanded
+            controls.visibility = if(releaseFiltersExpanded) View.VISIBLE else View.GONE
+        }.apply { tag="release_filters_toggle" })
+        content.addView(controls)
         val sorting = row()
         val sortLabel = when (store.releaseSort) { "small" -> "Меньше размер"; "large" -> "Больше размер"; else -> "Больше сидов" }
         sorting.addView(button("Порядок · $sortLabel") {
@@ -923,18 +946,18 @@ open class MediaCenterActivity : AppCompatActivity() {
         sorting.addView(button(if (store.seededOnly) "Сиды > 0 · Вкл" else "Сиды > 0 · Выкл") {
             store.seededOnly = !store.seededOnly; redraw("release_seeded")
         }.apply { tag = "release_seeded" }, LinearLayout.LayoutParams(0, dp(48), 1f))
-        content.addView(sorting); space(content, 10)
+        controls.addView(sorting); space(controls, 10)
         val filters = row()
         listOf("Все", "2160", "1080", "720", "480").forEach { value -> filters.addView(button(value) { releaseList(item, episode, releases, value); content.post { findTag(content, "release_quality:$value")?.requestFocus() } }.apply { tag = "release_quality:$value"; isActivated = quality == value; paintButton(this, false) },
             LinearLayout.LayoutParams(0, dp(48), 1f).apply { rightMargin = dp(8) }) }
-        content.addView(filters); space(content, 12)
-        content.addView(button(if(store.exactReleases) "Точные совпадения · Вкл" else "Точные совпадения · Выкл") {
+        controls.addView(filters); space(controls, 12)
+        controls.addView(button(if(store.exactReleases) "Точные совпадения · Вкл" else "Точные совпадения · Выкл") {
             store.exactReleases = !store.exactReleases; redraw("release_exact")
         }.apply { tag = "release_exact" })
         val visible = CenterBackend.selectReleases(releases, quality, store.releaseSort, store.seededOnly)
             .filter { !store.exactReleases || CenterBackend.matchesRelease(it, item, episode) }
             .sortedByDescending { CenterBackend.matchesRelease(it, item, episode) }
-        content.addView(text("Показано: ${visible.size} из ${releases.size}. Сиды — по данным источника.", 13, muted)); space(content, 10)
+        content.addView(text("${quality} · ${sortLabel} · ${visible.size} / ${releases.size} раздач", 13, muted)); space(content, 10)
         if (visible.isEmpty()) content.addView(text("Нет раздач с выбранными фильтрами. Измени качество, отключи фильтр сидов или точные совпадения", 18, muted))
         visible.forEach { release ->
             content.addView(button("${release.title}\nРаздают: ${if (release.seedsKnown) release.seeds.toString() else "—"} · Качают: ${release.leechers?.toString() ?: "—"}\nБитрейт: ${release.bitrate ?: "—"} · ${size(release.size)} · ${release.tracker}") {
