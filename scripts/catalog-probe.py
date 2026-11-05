@@ -111,6 +111,7 @@ def inspect_domain(url):
             if len(samples)<2:
                 parent=node.parent
                 if parent and parent.parent:parent=parent.parent
+                if "kinogo" in final and parent and parent.parent:parent=parent.parent
                 samples.append(parent.dump() if parent else node.dump())
         forms=[]
         for form in (n for n in page.nodes if n.tag=="form"):
@@ -130,5 +131,5 @@ def inspect_domain(url):
         return result
     except Exception as error:return {"url":url,"error":str(error)}
 with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-    for result in pool.map(inspect_domain,("https://lv.hdrezka.inc/","https://kz.kinogo.moi/")):
+    for result in pool.map(inspect_domain,("https://lv.hdrezka.inc/","https://kz.kinogo.moi/film/","https://kz.kinogo.moi/serial/","https://kz.kinogo.moi/index.php?do=search&subaction=search&story=Matrix")):
         print("CATALOG_INSPECT "+json.dumps(result,ensure_ascii=False))
