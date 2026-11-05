@@ -96,6 +96,17 @@ open class CenterBackend {
             }
             return results.distinctBy { it.link }.sortedByDescending { it.seeds }.take(100)
         }
+        fun selectReleases(releases: List<CenterRelease>, quality: String, sort: String, seededOnly: Boolean): List<CenterRelease> {
+            val filtered = releases.filter { release ->
+                (!seededOnly || release.seeds > 0) &&
+                    (quality == "Все" || Regex("(?<![0-9])" + Regex.escape(quality) + "(?:[pi])?(?![0-9])", RegexOption.IGNORE_CASE).containsMatchIn(release.title))
+            }
+            return when (sort) {
+                "small" -> filtered.sortedWith(compareBy<CenterRelease> { it.size <= 0 }.thenBy { it.size }.thenByDescending { it.seeds })
+                "large" -> filtered.sortedWith(compareBy<CenterRelease> { it.size <= 0 }.thenByDescending { it.size }.thenByDescending { it.seeds })
+                else -> filtered.sortedByDescending { it.seeds }
+            }
+        }
         fun playableSource(link: String) = link.startsWith("magnet:?xt=urn:btih:", true) || link.toHttpUrlOrNull() != null
         fun title(o: JsonObject, defaultType: String = "movie"): CenterTitle? {
             val type = o.str("media_type").ifBlank { defaultType }
