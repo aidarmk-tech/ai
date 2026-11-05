@@ -46,6 +46,12 @@ open class MediaCenterActivity : AppCompatActivity() {
     private var updatePrompt: AlertDialog? = null
     private var updateBusy = false
     protected open fun elapsedTime(): Long = android.os.SystemClock.elapsedRealtime()
+    private var onlineReport: String? = null
+    private class OnlineFailure(message:String, val report:String, cause:Exception):IllegalStateException(message,cause)
+    private fun onlineFailure(error:Exception):OnlineFailure {
+        val message=(error.message ?: "Не удалось открыть видео").replace(Regex("https?://\\S+"),"<ссылка>").take(300)
+        return OnlineFailure(message,(onlineReport ?: "LampMedia · ${BuildConfig.VERSION_NAME}")+"\n"+message,error)
+    }
     private var forceQualityOnce = false
     private var recovery: Pair<String, CardMeta>? = null
     private val playerLauncher = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { result ->
@@ -335,6 +341,11 @@ open class MediaCenterActivity : AppCompatActivity() {
                 page = "error"; clear("Не удалось загрузить")
                 content.addView(text(e.message ?: "Проверь соединение и настройки источника", 17, muted)); space(content, 20)
                 content.addView(button("Повторить") { work(message, block) })
+                if(e is OnlineFailure) content.addView(button("Скопировать отчёт") {
+                    (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager)
+                        .setPrimaryClip(android.content.ClipData.newPlainText("LampMedia online",e.report))
+                    Toast.makeText(this@MediaCenterActivity,"Отчёт скопирован",Toast.LENGTH_SHORT).show()
+                })
                 content.addView(button("Выбрать каталог") { chooseCatalog() })
                 content.addView(button("Поиск торрентов") { sources() })
                 content.addView(button("Назад") { back() })
@@ -842,9 +853,18 @@ open class MediaCenterActivity : AppCompatActivity() {
         if (details.actors.isNotBlank()) { space(copy, 18); copy.addView(text("В ролях", 18)); space(copy, 8); copy.addView(text(details.actors, 15, muted)) }
         body.addView(copy, LinearLayout.LayoutParams(0, -2, 1f)); content.addView(body)
     }
-    protected open suspend fun resolveOnline(item: CenterTitle): OnlineVideo = CenterOnline(this).resolve(item)
+    protected open suspend fun resolveOnline(item: CenterTitle): OnlineVideo {
+        val resolver=CenterOnline(this)
+        fun report() = "LampMedia · ${BuildConfig.VERSION_NAME}\nИсточник: ${CenterCatalog.name(item.provider)}\nКарточка: ${item.key}\n"+
+            resolver.diagnostics.substringBefore(" errors=")
+        try { return resolver.resolve(item) }
+        catch(e:CancellationException) { throw e }
+        catch(e:Exception) { onlineReport=report();throw onlineFailure(e) }
+        finally { onlineReport=report() }
+    }
     private fun online(item: CenterTitle, resume: CardMeta? = null, refresh: Boolean = false, returnTo: Screen? = null,
         selectedSeason: Int? = null, selectedVoice: String? = null) {
+        onlineReport=null
         val previous = returnTo ?: if (resume != null && page == "online") snapshot() else null
         work("Получаю список серий · ${CenterCatalog.name(item.provider)}…") {
             val cached = onlineCache[item.key]?.takeIf { System.currentTimeMillis() - it.first < 180000 && !refresh }?.second
@@ -937,7 +957,11 @@ open class MediaCenterActivity : AppCompatActivity() {
             .setNeutralButton("Сбросить выбор") { _, _ -> store.setPreferredQuality(video.item.provider, null) }
             .setNegativeButton("Отмена", null).show()
     }
-    protected open suspend fun verifyOnlineUrl(url:String,headers:Map<String,String>):String = CenterOnline.playableUrl(url,headers)
+    protected open suspend fun verifyOnlineUrl(url:String,headers:Map<String,String>):String {
+        try { return CenterOnline.playableUrl(url,headers) }
+        catch(e:CancellationException) { throw e }
+        catch(e:Exception) { throw onlineFailure(e) }
+    }
     private fun playOnline(video: OnlineVideo, episode: OnlineEpisode, quality: Int, returnTo: Screen? = null) {
         if (System.currentTimeMillis() - video.fetchedAt > 180000) {
             online(video.item, CardMeta(video.item.title, seasonNumber = episode.season.takeIf { it>0 }, episodeNumber = episode.number,

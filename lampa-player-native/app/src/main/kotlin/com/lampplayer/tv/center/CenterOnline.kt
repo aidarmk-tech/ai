@@ -103,6 +103,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
                         else "window.__lampSnapshot ? window.__lampSnapshot() : '{}' ")
                     val observed=runCatching { JsonParser.parseString(JsonParser.parseString(raw).asString).asJsonObject }.getOrElse { JsonObject() }
                     var frameReferer: String?=null
+                    var frameInfo=""
                     val snapshot=if(item.provider=="kinogo") {
                         val candidates=observed.getAsJsonArray("candidates").orEmpty().mapNotNull { it.takeIf { it.isJsonObject }?.asJsonObject }
                         val usable=candidates.firstOrNull { entry ->
@@ -111,12 +112,13 @@ class CenterOnline(private val activity:AppCompatActivity) {
                         }
                         frameReferer=usable?.get("url")?.asString
                         val pending=observed.get("expected")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0
+                        frameInfo="frames=$pending replies=${candidates.size} "
                         usable?.getAsJsonObject("snapshot") ?: candidates.firstOrNull()?.getAsJsonObject("snapshot")?.let { first ->
                             if(pending>0 && candidates.size==pending && candidates.all { e -> e.getAsJsonObject("snapshot")?.get("blocked")?.isJsonNull==false }) first
                             else JsonObject()
                         } ?: JsonObject()
                     } else observed
-                    diagnostics="files=${snapshot.getAsJsonArray("files")?.size()} lists=${snapshot.getAsJsonArray("lists")?.size()} player=${snapshot.get("playerType")} ids=${snapshot.get("ids")} xhr=${snapshot.get("xhr")}"
+                    diagnostics=frameInfo+"files=${snapshot.getAsJsonArray("files")?.size()} lists=${snapshot.getAsJsonArray("lists")?.size()} player=${snapshot.get("playerType")} ids=${snapshot.get("ids")} xhr=${snapshot.get("xhr")}"
                     snapshot.get("blocked")?.takeIf { !it.isJsonNull }?.asString?.let {
                         throw OnlineSourceBlocked(if(it.contains("стране",true)||it.contains("регион",true)) "country" else if(it.contains("правообладателя",true)) "rights" else "unavailable",
                             "${CenterCatalog.name(item.provider)}: $it")
