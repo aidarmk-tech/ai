@@ -5,10 +5,10 @@ from html.parser import HTMLParser
 class Node:
     def __init__(self, tag="", attrs=(), parent=None):
         self.tag, self.attrs, self.parent, self.children, self.text = tag, dict(attrs), parent, [], ""
-    def dump(self):
-        allowed = {"class","id","href","src","data-src","data-id","action","method","name","type","placeholder","property","content","itemprop","alt"}
+    def dump(self, depth=0):
+        allowed = {"class","id","href","src","data-src","data-id","action","method","name","type","placeholder","property","content","itemprop","alt","data-original","data-lazy-src"}
         return {"tag": self.tag, "attrs": {k:v for k,v in self.attrs.items() if k in allowed},
-                "text": self.text.strip()[:250], "children": [c.dump() for c in self.children[:30] if c.tag not in ("script","style","iframe")]}
+                "text": self.text.strip()[:250], "children": [c.dump(depth+1) for c in self.children[:12] if c.tag not in ("script","style","iframe","svg")] if depth<5 else []}
 
 class Page(HTMLParser):
     def __init__(self, html):
@@ -43,22 +43,27 @@ def probe(url):
             if link in links: continue
             links.append(link)
             if len(cards)<2:
-                parent=a.parent
-                if parent and parent.parent: parent=parent.parent
+                parent=a if "/film/" in link or "/serial/" in link else a.parent
+                if parent is a.parent and parent and parent.parent: parent=parent.parent
                 cards.append(parent.dump() if parent else a.dump())
         result={"url":url,"final":final,"count":len(set(links)),
-                "forms":[n.dump() for n in page.nodes if n.tag=="form"][:3],
+                "forms":[n.dump() for n in page.nodes if n.tag=="form"][:2],
+                "headings":[n.dump() for n in page.nodes if n.tag=="h1"][:2],
+                "images":[n.attrs for n in page.nodes if n.tag=="img"][:2],
                 "cards":cards,
                 "pagination":[n.dump() for n in page.nodes if n.tag=="a" and ("page=" in n.attrs.get("href","") or "/page/" in n.attrs.get("href",""))][:4]}
         if links:
             detail, target=fetch(links[0])
             result["detail"]={"url":target,"headings":[n.dump() for n in detail.nodes if n.tag in ("h1","h2")][:3],
                 "metadata":[n.dump() for n in detail.nodes if n.tag=="meta" and n.attrs.get("property","").startswith("og:")],
-                "info":[n.dump() for n in detail.nodes if any(key in n.attrs.get("class","") for key in ("b-post__info","b-post__description","original-title","film-info","film-description"))][:4]}
-        return json.dumps(result,ensure_ascii=False)[:22000]
+                "info":[n.dump() for n in detail.nodes if any(key in n.attrs.get("class","") for key in ("b-post__info","b-post__description","original-title","film-info","film-description"))][:2]}
+        return json.dumps(result,ensure_ascii=False)
     except Exception as error:
         return json.dumps({"url":url,"error":str(error)},ensure_ascii=False)
 
-urls=["https://rezka.ac/films/","https://rezka.ac/films/page/2/","https://kazplay.kz/films","https://kazplay.kz/films?page=2","https://kazplay.kz/serials"]
+urls=["https://rezka.ac/films/","https://kazplay.kz/films","https://kazplay.kz/serials",
+      "https://rezka.ac/index.php?do=search&subaction=search&story=Matrix",
+      "https://rezka.ac/search/?do=search&subaction=search&q=Matrix",
+      "https://kazplay.kz/search?q=Titanic","https://kazplay.kz/search?query=Titanic"]
 with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
     for result in pool.map(probe,urls): print("CATALOG_PROBE "+result)
