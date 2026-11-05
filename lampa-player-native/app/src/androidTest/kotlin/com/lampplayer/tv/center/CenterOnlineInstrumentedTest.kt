@@ -156,4 +156,53 @@ class CenterOnlineInstrumentedTest {
             }
         }
     }
+    @Test fun kinogoCollectsTheBoundEmbedPlaylistAndUsesItsRefererWithoutTrailerOrPageJson() = runBlocking {
+        MockWebServer().use { server ->
+            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest):MockResponse {
+                    val html=when(request.path?.substringBefore('?')) {
+                        "/6873-gangsterlend.html" -> """<html><body>
+                            <script>JSON.parse('[{"title":"Сезон 9","folder":[{"title":"99 серия","file":"https://cdn.test/unrelated.mp4"}]}]');</script>
+                            <iframe data-src="/embed/movie/81816"></iframe><iframe data-src="/embed/trailer/81816"></iframe>
+                            </body></html>"""
+                        "/embed/movie/81816" -> """<html><body><div id="player"></div><script>
+                            window.Playerjs=function(options){this.api=function(command){return command==='playlist_folders'?options.file:[];};};
+                            new Playerjs({id:'player',file:[{title:'Сезон 2',folder:[{title:'Дубляж',folder:[
+                                {title:'5 серия',file:'[720p]https://cdn.test/five.m3u8'},
+                                {title:'6 серия',file:'[720p]https://cdn.test/six.m3u8'}]}]}]});
+                            </script></body></html>"""
+                        else -> "<html><body>Trailer or unknown page</body></html>"
+                    }
+                    return MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody(html)
+                }
+            }
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val result=resolver.resolve(CenterTitle(6873,"tv","Гангстерленд",provider="kinogo",
+                    sourceUrl=server.url("/6873-gangsterlend.html").toString()))
+                assertEquals(listOf(5,6),result.episodes.map { it.number })
+                assertTrue(result.episodes.all { it.season==2 && it.voice=="Дубляж" })
+                assertEquals(server.url("/embed/movie/81816").toString(),result.headers["Referer"])
+            }
+        }
+    }
+
+    @Test fun kinogoReportsExplicitRegionalRestrictionFromItsPlayer() = runBlocking {
+        MockWebServer().use { server ->
+            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest)=MockResponse()
+                    .setHeader("Content-Type","text/html; charset=utf-8").setBody(
+                        if(request.path?.startsWith("/17-")==true) """<html><body><iframe data-src="/embed/movie/9"></iframe></body></html>"""
+                        else """<html><body>К сожалению, видео недоступно для вашего региона: US</body></html>""")
+            }
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                try {
+                    resolver.resolve(CenterTitle(17,"movie","Movie",provider="kinogo",sourceUrl=server.url("/17-movie.html").toString()))
+                    fail("Ignored source regional restriction")
+                } catch(e:OnlineSourceBlocked) { assertEquals("country",e.reason) }
+            }
+        }
+    }
+
 }

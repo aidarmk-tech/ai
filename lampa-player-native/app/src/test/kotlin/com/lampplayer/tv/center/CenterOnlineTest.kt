@@ -89,4 +89,15 @@ class CenterOnlineTest {
             assertTrue(runCatching { CenterOnline.playableUrl(server.url("/video.mp4/master.m3u8").toString(),emptyMap()) }.isFailure)
         }
     }
+    @Test fun kinogoIdentityAndOnlineScopeStayExplicit() {
+        val item=CenterTitle(6873,"tv","Гангстерленд",provider="kinogo",sourceUrl="https://kz.kinogo.moi/6873-gangsterlend-2025.html")
+        assertEquals(6873,CenterOnline.source(item).encodedPath.substringAfter('/').substringBefore('-').toInt())
+        assertTrue(CenterOnline.sameTitleNavigation(item,"https://kz.kinogo.moi/6873-canonical.html"))
+        assertFalse(CenterOnline.sameTitleNavigation(item,"https://kz.kinogo.moi/6874-other.html"))
+        assertFalse(CenterOnline.sameTitleNavigation(item,"https://foreign.test/6873-other.html"))
+        assertTrue(CenterOnline.onlineSupported("kinogo"));assertTrue(CenterOnline.onlineSupported("kinovod"))
+        assertFalse(CenterOnline.onlineSupported("filmix"));assertFalse(CenterOnline.onlineSupported("hdrezka"))
+        try { CenterOnline.source(item.copy(type="all"));fail("Accepted an unknown media type") } catch(_:IllegalStateException) {}
+    }
+
 }

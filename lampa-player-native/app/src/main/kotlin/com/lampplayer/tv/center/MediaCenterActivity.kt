@@ -251,7 +251,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         super.onResume()
         playerReturn?.let { playerReturn = null; restore(it) }
         offerAutomaticUpdate()
-        recovery?.let { (_, card) ->
+        recovery?.let { (action, card) ->
             recovery = null
             content.post {
                 val parts = card.contentKey?.split(':').orEmpty()
@@ -260,7 +260,13 @@ open class MediaCenterActivity : AppCompatActivity() {
                     if (card.seasonNumber != null || parts.getOrNull(1) == "tv") "tv" else "movie",
                     card.title, original = card.originalTitle.orEmpty(), provider = provider, sourceUrl = card.sourcePage)
                 enter {
-                    find(item, card.episodeNumber?.let { CenterEpisode(card.seasonNumber ?: 1, it, "", "") })
+                    when {
+                        action=="refresh" && CenterOnline.onlineSupported(provider) -> online(item,card,refresh=true)
+                        action=="quality" && CenterOnline.onlineSupported(provider) -> {
+                            forceQualityOnce=true;online(item,refresh=true,selectedSeason=card.seasonNumber,selectedVoice=card.translator)
+                        }
+                        else -> find(item, card.episodeNumber?.let { CenterEpisode(card.seasonNumber ?: 1, it, "", "") })
+                    }
                 }
             }
         }
@@ -443,7 +449,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         boards.firstOrNull()?.second?.firstOrNull()?.let { featured(it) }
         if (store.history().isNotEmpty()) { section("Продолжить просмотр"); historyCards(store.history().take(8)); space(content, 14) }
         if (store.catalog == "tmdb") {
-            content.addView(text("Каталоги показывают описания фильмов и сериалов. Для просмотра выбери торрент-раздачу.", 13, muted)); space(content, 14)
+            content.addView(text("Каталоги показывают описания фильмов и сериалов. Онлайн KinoGo и Киновода доступен в режиме проверки; также можно выбрать торрент-раздачу.", 13, muted)); space(content, 14)
         }
         boards.forEach { (category, items) ->
             section(category.label, items.size)
@@ -809,6 +815,7 @@ open class MediaCenterActivity : AppCompatActivity() {
             }
         }
         if (movie.provider != null) {
+            if(CenterOnline.onlineSupported(movie.provider)) copy.addView(button("Смотреть онлайн · проверка") { enter { online(movie) } })
             copy.addView(button("Найти торрент-раздачу") { enter { find(movie, null) } })
             movie.updateLabel?.let { copy.addView(text(it, 15, accent)); space(copy, 10) }
         } else if (movie.type == "tv") {
@@ -958,7 +965,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                 entries.forEach { entry -> if(entry.asJsonObject.get("url")?.asString==url) entry.asJsonObject.addProperty("url",playable) }
                 meta.addProperty("episodes",entries.toString())
             }
-            launchPlayer(playable,meta.toString(),previous)
+            launchPlayer(playable,meta.toString(),previous,online=true)
         }
     }
     private fun episodeList(item: CenterTitle, season: Int) {
@@ -1169,7 +1176,10 @@ open class MediaCenterActivity : AppCompatActivity() {
                     if (card.seasonNumber != null || key.getOrNull(1) == "tv") "tv" else "movie",
                     card.title, original = card.originalTitle.orEmpty(), overview = card.overview.orEmpty(),
                     poster = card.posterUrl, provider = provider, sourceUrl = card.sourcePage)
-                content.post { find(item, card.episodeNumber?.let { CenterEpisode(card.seasonNumber ?: 1, it, "", "") }) }
+                content.post {
+                    if(CenterOnline.onlineSupported(provider)) online(item,card,refresh=true)
+                    else find(item, card.episodeNumber?.let { CenterEpisode(card.seasonNumber ?: 1, it, "", "") })
+                }
                 return@work
             }
             val base = CenterEngineService.ensure(this@MediaCenterActivity)
@@ -1204,9 +1214,9 @@ open class MediaCenterActivity : AppCompatActivity() {
         playerReturn = if (page == "loading" && backStack.isNotEmpty()) backStack.removeLast() else snapshot()
         startActivity(Intent(this, CenterWebActivity::class.java).putExtra("url", url).putExtra("lampa_data", metadata))
     }
-    private fun launchPlayer(url: String, metadata: String, returnTo: Screen? = null) {
+    private fun launchPlayer(url: String, metadata: String, returnTo: Screen? = null, online: Boolean = false) {
         playerReturn = returnTo ?: if (page == "loading" && backStack.isNotEmpty()) backStack.removeLast() else snapshot()
-        playerLauncher.launch(Intent(this, PlayerActivity::class.java).putExtra("media_center", true).setAction(Intent.ACTION_VIEW)
+        playerLauncher.launch(Intent(this, PlayerActivity::class.java).putExtra("media_center", true).putExtra("center_online",online).setAction(Intent.ACTION_VIEW)
             .setDataAndType(android.net.Uri.parse(url), "video/*").putExtra("lampa_data", metadata))
     }
     private fun sources(after: (() -> Unit)? = null) {

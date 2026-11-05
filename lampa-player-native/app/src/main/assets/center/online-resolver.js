@@ -1,6 +1,6 @@
 (function(){
 'use strict';
-if(window!==window.top||window.__lampOnline)return;
+if((window!==window.top&&!window.__lampMetadataFrame)||window.__lampOnline)return;
 HTMLMediaElement.prototype.play=function(){return Promise.reject(new DOMException('Metadata only','NotAllowedError'));};
 var state=window.__lampOnline={files:[],lists:[],playerFiles:[],playerLists:[],seen:{},errors:[],cap:480,ids:[],instances:[],xhr:[]};
 var originalParse=JSON.parse,originalStringify=JSON.stringify;
@@ -43,7 +43,7 @@ function wrapPlayer(){
   var wrapped=function(options){
    var id=typeof options==='string'?options:options&&options.id;
    if(state.ids.length<12&&id)state.ids.push(String(id));
-   var main=typeof id==='string'&&/^(?:video)?player$/i.test(id),voice=main?activeVoice():'';
+   var main=typeof id==='string'&&(/^(?:video)?player$/i.test(id)||(window.__lampMetadataFrame&&/^player(?:js|[12])?$/i.test(id))),voice=main?activeVoice():'';
    if(main&&options&&typeof options==='object')playerFile(options.file,voice);
    var instance=Reflect.construct(original,Array.prototype.slice.call(arguments));
    if(main&&instance&&typeof instance.api==='function'){
@@ -91,7 +91,7 @@ function providerMessage(){
 window.__lampSnapshot=function(){
  wrapPlayer();
  var text=providerMessage();
- var blocked=/(недоступно[\s\S]{0,70}стране|заблокировано[\s\S]{0,90}правообладателя|нет видео файла)/i.exec(text);
+ var blocked=/(недоступ(?:но|ен)[\s\S]{0,90}(?:стране|регион[ае])|заблокировано[\s\S]{0,90}правообладателя|нет видео файла)/i.exec(text);
  // Once a player is observed, unrelated page JSON cannot stand in for its playlist.
  var bound=state.ids.length||state.playerFiles.length||state.playerLists.length;
  var result={files:bound?state.playerFiles:state.files,lists:bound?state.playerLists:state.lists,cap:state.cap,blocked:blocked?blocked[0]:null,playerType:typeof window.Playerjs,ids:state.ids,xhr:state.xhr};

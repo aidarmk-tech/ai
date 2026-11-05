@@ -271,7 +271,10 @@ class PlayerActivity : AppCompatActivity() {
         if (intent.getBooleanExtra("media_center", false)) {
             val actions = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.VERTICAL }
             // Read current metadata on click: the user may have advanced to another episode.
-            listOf("torrent" to "Выбрать другую раздачу").forEach { (action, title) ->
+            val recoveryActions = if(intent.getBooleanExtra("center_online",false))
+                listOf("refresh" to "Обновить ссылку","quality" to "Выбрать качество","torrent" to "Выбрать раздачу")
+                else listOf("torrent" to "Выбрать другую раздачу")
+            recoveryActions.forEach { (action, title) ->
                 val button = android.widget.Button(this).apply {
                     text = title; isFocusable = true; tag = "recovery_$action"
                     setOnClickListener {

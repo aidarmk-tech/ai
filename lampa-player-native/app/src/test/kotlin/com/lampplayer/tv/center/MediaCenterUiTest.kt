@@ -419,8 +419,8 @@ class MediaCenterUiTest {
         try {
             val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
             CenterStore(host).indexer=""
-            val card=com.lampplayer.tv.domain.model.CardMeta("Recovery",contentKey="kinovod:tv:912",
-                sourcePage="https://source.test/serial/912-show",seasonNumber=2,episodeNumber=5)
+            val card=com.lampplayer.tv.domain.model.CardMeta("Recovery",contentKey="filmix:tv:912",
+                sourcePage="https://source.test/seria/912-show",seasonNumber=2,episodeNumber=5)
             ReflectionHelpers.setField(host,"recovery","quality" to card)
             controller.pause().resume();frame(root)
             assertEquals(0,host.onlineCalls)
@@ -702,6 +702,27 @@ class MediaCenterUiTest {
             label(root,"Искать в: KazPlay · Қазақша").performClick();frame(root)
             dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
             assertEquals(CenterCatalog.providers.size,dialog.listView.adapter.count);dialog.dismiss()
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun onlineTestIsSelectiveAndKinogoPassesTheSelectedEpisodeToOurPlayer() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(6873,"tv","Гангстерленд",provider="kinogo",sourceUrl="https://kz.kinogo.moi/6873-gangsterlend-2025.html")
+            host.nextOnline=OnlineVideo(item,listOf(OnlineEpisode(2,5,"Пятая","Voice",mapOf(720 to "https://cdn.test/five.m3u8"))),mapOf("Referer" to "https://player.test/embed/movie/9"))
+            host.detailFixture(CenterDetails(item,emptyList(),""));frame(root)
+            label(root,"Смотреть онлайн · проверка").performClick();frame(root)
+            assertEquals(1,host.onlineCalls)
+            label(root,"Сезон 2").performClick();frame(root)
+            all(root).first { it.tag=="online:2:5:Voice" }.performClick();frame(root)
+            val intent=shadowOf(host).nextStartedActivity
+            assertTrue(intent.getBooleanExtra("center_online",false))
+            val parsed=com.lampplayer.tv.player.IntentParser.parse(intent)!!
+            assertEquals("https://cdn.test/five.m3u8",parsed.first)
+            assertEquals(2,parsed.second.seasonNumber);assertEquals(5,parsed.second.episodeNumber)
+            assertEquals(item.key,parsed.second.contentKey)
+            assertEquals("https://player.test/embed/movie/9",parsed.second.headers["Referer"])
         } finally { controller.pause().stop().destroy() }
     }
 
