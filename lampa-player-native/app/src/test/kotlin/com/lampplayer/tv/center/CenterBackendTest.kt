@@ -198,4 +198,28 @@ class CenterBackendTest {
         assertEquals(5,releases.size)
         assertTrue(CenterBackend.selectReleases(releases,"480","seeds",false).isEmpty())
     }
+
+    @Test fun nativeJacredSidPirAndBitrateAreNotLostOrReplacedByZero() {
+        val list=CenterBackend.parseReleases("""[
+          {"title":"Known","magnet":"magnet:?xt=urn:btih:known","sid":42,"pir":9,"bit_rate":8000000,"trackerName":"rutracker"},
+          {"title":"Zero","magnet":"magnet:?xt=urn:btih:zero","sid":0,"pir":0},
+          {"title":"Unknown","magnet":"magnet:?xt=urn:btih:unknown"},
+          {"title":"Video","magnet":"magnet:?xt=urn:btih:video","ffprobe":[{"codec_type":"audio","bit_rate":"192000"},{"codec_type":"video","bit_rate":"4500000"}]}
+        ]""").associateBy { it.title }
+        assertEquals(42,list.getValue("Known").seeds);assertEquals(9,list.getValue("Known").leechers)
+        assertEquals("8.0 Мбит/с",list.getValue("Known").bitrate);assertEquals("rutracker",list.getValue("Known").tracker)
+        assertTrue(list.getValue("Zero").seedsKnown);assertEquals(0,list.getValue("Zero").leechers)
+        assertFalse(list.getValue("Unknown").seedsKnown);assertNull(list.getValue("Unknown").leechers)
+        assertEquals("Видео 4.5 Мбит/с",list.getValue("Video").bitrate)
+        assertEquals(listOf("Known"),CenterBackend.selectReleases(list.values.toList(),"Все","seeds",true).map { it.title })
+    }
+    @Test fun torznabCountsRetainUnknownAndExplicitZeroSeparately() {
+        val list=CenterBackend.parseReleases("""<rss xmlns:torznab="http://torznab.com/schemas/2015/feed"><channel>
+        <item><title>Known</title><link>https://source.test/known.torrent</link><torznab:attr name="seeders" value="12"/><torznab:attr name="leechers" value="3"/></item>
+        <item><title>Zero</title><link>https://source.test/zero.torrent</link><torznab:attr name="seeders" value="0"/></item>
+        <item><title>Unknown</title><link>https://source.test/unknown.torrent</link></item>
+        </channel></rss>""").associateBy { it.title }
+        assertEquals(12,list.getValue("Known").seeds);assertEquals(3,list.getValue("Known").leechers)
+        assertTrue(list.getValue("Zero").seedsKnown);assertFalse(list.getValue("Unknown").seedsKnown)
+    }
 }
