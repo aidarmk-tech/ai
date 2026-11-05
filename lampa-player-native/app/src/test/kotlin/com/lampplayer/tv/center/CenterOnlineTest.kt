@@ -59,4 +59,34 @@ class CenterOnlineTest {
         assertTrue(CenterOnline.sameTitleNavigation(show.copy(sourceUrl="https://site.test/serial/17-old"),"https://site.test/serial/17-canonical"))
     }
 
+
+    @Test fun missingManifestFallsBackOnlyToVerifiedVideo() = kotlinx.coroutines.runBlocking {
+        okhttp3.mockwebserver.MockWebServer().use { server ->
+            server.enqueue(okhttp3.mockwebserver.MockResponse().setResponseCode(404))
+            server.enqueue(okhttp3.mockwebserver.MockResponse().setHeader("Content-Type","video/mp4").setBody("0000ftypisom"))
+            val hls=server.url("/video.mp4/master-v1-a1.m3u8?token=test").toString()
+            val resolved=CenterOnline.playableUrl(hls,mapOf("Referer" to "https://source.test/film/1"))
+            assertEquals(server.url("/video.mp4?token=test").toString(),resolved)
+            assertEquals("/video.mp4/master-v1-a1.m3u8?token=test",server.takeRequest().path)
+            assertEquals("/video.mp4?token=test",server.takeRequest().path)
+        }
+    }
+    @Test fun validHlsRemainsUnchangedAndAccessDeniedNeverTriggersMp4Fallback() = kotlinx.coroutines.runBlocking {
+        okhttp3.mockwebserver.MockWebServer().use { server ->
+            val url=server.url("/video.mp4/master.m3u8").toString()
+            server.enqueue(okhttp3.mockwebserver.MockResponse().setBody("#EXTM3U\n#EXT-X-ENDLIST"))
+            assertEquals(url,CenterOnline.playableUrl(url,emptyMap()))
+            server.takeRequest()
+            server.enqueue(okhttp3.mockwebserver.MockResponse().setResponseCode(403))
+            assertTrue(runCatching { CenterOnline.playableUrl(url,emptyMap()) }.isFailure)
+            assertEquals(2,server.requestCount)
+        }
+    }
+    @Test fun htmlIsNotAcceptedAsTheDirectVideoFallback() = kotlinx.coroutines.runBlocking {
+        okhttp3.mockwebserver.MockWebServer().use { server ->
+            server.enqueue(okhttp3.mockwebserver.MockResponse().setResponseCode(404))
+            server.enqueue(okhttp3.mockwebserver.MockResponse().setHeader("Content-Type","text/html").setBody("<html>Login</html>"))
+            assertTrue(runCatching { CenterOnline.playableUrl(server.url("/video.mp4/master.m3u8").toString(),emptyMap()) }.isFailure)
+        }
+    }
 }
