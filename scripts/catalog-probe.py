@@ -6,7 +6,7 @@ class Node:
     def __init__(self, tag="", attrs=(), parent=None):
         self.tag, self.attrs, self.parent, self.children, self.text = tag, dict(attrs), parent, [], ""
     def dump(self, depth=0):
-        allowed = {"class","id","href","src","data-src","data-id","action","method","name","type","placeholder","property","content","itemprop","alt","data-original","data-lazy-src"}
+        allowed = {"class","id","href","src","data-src","data-id","action","method","name","type","placeholder","property","content","itemprop","alt","data-original","data-lazy-src","style","data-background"}
         return {"tag": self.tag, "attrs": {k:v for k,v in self.attrs.items() if k in allowed},
                 "text": self.text.strip()[:250], "children": [c.dump(depth+1) for c in self.children[:12] if c.tag not in ("script","style","iframe","svg")] if depth<5 else []}
 
@@ -57,6 +57,18 @@ def probe(url):
             result["detail"]={"url":target,"headings":[n.dump() for n in detail.nodes if n.tag in ("h1","h2")][:3],
                 "metadata":[n.dump() for n in detail.nodes if n.tag=="meta" and n.attrs.get("property","").startswith("og:")],
                 "info":[n.dump() for n in detail.nodes if any(key in n.attrs.get("class","") for key in ("b-post__info","b-post__description","original-title","film-info","film-description"))][:2]}
+        if url=="https://kazplay.kz/films":
+            scripts=[n.attrs.get("src") for n in page.nodes if n.tag=="script" and n.attrs.get("src","").startswith("/_next/")]
+            snippets=[]
+            for source in scripts[:18]:
+                try:
+                    request=urllib.request.Request(urllib.parse.urljoin(final,source),headers={"User-Agent":"Mozilla/5.0"})
+                    with urllib.request.urlopen(request,timeout=8) as response:
+                        code=response.read(1800000).decode("utf-8","replace")
+                    for match in re.finditer(r"/api/search|/search\?|/search/|router\.push|/api/films",code):
+                        snippets.append(code[max(0,match.start()-100):match.end()+350])
+                except Exception: pass
+            result["search_code"]=snippets[:10]
         return json.dumps(result,ensure_ascii=False)
     except Exception as error:
         return json.dumps({"url":url,"error":str(error)},ensure_ascii=False)
