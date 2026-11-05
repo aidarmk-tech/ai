@@ -136,6 +136,7 @@ open class MediaCenterActivity : AppCompatActivity() {
             "Поиск" -> searchScreen()
             "Настройки" -> settings()
             "История" -> historyScreen()
+            "Мои сериалы" -> mySeriesScreen()
             "Избранное" -> showHome(store.favorites(), "Избранное")
             else -> loadHome()
         }
@@ -147,10 +148,10 @@ open class MediaCenterActivity : AppCompatActivity() {
         navigation = column().apply { setPadding(0, 0, dp(22), 0) }
         navigation.addView(text("LampMedia", 24, accent).apply { typeface = Typeface.DEFAULT_BOLD })
         space(navigation, 24)
-        listOf("Главная", "Фильмы", "Сериалы", "Поиск", "Избранное", "История", "Источники", "Настройки").forEach { label ->
+        listOf("Главная", "Фильмы", "Сериалы", "Поиск", "Мои сериалы", "Избранное", "История", "Источники", "Настройки").forEach { label ->
             navigation.addView(button(label) { navigate(label); closeMenu() }.apply {
                 textSize = 14f
-                layoutParams = LinearLayout.LayoutParams(-1, dp(43)).apply { bottomMargin = dp(6) }
+                layoutParams = LinearLayout.LayoutParams(-1, dp(38)).apply { bottomMargin = dp(4) }
                 setOnKeyListener { _, key, event ->
                     if (key == KeyEvent.KEYCODE_DPAD_RIGHT && event.action == KeyEvent.ACTION_DOWN) {
                         content.getFocusables(View.FOCUS_FORWARD).firstOrNull { it.isShown && it.isEnabled }?.requestFocus() == true
@@ -275,7 +276,7 @@ open class MediaCenterActivity : AppCompatActivity() {
     }
     protected open fun loadHome() {
         selected = null; catalogPage = 1
-        if (nav != "Главная") { loadCategory(CenterSection.all.first { it.id == if (nav == "Сериалы") "new_episodes" else "new_movies" }); return }
+        if (nav != "Главная") { loadLibrary(CenterBrowse(type=if(nav=="Сериалы") "tv" else "movie")); return }
         work("Загружаю ${CenterCatalog.name(store.catalog)}…") {
             val provider = store.catalog; val limiter = Semaphore(3)
             val results = coroutineScope { CenterSection.all.map { section -> async {
@@ -294,6 +295,67 @@ open class MediaCenterActivity : AppCompatActivity() {
         work("${section.label} · ${CenterCatalog.name(store.catalog)}…") {
             showHome(catalogItems(store.catalog, section, number), section.label, number, section)
         }
+    }
+    protected open suspend fun browsePage(provider: String, request: CenterBrowse, number: Int): List<CenterTitle> =
+        if(provider=="tmdb") backend.library(request,number)
+        else if(request.query.isNotBlank() && number==1) catalogs.search(provider,store.catalogHost(provider),request.query)
+        else emptyList()
+    protected fun mySeriesScreen() {
+        showHome(store.mySeries(),"Мои сериалы")
+    }
+    private fun loadLibrary(request: CenterBrowse) {
+        if(store.catalog!="tmdb") {
+            val section=CenterSection.all.first { it.type==request.type && it.country==null }
+            loadCategory(section); return
+        }
+        work("Загружаю каталог…") {
+            showHome(browsePage("tmdb",request,1),if(request.type=="tv") "Сериалы" else "Фильмы",1,null,request)
+        }
+    }
+    private fun libraryTools(request: CenterBrowse) {
+        content.addView(text(listOf(if(request.mode=="new") "Новые" else "Популярные",
+            request.country.takeIf { it.isNotBlank() },request.year?.toString(),request.genreName.takeIf { it.isNotBlank() }).filterNotNull().joinToString(" · "),14,accent))
+        content.addView(button("Подборка и фильтры") {
+            val expected=gridGeneration
+            job?.cancel()
+            job=lifecycleScope.launch {
+                try {
+                    val genres=backend.genres(request.type)
+                    if(expected!=gridGeneration)return@launch
+                    val form=column().apply { setPadding(dp(20),dp(8),dp(20),0) }
+                    fun choice(label:String,values:List<String>,selected:Int):Spinner {
+                        form.addView(text(label,14,muted))
+                        return Spinner(this@MediaCenterActivity).apply {
+                            adapter=ArrayAdapter(this@MediaCenterActivity,android.R.layout.simple_spinner_dropdown_item,values)
+                            setSelection(selected.coerceAtLeast(0));form.addView(this)
+                        }
+                    }
+                    val mode=choice("Подборка",listOf("Популярные","Новые"),if(request.mode=="new")1 else 0)
+                    val countries=listOf("","RU","KZ","US")
+                    val country=choice("Страна",listOf("Все страны","Россия","Казахстан","США"),countries.indexOf(request.country))
+                    val genreItems=listOf(0 to "Все жанры")+genres
+                    val genre=choice("Жанр",genreItems.map { it.second },genreItems.indexOfFirst { it.first==request.genre })
+                    form.addView(text(if(request.type=="tv") "Год начала сериала" else "Год фильма",14,muted))
+                    val year=EditText(this@MediaCenterActivity).apply { hint="Любой год";setText(request.year?.toString().orEmpty());inputType=InputType.TYPE_CLASS_NUMBER;form.addView(this) }
+                    val dialog=AlertDialog.Builder(this@MediaCenterActivity).setTitle("Фильтры каталога").setView(form)
+                        .setNegativeButton("Отмена",null).setNeutralButton("Сбросить") { _,_-> loadLibrary(CenterBrowse(type=request.type)) }
+                        .setPositiveButton("Применить",null).create()
+                    dialog.setOnShowListener { dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                        val value=year.text.toString().trim()
+                        val parsed=value.toIntOrNull()
+                        if(value.isNotEmpty()&&(parsed==null||parsed !in 1888..(java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)+1))) { year.error="Укажи год из четырёх цифр";return@setOnClickListener }
+                        val selectedGenre=genreItems[genre.selectedItemPosition]
+                        dialog.dismiss()
+                        loadLibrary(request.copy(mode=if(mode.selectedItemPosition==1)"new" else "popular",
+                            country=countries[country.selectedItemPosition],year=parsed,genre=selectedGenre.first.takeIf { it>0 },
+                            genreName=selectedGenre.second.takeIf { selectedGenre.first>0 }.orEmpty()))
+                    } }
+                    dialog.show()
+                } catch(e:CancellationException) { throw e }
+                catch(_:Exception) { Toast.makeText(this@MediaCenterActivity,"Не удалось загрузить жанры. Попробуй ещё раз",Toast.LENGTH_SHORT).show() }
+            }
+        }.apply { tag="library_filters" })
+        if(request.type=="tv") content.addView(button("Новые серии · эфир") { enter { loadCategory(CenterSection.all.first { it.id=="new_episodes" }) } })
     }
     private fun catalogTools() {
         val tools = row()
@@ -354,19 +416,22 @@ open class MediaCenterActivity : AppCompatActivity() {
             LinearLayout.LayoutParams(dp(230), dp(43)))
         hero.addView(copy, FrameLayout.LayoutParams(-1, -2)); content.addView(hero, LinearLayout.LayoutParams(-1, dp(215))); space(content, 20)
     }
-    protected fun showHome(items: List<CenterTitle>, heading: String = "Популярное сейчас", pageNumber: Int = catalogPage, category: CenterSection? = null) {
+    protected fun showHome(items: List<CenterTitle>, heading: String = "Популярное сейчас", pageNumber: Int = catalogPage, category: CenterSection? = null, request: CenterBrowse? = null) {
         catalogPage = pageNumber
-        currentScreen = { showHome(items, heading, pageNumber, category) }; page = "home"; clear(heading)
-        if (category != null) catalogTools()
+        currentScreen = { showHome(items, heading, pageNumber, category, request) }; page = "home"; clear(heading)
+        if (category != null || request != null || heading=="Мои сериалы") catalogTools()
+        if(request != null && request.query.isBlank()) libraryTools(request)
+        if(heading=="Мои сериалы") content.addView(text("Сериалы из подписок и истории просмотра",14,muted))
+        if(request?.query?.isNotBlank()==true) content.addView(text("Поиск: ${request.query} · ${CenterCatalog.name(store.catalog)}",14,muted))
         if (items.isEmpty()) {
             content.addView(text(if (heading == "Избранное") "Здесь появятся фильмы и сериалы из избранного" else "Ничего не найдено", 17, muted))
             return
         }
-        titleGrid(items, heading, pageNumber, category, heading !in listOf("Избранное", "Результаты поиска"))
+        titleGrid(items, heading, pageNumber, category, request != null || heading !in listOf("Избранное", "Результаты поиска", "Мои сериалы"), request)
     }
     protected open suspend fun nextGridPage(provider: String, category: CenterSection?, type: String, number: Int): List<CenterTitle> =
         if (category != null) catalogItems(provider, category, number) else backend.browse(type, page = number)
-    private fun titleGrid(initial: List<CenterTitle>, heading: String, firstPage: Int, category: CenterSection?, canLoad: Boolean) {
+    private fun titleGrid(initial: List<CenterTitle>, heading: String, firstPage: Int, category: CenterSection?, canLoad: Boolean, request: CenterBrowse? = null) {
         val loaded = initial.distinctBy { it.key }.toMutableList()
         val provider = store.catalog
         val type = when (nav) { "Фильмы" -> "movie"; "Сериалы" -> "tv"; else -> "all" }
@@ -388,13 +453,14 @@ open class MediaCenterActivity : AppCompatActivity() {
         }
         val status = text("", 14, muted).apply { tag = "grid_status"; setPadding(dp(8),dp(8),dp(8),dp(8)) }
         lateinit var adapter: RecyclerView.Adapter<Poster>
-        fun rememberScreen() { currentScreen = { showHome(loaded.toList(), heading, number, category) } }
+        fun rememberScreen() { currentScreen = { showHome(loaded.toList(), heading, number, category, request) } }
         fun nextPage() {
             if (busy || ended || failed || generation != gridGeneration || page != "home") return
             busy = true; status.text = "Загружаю ещё…"; status.isFocusable = false
             gridJob = lifecycleScope.launch {
                 try {
-                    val batch = nextGridPage(provider, category, type, number + 1)
+                    if(number>=500) { ended=true;status.text="Достигнут конец каталога";return@launch }
+                    val batch = if(request != null) browsePage(provider,request,number+1) else nextGridPage(provider, category, type, number + 1)
                     if (generation != gridGeneration) return@launch
                     val keys = loaded.mapTo(hashSetOf()) { it.key }
                     val fresh = batch.filter { keys.add(it.key) }
@@ -433,6 +499,10 @@ open class MediaCenterActivity : AppCompatActivity() {
                 holder.itemView.tag = if(item.provider == null) "title:${item.type}:${item.id}" else "title:${item.key}"
                 holder.title.text = item.title
                 holder.info.text = item.updateLabel ?: facts(item)
+                if(heading=="Мои сериалы") {
+                    val saved=store.history().firstOrNull { (it.card.contentKey ?: "tmdb:tv:${it.card.tmdbId}")==item.key }
+                    if(saved!=null) holder.info.text=listOfNotNull(saved.card.seasonNumber?.let { "Сезон $it" },saved.card.episodeNumber?.let { "Серия $it" }).joinToString(" · ")
+                }
                 holder.art.removeAllViews()
                 holder.art.addView(artFrame(item.title,desired,desired*3/2,item.poster,item.id),FrameLayout.LayoutParams(-1,-1))
                 holder.itemView.setOnClickListener { enter { detail(item) } }
@@ -576,7 +646,10 @@ open class MediaCenterActivity : AppCompatActivity() {
             val term = query.text.toString().trim()
             if (term.length < 2) { query.error = "Введи хотя бы две буквы"; return }
             currentScreen = { searchScreen(term) }
-            enter { work("Ищу «$term»…") { showHome(if (store.catalog == "tmdb") backend.browse(query = term) else catalogs.search(store.catalog, store.catalogHost(store.catalog), term), "Результаты поиска") } }
+            enter { work("Ищу «$term»…") {
+                val spec=CenterBrowse(type="all",query=term)
+                showHome(browsePage(store.catalog,spec,1),"Результаты поиска",1,null,if(store.catalog=="tmdb") spec else null)
+            } }
         }
         query.setOnEditorActionListener { _, action, event ->
             if (action == EditorInfo.IME_ACTION_SEARCH || event?.let { it.keyCode == KeyEvent.KEYCODE_ENTER && it.action == KeyEvent.ACTION_DOWN } == true) { search(); true } else false
@@ -595,6 +668,9 @@ open class MediaCenterActivity : AppCompatActivity() {
         val copy = column().apply { setPadding(dp(24), 0, 0, 0) }
         copy.addView(text(facts(movie), 15, accent)); space(copy, 15)
         val saved = store.history().firstOrNull { (it.card.contentKey ?: "tmdb:${movie.type}:${it.card.tmdbId}") == movie.key }
+        if (movie.type=="tv") copy.addView(button(if(store.isFollowed(movie)) "✓ В моих сериалах · убрать" else "+ В мои сериалы") {
+            store.toggleFollow(movie); showDetails(details)
+        }.apply { tag="follow_series" })
         if (saved != null) {
             val continueButton = button("Продолжить") { enter { resume(saved) } }.apply { tag = "continue_title"; maxLines = 2; layoutParams.height = dp(62) }
             copy.addView(continueButton)
