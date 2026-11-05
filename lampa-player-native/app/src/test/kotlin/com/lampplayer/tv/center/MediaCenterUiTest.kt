@@ -48,6 +48,7 @@ class MediaCenterUiTest {
             CenterTitle(it, if(it%2==0) "tv" else "movie", listOf("Тихий город","За горизонтом","Новый день","На орбите")[(it-1)%4],
                 overview="Истории, к которым хочется возвращаться. Каталог, серии и просмотр в одном приложении.", year="2026",rating="8.2")
         }; showDashboard(CenterSection.all.map { section -> section to items.filter { it.type == section.type } }) }
+        fun detailFixture(details: CenterDetails) { showDetails(details) }
         fun calls()=backend.detailCalls to backend.episodeCalls
         fun nativeFixture(video:OnlineVideo) { showOnline(video) }
     }
@@ -330,5 +331,56 @@ class MediaCenterUiTest {
             assertEquals(width,catalog.width)
             screenshot(root,"media-center-drawer-closed")
         } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun watchedEpisodesAndResumeUseStablePositions() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(981,"tv","Progress series",provider="kinovod",sourceUrl="https://source.test/serial/981-show")
+            val card=com.lampplayer.tv.domain.model.CardMeta(item.title,contentKey=item.key,sourcePage=item.sourceUrl,seasonNumber=2,episodeNumber=5)
+            val positions=com.lampplayer.tv.data.datastore.PositionDataStore(host)
+            kotlinx.coroutines.runBlocking {
+                positions.savePosition("old-token",card,com.lampplayer.tv.domain.model.PlaybackPosition(1112.0,2400.0,46,false))
+                positions.savePosition("watched-token",card.copy(episodeNumber=4),com.lampplayer.tv.domain.model.PlaybackPosition(2390.0,2400.0,99,true))
+            }
+            CenterStore(host).remember("old-token",card)
+            host.detailFixture(CenterDetails(item,listOf(2),""));repeat(8) { frame(root) }
+            val resume=all(root).filterIsInstance<TextView>().first { it.tag=="continue_title" }
+            assertTrue(resume.text.toString().contains("Сезон 2 · Серия 5 · 18:32"))
+            val video=OnlineVideo(item,listOf(4,5).map { OnlineEpisode(2,it,"Episode $it","Voice",mapOf(720 to "https://cdn.test/new-$it.m3u8")) },emptyMap())
+            host.nativeFixture(video);frame(root);label(root,"Сезон 2").performClick();repeat(8) { frame(root) }
+            val watched=all(root).filterIsInstance<TextView>().first { it.tag=="online:2:4:Voice" }
+            val current=all(root).filterIsInstance<TextView>().first { it.tag=="online:2:5:Voice" }
+            assertTrue(watched.text.startsWith("✓"))
+            assertTrue(current.text.startsWith("▶"))
+            assertTrue(current.text.contains("46%"))
+        } finally { controller.pause().stop().destroy() }
+    }
+    @Test fun voicePreferenceIsPerTitleAndCardSizesSurviveReopening() {
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        val store=CenterStore(context)
+        store.setVoice("kinovod:tv:1","Дубляж")
+        store.setVoice("filmix:tv:1","Оригинал")
+        assertEquals("Дубляж",CenterStore(context).voice("kinovod:tv:1"))
+        assertEquals("Оригинал",CenterStore(context).voice("filmix:tv:1"))
+        assertNull(store.voice("kinovod:tv:2"))
+        for(size in listOf("compact","normal","large")) { store.cardSize=size;assertEquals(size,CenterStore(context).cardSize) }
+        store.setVoice("kinovod:tv:1",null);assertNull(store.voice("kinovod:tv:1"))
+    }
+    @Test fun compactCardsLeaveRoomForMoreTitles() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        fun cardWidth(size:String):Int {
+            CenterStore(context).cardSize=size
+            val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+            try {
+                val root=controller.get().findViewById<View>(android.R.id.content);frame(root)
+                return all(root).first { it.tag=="new_episodes:title:tv:2" }.width
+            } finally { controller.pause().stop().destroy() }
+        }
+        assertTrue(cardWidth("compact") < cardWidth("normal"))
+        assertTrue(cardWidth("normal") < cardWidth("large"))
     }
 }
