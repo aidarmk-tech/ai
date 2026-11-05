@@ -24,7 +24,7 @@ data class CenterTitle(val id: Int, val type: String, val title: String, val ori
 data class CenterEpisode(val season: Int, val number: Int, val name: String, val overview: String,
     val still: String? = null, val airDate: String = "", val runtime: Int = 0)
 data class CenterDetails(val title: CenterTitle, val seasons: List<Int>, val actors: String)
-data class CenterRelease(val title: String, val link: String, val seeds: Int, val size: Long, val tracker: String, val leechers: Int? = null, val bitrate: String? = null, val seedsKnown: Boolean = true)
+data class CenterRelease(val title: String, val link: String, val seeds: Int, val size: Long, val tracker: String, val leechers: Int? = null, val bitrate: String? = null, val seedsKnown: Boolean = true, val voices: List<String> = emptyList())
 data class CenterFile(val id: Int, val path: String, val size: Long) {
     val name get() = path.substringAfterLast('/')
     fun episode(): Pair<Int, Int>? {
@@ -105,10 +105,38 @@ open class CenterBackend {
                     if (title.isNotBlank() && playableSource(link)) results += CenterRelease(title, link,
                         seeds ?: 0, o.num("size").takeIf { it > 0 } ?: o.num("Size"),
                         o.str("tracker").ifBlank { o.str("trackerName") }.ifBlank { o.str("Tracker") },
-                        leechers, directBitrate ?: videoBitrate, seeds != null)
+                        leechers, directBitrate ?: videoBitrate, seeds != null,
+                        o.get("voices")?.takeIf { it.isJsonArray }?.asJsonArray?.mapNotNull { it.takeIf { it.isJsonPrimitive }?.asString?.trim()?.takeIf { it.isNotEmpty() } }?.distinct()?.take(12).orEmpty())
                 }
             }
             return results.distinctBy { it.link }.sortedByDescending { it.seeds }.take(100)
+        }
+        fun matchesRelease(release: CenterRelease, item: CenterTitle, episode: CenterEpisode? = null): Boolean {
+            fun words(text: String) = Regex("[\\p{L}\\p{N}]+").findAll(text.lowercase(java.util.Locale.ROOT).replace('ё','е'))
+                .map { it.value }.toList()
+            val actual = words(release.title).toSet()
+            val titles = listOf(item.title, item.original).filter { it.isNotBlank() }
+            val titleMatch = titles.any { title ->
+                val wanted = words(title)
+                wanted.isNotEmpty() && wanted.all { it in actual }
+            }
+            if (!titleMatch) return false
+            val year = Regex("(?<![0-9])(?:19|20)[0-9]{2}(?![0-9])").find(release.title)?.value
+            if (item.type == "movie" && item.year.length == 4 && year != null && item.year != year) return false
+            if (episode != null) {
+                val explicit = Regex("(?i)s([0-9]{1,2})(?:[ ._-]*e([0-9]{1,3}))?").find(release.title)
+                if (explicit != null) {
+                    if (explicit.groupValues[1].toInt() != episode.season) return false
+                    if (explicit.groupValues[2].isNotEmpty() && explicit.groupValues[2].toInt() != episode.number) return false
+                }
+            }
+            return true
+        }
+        fun releaseFormat(release: CenterRelease): String {
+            val tags = listOf("HEVC", "H[ .]?265", "x265", "AVC", "H[ .]?264", "x264", "AV1", "VP9",
+                "Dolby[ .]?Vision", "HDR10[+]?", "HDR")
+            return tags.mapNotNull { Regex("(?i)(?<![a-z0-9])(?:$it)(?![a-z0-9])").find(release.title)?.value }
+                .distinctBy { it.lowercase(java.util.Locale.ROOT) }.joinToString(" · ").ifBlank { "Не указан" }
         }
         fun selectReleases(releases: List<CenterRelease>, quality: String, sort: String, seededOnly: Boolean): List<CenterRelease> {
             val filtered = releases.filter { release ->
