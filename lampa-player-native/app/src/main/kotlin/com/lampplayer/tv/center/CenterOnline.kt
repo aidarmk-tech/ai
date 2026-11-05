@@ -163,7 +163,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
                 val fallback=parsed.newBuilder().encodedPath(path.substringBeforeLast('/')).build().toString()
                 if(probe(fallback).second)return fallback
             }
-            error(if(original.first==404) "Киновод: видео по этой ссылке не найдено (HTTP 404). Обнови ссылки или выбери другой источник."
+            error(if(original.first==404) "Видео по этой ссылке не найдено (HTTP 404). Обнови ссылки или выбери другой источник."
                 else "Источник не отдал видео: HTTP ${original.first}")
         }
         private val libraryHttp=OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
