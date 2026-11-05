@@ -101,16 +101,11 @@ open class MediaCenterActivity : AppCompatActivity() {
     }
     private fun iconButton(symbol: String, label: String, action: () -> Unit): TextView =
         button(label, action).apply {
-            text = symbol; contentDescription = label; tag = label
-            gravity = Gravity.CENTER; maxLines = 1; ellipsize = TextUtils.TruncateAt.END
+            text = "$symbol  $label"; textSize=12f; contentDescription=label; tag=label
+            gravity=Gravity.CENTER; maxLines=1; ellipsize=TextUtils.TruncateAt.END
             setPadding(dp(10),0,dp(10),0)
-            layoutParams = LinearLayout.LayoutParams(dp(46),dp(44)).apply { rightMargin=dp(8) }
-            setOnFocusChangeListener { view, focused ->
-                text = if(focused) label else symbol
-                gravity = if(focused) Gravity.CENTER_VERTICAL else Gravity.CENTER
-                layoutParams = (layoutParams as LinearLayout.LayoutParams).apply { width=dp(if(focused)210 else 46) }
-                paintButton(view,focused)
-            }
+            layoutParams=LinearLayout.LayoutParams(-2,dp(34)).apply { rightMargin=dp(6) }
+            setOnFocusChangeListener { view,focused -> paintButton(view,focused) }
         }
     private fun space(parent: LinearLayout, n: Int) { parent.addView(View(this), LinearLayout.LayoutParams(1, dp(n))) }
     private fun findTag(view: View, key: String): View? {
@@ -863,6 +858,7 @@ open class MediaCenterActivity : AppCompatActivity() {
             .setNeutralButton("Сбросить выбор") { _, _ -> store.setPreferredQuality(video.item.provider, null) }
             .setNegativeButton("Отмена", null).show()
     }
+    protected open suspend fun verifyOnlineUrl(url:String,headers:Map<String,String>):String = CenterOnline.playableUrl(url,headers)
     private fun playOnline(video: OnlineVideo, episode: OnlineEpisode, quality: Int, returnTo: Screen? = null) {
         if (System.currentTimeMillis() - video.fetchedAt > 180000) {
             online(video.item, CardMeta(video.item.title, seasonNumber = episode.season.takeIf { it>0 }, episodeNumber = episode.number,
@@ -882,7 +878,16 @@ open class MediaCenterActivity : AppCompatActivity() {
                 addProperty("episode_index", playlist.indexOfFirst { it.url == url }.coerceAtLeast(0))
             }
         }
-        launchPlayer(url, meta.toString(), returnTo)
+        val previous=returnTo ?: snapshot()
+        work("Проверяю доступность видео…") {
+            val playable=verifyOnlineUrl(url,video.headers)
+            if(playable!=url && meta.has("episodes")) {
+                val entries=com.google.gson.JsonParser.parseString(meta.get("episodes").asString).asJsonArray
+                entries.forEach { entry -> if(entry.asJsonObject.get("url")?.asString==url) entry.asJsonObject.addProperty("url",playable) }
+                meta.addProperty("episodes",entries.toString())
+            }
+            launchPlayer(playable,meta.toString(),previous)
+        }
     }
     private fun episodeList(item: CenterTitle, season: Int) {
         work("Загружаю серии…") { showEpisodes(item, season, backend.episodes(item, season)) }
