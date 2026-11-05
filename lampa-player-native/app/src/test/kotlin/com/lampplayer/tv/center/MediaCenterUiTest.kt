@@ -77,6 +77,7 @@ class MediaCenterUiTest {
         val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
         try {
             val root=controller.get().findViewById<View>(android.R.id.content);frame(root)
+            all(root).first { it.tag=="menu_handle" }.performClick();frame(root)
             val home=label(root,"Главная");home.requestFocus();frame(root);key(root,KeyEvent.KEYCODE_DPAD_RIGHT);frame(root)
             assertFalse(home.hasFocus());assertNotNull(root.findFocus());assertEquals("Каталог: TMDB  ▾",(root.findFocus() as TextView).text.toString())
             assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Казахстанское кино" })
@@ -302,5 +303,31 @@ class MediaCenterUiTest {
         assertNull(CenterStore(context).preferredQuality("filmix"))
         CenterStore(context).setPreferredQuality("kinovod",null)
         assertNull(CenterStore(context).preferredQuality("kinovod"))
+    }
+
+    @Test fun drawerOverlaysTheCatalogAndClosesWithBackOrRight() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content);frame(root)
+            val handle=all(root).first { it.tag=="menu_handle" }
+            val catalog=label(root,"Каталог: TMDB  ▾")
+            assertFalse(label(root,"Главная").isShown)
+            val width=catalog.width
+            handle.performClick();frame(root)
+            assertTrue(label(root,"Главная").isShown)
+            assertEquals(width,catalog.width)
+            assertEquals("Главная",root.findFocus()?.tag)
+            screenshot(root,"media-center-drawer-open")
+            host.onBackPressedDispatcher.onBackPressed();frame(root)
+            assertFalse(label(root,"Главная").isShown)
+            assertEquals("Каталог: TMDB  ▾",root.findFocus()?.tag)
+            key(root,KeyEvent.KEYCODE_DPAD_LEFT);frame(root)
+            assertTrue(label(root,"Главная").isShown)
+            key(root,KeyEvent.KEYCODE_DPAD_RIGHT);frame(root)
+            assertFalse(label(root,"Главная").isShown)
+            assertEquals(width,catalog.width)
+            screenshot(root,"media-center-drawer-closed")
+        } finally { controller.pause().stop().destroy() }
     }
 }
