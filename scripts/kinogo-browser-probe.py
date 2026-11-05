@@ -48,6 +48,7 @@ async def check(browser,url):
     await context.add_init_script(script=Path("lampa-player-native/app/src/main/assets/center/online-resolver.js").read_text())
     page=await context.new_page()
     events=[]
+    media_requests=[]
     async def route(request_route):
         request=request_route.request
         if request.resource_type=="media" or re.search(r"\.(ts|m4s|mp4)(?:\?|$)",request.url,re.I):
@@ -60,6 +61,7 @@ async def check(browser,url):
             events.append({**label(response.url),"status":response.status})
         if ".m3u8" in response.url.lower():
             events.append({"manifest_host":urlparse(response.url).hostname,"status":response.status})
+            media_requests.append((response.url,response.request.headers))
     page.on("response",response)
     context.on("page",lambda popup:asyncio.create_task(popup.close()) if popup!=page else None)
     try:
@@ -93,17 +95,22 @@ async def check(browser,url):
                     if isinstance(child,(dict,list)):walk(child)
             elif isinstance(value,list):
                 for child in value:walk(child)
-            elif isinstance(value,str) and value.startswith("http"):media.append(value)
+            elif isinstance(value,str) and re.search(r"https?://",value):media.append(value)
         walk(snapshot.get("lists",[]));walk(snapshot.get("files",[]))
         checks=[]
         if not snapshot.get("blocked"):
             for value in media[:1]:
-                matches=re.findall(r"(?:\\[([0-9]{3,4})p?\\])?(https?://[^,\\s\\[\\]]+)",value)
+                matches=re.findall(r"(?:\[([0-9]{3,4})p?\])?(https?://[^,\s\[\]]+)",value)
                 for quality,target in matches[:2]:
                     cookies=await context.cookies([target])
                     headers={"User-Agent":await page.evaluate("navigator.userAgent"),"Referer":url,"Origin":url.split("/")[0]+"//"+urlparse(url).netloc,
                         "Cookie":"; ".join(c["name"]+"="+c["value"] for c in cookies),"Range":"bytes=0-4095"}
                     checks.append(await asyncio.to_thread(probe_media,target,headers))
+        if not snapshot.get("blocked") and not checks and media_requests:
+            target,headers=media_requests[0]
+            headers=dict(headers);headers["Range"]="bytes=0-4095"
+            cookies=await context.cookies([target]);headers["Cookie"]="; ".join(c["name"]+"="+c["value"] for c in cookies)
+            checks.append(await asyncio.to_thread(probe_media,target,headers))
         result={"source":url,"snapshot":{"files":len(snapshot.get("files",[])),"lists":len(snapshot.get("lists",[])),
                 "ids":snapshot.get("ids"),"blocked":snapshot.get("blocked"),"media_records":len(media)},"checks":checks,"events":events[:16],"frames":frames,
                 "iframe_hosts":[{"active":label(a["src"]) if a.get("src") else None,
