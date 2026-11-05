@@ -705,19 +705,37 @@ open class MediaCenterActivity : AppCompatActivity() {
             releaseList(item, episode, releases)
         }
     }
-    private fun releaseList(item: CenterTitle, episode: CenterEpisode?, releases: List<CenterRelease>, quality: String = "Все") {
+    protected fun releaseList(item: CenterTitle, episode: CenterEpisode?, releases: List<CenterRelease>, quality: String = "Все") {
         currentScreen = { releaseList(item, episode, releases, quality) }
         page = "releases"; clear("Раздачи · ${item.title}" + (episode?.let { " · S${it.season}E${it.number}" } ?: ""))
+        fun redraw(focus: String) {
+            releaseList(item, episode, releases, quality)
+            content.post { findTag(content, focus)?.requestFocus() }
+        }
+        val sorting = row()
+        val sortLabel = when (store.releaseSort) { "small" -> "Меньше размер"; "large" -> "Больше размер"; else -> "Больше сидов" }
+        sorting.addView(button("Порядок · $sortLabel") {
+            val ids = listOf("seeds", "small", "large")
+            AlertDialog.Builder(this).setTitle("Сортировка раздач")
+                .setSingleChoiceItems(arrayOf("Больше сидов", "Меньше размер", "Больше размер"), ids.indexOf(store.releaseSort)) { dialog, index ->
+                    store.releaseSort = ids[index]; dialog.dismiss(); redraw("release_sort")
+                }.setNegativeButton("Отмена", null).show()
+        }.apply { tag = "release_sort" }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { rightMargin = dp(8) })
+        sorting.addView(button(if (store.seededOnly) "Сиды > 0 · Вкл" else "Сиды > 0 · Выкл") {
+            store.seededOnly = !store.seededOnly; redraw("release_seeded")
+        }.apply { tag = "release_seeded" }, LinearLayout.LayoutParams(0, dp(48), 1f))
+        content.addView(sorting); space(content, 10)
         val filters = row()
-        listOf("Все", "2160", "1080", "720").forEach { value -> filters.addView(button(value) { releaseList(item, episode, releases, value) },
+        listOf("Все", "2160", "1080", "720", "480").forEach { value -> filters.addView(button(value) { releaseList(item, episode, releases, value); content.post { findTag(content, "release_quality:$value")?.requestFocus() } }.apply { tag = "release_quality:$value"; isActivated = quality == value; paintButton(this, false) },
             LinearLayout.LayoutParams(0, dp(48), 1f).apply { rightMargin = dp(8) }) }
         content.addView(filters); space(content, 12)
-        val visible = releases.filter { quality == "Все" || it.title.contains(quality) }
-        if (visible.isEmpty()) content.addView(text("Раздачи не найдены. Измени качество или проверь источник", 18, muted))
+        val visible = CenterBackend.selectReleases(releases, quality, store.releaseSort, store.seededOnly)
+        content.addView(text("Показано: ${visible.size} из ${releases.size}. Сиды — по данным источника.", 13, muted)); space(content, 10)
+        if (visible.isEmpty()) content.addView(text("Нет раздач с выбранными фильтрами. Измени качество или отключи фильтр сидов", 18, muted))
         visible.forEach { release ->
             content.addView(button("${release.title}\nСиды: ${release.seeds} · ${size(release.size)} · ${release.tracker}") {
                 enter { openRelease(item, episode, release) }
-            }.apply { layoutParams.height = dp(86); maxLines = 3 })
+            }.apply { tag = "release:${release.link}"; layoutParams.height = dp(86); maxLines = 3 })
         }
         content.addView(button("Открыть свою magnet-ссылку / .torrent") { magnet(item, episode) })
     }
