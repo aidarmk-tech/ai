@@ -224,6 +224,39 @@ open class CenterBackend {
         }
         error("Не удалось получить файлы раздачи. Проверь доступность пиров и попробуй другую раздачу")
     }
+    /** Read only the opening bytes into TorrServer's cache before handing the stream to the player. */
+    open suspend fun prepareStream(url: String, onProgress: (Long, Long) -> Unit) {
+        val target = 256 * 1024L
+        suspendCancellableCoroutine<Unit> { continuation ->
+            val client = http.newBuilder().callTimeout(90, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
+            val call = client.newCall(Request.Builder().url(url).header("Range", "bytes=0-${target - 1}").build())
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) {
+                    if (continuation.isActive) continuation.resumeWith(Result.failure(e))
+                }
+                override fun onResponse(call: Call, response: Response) {
+                    val result = runCatching { response.use {
+                        check(response.isSuccessful) { "Подготовка видео: HTTP ${response.code}" }
+                        val body = response.body ?: error("Пустой ответ торрент-движка")
+                        check(body.contentType()?.type != "text") { "Движок вернул текст вместо видео" }
+                        val total = body.contentLength().takeIf { it > 0 }?.coerceAtMost(target) ?: target
+                        var read = 0L
+                        val bytes = ByteArray(16 * 1024)
+                        onProgress(0, total)
+                        while (read < total && continuation.isActive) {
+                            val count = body.byteStream().read(bytes, 0, minOf(bytes.size.toLong(), total - read).toInt())
+                            if (count < 0) break
+                            read += count
+                            onProgress(read, total)
+                        }
+                        check(read > 0 && read >= total) { "Начало видео загрузилось не полностью. Попробуй другую раздачу" }
+                    } }
+                    if (continuation.isActive) continuation.resumeWith(result)
+                }
+            })
+        }
+    }
     fun stream(base: String, hash: String, file: CenterFile) = "$base/stream/".toHttpUrl().newBuilder()
         .addPathSegment(file.name).addQueryParameter("link", hash).addQueryParameter("index", file.id.toString())
         .addQueryParameter("play", null).build().toString()
