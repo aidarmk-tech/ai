@@ -269,4 +269,20 @@ class CenterBackendTest {
         store.toggleFollow(first);assertFalse(store.isFollowed(first))
         assertEquals(2,store.mySeries().size)
     }
+
+    @Test fun recentSearchesDeduplicateBoundAndClearWithoutTouchingFavorites() {
+        val context=RuntimeEnvironment.getApplication()
+        val store=CenterStore(context)
+        val favorite=CenterTitle(610,"movie","Keep me")
+        store.toggle(favorite)
+        store.rememberSearch("  Король   Талсы ")
+        store.rememberSearch("король талсы")
+        assertEquals(listOf("король талсы"),CenterStore(context).searches())
+        repeat(25) { store.rememberSearch("Query $it") }
+        assertEquals(20,store.searches().size)
+        assertEquals("Query 24",store.searches().first())
+        store.removeSearch("QUERY 24");assertFalse(store.searches().contains("Query 24"))
+        store.rememberSearch("x");assertFalse(store.searches().contains("x"))
+        store.clearSearches();assertTrue(store.searches().isEmpty());assertTrue(store.isFavorite(favorite))
+    }
 }
