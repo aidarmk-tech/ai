@@ -1,0 +1,23 @@
+name: Check KinoGo browser players
+on:
+  push:
+    branches: [codex/kinogo-browser-probe]
+    paths: ['scripts/kinogo-browser-probe.py', '.github/workflows/kinogo-browser-probe.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Chromium
+        run: |
+          python -m pip install playwright==1.56.0
+          python -m playwright install --with-deps chromium
+      - name: Observe public film and series players
+        run: python scripts/kinogo-browser-probe.py
