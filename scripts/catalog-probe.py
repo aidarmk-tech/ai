@@ -154,7 +154,7 @@ def embed_probe(page_url):
         html,_=read(page_url)
         page=PlayerPage(html)
         candidates=[urllib.parse.urljoin(page_url,f.get("src") or f.get("data-src","")) for f in page.frames]
-        target=next(u for u in candidates if urllib.parse.urlparse(u).hostname=="api.nextembed.ws" and "/embed/movie/" in u)
+        target=next(u for u in candidates if urllib.parse.urlparse(u).hostname.endswith(".stravers.live"))
         request=urllib.request.Request(target,headers={"User-Agent":"Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36","Referer":page_url})
         with urllib.request.urlopen(request,timeout=20) as response:
             raw=response.read(1500000).decode("utf-8","replace");final=response.url
@@ -163,7 +163,7 @@ def embed_probe(page_url):
             "prefix":redact(raw[:500]),
             "scripts":[{"src":s["src"],"code":redact(s["code"])} for s in embed.scripts if s["src"] or any(k in s["code"] for k in ("Player","file","playlist","video","sources"))][:12],
             "frames":[{k:redact(v) for k,v in f.items() if k in ("src","data-src")} for f in embed.frames]}
-    except Exception as error:return {"source":page_url,"error":str(error)}
+    except Exception as error:return {"source":page_url,"error":str(error),"kind":type(error).__name__}
 with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-    for result in pool.map(embed_probe,kinogo_cards("https://kz.kinogo.moi/film/")[:1]+kinogo_cards("https://kz.kinogo.moi/serial/")[:1]):
+    for result in pool.map(embed_probe,kinogo_cards("https://kz.kinogo.moi/film/")[:2]+kinogo_cards("https://kz.kinogo.moi/serial/")[:1]):
         print("EMBED_INSPECT "+json.dumps(result,ensure_ascii=False))
