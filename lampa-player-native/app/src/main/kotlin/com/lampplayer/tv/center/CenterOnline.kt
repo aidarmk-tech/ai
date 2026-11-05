@@ -68,7 +68,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
             browser.webViewClient=object:WebViewClient() {
                 override fun shouldInterceptRequest(view:WebView,request:WebResourceRequest):WebResourceResponse? {
                     val url=request.url.toString().toHttpUrlOrNull() ?: return null
-                    if(request.isForMainFrame||url.host!=source.host||!url.encodedPath.endsWith("playerjs.js",true))return null
+                    if(request.isForMainFrame||!url.encodedPath.endsWith("playerjs.js",true)||(item.provider!="kinogo"&&url.host!=source.host))return null
                     val call=libraryHttp.newCall(Request.Builder().url(url).apply {
                         request.requestHeaders.filterKeys { it.equals("User-Agent",true)||it.equals("Referer",true)||it.equals("Cookie",true) }
                             .forEach { (name,value) -> header(name,value) }

@@ -159,6 +159,7 @@ class CenterOnlineInstrumentedTest {
     @Test fun kinogoCollectsTheBoundEmbedPlaylistAndUsesItsRefererWithoutTrailerOrPageJson() = runBlocking {
         MockWebServer().use { server ->
             MockWebServer().use { frameServer ->
+            frameServer.start(java.net.InetAddress.getByName("127.0.0.1"),0)
             val dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
                 override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest):MockResponse {
                     val html=when(request.path?.substringBefore('?')) {
@@ -166,15 +167,15 @@ class CenterOnlineInstrumentedTest {
                             <script>JSON.parse('[{"title":"Сезон 9","folder":[{"title":"99 серия","file":"https://cdn.test/unrelated.mp4"}]}]');</script>
                             <iframe data-src="${frameServer.url("/embed/movie/81816")}"></iframe><iframe data-src="/embed/trailer/81816"></iframe>
                             </body></html>"""
-                        "/embed/movie/81816" -> """<html><body><div id="player"></div><script>
-                            window.Playerjs=function(options){this.api=function(command){return command==='playlist_folders'?options.file:[];};};
+                        "/playerjs.js" -> "function Playerjs(options){this.api=function(command){return command==='playlist_folders'?options.file:[];};}"
+                        "/embed/movie/81816" -> """<html><body><div id="player"></div><script src="/playerjs.js"></script><script>
                             new Playerjs({id:'player',file:[{title:'Сезон 2',folder:[{title:'Дубляж',folder:[
                                 {title:'5 серия',file:'[720p]https://cdn.test/five.m3u8'},
                                 {title:'6 серия',file:'[720p]https://cdn.test/six.m3u8'}]}]}]});
                             </script></body></html>"""
                         else -> "<html><body>Trailer or unknown page</body></html>"
                     }
-                    return MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody(html)
+                    return MockResponse().setHeader("Content-Type",if(request.path=="/playerjs.js") "application/javascript" else "text/html; charset=utf-8").setBody(html)
                 }
             }
             server.dispatcher=dispatcher
