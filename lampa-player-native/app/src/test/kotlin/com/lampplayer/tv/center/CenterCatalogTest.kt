@@ -132,7 +132,7 @@ class CenterCatalogTest {
             <div class="mt-2"><p class="truncate">Титаник қазақша аудармасы</p><p>1997 · Драма</p></div></a>"""
         val card=CenterCatalog.parse(Jsoup.parse(html,"https://catalog.test/films"),"kazplay").single()
         assertEquals("1997",card.year);assertEquals("7.9",card.rating);assertEquals("movie",card.type)
-        assertTrue(card.poster!!.contains("w=384&"))
+        assertEquals("384",android.net.Uri.parse(card.poster).getQueryParameter("w"))
         val search=CenterCatalog.kazplaySearch("""{"success":true,"data":[{"id":475,"slug":"titanik-qazaqsha-audarmasy","title":"Титаник қазақша аудармасы",
             "rus_title":"Титаник","date_release":1997,"is_serial":0,"poster_media_url":"/media/real.jpg","description":"<p>Описание</p>","rating":7.9}]}""","https://mirror.test/api/v2/film/search")
             .single()
