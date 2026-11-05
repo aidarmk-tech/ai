@@ -183,4 +183,19 @@ class CenterBackendTest {
             assertTrue(CenterBackend().torrentMetrics(server.url("/").toString().trimEnd('/'),"a".repeat(40)).contains("Скорость: —"))
         } finally { server.shutdown() }
     }
+
+    @Test fun releaseSortingKeepsUnknownSizesLastAndFiltersSeedsAndQuality() {
+        val releases=listOf(
+            CenterRelease("Film 1080p","a",0,100,"A"),
+            CenterRelease("Film 720p","b",20,0,"B"),
+            CenterRelease("Film 1080p","c",10,300,"C"),
+            CenterRelease("Film 1080p","d",2,50,"D"),
+            CenterRelease("ID 17201 10800","e",40,10,"E"))
+        assertEquals(listOf("d","a","c","b"),CenterBackend.selectReleases(releases.take(4),"Все","small",false).map { it.link })
+        assertEquals(listOf("c","a","d","b"),CenterBackend.selectReleases(releases.take(4),"Все","large",false).map { it.link })
+        assertEquals(listOf("c","d"),CenterBackend.selectReleases(releases,"1080","seeds",true).map { it.link })
+        assertEquals(listOf("b"),CenterBackend.selectReleases(releases,"720","seeds",false).map { it.link })
+        assertEquals(5,releases.size)
+        assertTrue(CenterBackend.selectReleases(releases,"480","seeds",false).isEmpty())
+    }
 }
