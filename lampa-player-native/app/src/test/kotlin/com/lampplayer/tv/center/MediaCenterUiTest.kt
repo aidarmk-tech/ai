@@ -547,4 +547,36 @@ class MediaCenterUiTest {
             assertFalse(CenterStore(host).isFollowed(item));assertNull(shadowOf(host).nextStartedActivity)
         } finally { controller.pause().stop().destroy() }
     }
+
+    @Test fun changingSearchSourceRetainsTheTypedQueryAndRecentSearchStartsImmediately() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            CenterStore(host).rememberSearch("Король Талсы")
+            all(root).first { it.tag=="Поиск" }.performClick();frame(root)
+            (all(root).first { it.tag=="search_query" } as android.widget.EditText).setText("Источник")
+            all(root).first { it.tag=="search_source" }.performClick();frame(root)
+            val dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
+            val list=dialog.listView;list.performItemClick(list.getChildAt(1),1,list.adapter.getItemId(1));frame(root)
+            assertEquals("kinovod",CenterStore(host).catalog)
+            assertEquals("Источник",(all(root).first { it.tag=="search_query" } as TextView).text.toString())
+            assertEquals("search_source",root.findFocus()?.tag)
+            all(root).first { it.tag=="search_recent:Король Талсы" }.performClick();repeat(3) { frame(root) }
+            assertEquals("Король Талсы",host.browseCalls.single().first.query)
+            assertEquals(1,host.browseCalls.single().second)
+        } finally { controller.pause().stop().destroy() }
+    }
+    @Test fun longPressRemovesOnlyOneRecentSearchWithoutIssuingARequest() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            CenterStore(host).rememberSearch("Первый");CenterStore(host).rememberSearch("Второй")
+            all(root).first { it.tag=="Поиск" }.performClick();frame(root)
+            all(root).first { it.tag=="search_recent:Второй" }.performLongClick();frame(root)
+            assertEquals(listOf("Первый"),CenterStore(host).searches())
+            assertEquals("search_recent:Первый",root.findFocus()?.tag)
+            assertTrue(host.browseCalls.isEmpty())
+        } finally { controller.pause().stop().destroy() }
+    }
 }
