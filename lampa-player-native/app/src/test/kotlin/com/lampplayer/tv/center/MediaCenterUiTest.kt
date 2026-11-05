@@ -568,6 +568,7 @@ class MediaCenterUiTest {
         } finally { controller.pause().stop().destroy() }
     }
     @Test fun longPressRemovesOnlyOneRecentSearchWithoutIssuingARequest() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
         val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
         try {
             val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
