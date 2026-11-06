@@ -65,7 +65,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
                 "Для получения списка серий обнови Android System WebView на устройстве"
             }
             val script=activity.assets.open("center/online-resolver.js").bufferedReader().use { it.readText() }
-            val injected = if(item.provider in listOf("kinogo","kinokong")) kinogoScript(source,script,item.provider) else script
+            val injected = if(item.provider in listOf("kinogo","kinokong")) kinogoScript(source,script,item.provider.orEmpty()) else script
             val origins = if(item.provider in listOf("kinogo","kinokong")) setOf("*") else setOf("${source.scheme}://${source.host}" + if(source.port!=443&&source.port!=80) ":${source.port}" else "")
             WebViewCompat.addDocumentStartJavaScript(browser,injected,origins)
             browser.webViewClient=object:WebViewClient() {
