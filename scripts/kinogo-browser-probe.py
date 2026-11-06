@@ -3,7 +3,7 @@ import urllib.request,re,json,concurrent.futures
 from html.parser import HTMLParser
 class Inspector(HTMLParser):
     def __init__(self):
-        super().__init__();self.stack=[];self.meta=[];self.images=[];self.paragraphs=[];self.json=[];self.active_json=None
+        super().__init__();self.stack=[];self.meta=[];self.images=[];self.paragraphs=[];self.json=[];self.active_json=None;self.facts=[]
     def handle_starttag(self,tag,attrs):
         a=dict(attrs)
         if tag=="meta":self.meta.append(a)
@@ -20,6 +20,7 @@ class Inspector(HTMLParser):
     def handle_data(self,text):
         if self.active_json is not None:self.active_json+=text;return
         text=text.strip()
+        if re.match(r"^(?:Год(?: выпуска| выхода)?\s*:?|2020|2022)$",text):self.facts.append({"text":text,"parents":self.stack[-4:]})
         if len(text)>90 and not any(n["tag"] in ("script","style") for n in self.stack):
             self.paragraphs.append({"chars":len(text),"parents":self.stack[-4:]})
 def scrub(value):
@@ -34,7 +35,7 @@ def inspect(url):
         text=raw.decode(charset.group(1).decode() if charset else "utf-8",errors="replace")
         parser=Inspector();parser.feed(text)
         print("TITLE_META "+json.dumps({"url":final,"meta":[m for m in parser.meta if m.get("property","").startswith("og:") or m.get("itemprop") in ("datePublished","dateCreated","name")],
-            "json":scrub(parser.json),"paragraphs":parser.paragraphs[:15],"images":[i for i in parser.images if not re.search(r'template|mini|spacer|logo|banner',i["attrs"].get("src",""))][:6]},ensure_ascii=False),flush=True)
+            "facts":parser.facts,"json":scrub(parser.json),"paragraphs":parser.paragraphs[:15],"images":[i for i in parser.images if not i["attrs"].get("src","").startswith("data:") and not re.search(r'template|spacer|logo|banner|actors|fotos',i["attrs"].get("src",""))][:6]},ensure_ascii=False),flush=True)
     except Exception as e:print("TITLE_META "+json.dumps({"url":url,"error":str(e)},ensure_ascii=False),flush=True)
 with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
     list(pool.map(inspect,["https://kinotac.org/20817-korol-talsy.html","https://zona.movie/series/mobland-1478/","https://kinokong.es/61709-serial-dok-vse-v-tvoih-rukah-1-4-sezon.html"]))
