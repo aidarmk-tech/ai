@@ -680,7 +680,7 @@ class MediaCenterUiTest {
             val panel=all(root).first { it.tag=="release_filters_panel" }
             assertFalse(panel.isShown)
             val toggle=all(root).first { it.tag=="release_filters_toggle" }
-            toggle.requestFocus();toggle.performClick();frame(root);assertTrue(panel.isShown)
+            assertTrue("Description control cannot receive remote focus",toggle.requestFocus());toggle.performClick();frame(root);assertTrue(panel.isShown)
             toggle.performClick();frame(root);assertFalse(panel.isShown)
             assertNotNull(all(root).firstOrNull { it.tag=="release:one" })
             screenshot(root,"media-center-collapsed-release-filters")
@@ -800,6 +800,7 @@ class MediaCenterUiTest {
     }
 
     @Test fun longSynopsisExpandsAboveTheTextAndKeepsTvFocusOnItsControl() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
         val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
         try {
             val host=controller.get();val root=host.findViewById<View>(android.R.id.content)

@@ -423,6 +423,7 @@ class CenterCatalog {
             val portrait=when(item.provider) {
                 "zona" -> image(document.selectFirst(".keep-full_poster img"))
                 "kinotac" -> image(document.selectFirst("article.full .images img[itemprop=image]"))
+                "kinokong" -> item.poster ?: image(document.selectFirst("#full_"+item.id+" .full-kino-story img"))
                 else -> null
             }
             val background=if(item.provider=="zona")image(document.selectFirst(".keep-full_bg img.posterbg")) else null

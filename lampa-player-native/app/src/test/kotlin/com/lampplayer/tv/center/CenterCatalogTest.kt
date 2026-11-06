@@ -349,12 +349,13 @@ class CenterCatalogTest {
         val source="https://catalog.test/17-serial-show.html"
         val html="""<meta itemprop="dateCreated" content="2026-11-06"><div itemprop="actor"><span itemprop="name">Чужой актёр</span></div>
         <div id="full_17"><div class="full-kino-info"><div><span>Год:</span><b>2020</b></div></div>
-        <div class="full-kino-story" itemprop="description">Полный сюжет.</div>
+        <div class="full-kino-story" itemprop="description"><img src="/small-selected-cover.webp">Полный сюжет.</div>
         <span itemprop="actor"><a><span itemprop="name">Актёр А</span></a></span><span itemprop="actor"><span itemprop="name">Актёр Б</span></span></div>"""
         val item=CenterTitle(17,"tv","Сериал",poster="https://catalog.test/cover.webp",provider="kinokong",sourceUrl=source)
         val result=CenterCatalog.details(Jsoup.parse(html,source),item)
         assertEquals("2020",result.title.year);assertEquals("Актёр А, Актёр Б",result.actors)
         assertEquals(item.poster,result.title.poster);assertEquals("Полный сюжет.",result.title.overview)
+        assertEquals("https://catalog.test/small-selected-cover.webp",CenterCatalog.details(Jsoup.parse(html,source),item.copy(poster=null)).title.poster)
     }
     @Test fun titleDetailsRejectOtherCardsAndDoNotReadCommentsOrRelatedMovieMetadata() {
         val source="https://catalog.test/film/selected-17/"
