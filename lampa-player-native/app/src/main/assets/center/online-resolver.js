@@ -2,7 +2,7 @@
 'use strict';
 if((window!==window.top&&!window.__lampMetadataFrame)||window.__lampOnline)return;
 HTMLMediaElement.prototype.play=function(){return Promise.reject(new DOMException('Metadata only','NotAllowedError'));};
-var state=window.__lampOnline={files:[],lists:[],playerFiles:[],playerLists:[],seen:{},errors:[],cap:480,ids:[],instances:[],xhr:[],shapes:[]};
+var state=window.__lampOnline={files:[],lists:[],playerFiles:[],playerLists:[],seen:{},errors:[],cap:480,ids:[],instances:[],xhr:[],shapes:[],jsonXhr:0};
 var originalParse=JSON.parse,originalStringify=JSON.stringify;
 function remember(value,kind,bound){
  try{
@@ -17,12 +17,16 @@ function remember(value,kind,bound){
 }
 function playlist(value,bound,voice,depth){
  depth=depth||0;if(depth>5)return;
- if(value&&typeof value==='object'&&!Array.isArray(value)){
-  if(state.shapes.length<8){var shape=Object.keys(value).slice(0,16).sort().join(',');if(state.shapes.indexOf(shape)<0)state.shapes.push(shape);}
-  ['data','result','playlist'].forEach(function(key){if(value[key]&&typeof value[key]==='object')playlist(value[key],bound,voice,depth+1);});
+ if(typeof value==='string'&&value.length<900000&&/^\s*[\[{]/.test(value)){
+  try{playlist(originalParse(value),bound,voice,depth+1);}catch(e){}
   return;
  }
- if(typeof value==='string'&&value.length<900000&&value.trim().charAt(0)==='['){try{value=originalParse(value);}catch(e){return;}}
+ if(value&&typeof value==='object'&&!Array.isArray(value)){
+  if(state.shapes.length<8){var shape=Object.keys(value).slice(0,16).sort().join(',');if(state.shapes.indexOf(shape)<0)state.shapes.push(shape);}
+  if(value.file||value.folder)remember(voice?[{title:voice,folder:[value]}]:[value],'list',bound);
+  ['data','result','playlist'].forEach(function(key){if(value[key]!=null)playlist(value[key],bound,voice,depth+1);});
+  return;
+ }
  if(!Array.isArray(value)||!value.length||value.length>1000)return;
  if(value.some(function(v){return v&&typeof v==='object'&&(v.file||v.folder)}))remember(voice?[{title:voice,folder:value}]:value,'list',bound);
 }
@@ -39,7 +43,19 @@ JSON.parse=function(){var result=originalParse.apply(JSON,arguments);playlist(re
 var open=XMLHttpRequest.prototype.open,send=XMLHttpRequest.prototype.send;
 XMLHttpRequest.prototype.open=function(method,url){this.__lampUrl=String(url);return open.apply(this,arguments);};
 XMLHttpRequest.prototype.send=function(){
- this.addEventListener('load',function(){try{if(!this.responseType||this.responseType==='text'){var text=this.responseText;if(state.xhr.length<12)state.xhr.push([this.status,text?text.length:0]);if(text&&text.length<900000)playlist(originalParse(text));}}catch(e){}});
+ this.addEventListener('load',function(){
+  try{
+   if(this.responseType==='json'){
+    state.jsonXhr++;
+    if(state.xhr.length<12)state.xhr.push([this.status,-1]);
+    playlist(this.response);
+   }else if(!this.responseType||this.responseType==='text'){
+    var text=this.responseText;
+    if(state.xhr.length<12)state.xhr.push([this.status,text?text.length:0]);
+    if(text&&text.length<900000)playlist(originalParse(text));
+   }
+  }catch(e){}
+ });
  return send.apply(this,arguments);
 };
 if(window.fetch){var fetch=window.fetch;window.fetch=function(){return fetch.apply(this,arguments).then(function(response){try{response.clone().text().then(function(text){if(text.length<900000){try{playlist(originalParse(text));}catch(e){}}}).catch(function(){});}catch(e){}return response;});};}
@@ -100,7 +116,7 @@ window.__lampSnapshot=function(){
  var blocked=/(недоступ(?:но|ен)[\s\S]{0,90}(?:стране|регион[ае])|заблокировано[\s\S]{0,90}правообладателя|нет видео файла)/i.exec(text);
  // Once a player is observed, unrelated page JSON cannot stand in for its playlist.
  var bound=state.ids.length||state.playerFiles.length||state.playerLists.length;
- var result={files:bound?state.playerFiles:state.files,lists:bound?state.playerLists:state.lists,cap:state.cap,blocked:blocked?blocked[0]:null,playerType:typeof window.Playerjs,ids:state.ids,xhr:state.xhr,shapes:state.shapes};
+ var result={files:bound?state.playerFiles:state.files,lists:bound?state.playerLists:state.lists,cap:state.cap,blocked:blocked?blocked[0]:null,playerType:typeof window.Playerjs,ids:state.ids,xhr:state.xhr,shapes:state.shapes,jsonXhr:state.jsonXhr};
  var json=originalStringify(result);return json.length<1000000?json:'{}';
 };
 })();

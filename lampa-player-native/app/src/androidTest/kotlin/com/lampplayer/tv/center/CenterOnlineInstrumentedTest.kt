@@ -312,4 +312,91 @@ class CenterOnlineInstrumentedTest {
             }
         }
     }
+
+    @Test fun kinogoLoadsTheLazySecondTabAndDecodesJsonXhrObjectPlaylist() = runBlocking {
+        MockWebServer().use { server ->
+            val requests=java.util.Collections.synchronizedList(mutableListOf<String>())
+            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest):MockResponse {
+                    val path=request.path?.substringBefore('?').orEmpty();requests.add(path)
+                    return when(path) {
+                        "/62389-show.html" -> MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody("""
+                            <html><body><ul class="player-tabs">
+                            <li class="current">Смотреть онлайн</li>
+                            <li onclick="document.querySelector('.current').classList.remove('current');this.classList.add('current');setTimeout(function(){document.getElementById('second').innerHTML='&lt;iframe src=&quot;/embed/movie/81817&quot;&gt;&lt;/iframe&gt;';},900);">Плеер 2</li>
+                            <li onclick="location.href='/wrong-trailer'">Трейлер</li></ul>
+                            <iframe data-src="/embed/movie/81816"></iframe><div id="second"></div></body></html>""")
+                        "/embed/movie/81816" -> MockResponse().setHeader("Content-Type","text/html; charset=utf-8")
+                            .setBody("<html><body>Видео недоступно для просмотра в вашей стране</body></html>")
+                        "/embed/movie/81817" -> MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody("""
+                            <html><body><script>var request=new XMLHttpRequest();request.open('GET','/playlist');
+                            request.responseType='json';request.send();</script></body></html>""")
+                        "/playlist" -> MockResponse().setHeader("Content-Type","application/json").setBody(
+                            """{"data":"{\"title\":\"Сезон 2\",\"folder\":[{\"title\":\"5 серия\",\"file\":\"[720p]https://cdn.test/five.m3u8\"}]}"}""")
+                        else -> MockResponse().setResponseCode(404)
+                    }
+                }
+            }
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val video=resolver.resolve(CenterTitle(62389,"tv","Гангстерленд",provider="kinogo",sourceUrl=server.url("/62389-show.html").toString()))
+                assertEquals(2,video.episodes.single().season);assertEquals(5,video.episodes.single().number)
+                assertEquals("https://cdn.test/five.m3u8",video.episodes.single().sources[720])
+                assertEquals(server.url("/embed/movie/81817").toString(),video.headers["Referer"])
+                assertTrue(resolver.diagnostics.contains("alternate=true"));assertTrue(resolver.diagnostics.contains("json=1"))
+                assertEquals(1,requests.count { it=="/embed/movie/81817" })
+                assertFalse(requests.contains("/wrong-trailer"))
+            }
+        }
+    }
+
+    @Test fun kinogoWebsiteOpensAtThePlayerAndToolbarSwitchesTheSameCardWithoutTrailer() = runBlocking {
+        MockWebServer().use { server ->
+            val requests=java.util.Collections.synchronizedList(mutableListOf<String>())
+            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest):MockResponse {
+                    val path=request.path?.substringBefore('?').orEmpty();requests.add(path)
+                    val html=if(path=="/17-show.html") """
+                        <html><body><div style="height:1800px">Заголовок и описание выбранного сериала</div>
+                        <ul class="player-tabs"><li class="current" onclick="pick(0)">Смотреть онлайн</li>
+                        <li onclick="pick(1)">Плеер 2</li><li onclick="location.href='/wrong-trailer'">Трейлер</li></ul>
+                        <div id="first"><iframe src="/embed/movie/9"></iframe></div><div id="second" style="display:none"><iframe data-src="/embed/movie/10"></iframe></div>
+                        <script>function pick(n){document.querySelector('.current').classList.remove('current');
+                        document.querySelectorAll('.player-tabs li')[n].classList.add('current');
+                        document.getElementById('first').style.display=n?'none':'block';document.getElementById('second').style.display=n?'block':'none';
+                        if(n){var frame=document.querySelector('#second iframe');if(!frame.src)frame.src=frame.dataset.src;}}</script></body></html>"""
+                    else "<html><body>Плеер выбранной серии</body></html>"
+                    return MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody(html)
+                }
+            }
+            val source=server.url("/17-show.html").toString()
+            val intent=android.content.Intent(androidx.test.core.app.ApplicationProvider.getApplicationContext(),CenterWebActivity::class.java)
+                .putExtra("url",source).putExtra("site_player",true).putExtra("catalog_provider","kinogo")
+                .putExtra("lampa_data","""{"title":"Show"}""")
+            ActivityScenario.launch<CenterWebActivity>(intent).use { scenario ->
+                suspend fun state():com.google.gson.JsonObject {
+                    val pending=kotlinx.coroutines.CompletableDeferred<String>()
+                    scenario.onActivity { activity ->
+                        activity.findViewById<android.view.View>(android.R.id.content).findViewWithTag<android.webkit.WebView>("site_player_web")
+                            .evaluateJavascript("(function(){return {scroll:scrollY,tab:document.querySelector('.player-tabs .current')?.textContent||'',url:location.href,focused:document.activeElement?.tagName};})()") { pending.complete(it) }
+                    }
+                    return com.google.gson.JsonParser.parseString(pending.await()).asJsonObject
+                }
+                kotlinx.coroutines.withTimeout(10000) {
+                    while(true) { val s=state();if(s.get("tab").asString=="Смотреть онлайн"&&s.get("scroll").asInt>1000)break;kotlinx.coroutines.delay(100) }
+                }
+                assertEquals(source,state().get("url").asString)
+                scenario.onActivity { activity ->
+                    fun views(v:android.view.View):List<android.view.View> = listOf(v)+if(v is android.view.ViewGroup)
+                        (0 until v.childCount).flatMap { views(v.getChildAt(it)) } else emptyList()
+                    views(activity.findViewById(android.R.id.content)).filterIsInstance<android.widget.Button>().first { it.text.toString()=="Плеер 2" }.performClick()
+                }
+                kotlinx.coroutines.withTimeout(10000) {
+                    while(true) { val s=state();if(s.get("tab").asString=="Плеер 2"&&s.get("scroll").asInt>1000&&s.get("focused").asString=="IFRAME")break;kotlinx.coroutines.delay(100) }
+                }
+                assertEquals(source,state().get("url").asString)
+                assertTrue(requests.contains("/embed/movie/10"));assertFalse(requests.contains("/wrong-trailer"))
+            }
+        }
+    }
 }

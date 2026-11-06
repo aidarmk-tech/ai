@@ -1258,11 +1258,11 @@ open class MediaCenterActivity : AppCompatActivity() {
         val url=runCatching { CenterOnline.source(item).toString() }.getOrElse {
             Toast.makeText(this,it.message ?: "Нет адреса плеера",Toast.LENGTH_SHORT).show();return
         }
-        launchWebsite(url,metadata(item).toString())
+        launchWebsite(url,metadata(item).toString(),item.provider)
     }
-    private fun launchWebsite(url: String, metadata: String) {
+    private fun launchWebsite(url: String, metadata: String, provider:String?=null) {
         playerReturn = if (page == "loading" && backStack.isNotEmpty()) backStack.removeLast() else snapshot()
-        startActivity(Intent(this, CenterWebActivity::class.java).putExtra("url", url).putExtra("lampa_data", metadata).putExtra("site_player",true))
+        startActivity(Intent(this, CenterWebActivity::class.java).putExtra("url", url).putExtra("lampa_data", metadata).putExtra("site_player",true).putExtra("catalog_provider",provider))
     }
     private fun launchPlayer(url: String, metadata: String, returnTo: Screen? = null, online: Boolean = false) {
         playerReturn = returnTo ?: if (page == "loading" && backStack.isNotEmpty()) backStack.removeLast() else snapshot()

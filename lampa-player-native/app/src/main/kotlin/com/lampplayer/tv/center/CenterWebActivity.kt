@@ -22,6 +22,11 @@ class CenterWebActivity : AppCompatActivity() {
     private lateinit var web: WebView
     private lateinit var root: FrameLayout
     private val sitePlayer by lazy { intent.getBooleanExtra("site_player",false) }
+    private val kinoGo by lazy {
+        sitePlayer && (intent.getStringExtra("catalog_provider")=="kinogo" || intent.getStringExtra("url")?.toHttpUrlOrNull()?.host?.let { it=="kinogo.moi"||it.endsWith(".kinogo.moi") }==true)
+    }
+    private var siteTab=0
+    private val kinoGoControls by lazy { assets.open("center/kinogo-player-controls.js").bufferedReader().use { it.readText() } }
     private lateinit var native: Button
     private var full: View? = null
     private var fullCallback: WebChromeClient.CustomViewCallback? = null
@@ -41,11 +46,16 @@ class CenterWebActivity : AppCompatActivity() {
             text = (if(sitePlayer) "Плеер сайта · " else "") + (media.get("title")?.asString ?: source.host); setTextColor(Color.WHITE); textSize = 17f
             maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(12,0,12,0)
         },LinearLayout.LayoutParams(0,-2,1f))
+        if(kinoGo) {
+            toolbar.addView(action("Плеер 1") { siteTab=0;focusKinoGo() })
+            toolbar.addView(action("Плеер 2") { siteTab=1;focusKinoGo() })
+        }
         toolbar.addView(action("Обновить") { web.reload() })
         native = action("В наш плеер") { chooseStream() }.apply { visibility = View.GONE }
         toolbar.addView(native)
         body.addView(toolbar,LinearLayout.LayoutParams(-1,-2))
         web = try { WebView(this).apply {
+            tag="site_player_web"
             setBackgroundColor(Color.BLACK)
             settings.javaScriptEnabled = true; settings.domStorageEnabled = true
             settings.allowFileAccess = false; settings.allowContentAccess = false
@@ -63,6 +73,9 @@ class CenterWebActivity : AppCompatActivity() {
                 override fun shouldOverrideUrlLoading(view:WebView,url:String) = url.toHttpUrlOrNull()==null || (sitePlayer&&!sameCardPage(source.toString(),url))
                 override fun onPageStarted(view:WebView,url:String,favicon:android.graphics.Bitmap?) {
                     synchronized(streams) { streams.clear() }; native.visibility = View.GONE
+                }
+                override fun onPageFinished(view:WebView,url:String) {
+                    if(kinoGo&&sameCardPage(source.toString(),url))focusKinoGo()
                 }
                 override fun shouldInterceptRequest(view:WebView,request:WebResourceRequest):WebResourceResponse? {
                     val url=request.url.toString()
@@ -88,6 +101,12 @@ class CenterWebActivity : AppCompatActivity() {
         body.addView(web,LinearLayout.LayoutParams(-1,0,1f)); root.addView(body); setContentView(root)
         onBackPressedDispatcher.addCallback(this,object:OnBackPressedCallback(true) { override fun handleOnBackPressed() = back() })
         web.loadUrl(source.toString()); web.requestFocus()
+    }
+    private fun focusKinoGo() {
+        if(!::web.isInitialized||!kinoGo)return
+        val source=intent.getStringExtra("url") ?: return
+        if(!sameCardPage(source,web.url ?: return))return
+        web.evaluateJavascript(kinoGoControls+"\nwindow.__lampKinogoControls.focus("+siteTab+",true);",null)
     }
     private fun hideFull() {
         full?.let { root.removeView(it) }; full = null

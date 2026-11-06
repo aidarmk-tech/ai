@@ -97,7 +97,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
             // The catalog stays above this transparent, non-focusable metadata view.
             (activity.findViewById<android.view.View>(android.R.id.content) as ViewGroup).addView(browser,0,FrameLayout.LayoutParams(-1,-1))
             browser.doOnLayout { if(active.get())browser.loadUrl(source.toString()) }
-            var last="";var stable=0;var filmixRequested=false
+            var last="";var stable=0;var filmixRequested=false;var emptyPasses=0
             withTimeout(30000) {
                 while(true) {
                     currentCoroutineContext().ensureActive()
@@ -117,12 +117,15 @@ class CenterOnline(private val activity:AppCompatActivity) {
                         }
                         frameReferer=usable?.get("url")?.takeIf { it.isJsonPrimitive }?.asString
                         val pending=observed.get("expected")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0
-                        val allBlocked=pending>0 && candidates.size==pending &&
+                        val alternateAvailable=observed.get("alternateAvailable")?.asBoolean ?: false
+                        val alternateRequested=observed.get("alternate")?.asBoolean ?: false
+                        val alternatePending=observed.get("alternatePending")?.asBoolean ?: false
+                        val allBlocked=(!alternateAvailable||alternateRequested&&!alternatePending) && pending>0 && candidates.size==pending &&
                             candidates.all { e -> e.getAsJsonObject("snapshot")?.get("blocked")?.isJsonNull==false }
-                        frameInfo="frames=$pending replies=${candidates.size} " + candidates.mapIndexed { index, entry ->
+                        frameInfo="frames=$pending replies=${candidates.size} alternate=$alternateRequested waiting=$alternatePending " + candidates.mapIndexed { index, entry ->
                             val data=entry.getAsJsonObject("snapshot") ?: JsonObject()
                             val host=entry.get("url")?.takeIf { it.isJsonPrimitive }?.asString?.toHttpUrlOrNull()?.host.orEmpty()
-                            "frame$index[host=$host player=${data.get("playerType")} ids=${data.get("ids")} files=${data.getAsJsonArray("files")?.size()} lists=${data.getAsJsonArray("lists")?.size()} xhr=${data.get("xhr")} shapes=${data.get("shapes")} blocked=${data.get("blocked")?.isJsonNull==false}] "
+                            "frame$index[host=$host player=${data.get("playerType")} ids=${data.get("ids")} files=${data.getAsJsonArray("files")?.size()} lists=${data.getAsJsonArray("lists")?.size()} xhr=${data.get("xhr")} shapes=${data.get("shapes")} json=${data.get("jsonXhr")} blocked=${data.get("blocked")?.isJsonNull==false}] "
                         }.joinToString("")
                         allowEntries=usable!=null
                         // Preserve the actual packet for diagnostics even when its playlist is not understood.
@@ -152,6 +155,8 @@ class CenterOnline(private val activity:AppCompatActivity) {
                                 "Origin" to origin.newBuilder().encodedPath("/").query(null).fragment(null).build().toString().trimEnd('/')))
                         }
                     }
+                    if(item.provider=="kinogo"&&entries.isEmpty()&&++emptyPasses>=20)
+                        evaluate(browser,"window.__lampKinogoTryAlternate ? window.__lampKinogoTryAlternate() : false")
                     delay(300)
                 }
                 @Suppress("UNREACHABLE_CODE") error("Нет списка серий")
@@ -169,12 +174,13 @@ class CenterOnline(private val activity:AppCompatActivity) {
             addProperty("origin",source.newBuilder().encodedPath("/").query(null).fragment(null).build().toString().trimEnd('/'))
             addProperty("id",source.encodedPath.substringAfter('/').substringBefore('-').toInt())
         }
+        val controls=activity.assets.open("center/kinogo-player-controls.js").bufferedReader().use { it.readText() }
         val bridge=activity.assets.open("center/kinogo-resolver.js").bufferedReader().use { it.readText() }
         return "(function(){var cfg="+config.toString()+";"+
             "var p=location.pathname;var root=window===window.top&&location.origin===cfg.origin&&p.indexOf('/'+cfg.id+'-')===0&&p.lastIndexOf('/')===0&&p.endsWith('.html');"+
             "var frame=window!==window.top&&window.parent===window.top&&/^https?:$/.test(location.protocol);"+
             "if(!root&&!frame)return;window.__lampKinogoConfig=cfg;window.__lampMetadataFrame=frame;"+
-            common+"\n"+bridge+"\n})();"
+            common+"\n"+controls+"\n"+bridge+"\n})();"
     }
     private suspend fun evaluate(web:WebView,script:String):String = suspendCancellableCoroutine { continuation ->
         web.evaluateJavascript(script) { if(continuation.isActive)continuation.resume(it ?: "null") }
