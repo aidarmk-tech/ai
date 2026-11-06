@@ -282,7 +282,8 @@ class CenterCatalog {
                 val update=badge?.let { label ->
                     Regex("(?i)^([0-9]{1,2})s([0-9]{1,4})e$").matchEntire(label)?.let { "${it.groupValues[1]} сезон ${it.groupValues[2]} серия" } ?: label
                 }?.takeIf { type=="tv" }
-                val year=Regex("(?<![0-9])(?:19|20)[0-9]{2}(?![0-9])").find(info)?.value.orEmpty()
+                val year=(if(provider=="zona")row.select(".keep-item_meta span").map { it.text().trim() }.firstOrNull { Regex("(?:19|20)[0-9]{2}").matches(it) } else null)
+                    ?: Regex("(?<![0-9])(?:19|20)[0-9]{2}(?![0-9])").find(info)?.value.orEmpty()
                 val cover=if(provider=="kinokong") row.selectFirst(".main-sliders-img > img,.kg-search-hit-poster img") else null
                 val poster=cover?.let { image -> listOf("data-src","data-original","src").firstNotNullOfOrNull { image.absolute(it) } } ?: row.poster()
                 CenterTitle(id,type,title,
