@@ -18,6 +18,8 @@ async def inspect(context,url):
             samples:Array.from(document.querySelectorAll('a.keep-item_title,a.th-in,a')).filter(a=>a.matches('.keep-item_title,.th-in')||a.querySelector('img')).filter(a=>/\\d/.test(a.getAttribute('href')||'')).slice(0,4).map(a=>(a.closest('article,.short,.item,.movie,.th-item,.poster,.keep-item')||a.parentElement.parentElement).outerHTML.slice(0,6000)),
             navigation:Array.from(document.querySelectorAll('a[href]')).filter(a=>/^(?:https?:\\/\\/[^/]+)?\\/(?:film|kino|serial|series|filmy|serialy|serialo|xfsearch|page)[^?#]*\\/$/.test(a.getAttribute('href'))).map(a=>({href:a.getAttribute('href'),text:a.textContent.trim().slice(0,40)})).slice(-50),
             forms:Array.from(document.forms).map(f=>({action:f.getAttribute('action'),method:f.method,fields:Array.from(f.elements).map(e=>({name:e.name,type:e.type,value:e.type==='hidden'?e.value:''}))})),
+            numeric:Array.from(document.querySelectorAll('a[href]')).filter(a=>/\\/[0-9]+-[^/]+\\.html/.test(a.getAttribute('href')||'')&&a.textContent.trim()).slice(0,5).map(a=>({href:a.getAttribute('href'),text:a.textContent.trim(),chain:[a,a.parentElement,a.parentElement.parentElement].map(e=>e.tagName+'.'+e.className),html:a.parentElement.parentElement.outerHTML.slice(0,5500)})),
+            zonaCards:Array.from(document.querySelectorAll('a.keep-item_title')).slice(-2).map(a=>(a.closest('.keep-item')||a.parentElement).outerHTML.slice(0,4000)),
             json:Array.from(document.querySelectorAll('script[type="application/ld+json"],script#__NEXT_DATA__')).map(e=>e.textContent.slice(0,600))
         })""")
         await page.close()
@@ -27,10 +29,10 @@ async def main():
     async with async_playwright() as p:
         browser=await p.chromium.launch()
         context=await browser.new_context(java_script_enabled=False)
-        for urls in [
-            ["https://kinotac.org/","https://zona.movie/","https://kinokong.es/"],
-            ["https://kinotac.org/serialy/","https://kinokong.es/serialo/","https://zona.movie/series/"],
-            ["https://kinokong.es/index.php?do=search&subaction=search&story=%D0%9C%D0%B0%D1%82%D1%80%D0%B8%D1%86%D0%B0","https://kinokong.es/index.php?do=search&subaction=search&story=%CC%E0%F2%F0%E8%F6%E0"]]:
-            await asyncio.gather(*(inspect(context,url) for url in urls))
+        await asyncio.gather(*(inspect(context,url) for url in [
+            "https://kinokong.es/serialo/","https://kinokong.es/kinofilmi/","https://zona.movie/film/",
+            "https://kinotac.org/index.php?do=search&subaction=search&story=%D0%9C%D0%B0%D1%82%D1%80%D0%B8%D1%86%D0%B0",
+            "https://zona.movie/index.php?do=search&subaction=search&story=%D0%9C%D0%B0%D1%82%D1%80%D0%B8%D1%86%D0%B0"
+        ]))
         await context.close();await browser.close()
 asyncio.run(main())
