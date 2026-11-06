@@ -97,7 +97,7 @@ jobs:
           data={'versionCode':${{ github.run_number }},'versionName':'0.1.${{ github.run_number }}',
             'url':'https://github.com/${{ github.repository }}/releases/download/media-center/'+p.name,
             'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),
-            'notes':'Улучшены карточки KinoTac, Zona.movie и KinoKong: полный сюжет, актёры, оригинальное название и год выхода. Постеры отделены от фоновых изображений. Длинное описание можно развернуть и свернуть с пульта.'}
+            'notes':'Добавлен проверочный онлайн KinoKong: получение списка серий, озвучек и качества из трёх видеовкладок, запуск через LampPlayer. В плеере сайта доступны все три варианта. Доступность видео зависит от источника и региона.'}
           pathlib.Path('dist/version.json').write_text(json.dumps(data,ensure_ascii=False,indent=2))
           PY
       - uses: softprops/action-gh-release@v2

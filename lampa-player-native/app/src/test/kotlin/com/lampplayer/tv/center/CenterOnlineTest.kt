@@ -160,4 +160,18 @@ class CenterOnlineTest {
         assertFalse(CenterOnline.mediaHeaders("http://cdn.test/movie.mp4",headers).containsKey("Referer"))
         assertEquals("test",CenterOnline.mediaHeaders("https://cdn.test/movie.m3u8",headers)["User-Agent"])
     }
+
+    @Test fun kinokongOnlineIsBoundToTheSelectedCardAndKeepsSeriesIdentity() {
+        val item=CenterTitle(61709,"tv","Док",provider="kinokong",sourceUrl="https://kinokong.es/61709-serial-doc.html")
+        assertTrue(CenterOnline.onlineSupported(item.provider))
+        assertEquals("/61709-serial-doc.html",CenterOnline.source(item).encodedPath)
+        assertTrue(CenterOnline.sameTitleNavigation(item,"https://kinokong.es/61709-canonical.html"))
+        assertFalse(CenterOnline.sameTitleNavigation(item,"https://kinokong.es/61710-another.html"))
+        assertFalse(CenterOnline.sameTitleNavigation(item,"https://other.test/61709-canonical.html"))
+        assertTrue(runCatching { CenterOnline.source(item.copy(type="all")) }.isFailure)
+        assertFalse(CenterOnline.onlineSupported("zona"));assertFalse(CenterOnline.onlineSupported("kinotac"))
+        val snapshot=JsonParser.parseString("""{"lists":[[{"title":"Сезон 4","folder":[{"title":"Дубляж","folder":[{"title":"12 серия","file":"[720p]https://cdn.test/12.m3u8"}]}]}]]}""").asJsonObject
+        val entry=CenterOnline.decode(item,snapshot).single()
+        assertEquals(4,entry.season);assertEquals(12,entry.number);assertEquals("Дубляж",entry.voice)
+    }
 }

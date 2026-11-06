@@ -25,8 +25,9 @@ class CenterWebActivity : AppCompatActivity() {
     private val kinoGo by lazy {
         sitePlayer && (intent.getStringExtra("catalog_provider")=="kinogo" || intent.getStringExtra("url")?.toHttpUrlOrNull()?.host?.let { it=="kinogo.moi"||it.endsWith(".kinogo.moi") }==true)
     }
+    private val kinoKong by lazy { sitePlayer && intent.getStringExtra("catalog_provider")=="kinokong" }
     private var siteTab=0
-    private val kinoGoControls by lazy { assets.open("center/kinogo-player-controls.js").bufferedReader().use { it.readText() } }
+    private val kinoGoControls by lazy { assets.open(if(kinoKong) "center/kinokong-player-controls.js" else "center/kinogo-player-controls.js").bufferedReader().use { it.readText() } }
     private lateinit var native: Button
     private var full: View? = null
     private var fullCallback: WebChromeClient.CustomViewCallback? = null
@@ -46,9 +47,10 @@ class CenterWebActivity : AppCompatActivity() {
             text = (if(sitePlayer) "Плеер сайта · " else "") + (media.get("title")?.asString ?: source.host); setTextColor(Color.WHITE); textSize = 17f
             maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(12,0,12,0)
         },LinearLayout.LayoutParams(0,-2,1f))
-        if(kinoGo) {
+        if(kinoGo||kinoKong) {
             toolbar.addView(action("Плеер 1") { siteTab=0;focusKinoGo() })
             toolbar.addView(action("Плеер 2") { siteTab=1;focusKinoGo() })
+            if(kinoKong)toolbar.addView(action("Плеер 3") { siteTab=2;focusKinoGo() })
         }
         toolbar.addView(action("Обновить") { web.reload() })
         native = action("В наш плеер") { chooseStream() }.apply { visibility = View.GONE }
@@ -75,7 +77,7 @@ class CenterWebActivity : AppCompatActivity() {
                     synchronized(streams) { streams.clear() }; native.visibility = View.GONE
                 }
                 override fun onPageFinished(view:WebView,url:String) {
-                    if(kinoGo&&sameCardPage(source.toString(),url))focusKinoGo()
+                    if((kinoGo||kinoKong)&&sameCardPage(source.toString(),url))focusKinoGo()
                 }
                 override fun shouldInterceptRequest(view:WebView,request:WebResourceRequest):WebResourceResponse? {
                     val url=request.url.toString()
@@ -103,10 +105,11 @@ class CenterWebActivity : AppCompatActivity() {
         web.loadUrl(source.toString()); web.requestFocus()
     }
     private fun focusKinoGo() {
-        if(!::web.isInitialized||!kinoGo)return
+        if(!::web.isInitialized||(!kinoGo&&!kinoKong))return
         val source=intent.getStringExtra("url") ?: return
         if(!sameCardPage(source,web.url ?: return))return
-        web.evaluateJavascript(kinoGoControls+"\nwindow.__lampKinogoControls.focus("+siteTab+",true);",null)
+        val name=if(kinoKong) "__lampKongControls" else "__lampKinogoControls"
+        web.evaluateJavascript(kinoGoControls+"\nwindow."+name+".focus("+siteTab+",true);",null)
     }
     private fun hideFull() {
         full?.let { root.removeView(it) }; full = null

@@ -65,13 +65,13 @@ class CenterOnline(private val activity:AppCompatActivity) {
                 "Для получения списка серий обнови Android System WebView на устройстве"
             }
             val script=activity.assets.open("center/online-resolver.js").bufferedReader().use { it.readText() }
-            val injected = if(item.provider=="kinogo") kinogoScript(source,script) else script
-            val origins = if(item.provider=="kinogo") setOf("*") else setOf("${source.scheme}://${source.host}" + if(source.port!=443&&source.port!=80) ":${source.port}" else "")
+            val injected = if(item.provider in listOf("kinogo","kinokong")) kinogoScript(source,script,item.provider) else script
+            val origins = if(item.provider in listOf("kinogo","kinokong")) setOf("*") else setOf("${source.scheme}://${source.host}" + if(source.port!=443&&source.port!=80) ":${source.port}" else "")
             WebViewCompat.addDocumentStartJavaScript(browser,injected,origins)
             browser.webViewClient=object:WebViewClient() {
                 override fun shouldInterceptRequest(view:WebView,request:WebResourceRequest):WebResourceResponse? {
                     val url=request.url.toString().toHttpUrlOrNull() ?: return null
-                    if(request.isForMainFrame||!url.encodedPath.endsWith("playerjs.js",true)||(item.provider!="kinogo"&&url.host!=source.host))return null
+                    if(request.isForMainFrame||!url.encodedPath.endsWith("playerjs.js",true)||(item.provider !in listOf("kinogo","kinokong")&&url.host!=source.host))return null
                     val call=libraryHttp.newCall(Request.Builder().url(url).apply {
                         request.requestHeaders.filterKeys { it.equals("User-Agent",true)||it.equals("Referer",true)||it.equals("Cookie",true) }
                             .forEach { (name,value) -> header(name,value) }
@@ -101,14 +101,14 @@ class CenterOnline(private val activity:AppCompatActivity) {
             withTimeout(30000) {
                 while(true) {
                     currentCoroutineContext().ensureActive()
-                    val raw=evaluate(browser,if(item.provider=="kinogo")
+                    val raw=evaluate(browser,if(item.provider in listOf("kinogo","kinokong"))
                         "window.__lampKinogoSnapshot ? window.__lampKinogoSnapshot() : '{}'"
                         else "window.__lampSnapshot ? window.__lampSnapshot() : '{}' ")
                     val observed=runCatching { JsonParser.parseString(JsonParser.parseString(raw).asString).asJsonObject }.getOrElse { JsonObject() }
                     var frameReferer: String?=null
                     var frameInfo=""
                     var allowEntries=true
-                    val snapshot=if(item.provider=="kinogo") {
+                    val snapshot=if(item.provider in listOf("kinogo","kinokong")) {
                         val candidates=observed.getAsJsonArray("candidates")?.toList().orEmpty()
                             .mapNotNull { it.takeIf { it.isJsonObject }?.asJsonObject }
                         val usable=candidates.firstOrNull { entry ->
@@ -155,7 +155,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
                                 "Origin" to origin.newBuilder().encodedPath("/").query(null).fragment(null).build().toString().trimEnd('/')))
                         }
                     }
-                    if(item.provider=="kinogo"&&entries.isEmpty()&&++emptyPasses>=20)
+                    if(item.provider in listOf("kinogo","kinokong")&&entries.isEmpty()&&++emptyPasses>=20)
                         evaluate(browser,"window.__lampKinogoTryAlternate ? window.__lampKinogoTryAlternate() : false")
                     delay(300)
                 }
@@ -168,14 +168,14 @@ class CenterOnline(private val activity:AppCompatActivity) {
             web?.let { it.stopLoading();(it.parent as? ViewGroup)?.removeView(it);it.destroy() }
         }
     }
-    private fun kinogoScript(source:okhttp3.HttpUrl, common:String):String {
+    private fun kinogoScript(source:okhttp3.HttpUrl, common:String,provider:String):String {
         val config=JsonObject().apply {
             addProperty("session",java.util.UUID.randomUUID().toString())
             addProperty("origin",source.newBuilder().encodedPath("/").query(null).fragment(null).build().toString().trimEnd('/'))
             addProperty("id",source.encodedPath.substringAfter('/').substringBefore('-').toInt())
         }
-        val controls=activity.assets.open("center/kinogo-player-controls.js").bufferedReader().use { it.readText() }
-        val bridge=activity.assets.open("center/kinogo-resolver.js").bufferedReader().use { it.readText() }
+        val controls=activity.assets.open(if(provider=="kinokong") "center/kinokong-player-controls.js" else "center/kinogo-player-controls.js").bufferedReader().use { it.readText() }
+        val bridge=activity.assets.open(if(provider=="kinokong") "center/kinokong-resolver.js" else "center/kinogo-resolver.js").bufferedReader().use { it.readText() }
         return "(function(){var cfg="+config.toString()+";"+
             "var p=location.pathname;var root=window===window.top&&location.origin===cfg.origin&&p.indexOf('/'+cfg.id+'-')===0&&p.lastIndexOf('/')===0&&p.endsWith('.html');"+
             "var frame=window!==window.top&&window.parent===window.top&&/^https?:$/.test(location.protocol);"+
@@ -186,7 +186,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
         web.evaluateJavascript(script) { if(continuation.isActive)continuation.resume(it ?: "null") }
     }
     companion object {
-        fun onlineSupported(provider: String?) = provider in listOf("kinogo","kinovod")
+        fun onlineSupported(provider: String?) = provider in listOf("kinogo","kinovod","kinokong")
         private data class MediaProbe(val status:Int,val kind:String,val bytes:ByteArray,val resolved:okhttp3.HttpUrl) {
             val text get()=bytes.toString(Charsets.UTF_8).trimStart('\uFEFF',' ','\r','\n','\t')
             val success get()=status in 200..299
@@ -286,9 +286,9 @@ class CenterOnline(private val activity:AppCompatActivity) {
             .connectTimeout(8,TimeUnit.SECONDS).readTimeout(10,TimeUnit.SECONDS).callTimeout(12,TimeUnit.SECONDS).build()
         fun source(item:CenterTitle):okhttp3.HttpUrl {
             val url=item.sourceUrl?.toHttpUrlOrNull() ?: error("Не указан адрес источника")
-            if(item.provider=="kinogo") {
+            if(item.provider in listOf("kinogo","kinokong")) {
                 val id=Regex("^/([0-9]+)-[^/]+\\.html$").find(url.encodedPath)?.groupValues?.get(1)?.toIntOrNull()
-                check(id==item.id && item.type in listOf("movie","tv")) { "Адрес KinoGo не соответствует выбранному фильму или сериалу" }
+                check(id==item.id && item.type in listOf("movie","tv")) { "Адрес ${CenterCatalog.name(item.provider)} не соответствует выбранному фильму или сериалу" }
                 return url
             }
             val match=when(item.provider) {

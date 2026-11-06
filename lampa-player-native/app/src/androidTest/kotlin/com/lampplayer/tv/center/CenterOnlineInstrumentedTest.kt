@@ -400,4 +400,102 @@ class CenterOnlineInstrumentedTest {
             }
         }
     }
+
+    private fun kongPage():String = """<html><body>
+        <div style="height:1800px">Описание сериала</div><ul class="newTabs">
+        <li class="current" data-iframe="/embed/movie/91" onclick="pick(this)">Смотреть</li>
+        <li data-iframe="/provider-two" onclick="pick(this)">2 плеер</li>
+        <li data-iframe="/provider-three" onclick="pick(this)">3 плеер</li>
+        <li class="trail" data-iframe="/trailer-cdn/17/" onclick="pick(this)">Трейлер</li></ul>
+        <div id="preroll"><iframe data-src="/embed/movie/91"></iframe></div>
+        <iframe src="/unrelated"></iframe>
+        <script>function pick(el){document.querySelector('.newTabs .current').classList.remove('current');el.classList.add('current');
+        setTimeout(function(){var f=document.querySelector('#preroll iframe');f.setAttribute('data-src',el.dataset.iframe);f.src=el.dataset.iframe;},500);}
+        JSON.parse('[{"title":"Серия 99","file":"https://cdn.test/wrong.m3u8"}]');</script></body></html>"""
+
+    @Test fun kinokongTriesAllThreeDeclaredVideoTabsAndKeepsTheEmbedReferer() = runBlocking {
+        MockWebServer().use { server ->
+            val requests=java.util.Collections.synchronizedList(mutableListOf<String>())
+            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest):MockResponse {
+                    val path=request.path?.substringBefore('?').orEmpty();requests.add(path)
+                    val body=when(path) {
+                        "/17-show.html" -> kongPage()
+                        "/embed/movie/91" -> "<html><body>Видео недоступно для вашего региона</body></html>"
+                        "/provider-two" -> "<html><body>Нет рабочего плеера</body></html>"
+                        "/provider-three" -> """<html><body><script>window.Playerjs=function(options){this.api=function(){return options.file;};};
+                            new Playerjs({id:'videoplayer',file:[{title:'Сезон 2',folder:[{title:'Дубляж',folder:[
+                            {title:'5 серия',file:'[720p]https://cdn.test/five.m3u8'},
+                            {title:'6 серия',file:'[720p]https://cdn.test/six.m3u8'}]}]}]});</script></body></html>"""
+                        else -> """<html><body><script>JSON.parse('[{"title":"Серия 99","file":"https://cdn.test/wrong.m3u8"}]');</script></body></html>"""
+                    }
+                    return MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody(body)
+                }
+            }
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val result=resolver.resolve(CenterTitle(17,"tv","Show",provider="kinokong",sourceUrl=server.url("/17-show.html").toString()))
+                assertEquals(listOf(5,6),result.episodes.map { it.number })
+                assertTrue(result.episodes.all { it.season==2&&it.voice=="Дубляж" })
+                assertEquals(server.url("/provider-three").toString(),result.headers["Referer"])
+                assertTrue(requests.contains("/provider-two"));assertTrue(requests.contains("/provider-three"))
+                assertFalse(requests.any { it.startsWith("/trailer-cdn/") })
+            }
+        }
+    }
+
+    @Test fun kinokongMovieReadsTheBoundPlayerWithoutBorrowingPageOrAdvertisingJson() = runBlocking {
+        MockWebServer().use { server ->
+            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest)=MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody(
+                    if(request.path=="/17-movie.html") """<html><body><ul class="newTabs"><li class="current" data-iframe="/video">Смотреть</li>
+                        <li class="trail" data-iframe="/trailer-cdn/17/">Трейлер</li></ul><div id="preroll"><iframe data-src="/video"></iframe></div>
+                        <script>JSON.parse('{"file":"https://cdn.test/wrong.mp4"}');</script></body></html>"""
+                    else """<html><body><script>window.Playerjs=function(options){this.api=function(){return [];};};
+                        new Playerjs({id:'player',file:'[720p]https://cdn.test/movie.mp4,[1080p]https://cdn.test/movie-high.mp4'});
+                        new Playerjs({id:'trailer',file:'https://cdn.test/wrong.mp4'});</script></body></html>""")
+            }
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val result=resolver.resolve(CenterTitle(17,"movie","Movie",provider="kinokong",sourceUrl=server.url("/17-movie.html").toString()))
+                assertEquals(setOf(720,1080),result.episodes.single().sources.keys)
+                assertEquals("https://cdn.test/movie-high.mp4",result.episodes.single().sources[1080])
+                assertEquals(server.url("/video").toString(),result.headers["Referer"])
+            }
+        }
+    }
+
+    @Test fun kinokongWebsiteFocusesItsPlayerAndSwitchesToThirdTabWithoutTrailer() = runBlocking {
+        MockWebServer().use { server ->
+            val requests=java.util.Collections.synchronizedList(mutableListOf<String>())
+            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest):MockResponse {
+                    requests.add(request.path.orEmpty())
+                    return MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody(
+                        if(request.path=="/17-show.html")kongPage() else "<html><body>Плеер выбранной серии</body></html>")
+                }
+            }
+            val source=server.url("/17-show.html").toString()
+            val intent=android.content.Intent(androidx.test.core.app.ApplicationProvider.getApplicationContext(),CenterWebActivity::class.java)
+                .putExtra("url",source).putExtra("site_player",true).putExtra("catalog_provider","kinokong").putExtra("lampa_data","""{"title":"Show"}""")
+            ActivityScenario.launch<CenterWebActivity>(intent).use { scenario ->
+                suspend fun state():com.google.gson.JsonObject {
+                    val result=kotlinx.coroutines.CompletableDeferred<String>()
+                    scenario.onActivity { it.findViewById<android.view.View>(android.R.id.content).findViewWithTag<android.webkit.WebView>("site_player_web")
+                        .evaluateJavascript("({scroll:scrollY,tab:document.querySelector('.newTabs .current')?.textContent||'',url:location.href,focused:document.activeElement?.tagName})") { value -> result.complete(value) } }
+                    return com.google.gson.JsonParser.parseString(result.await()).asJsonObject
+                }
+                kotlinx.coroutines.withTimeout(10000) { while(state().get("scroll").asInt<1000)kotlinx.coroutines.delay(100) }
+                scenario.onActivity { activity ->
+                    fun views(v:android.view.View):List<android.view.View> = listOf(v)+if(v is android.view.ViewGroup)(0 until v.childCount).flatMap { views(v.getChildAt(it)) } else emptyList()
+                    views(activity.findViewById(android.R.id.content)).filterIsInstance<android.widget.Button>().first { it.text.toString()=="Плеер 3" }.performClick()
+                }
+                kotlinx.coroutines.withTimeout(10000) { while(true) { val s=state()
+                    if(s.get("tab").asString=="3 плеер"&&s.get("focused").asString=="IFRAME"&&requests.contains("/provider-three"))break
+                    kotlinx.coroutines.delay(100)
+                } }
+                assertEquals(source,state().get("url").asString);assertFalse(requests.any { it.startsWith("/trailer-cdn/") })
+            }
+        }
+    }
 }
