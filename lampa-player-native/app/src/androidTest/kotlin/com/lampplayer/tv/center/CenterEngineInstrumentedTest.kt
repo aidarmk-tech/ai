@@ -64,4 +64,25 @@ class CenterEngineInstrumentedTest {
             Unit
         }
     }
+
+    @Test fun newCatalogTitleDetailsContainTheSelectedSynopsisCastAndReleaseYear() = runBlocking {
+        coroutineScope {
+            listOf(
+                CenterTitle(20817,"tv","Король Талсы",provider="kinotac",sourceUrl="https://kinotac.org/20817-korol-talsy.html") to "2022",
+                CenterTitle(1478,"tv","Гангстерленд",provider="zona",sourceUrl="https://zona.movie/series/mobland-1478/") to "2025",
+                CenterTitle(61709,"tv","Док - Всё в твоих руках",provider="kinokong",sourceUrl="https://kinokong.es/61709-serial-dok-vse-v-tvoih-rukah-1-4-sezon.html") to "2020"
+            ).map { (item,year) -> async {
+                val detail=CenterCatalog().detail(item)
+                assertEquals(item.key,detail.title.key);assertEquals(year,detail.title.year)
+                assertTrue("Selected synopsis is missing",detail.title.overview.isNotBlank())
+                assertTrue("Selected cast is missing",detail.actors.isNotBlank())
+                assertTrue("Selected cover is missing",detail.title.poster?.startsWith("https://")==true)
+                if(item.provider=="zona") {
+                    assertEquals("mobland",detail.title.original.lowercase())
+                    assertNotNull(detail.title.backdrop);assertNotEquals(detail.title.poster,detail.title.backdrop)
+                }
+            } }.awaitAll()
+            Unit
+        }
+    }
 }

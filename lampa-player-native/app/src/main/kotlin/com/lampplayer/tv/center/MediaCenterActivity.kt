@@ -1,5 +1,6 @@
 package com.lampplayer.tv.center
 
+import androidx.core.view.doOnLayout
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
@@ -857,8 +858,23 @@ open class MediaCenterActivity : AppCompatActivity() {
         }.apply { tag = "pin" })
         moreActions.addView(iconButton("+", "Открыть свою magnet-ссылку / .torrent") { magnet(movie, null) })
         space(copy, 12)
-        copy.addView(text("Описание", 18)); space(copy, 9)
-        copy.addView(text(movie.overview.ifBlank { "Описание пока отсутствует" }, 16, muted))
+        val descriptionHeader=row()
+        descriptionHeader.addView(text("Описание",18),LinearLayout.LayoutParams(0,-2,1f))
+        var expanded=false
+        val synopsis=text(movie.overview.ifBlank { "Описание пока отсутствует" },16,muted).apply {
+            tag="detail_description";maxLines=7;ellipsize=TextUtils.TruncateAt.END
+        }
+        val toggle=button("Показать полностью") {
+            expanded=!expanded;synopsis.maxLines=if(expanded)Int.MAX_VALUE else 7
+            synopsis.ellipsize=if(expanded)null else TextUtils.TruncateAt.END
+            (findTag(content,"description_toggle") as? TextView)?.text=if(expanded)"Свернуть описание" else "Показать полностью"
+        }.apply { tag="description_toggle";visibility=View.GONE }
+        descriptionHeader.addView(toggle,LinearLayout.LayoutParams(dp(210),dp(44)))
+        copy.addView(descriptionHeader);space(copy,9);copy.addView(synopsis)
+        synopsis.doOnLayout {
+            val layout=synopsis.layout
+            toggle.visibility=if(layout!=null&&layout.lineCount>0&&layout.getEllipsisCount(layout.lineCount-1)>0)View.VISIBLE else View.GONE
+        }
         if (details.actors.isNotBlank()) { space(copy, 18); copy.addView(text("В ролях", 18)); space(copy, 8); copy.addView(text(details.actors, 15, muted)) }
         body.addView(copy, LinearLayout.LayoutParams(0, -2, 1f)); content.addView(body)
     }

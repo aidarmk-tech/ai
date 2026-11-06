@@ -1,6 +1,6 @@
 package com.lampplayer.tv.center
 
-import com.google.gson.JsonParser
+import com.google.gson.*
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -321,20 +321,125 @@ class CenterCatalog {
             }
             return items
         }
-        fun details(document: Document, item: CenterTitle): CenterDetails {
-            val structured=document.select("script[type=application/ld+json]").firstOrNull()?.data()?.let {
-                runCatching { JsonParser.parseString(it).takeIf { json -> json.isJsonObject }?.asJsonObject }.getOrNull()
+        private fun mediaMetadata(document:Document,item:CenterTitle):JsonObject? {
+            fun text(node:JsonObject,key:String)=node.get(key)?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
+            fun title(value:String)=Jsoup.parse(value).text().replace(Regex("(?iu)\\s*\\((?:(?:19|20)[0-9]{2}|[0-9]+(?:[-–][0-9]+)?\\s*сезон(?:а|ов)?)\\)\\s*$"),"")
+                .lowercase(java.util.Locale.ROOT).replace(Regex("[^\\p{L}\\p{N}]+")," ").trim()
+            val candidates=mutableListOf<JsonObject>();val legacy=mutableListOf<JsonObject>()
+            fun collect(value:JsonElement,depth:Int) {
+                if(depth>3||candidates.size>=64)return
+                if(value.isJsonArray) { value.asJsonArray.take(64).forEach { collect(it,depth+1) };return }
+                if(!value.isJsonObject)return
+                val obj=value.asJsonObject;val kind=obj.get("@type")
+                val types=if(kind?.isJsonArray==true)kind.asJsonArray.mapNotNull { it.takeIf { it.isJsonPrimitive }?.asString }
+                    else listOfNotNull(kind?.takeIf { it.isJsonPrimitive }?.asString)
+                if(types.any { it in listOf("Movie","TVSeries") })candidates+=obj
+                else if(depth==0&&types.isEmpty()&&!obj.has("@graph")&&obj.has("description"))legacy+=obj
+                obj.get("@graph")?.let { collect(it,depth+1) }
             }
-            val synopsis=document.selectFirst(".b-post__description_text, [itemprop=description]")?.text()?.takeIf { it.isNotBlank() }
-                ?: structured?.get("description")?.takeIf { it.isJsonPrimitive }?.asString
-                ?: document.selectFirst("meta[property=og:description]")?.attr("content")
-            val cast=structured?.get("actor")?.takeIf { it.isJsonArray }?.asJsonArray?.mapNotNull {
-                runCatching { it.asJsonObject.get("name").asString }.getOrNull()
-            }?.joinToString(", ") ?: document.select(".item.actors").firstOrNull { it.text().contains("В ролях") }?.selectFirst(".item-content")?.text().orEmpty()
-            val poster=document.selectFirst("meta[property=og:image]")?.attr("content")?.let { document.baseUri().toHttpUrlOrNull()?.resolve(it)?.toString() }
-            return CenterDetails(item.copy(overview=synopsis?.take(8000) ?: item.overview,
-                poster=if(item.provider=="kazplay") item.poster ?: poster else poster ?: item.poster,
-                backdrop=if(item.provider=="kazplay") poster ?: item.backdrop else item.backdrop),emptyList(),cast.take(2000))
+            document.select("script[type=application/ld+json]").take(16).forEach {
+                runCatching { collect(JsonParser.parseString(it.data()),0) }
+            }
+            val targets=listOfNotNull(document.location().toHttpUrlOrNull(),item.sourceUrl?.toHttpUrlOrNull())
+            val name=title(item.title)
+            fun match(node:JsonObject):Boolean {
+                val candidateName=text(node,"name")
+                if(candidateName.isNotBlank()&&title(candidateName)!=name)return false
+                val page=node.get("mainEntityOfPage")
+                val pageUrl=when { page?.isJsonPrimitive==true -> page.asString
+                    page?.isJsonObject==true -> text(page.asJsonObject,"@id").ifBlank { text(page.asJsonObject,"url") };else -> "" }
+                val address=text(node,"url").ifBlank { pageUrl }.ifBlank { text(node,"@id") }
+                if(address.isNotBlank()&&!address.startsWith("#")) {
+                    val url=targets.firstOrNull()?.resolve(address) ?: return false
+                    return targets.any { it.host==url.host&&it.port==url.port&&it.encodedPath.trimEnd('/')==url.encodedPath.trimEnd('/') }
+                }
+                return candidateName.isNotBlank()
+            }
+            return candidates.firstOrNull { match(it) } ?: legacy.singleOrNull()?.takeIf {
+                text(it,"name").isBlank()&&text(it,"url").isBlank()&&text(it,"@id").isBlank()
+            }
+        }
+        fun details(document: Document, item: CenterTitle): CenterDetails {
+            val added=item.provider in listOf("kinotac","zona","kinokong")
+            if(added) {
+                val path=document.location().toHttpUrl().encodedPath
+                val id=if(item.provider=="zona")Regex("^/(film|series)/[^/]+-([0-9]+)/?$").find(path)?.groupValues?.get(2)?.toIntOrNull()
+                    else Regex("^/([0-9]+)-[^/]+\\.html$").find(path)?.groupValues?.get(1)?.toIntOrNull()
+                check(id==item.id&&(item.provider!="zona"||(if(path.startsWith("/series/"))"tv" else "movie")==item.type)) {
+                    "Сайт открыл другую страницу вместо выбранной карточки"
+                }
+            }
+            val structured=mediaMetadata(document,item)
+            fun str(key:String)=structured?.get(key)?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
+            fun clean(value:String)=Jsoup.parse(value).text().trim()
+            fun usable(element:Element)=(listOf(element)+element.parents()).none { parent ->
+                parent.id().startsWith("comm-")||parent.classNames().any { it.startsWith("comment")||it in listOf("comm","comm-item","dle-comm_item") }
+            }
+            fun description(selector:String):String?=document.select(selector).firstNotNullOfOrNull { element ->
+                if(!usable(element)||element.tagName() in listOf("meta","script"))null else {
+                    val copy=element.clone();copy.select("script,style,iframe,form").remove()
+                    val paragraphs=copy.select("p").map { it.text().trim() }.filter { it.isNotEmpty() }
+                    (if(paragraphs.isNotEmpty())paragraphs.joinToString("\n\n") else copy.text()).trim().takeIf { it.isNotBlank() }
+                }
+            }
+            val specific=when(item.provider) {
+                "kinotac" -> "article.full .descriptionnew"
+                "zona" -> ".keep-detal_text"
+                "kinokong" -> "#full_${item.id} .full-kino-story"
+                else -> ".b-post__description_text"
+            }
+            val structuredSynopsis=str("description").takeIf { it.isNotBlank() }?.let(::clean)
+            val synopsis=description(specific)
+                ?: (if(added)structuredSynopsis ?: description("[itemprop=description]") else description("[itemprop=description]") ?: structuredSynopsis)
+                ?: document.selectFirst("meta[property=og:description]")?.attr("content")?.let(::clean)?.takeIf { it.isNotBlank() }
+            fun people(value:JsonElement?):List<String> = when {
+                value==null||value.isJsonNull -> emptyList()
+                value.isJsonArray -> value.asJsonArray.take(24).flatMap { people(it) }
+                value.isJsonObject -> listOf(value.asJsonObject.get("name")?.takeIf { it.isJsonPrimitive }?.asString.orEmpty())
+                value.isJsonPrimitive -> value.asString.split(',')
+                else -> emptyList()
+            }
+            val names=(people(structured?.get("actor"))+people(structured?.get("actors"))).map(::clean).filter { it.isNotEmpty() }
+            val metadataRoot=when(item.provider) {
+                "kinotac" -> document.selectFirst("article.full")
+                "kinokong" -> document.getElementById("full_"+item.id)
+                "zona" -> document.selectFirst(".keep-full")
+                else -> null
+            } ?: document
+            val microdata=metadataRoot.select("[itemprop=actor]").filter(::usable).mapNotNull { actor ->
+                actor.select("[itemprop=name]").map { it.attr("content").ifBlank { it.text() } }.filter { it.isNotBlank() }
+                    .takeIf { it.isNotEmpty() }?.joinToString(", ") ?: actor.text().takeIf { it.isNotBlank() }
+            }
+            val oldCast=document.select(".item.actors").firstOrNull { it.text().contains("В ролях") }?.selectFirst(".item-content")?.text().orEmpty()
+            val cast=(if(names.isNotEmpty())names else microdata.flatMap { it.split(',') }.ifEmpty { listOf(oldCast) })
+                .map(::clean).filter { it.isNotEmpty() }.distinct().take(24).joinToString(", ").take(2000)
+            fun image(element:Element?):String?=element?.let { el ->
+                listOf("data-src","data-original","src","content").firstNotNullOfOrNull { attr ->
+                    el.attr(attr).takeIf { it.isNotBlank() }?.let { document.location().toHttpUrl().resolve(it) }?.toString()
+                }
+            }
+            val social=document.selectFirst("meta[property=og:image]")?.attr("content")?.takeIf { it.isNotBlank() }
+                ?.let { document.location().toHttpUrlOrNull()?.resolve(it)?.toString() }
+            val portrait=when(item.provider) {
+                "zona" -> image(document.selectFirst(".keep-full_poster img"))
+                "kinotac" -> image(document.selectFirst("article.full .images img[itemprop=image]"))
+                else -> null
+            }
+            val background=if(item.provider=="zona")image(document.selectFirst(".keep-full_bg img.posterbg")) else null
+            val year=if(item.year.isNotBlank())item.year else {
+                val copyright=metadataRoot.select("[itemprop=copyrightYear]").firstNotNullOfOrNull { element ->
+                    Regex("^(?:19|20)[0-9]{2}$").find(element.attr("content").ifBlank { element.text() }.trim())?.value
+                }
+                val rowYear=if(item.provider=="kinokong")document.select("#full_${item.id} .full-kino-info > div").firstNotNullOfOrNull {
+                    Regex("(?iu)^Год\\s*:\\s*((?:19|20)[0-9]{2})$").find(it.text().trim())?.groupValues?.get(1)
+                } else null
+                copyright ?: rowYear ?: str("datePublished").takeIf { item.provider=="zona"&&Regex("(?:19|20)[0-9]{2}").matches(it) }.orEmpty()
+            }
+            val original=item.original.ifBlank { clean(str("alternateName")) }
+            val poster=if(added)portrait ?: item.poster ?: social else if(item.provider=="kazplay")item.poster ?: social else social ?: item.poster
+            val backdrop=if(added)background ?: item.backdrop else if(item.provider=="kazplay")social ?: item.backdrop else item.backdrop
+            return CenterDetails(item.copy(overview=synopsis?.take(8000) ?: item.overview,poster=poster,backdrop=backdrop,
+                year=year,original=original),emptyList(),cast)
         }
     }
     private data class Cache(val at: Long, val items: List<CenterTitle>, val hasNext: Boolean? = null)

@@ -315,4 +315,55 @@ class CenterCatalogTest {
         assertFalse(CenterCatalog.providers.any { it in listOf("kazplay","rezka","hdrezka") })
         assertFalse(CenterCatalog.isSiteIdentity("tmdb"));assertFalse(CenterCatalog.isSiteIdentity("unknown"))
     }
+
+    @Test fun zonaDetailsReadTheSelectedMediaGraphFullSynopsisAndPortraitSeparatelyFromBackdrop() {
+        val source="https://catalog.test/series/show-17/"
+        val html="""<script type="application/ld+json">{"@type":"Organization","description":"Реклама сайта"}</script>
+        <script type="application/ld+json">{"@graph":[
+          {"@type":"Movie","name":"Другой фильм","url":"https://catalog.test/film/other-99/","description":"Чужой сюжет","actors":"Чужой актёр"},
+          {"@type":"Movie","name":"Сериал","url":"https://catalog.test/series/show-17/","description":"Кратко","actors":"Актёр А, Актёр Б","alternateName":"My Show","datePublished":"2025"}
+        ]}</script><meta property="og:image" content="/social-wide.jpg">
+        <div class="keep-full"><div class="keep-full_poster"><img src="/portrait-large.jpg"></div><div class="keep-full_bg"><img class="posterbg" src="/backdrop.jpg"></div></div>
+        <div class="keep-detal_text"><p>Полный первый абзац.</p><p>Полный второй абзац.</p></div>"""
+        val item=CenterTitle(17,"tv","Сериал",poster="https://catalog.test/small.jpg",provider="zona",sourceUrl=source)
+        val result=CenterCatalog.details(Jsoup.parse(html,source),item)
+        assertEquals("Полный первый абзац.\n\nПолный второй абзац.",result.title.overview)
+        assertEquals("Актёр А, Актёр Б",result.actors);assertEquals("My Show",result.title.original)
+        assertEquals("2025",result.title.year);assertEquals(item.key,result.title.key)
+        assertEquals("https://catalog.test/portrait-large.jpg",result.title.poster)
+        assertEquals("https://catalog.test/backdrop.jpg",result.title.backdrop);assertTrue(result.seasons.isEmpty())
+    }
+    @Test fun kinoTacReleaseYearAndCastComeFromTheFilmRatherThanTheArticlePublicationDate() {
+        val source="https://catalog.test/17-show.html"
+        val html="""<meta itemprop="description" content="Короткое описание"><meta itemprop="datePublished" content="2026-10-23">
+        <script type="application/ld+json">{"@graph":[{"@type":"Movie","name":"Сериал","mainEntityOfPage":{"@id":"https://catalog.test/17-show.html"},"datePublished":"2026-10-23","description":"Кратко"}]}</script>
+        <article class="full"><div class="images"><img itemprop="image" src="/large.jpg"></div>
+        <div class="info" itemprop="copyrightYear">2022</div><div class="info" itemprop="actor">Актёр А, Актёр Б</div>
+        <div class="descriptionnew" itemprop="description">Полный сюжет выбранного сериала.</div></article>
+        <div class="comm-item" itemprop="description">Комментарий зрителя</div>"""
+        val result=CenterCatalog.details(Jsoup.parse(html,source),CenterTitle(17,"tv","Сериал",provider="kinotac",sourceUrl=source))
+        assertEquals("2022",result.title.year);assertEquals("Полный сюжет выбранного сериала.",result.title.overview)
+        assertEquals("Актёр А, Актёр Б",result.actors);assertEquals("https://catalog.test/large.jpg",result.title.poster)
+    }
+    @Test fun kinoKongDetailsKeepTheCoverAndReadScopedCastAndOriginalReleaseYear() {
+        val source="https://catalog.test/17-serial-show.html"
+        val html="""<meta itemprop="dateCreated" content="2026-11-06"><div itemprop="actor"><span itemprop="name">Чужой актёр</span></div>
+        <div id="full_17"><div class="full-kino-info"><div><span>Год:</span><b>2020</b></div></div>
+        <div class="full-kino-story" itemprop="description">Полный сюжет.</div>
+        <span itemprop="actor"><a><span itemprop="name">Актёр А</span></a></span><span itemprop="actor"><span itemprop="name">Актёр Б</span></span></div>"""
+        val item=CenterTitle(17,"tv","Сериал",poster="https://catalog.test/cover.webp",provider="kinokong",sourceUrl=source)
+        val result=CenterCatalog.details(Jsoup.parse(html,source),item)
+        assertEquals("2020",result.title.year);assertEquals("Актёр А, Актёр Б",result.actors)
+        assertEquals(item.poster,result.title.poster);assertEquals("Полный сюжет.",result.title.overview)
+    }
+    @Test fun titleDetailsRejectOtherCardsAndDoNotReadCommentsOrRelatedMovieMetadata() {
+        val source="https://catalog.test/film/selected-17/"
+        val item=CenterTitle(17,"movie","Выбранный фильм",provider="zona",sourceUrl=source)
+        val html="""<script type="application/ld+json">[{"@type":"Movie","name":"Другой фильм","url":"https://catalog.test/film/other-99/","description":"Чужой сюжет","actor":[{"name":"Чужой актёр"}]}]</script>
+        <div class="comm-item" itemprop="description">Комментарий вместо сюжета</div><meta property="og:description" content="Описание выбранного фильма">"""
+        val result=CenterCatalog.details(Jsoup.parse(html,source),item)
+        assertEquals("Описание выбранного фильма",result.title.overview);assertEquals("",result.actors)
+        try { CenterCatalog.details(Jsoup.parse(html,"https://catalog.test/film/other-99/"),item);fail("Accepted another title") }
+        catch(_:IllegalStateException) {}
+    }
 }

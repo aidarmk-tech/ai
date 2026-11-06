@@ -798,4 +798,21 @@ class MediaCenterUiTest {
             assertEquals("https://kinovod.pro/",parsed.second.headers["Referer"])
         } finally { controller.pause().stop().destroy() }
     }
+
+    @Test fun longSynopsisExpandsAboveTheTextAndKeepsTvFocusOnItsControl() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            host.detailFixture(CenterDetails(CenterTitle(17,"movie","Фильм",overview=("Длинное описание сюжета. ").repeat(140),provider="kinotac"),emptyList(),"Актёр А"))
+            frame(root)
+            val toggle=all(root).first { it.tag=="description_toggle" }
+            assertEquals(View.VISIBLE,toggle.visibility)
+            toggle.requestFocus();toggle.performClick();frame(root)
+            assertTrue(toggle.hasFocus());assertEquals("Свернуть описание",(toggle as TextView).text.toString())
+            assertEquals(Int.MAX_VALUE,(all(root).first { it.tag=="detail_description" } as TextView).maxLines)
+            toggle.performClick();frame(root)
+            assertTrue(toggle.hasFocus());assertEquals("Показать полностью",toggle.text.toString())
+            assertEquals(7,(all(root).first { it.tag=="detail_description" } as TextView).maxLines)
+        } finally { controller.pause().stop().destroy() }
+    }
 }
