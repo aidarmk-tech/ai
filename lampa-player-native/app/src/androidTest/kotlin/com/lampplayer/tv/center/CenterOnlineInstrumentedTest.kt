@@ -109,6 +109,7 @@ class CenterOnlineInstrumentedTest {
             }
         }
     }
+    @org.junit.Ignore("Filmix is catalog-only in LampMedia; its live online adapter is not exposed")
     @Test fun filmixPublicMovieResolvesOrReportsItsExplicitCountryRestriction() = runBlocking {
         ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
             lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
@@ -392,10 +393,10 @@ class CenterOnlineInstrumentedTest {
                     views(activity.findViewById(android.R.id.content)).filterIsInstance<android.widget.Button>().first { it.text.toString()=="Плеер 2" }.performClick()
                 }
                 kotlinx.coroutines.withTimeout(10000) {
-                    while(true) { val s=state();if(s.get("tab").asString=="Плеер 2"&&s.get("scroll").asInt>1000&&s.get("focused").asString=="IFRAME")break;kotlinx.coroutines.delay(100) }
+                    while(true) { val s=state();if(s.get("tab").asString=="Плеер 2"&&s.get("scroll").asInt>1000&&s.get("focused").asString=="IFRAME"&&requests.contains("/embed/movie/10"))break;kotlinx.coroutines.delay(100) }
                 }
                 assertEquals(source,state().get("url").asString)
-                assertTrue(requests.contains("/embed/movie/10"));assertFalse(requests.contains("/wrong-trailer"))
+                assertTrue("Second player did not request its document",requests.contains("/embed/movie/10"));assertFalse("A trailer was opened instead of the selected video",requests.contains("/wrong-trailer"))
             }
         }
     }
