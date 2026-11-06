@@ -16,7 +16,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Read Android failure report
+      - run: pip install playwright
+      - run: playwright install --with-deps chromium
+      - name: Inspect selected KinoKong player
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python scripts/kinogo-browser-probe.py
