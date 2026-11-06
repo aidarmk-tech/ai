@@ -83,7 +83,8 @@ internal class LampCoreRangeReader(
         }
         if (headers.keys.none { it.equals("User-Agent", true) }) builder.header("User-Agent", "LampPlayer/LampCore")
         builder.header("Accept-Encoding", "identity").header("Range", "bytes=$start-$end")
-        val call = client.newCall(builder.build())
+        val requestClient = if(headers.keys.any { it.equals("Cookie",true) })client.newBuilder().cookieJar(okhttp3.CookieJar.NO_COOKIES).build() else client
+        val call = requestClient.newCall(builder.build())
         activeCall = call
         // close() can race between construction and assignment; never start a cancelled session.
         if (closed) { call.cancel(); throw IOException("Источник закрыт") }

@@ -188,7 +188,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
         /** Bound all reads; verify the HLS chain before launching another player. */
         suspend fun playableUrl(url:String,headers:Map<String,String>):String {
             suspend fun probe(target:String,range:Boolean=false):MediaProbe = suspendCancellableCoroutine { continuation ->
-                val call=libraryHttp.newBuilder().cookieJar(com.lampplayer.tv.data.BrowserMediaSession).followRedirects(true).build().newCall(Request.Builder().url(target)
+                val call=libraryHttp.newBuilder().cookieJar(if(headers.keys.any { it.equals("Cookie",true) })okhttp3.CookieJar.NO_COOKIES else com.lampplayer.tv.data.BrowserMediaSession).followRedirects(true).build().newCall(Request.Builder().url(target)
                     .apply {
                         mediaHeaders(target,headers).forEach { (key,value)->header(key,value) }
                         // HLS clients request manifests without a byte range. Reads remain capped below.

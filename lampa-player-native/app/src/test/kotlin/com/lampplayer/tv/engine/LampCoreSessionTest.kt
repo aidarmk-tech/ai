@@ -25,7 +25,11 @@ class LampCoreSessionTest {
                 }
                 LampCoreHlsHttp(emptyMap()).use { assertNotNull(it.probe(server.url("/movie.m3u8").toString())) }
                 LampCoreRangeReader(server.url("/movie.mp4").toString(),emptyMap()).use { assertEquals(12L,it.size()) }
-                repeat(2) { assertEquals("media_session=valid",server.takeRequest().getHeader("Cookie")) }
+                BrowserMediaSession.install { "media_session=browser" }
+                val explicit=mapOf("Cookie" to "media_session=valid")
+                LampCoreHlsHttp(explicit).use { assertNotNull(it.probe(server.url("/movie.m3u8").toString())) }
+                LampCoreRangeReader(server.url("/movie.mp4").toString(),explicit).use { assertEquals(12L,it.size()) }
+                repeat(4) { assertEquals("media_session=valid",server.takeRequest().getHeader("Cookie")) }
             }
         } finally { BrowserMediaSession.refresh();BrowserMediaSession.install { null };CookieHandler.setDefault(previous) }
     }

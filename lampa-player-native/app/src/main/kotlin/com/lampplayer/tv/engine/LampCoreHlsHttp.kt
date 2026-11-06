@@ -173,7 +173,9 @@ internal class LampCoreHlsHttp(private val headers: Map<String, String>, private
         if (headers.keys.none { it.equals("User-Agent", true) }) builder.header("User-Agent", "LampPlayer/LampCore")
         builder.header("Accept-Encoding", "identity")
         range?.let { builder.header("Range", "bytes=${it.offset}-${it.offset + it.length - 1}") }
-        val call = (if (quick) quickClient else client).newCall(builder.build())
+        val baseClient = if(quick)quickClient else client
+        val requestClient = if(headers.keys.any { it.equals("Cookie",true) })baseClient.newBuilder().cookieJar(okhttp3.CookieJar.NO_COOKIES).build() else baseClient
+        val call = requestClient.newCall(builder.build())
         calls.add(call)
         if (closed) call.cancel()
         try {
