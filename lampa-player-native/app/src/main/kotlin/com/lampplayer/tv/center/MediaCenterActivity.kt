@@ -327,7 +327,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         count?.let { heading.addView(text(it.toString(), 13, muted)) }
         content.addView(heading); space(content, 8)
     }
-    private fun work(message: String, block: suspend () -> Unit) {
+    private fun work(message: String, onlineItem: CenterTitle? = null, block: suspend () -> Unit) {
         val focusContent = content.hasFocus()
         job?.cancel(); page = "loading"; clear(message)
         content.addView(ProgressBar(this), LinearLayout.LayoutParams(dp(40), dp(40)))
@@ -340,12 +340,17 @@ open class MediaCenterActivity : AppCompatActivity() {
             catch (e: Exception) {
                 page = "error"; clear("Не удалось загрузить")
                 content.addView(text(e.message ?: "Проверь соединение и настройки источника", 17, muted)); space(content, 20)
-                content.addView(button("Повторить") { work(message, block) })
+                content.addView(button("Повторить") { work(message, onlineItem, block) })
                 if(e is OnlineFailure) content.addView(button("Скопировать отчёт") {
                     (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager)
                         .setPrimaryClip(android.content.ClipData.newPlainText("LampMedia online",e.report))
                     Toast.makeText(this@MediaCenterActivity,"Отчёт скопирован",Toast.LENGTH_SHORT).show()
                 })
+                if(onlineItem!=null) {
+                    content.addView(button("Обновить ссылки") { online(onlineItem,refresh=true) })
+                    content.addView(button("Плеер сайта") { website(onlineItem) })
+                    content.addView(button("Выбрать раздачу") { find(onlineItem,null) })
+                }
                 content.addView(button("Выбрать каталог") { chooseCatalog() })
                 content.addView(button("Поиск торрентов") { sources() })
                 content.addView(button("Назад") { back() })
@@ -826,7 +831,10 @@ open class MediaCenterActivity : AppCompatActivity() {
             }
         }
         if (movie.provider != null) {
-            if(CenterOnline.onlineSupported(movie.provider)) copy.addView(button("Смотреть онлайн · проверка") { enter { online(movie) } })
+            if(CenterOnline.onlineSupported(movie.provider)) {
+                copy.addView(button("Смотреть онлайн · проверка") { enter { online(movie) } })
+                moreActions.addView(iconButton("▣","Плеер сайта") { website(movie) })
+            }
             copy.addView(button("Найти торрент-раздачу") { enter { find(movie, null) } })
             movie.updateLabel?.let { copy.addView(text(it, 15, accent)); space(copy, 10) }
         } else if (movie.type == "tv") {
@@ -866,7 +874,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         selectedSeason: Int? = null, selectedVoice: String? = null) {
         onlineReport=null
         val previous = returnTo ?: if (resume != null && page == "online") snapshot() else null
-        work("Получаю список серий · ${CenterCatalog.name(item.provider)}…") {
+        work("Получаю список серий · ${CenterCatalog.name(item.provider)}…",onlineItem=item) {
             val cached = onlineCache[item.key]?.takeIf { System.currentTimeMillis() - it.first < 180000 && !refresh }?.second
             val video = cached ?: resolveOnline(item).also {
                 if (onlineCache.size >= 4) onlineCache.remove(onlineCache.keys.first())
@@ -967,29 +975,44 @@ open class MediaCenterActivity : AppCompatActivity() {
             online(video.item, CardMeta(video.item.title, seasonNumber = episode.season.takeIf { it>0 }, episodeNumber = episode.number,
                 translator = episode.voice, quality = quality.toString()), refresh = true, returnTo = returnTo ?: snapshot()); return
         }
-        val url = episode.sources[quality] ?: return
-        val candidates = video.episodes.filter { it.season == episode.season && it.voice == episode.voice && it.number > 0 && it.sources.containsKey(quality) }.sortedBy { it.number }
-        val playlist = if (candidates.groupBy { it.number }.all { it.value.size == 1 }) candidates.mapIndexed { index, entry ->
-            com.lampplayer.tv.domain.model.EpisodeItem(index, entry.title, entry.sources.getValue(quality), entry.season.takeIf { it>0 }, entry.number)
-        } else emptyList()
-        val meta = metadata(video.item).apply {
-            if (episode.number > 0) { if(episode.season>0)addProperty("season_number", episode.season); addProperty("episode_number", episode.number) }
-            addProperty("translator", episode.voice); addProperty("quality", quality.toString())
-            addProperty("headers", Gson().toJson(video.headers))
-            if (playlist.isNotEmpty()) {
-                addProperty("episodes", Gson().toJson(playlist))
-                addProperty("episode_index", playlist.indexOfFirst { it.url == url }.coerceAtLeast(0))
-            }
-        }
         val previous=returnTo ?: snapshot()
-        work("Проверяю доступность видео…") {
-            val playable=verifyOnlineUrl(url,video.headers)
-            if(playable!=url && meta.has("episodes")) {
-                val entries=com.google.gson.JsonParser.parseString(meta.get("episodes").asString).asJsonArray
-                entries.forEach { entry -> if(entry.asJsonObject.get("url")?.asString==url) entry.asJsonObject.addProperty("url",playable) }
-                meta.addProperty("episodes",entries.toString())
+        work("Проверяю доступность видео…",onlineItem=video.item) {
+            var current=video
+            var selected=episode
+            var raw=selected.sources[quality] ?: error("Качество недоступно")
+            val playable=try { verifyOnlineUrl(raw,current.headers) } catch(first:Exception) {
+                if(first is CancellationException)throw first
+                val missing=generateSequence<Throwable>(first) { it.cause }
+                    .any { it is OnlineMediaUnavailable && it.status==404 }
+                if(!missing)throw first
+                onlineCache.remove(video.item.key)
+                val fresh=resolveOnline(video.item)
+                check(fresh.item.key==video.item.key) { "Источник вернул другую карточку" }
+                val match=fresh.episodes.singleOrNull { it.season==episode.season && it.number==episode.number && it.voice==episode.voice }
+                    ?: error("Источник изменил список серий или озвучку. Обнови список")
+                val next=match.sources[quality] ?: error("Выбранное качество исчезло. Выбери качество заново")
+                onlineCache[video.item.key]=System.currentTimeMillis() to fresh
+                if(next==raw && fresh.headers==video.headers)throw first
+                current=fresh;selected=match;raw=next
+                // Exactly one refresh; never switch the selected episode, voice or quality.
+                verifyOnlineUrl(next,fresh.headers)
             }
-            launchPlayer(playable,meta.toString(),previous,online=true)
+            val candidates=current.episodes.filter { it.season==selected.season && it.voice==selected.voice && it.number>0 && it.sources.containsKey(quality) }.sortedBy { it.number }
+            val playlist=if(candidates.groupBy { it.number }.all { it.value.size==1 }) candidates.mapIndexed { index,entry ->
+                val uri=if(entry.number==selected.number)playable else entry.sources.getValue(quality)
+                com.lampplayer.tv.domain.model.EpisodeItem(index,entry.title,uri,entry.season.takeIf { it>0 },entry.number)
+            } else emptyList()
+            val meta=metadata(current.item).apply {
+                if(selected.number>0) { if(selected.season>0)addProperty("season_number",selected.season);addProperty("episode_number",selected.number) }
+                addProperty("translator",selected.voice);addProperty("quality",quality.toString())
+                addProperty("headers",Gson().toJson(current.headers))
+                if(playlist.isNotEmpty()) {
+                    addProperty("episodes",Gson().toJson(playlist))
+                    addProperty("episode_index",playlist.indexOfFirst { it.url==playable }.coerceAtLeast(0))
+                }
+            }
+            val target=if(current!==video)previous?.copy(draw={showOnline(current,selected.season.takeIf { current.item.type=="tv" },selected.voice,false)}) else previous
+            launchPlayer(playable,meta.toString(),target,online=true)
         }
     }
     private fun episodeList(item: CenterTitle, season: Int) {
@@ -1229,14 +1252,14 @@ open class MediaCenterActivity : AppCompatActivity() {
     }
     private fun localTorrent(url: String): Boolean = url.toHttpUrlOrNull()?.let { it.host == "127.0.0.1" && it.encodedPath.startsWith("/stream/") } == true
     private fun website(item: CenterTitle) {
-        val url = item.sourceUrl ?: return
-        store.remember(url, CardMeta(title = item.title, contentKey = item.key, sourcePage = url,
-            posterUrl = item.poster, overview = item.overview, releaseYear = item.year.toIntOrNull()))
-        launchWebsite(url, metadata(item).toString())
+        val url=runCatching { CenterOnline.source(item).toString() }.getOrElse {
+            Toast.makeText(this,it.message ?: "Нет адреса плеера",Toast.LENGTH_SHORT).show();return
+        }
+        launchWebsite(url,metadata(item).toString())
     }
     private fun launchWebsite(url: String, metadata: String) {
         playerReturn = if (page == "loading" && backStack.isNotEmpty()) backStack.removeLast() else snapshot()
-        startActivity(Intent(this, CenterWebActivity::class.java).putExtra("url", url).putExtra("lampa_data", metadata))
+        startActivity(Intent(this, CenterWebActivity::class.java).putExtra("url", url).putExtra("lampa_data", metadata).putExtra("site_player",true))
     }
     private fun launchPlayer(url: String, metadata: String, returnTo: Screen? = null, online: Boolean = false) {
         playerReturn = returnTo ?: if (page == "loading" && backStack.isNotEmpty()) backStack.removeLast() else snapshot()

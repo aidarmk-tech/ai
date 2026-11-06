@@ -64,7 +64,13 @@ class MediaCenterUiTest {
             return gridPages[number].orEmpty()
         }
         fun gridFixture(items:List<CenterTitle>) { showHome(items,"Grid",1,null) }
-        override suspend fun verifyOnlineUrl(url:String,headers:Map<String,String>)=url
+        val verifyFailures=java.util.ArrayDeque<Exception>()
+        val verifiedUrls=mutableListOf<String>()
+        override suspend fun verifyOnlineUrl(url:String,headers:Map<String,String>):String {
+            verifiedUrls.add(url)
+            if(verifyFailures.isNotEmpty())throw verifyFailures.removeFirst()
+            return url
+        }
         override suspend fun resolveOnline(item:CenterTitle):OnlineVideo { onlineCalls++;return requireNotNull(nextOnline) }
         override fun loadHome() { val items=(1..8).map {
             CenterTitle(it, if(it%2==0) "tv" else "movie", listOf("Тихий город","За горизонтом","Новый день","На орбите")[(it-1)%4],
@@ -723,6 +729,50 @@ class MediaCenterUiTest {
             assertEquals(2,parsed.second.seasonNumber);assertEquals(5,parsed.second.episodeNumber)
             assertEquals(item.key,parsed.second.contentKey)
             assertEquals("https://player.test/embed/movie/9",parsed.second.headers["Referer"])
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun a404RefreshesExactlyTheSameEpisodeOnceAndUsesFreshHeaders() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(240279,"tv","Король Талсы",provider="kinovod",sourceUrl="https://kinovod.pro/serial/240279-korol-talsy")
+            val episode=OnlineEpisode(2,5,"Пятая","Voice",mapOf(720 to "https://cdn.test/expired.m3u8"))
+            val old=OnlineVideo(item,listOf(episode),mapOf("Referer" to "https://source.test/old"))
+            host.nextOnline=old.copy(episodes=listOf(episode.copy(sources=mapOf(720 to "https://cdn.test/fresh.m3u8"))),
+                headers=mapOf("Referer" to "https://source.test/fresh"))
+            host.verifyFailures.add(OnlineMediaUnavailable(404,"fixture","HTTP 404"))
+            host.nativeFixture(old);frame(root);label(root,"Сезон 2").performClick();frame(root)
+            all(root).first { it.tag=="online:2:5:Voice" }.performClick();frame(root)
+            val parsed=com.lampplayer.tv.player.IntentParser.parse(shadowOf(host).nextStartedActivity)!!
+            assertEquals(1,host.onlineCalls)
+            assertEquals(listOf("https://cdn.test/expired.m3u8","https://cdn.test/fresh.m3u8"),host.verifiedUrls)
+            assertEquals("https://cdn.test/fresh.m3u8",parsed.first)
+            assertEquals(2,parsed.second.seasonNumber);assertEquals(5,parsed.second.episodeNumber)
+            assertEquals("Voice",parsed.second.translator);assertEquals("720",parsed.second.quality)
+            assertEquals("https://source.test/fresh",parsed.second.headers["Referer"])
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun failedFreshLinkStopsRetryingAndSitePlayerDoesNotMarkAnythingWatched() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(240279,"tv","Король Талсы",provider="kinovod",sourceUrl="https://kinovod.pro/serial/240279-korol-talsy")
+            val episode=OnlineEpisode(2,5,"Пятая","Voice",mapOf(720 to "https://cdn.test/expired.m3u8"))
+            val old=OnlineVideo(item,listOf(episode),emptyMap())
+            host.nextOnline=old.copy(episodes=listOf(episode.copy(sources=mapOf(720 to "https://cdn.test/fresh.m3u8"))))
+            repeat(2) { host.verifyFailures.add(OnlineMediaUnavailable(404,"fixture","HTTP 404")) }
+            host.nativeFixture(old);frame(root);label(root,"Сезон 2").performClick();frame(root)
+            all(root).first { it.tag=="online:2:5:Voice" }.performClick();frame(root)
+            assertEquals(1,host.onlineCalls);assertEquals(2,host.verifiedUrls.size)
+            assertNull(shadowOf(host).nextStartedActivity)
+            val before=CenterStore(host).history()
+            label(root,"Плеер сайта").performClick();frame(root)
+            val launch=shadowOf(host).nextStartedActivity
+            assertTrue(launch.getBooleanExtra("site_player",false))
+            assertEquals(item.sourceUrl,launch.getStringExtra("url"))
+            assertEquals(before,CenterStore(host).history())
         } finally { controller.pause().stop().destroy() }
     }
 

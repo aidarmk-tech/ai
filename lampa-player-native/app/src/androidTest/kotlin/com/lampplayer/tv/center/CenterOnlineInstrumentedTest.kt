@@ -3,6 +3,7 @@ package com.lampplayer.tv.center
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.async
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.*
@@ -207,6 +208,56 @@ class CenterOnlineInstrumentedTest {
                     resolver.resolve(CenterTitle(17,"movie","Movie",provider="kinogo",sourceUrl=server.url("/17-movie.html").toString()))
                     fail("Ignored source regional restriction")
                 } catch(e:OnlineSourceBlocked) { assertEquals("country",e.reason) }
+            }
+        }
+    }
+
+    @Test fun kinogoFollowsTheSelectedFrameRedirectAndReadsWrappedPlaylistJson() = runBlocking {
+        MockWebServer().use { pageServer -> MockWebServer().use { playerServer ->
+            playerServer.start(java.net.InetAddress.getByName("127.0.0.1"),0)
+            val finalUrl=playerServer.url("/video/player").newBuilder().host("127.0.0.1").build().toString()
+            pageServer.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest):MockResponse =
+                    if(request.path=="/embed/movie/81816") MockResponse().setResponseCode(302).setHeader("Location",finalUrl)
+                    else MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody(
+                        """<html><body><iframe data-src="/embed/movie/81816"></iframe>
+                        <iframe data-src="/embed/trailer/81816"></iframe></body></html>""")
+            }
+            playerServer.enqueue(MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody(
+                """<html><body><script>
+                JSON.parse('{"data":{"playlist":[{"title":"Сезон 2","folder":[{"title":"5 серия","file":"[720p]https://cdn.test/five.m3u8"}]}]}}');
+                </script></body></html>"""))
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val result=resolver.resolve(CenterTitle(62389,"tv","Гангстерленд",provider="kinogo",
+                    sourceUrl=pageServer.url("/62389-gangsterlend.html").toString()))
+                assertEquals(2,result.episodes.single().season);assertEquals(5,result.episodes.single().number)
+                assertEquals(finalUrl,result.headers["Referer"])
+            }
+        } }
+    }
+
+    @Test fun unrecognizedFrameRepliesRemainVisibleInDiagnostics() = runBlocking {
+        MockWebServer().use { server ->
+            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest)=MockResponse()
+                    .setHeader("Content-Type","text/html; charset=utf-8").setBody(
+                        if(request.path=="/17-show.html") """<html><body><iframe data-src="/embed/movie/9"></iframe></body></html>"""
+                        else """<html><body>Список загружается другим проигрывателем</body></html>""")
+            }
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val pending=async {
+                    resolver.resolve(CenterTitle(17,"tv","Show",provider="kinogo",sourceUrl=server.url("/17-show.html").toString()))
+                }
+                try {
+                    kotlinx.coroutines.withTimeout(8000) {
+                        while(!resolver.diagnostics.contains("replies=1"))kotlinx.coroutines.delay(50)
+                    }
+                    assertTrue(resolver.diagnostics.contains("files=0"))
+                    assertTrue(resolver.diagnostics.contains("undefined"))
+                    assertFalse(resolver.diagnostics.contains("player=null"))
+                } finally { pending.cancel();pending.join() }
             }
         }
     }

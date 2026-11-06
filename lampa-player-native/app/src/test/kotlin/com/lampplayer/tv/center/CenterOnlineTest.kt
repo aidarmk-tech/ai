@@ -74,12 +74,13 @@ class CenterOnlineTest {
     @Test fun validHlsRemainsUnchangedAndAccessDeniedNeverTriggersMp4Fallback() = kotlinx.coroutines.runBlocking {
         okhttp3.mockwebserver.MockWebServer().use { server ->
             val url=server.url("/video.mp4/master.m3u8").toString()
-            server.enqueue(okhttp3.mockwebserver.MockResponse().setBody("#EXTM3U\n#EXT-X-ENDLIST"))
+            server.enqueue(okhttp3.mockwebserver.MockResponse().setBody("#EXTM3U\n#EXTINF:1,\nsegment.ts\n#EXT-X-ENDLIST"))
+            server.enqueue(okhttp3.mockwebserver.MockResponse().setHeader("Content-Type","video/mp2t").setBody("G"))
             assertEquals(url,CenterOnline.playableUrl(url,emptyMap()))
-            server.takeRequest()
+            server.takeRequest();assertEquals("/video.mp4/segment.ts",server.takeRequest().path)
             server.enqueue(okhttp3.mockwebserver.MockResponse().setResponseCode(403))
             assertTrue(runCatching { CenterOnline.playableUrl(url,emptyMap()) }.isFailure)
-            assertEquals(2,server.requestCount)
+            assertEquals(3,server.requestCount)
         }
     }
     @Test fun htmlIsNotAcceptedAsTheDirectVideoFallback() = kotlinx.coroutines.runBlocking {
@@ -98,6 +99,24 @@ class CenterOnlineTest {
         assertTrue(CenterOnline.onlineSupported("kinogo"));assertTrue(CenterOnline.onlineSupported("kinovod"))
         assertFalse(CenterOnline.onlineSupported("filmix"));assertFalse(CenterOnline.onlineSupported("hdrezka"))
         try { CenterOnline.source(item.copy(type="all"));fail("Accepted an unknown media type") } catch(_:IllegalStateException) {}
+    }
+
+    @Test fun successfulManifestWithMissingSegmentFailsBeforePlayerLaunch() = kotlinx.coroutines.runBlocking {
+        okhttp3.mockwebserver.MockWebServer().use { server ->
+            server.enqueue(okhttp3.mockwebserver.MockResponse().setBody("\uFEFF#EXTM3U\n#EXTINF:4,\nmissing.ts\n"))
+            server.enqueue(okhttp3.mockwebserver.MockResponse().setResponseCode(404))
+            val error=runCatching { CenterOnline.playableUrl(server.url("/stream.m3u8").toString(),emptyMap()) }.exceptionOrNull()
+            assertTrue(error is OnlineMediaUnavailable)
+            assertEquals(404,(error as OnlineMediaUnavailable).status)
+            assertFalse(error.message!!.contains(server.hostName))
+        }
+    }
+    @Test fun sitePlayerStaysOnTheSelectedCardAndAllowsCanonicalTitlesOnly() {
+        val source="https://kz.kinogo.moi/62389-gangsterlend.html"
+        assertTrue(CenterWebActivity.sameCardPage(source,"https://kz.kinogo.moi/62389-canonical.html#player"))
+        assertFalse(CenterWebActivity.sameCardPage(source,"https://kz.kinogo.moi/9-another.html"))
+        assertFalse(CenterWebActivity.sameCardPage(source,"https://ads.test/62389-gangsterlend.html"))
+        assertFalse(CenterWebActivity.sameCardPage(source,"https://kz.kinogo.moi/login"))
     }
 
 }

@@ -21,6 +21,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 class CenterWebActivity : AppCompatActivity() {
     private lateinit var web: WebView
     private lateinit var root: FrameLayout
+    private val sitePlayer by lazy { intent.getBooleanExtra("site_player",false) }
     private lateinit var native: Button
     private var full: View? = null
     private var fullCallback: WebChromeClient.CustomViewCallback? = null
@@ -37,7 +38,7 @@ class CenterWebActivity : AppCompatActivity() {
         fun action(label: String, click: () -> Unit) = Button(this).apply { text = label; isAllCaps = false; setOnClickListener { click() } }
         toolbar.addView(action("Назад") { back() })
         toolbar.addView(TextView(this).apply {
-            text = media.get("title")?.asString ?: source.host; setTextColor(Color.WHITE); textSize = 17f
+            text = (if(sitePlayer) "Плеер сайта · " else "") + (media.get("title")?.asString ?: source.host); setTextColor(Color.WHITE); textSize = 17f
             maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(12,0,12,0)
         },LinearLayout.LayoutParams(0,-2,1f))
         toolbar.addView(action("Обновить") { web.reload() })
@@ -50,16 +51,22 @@ class CenterWebActivity : AppCompatActivity() {
             settings.allowFileAccess = false; settings.allowContentAccess = false
             settings.mediaPlaybackRequiresUserGesture = true
             settings.setSupportMultipleWindows(false)
+            if(sitePlayer) CookieManager.getInstance().setAcceptThirdPartyCookies(this,true)
             webViewClient = object : WebViewClient() {
-                override fun shouldOverrideUrlLoading(view:WebView,request:WebResourceRequest) = request.url.toString().toHttpUrlOrNull() == null
+                override fun shouldOverrideUrlLoading(view:WebView,request:WebResourceRequest):Boolean {
+                    val next=request.url.toString()
+                    if(next.toHttpUrlOrNull()==null)return true
+                    if(!sitePlayer||!request.isForMainFrame)return false
+                    return !sameCardPage(source.toString(),next)
+                }
                 @Deprecated("Compatibility with Android 5")
-                override fun shouldOverrideUrlLoading(view:WebView,url:String) = url.toHttpUrlOrNull() == null
+                override fun shouldOverrideUrlLoading(view:WebView,url:String) = url.toHttpUrlOrNull()==null || (sitePlayer&&!sameCardPage(source.toString(),url))
                 override fun onPageStarted(view:WebView,url:String,favicon:android.graphics.Bitmap?) {
                     synchronized(streams) { streams.clear() }; native.visibility = View.GONE
                 }
                 override fun shouldInterceptRequest(view:WebView,request:WebResourceRequest):WebResourceResponse? {
                     val url=request.url.toString()
-                    if (isVideo(url)) {
+                    if (!sitePlayer && isVideo(url)) {
                         val headers = request.requestHeaders.filterKeys { it.equals("Referer",true) || it.equals("User-Agent",true) }
                         synchronized(streams) { if(streams.size < 16) streams[url] = headers }
                         runOnUiThread { if(!isFinishing) native.visibility = View.VISIBLE }
@@ -112,6 +119,15 @@ class CenterWebActivity : AppCompatActivity() {
         super.onDestroy()
     }
     companion object {
+        fun sameCardPage(source:String,target:String):Boolean {
+            val original=source.toHttpUrlOrNull() ?: return false
+            val next=target.toHttpUrlOrNull() ?: return false
+            if(original.scheme!=next.scheme || original.host!=next.host || original.port!=next.port)return false
+            fun identity(path:String):String? = Regex("^/(?:serial/|film/)?([0-9]+)-[^/]+(?:\\.html)?$").find(path)?.groupValues?.get(1)
+            val id=identity(original.encodedPath) ?: return next==original
+            return identity(next.encodedPath)==id && (original.encodedPath.startsWith("/serial/")==next.encodedPath.startsWith("/serial/")) &&
+                (original.encodedPath.startsWith("/film/")==next.encodedPath.startsWith("/film/"))
+        }
         fun isVideo(url:String) = url.toHttpUrlOrNull()?.encodedPath?.let { it.endsWith(".m3u8",true) || it.endsWith(".mp4",true) } == true
     }
 }

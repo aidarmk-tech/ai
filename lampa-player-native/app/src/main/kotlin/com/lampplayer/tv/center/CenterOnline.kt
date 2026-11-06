@@ -31,6 +31,7 @@ import kotlin.coroutines.resume
 data class OnlineEpisode(val season:Int,val number:Int,val title:String,val voice:String,val sources:Map<Int,String>)
 data class OnlineVideo(val item:CenterTitle,val episodes:List<OnlineEpisode>,val headers:Map<String,String>,val fetchedAt:Long=System.currentTimeMillis())
 class OnlineSourceBlocked(val reason:String,message:String):IllegalStateException(message)
+class OnlineMediaUnavailable(val status:Int, val detail:String, message:String):IllegalStateException(message)
 
 /** Resolves the selected provider's own player metadata, without showing a website or starting video. */
 class CenterOnline(private val activity:AppCompatActivity) {
@@ -104,18 +105,27 @@ class CenterOnline(private val activity:AppCompatActivity) {
                     val observed=runCatching { JsonParser.parseString(JsonParser.parseString(raw).asString).asJsonObject }.getOrElse { JsonObject() }
                     var frameReferer: String?=null
                     var frameInfo=""
+                    var allowEntries=true
                     val snapshot=if(item.provider=="kinogo") {
-                        val candidates=observed.getAsJsonArray("candidates")?.toList().orEmpty().mapNotNull { it.takeIf { it.isJsonObject }?.asJsonObject }
+                        val candidates=observed.getAsJsonArray("candidates")?.toList().orEmpty()
+                            .mapNotNull { it.takeIf { it.isJsonObject }?.asJsonObject }
                         val usable=candidates.firstOrNull { entry ->
                             val data=entry.get("snapshot")?.takeIf { it.isJsonObject }?.asJsonObject
                             data!=null && (data.get("blocked")==null || data.get("blocked").isJsonNull) && decode(item,data).isNotEmpty()
                         }
-                        frameReferer=usable?.get("url")?.asString
+                        frameReferer=usable?.get("url")?.takeIf { it.isJsonPrimitive }?.asString
                         val pending=observed.get("expected")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0
-                        frameInfo="frames=$pending replies=${candidates.size} "
-                        usable?.getAsJsonObject("snapshot") ?: candidates.firstOrNull()?.getAsJsonObject("snapshot")?.let { first ->
-                            if(pending>0 && candidates.size==pending && candidates.all { e -> e.getAsJsonObject("snapshot")?.get("blocked")?.isJsonNull==false }) first
-                            else JsonObject()
+                        val allBlocked=pending>0 && candidates.size==pending &&
+                            candidates.all { e -> e.getAsJsonObject("snapshot")?.get("blocked")?.isJsonNull==false }
+                        frameInfo="frames=$pending replies=${candidates.size} " + candidates.mapIndexed { index, entry ->
+                            val data=entry.getAsJsonObject("snapshot") ?: JsonObject()
+                            val host=entry.get("url")?.takeIf { it.isJsonPrimitive }?.asString?.toHttpUrlOrNull()?.host.orEmpty()
+                            "frame$index[host=$host player=${data.get("playerType")} ids=${data.get("ids")} files=${data.getAsJsonArray("files")?.size()} lists=${data.getAsJsonArray("lists")?.size()} xhr=${data.get("xhr")} shapes=${data.get("shapes")} blocked=${data.get("blocked")?.isJsonNull==false}] "
+                        }.joinToString("")
+                        allowEntries=usable!=null
+                        // Preserve the actual packet for diagnostics even when its playlist is not understood.
+                        (usable ?: candidates.firstOrNull())?.getAsJsonObject("snapshot")?.deepCopy()?.apply {
+                            if(!allBlocked)remove("blocked")
                         } ?: JsonObject()
                     } else observed
                     diagnostics=frameInfo+"files=${snapshot.getAsJsonArray("files")?.size()} lists=${snapshot.getAsJsonArray("lists")?.size()} player=${snapshot.get("playerType")} ids=${snapshot.get("ids")} xhr=${snapshot.get("xhr")}"
@@ -127,7 +137,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
                         val started=evaluate(browser,"(function(){var el=document.querySelector('.players[data-player]');if(el&&String(el.getAttribute('data-player'))==='${item.id}'&&typeof getDataPlayer==='function'){getDataPlayer(${item.id});return true;}return false;})()")
                         if(started=="true")filmixRequested=true
                     }
-                    val entries=decode(item,snapshot)
+                    val entries=if(allowEntries)decode(item,snapshot) else emptyList()
                     diagnostics += " entries=${entries.size} errors=$issues"
                     if(entries.isNotEmpty()) {
                         val signature=Gson().toJson(entries)
@@ -160,7 +170,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
         val bridge=activity.assets.open("center/kinogo-resolver.js").bufferedReader().use { it.readText() }
         return "(function(){var cfg="+config.toString()+";"+
             "var p=location.pathname;var root=window===window.top&&location.origin===cfg.origin&&p.indexOf('/'+cfg.id+'-')===0&&p.lastIndexOf('/')===0&&p.endsWith('.html');"+
-            "var frame=window!==window.top&&(/^walking-as\\./i.test(location.hostname)||/^\\/embed\\/movie\\/[0-9]+\\/?$/.test(location.pathname));"+
+            "var frame=window!==window.top&&window.parent===window.top&&/^https?:$/.test(location.protocol);"+
             "if(!root&&!frame)return;window.__lampKinogoConfig=cfg;window.__lampMetadataFrame=frame;"+
             common+"\n"+bridge+"\n})();"
     }
@@ -169,37 +179,71 @@ class CenterOnline(private val activity:AppCompatActivity) {
     }
     companion object {
         fun onlineSupported(provider: String?) = provider in listOf("kinogo","kinovod")
-        /** Validate the media URL and only use a direct MP4 fallback after a 404 for its HLS manifest. */
+        private data class MediaProbe(val status:Int,val kind:String,val bytes:ByteArray,val resolved:okhttp3.HttpUrl) {
+            val text get()=bytes.toString(Charsets.UTF_8).trimStart('\uFEFF',' ','\r','\n','\t')
+            val success get()=status in 200..299
+        }
+        /** Bound all reads; verify the HLS chain before launching another player. */
         suspend fun playableUrl(url:String,headers:Map<String,String>):String {
-            suspend fun probe(target:String):Pair<Int,Boolean> = suspendCancellableCoroutine { continuation ->
+            suspend fun probe(target:String):MediaProbe = suspendCancellableCoroutine { continuation ->
                 val call=libraryHttp.newBuilder().followRedirects(true).build().newCall(Request.Builder().url(target)
-                    .apply { headers.forEach { (key,value)->header(key,value) };header("Range","bytes=0-4095") }.build())
+                    .apply { headers.forEach { (key,value)->header(key,value) };header("Range","bytes=0-65535") }.build())
                 continuation.invokeOnCancellation { call.cancel() }
                 call.enqueue(object:okhttp3.Callback {
                     override fun onFailure(call:Call,e:java.io.IOException) { if(continuation.isActive)continuation.resumeWith(Result.failure(e)) }
                     override fun onResponse(call:Call,response:okhttp3.Response) {
                         val result=runCatching { response.use {
-                            val body=response.body
-                            val data=body?.byteStream()?.let { stream -> val bytes=ByteArray(4096);val count=stream.read(bytes);if(count>0)bytes.copyOf(count) else byteArrayOf() } ?: byteArrayOf()
-                            val prefix=data.toString(Charsets.UTF_8).trimStart()
-                            val media=prefix.startsWith("#EXTM3U") || (data.size>=8 && String(data,4,4,Charsets.US_ASCII)=="ftyp") ||
-                                (body?.contentType()?.type=="video" && data.isNotEmpty())
-                            response.code to (response.isSuccessful && media)
+                            val bytes=java.io.ByteArrayOutputStream()
+                            response.body?.byteStream()?.use { stream ->
+                                val buffer=ByteArray(4096)
+                                while(bytes.size()<65536) {
+                                    val read=stream.read(buffer,0,minOf(buffer.size,65536-bytes.size()))
+                                    if(read<0)break
+                                    if(read>0)bytes.write(buffer,0,read)
+                                }
+                            }
+                            val data=bytes.toByteArray()
+                            val prefix=data.toString(Charsets.UTF_8).trimStart('\uFEFF',' ','\r','\n','\t')
+                            val kind=when {
+                                prefix.startsWith("#EXTM3U")->"hls"
+                                data.size>=8 && String(data,4,4,Charsets.US_ASCII)=="ftyp"->"mp4"
+                                prefix.startsWith("<")->"html"
+                                response.body?.contentType()?.type=="video" && data.isNotEmpty()->"video"
+                                else->"unknown"
+                            }
+                            MediaProbe(response.code,kind,data,response.request.url)
                         } }
                         if(continuation.isActive)continuation.resumeWith(result)
                     }
                 })
             }
-            val original=probe(url)
-            if(original.second)return url
-            val parsed=url.toHttpUrlOrNull() ?: error("Некорректный адрес видео")
-            val path=parsed.encodedPath
-            if(original.first==404 && Regex("(?i)\\.mp4/[^/]+\\.m3u8$").containsMatchIn(path)) {
-                val fallback=parsed.newBuilder().encodedPath(path.substringBeforeLast('/')).build().toString()
-                if(probe(fallback).second)return fallback
+            suspend fun verify(target:String):Pair<MediaProbe,String> {
+                var current=probe(target)
+                if(!current.success || current.kind !in listOf("hls","mp4","video"))return current to "адрес видео"
+                repeat(3) { depth ->
+                    if(current.kind!="hls")return current to "фрагмент"
+                    val next=current.text.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty()&&!it.startsWith("#") }
+                        ?: return current.copy(kind="empty-hls") to "пустой плейлист"
+                    val uri=current.resolved.resolve(next) ?: return current.copy(kind="invalid-hls") to "адрес в плейлисте"
+                    current=probe(uri.toString())
+                    if(!current.success || current.kind=="html" || current.bytes.isEmpty())
+                        return current to if(depth==0) "HLS/фрагмент" else "фрагмент"
+                }
+                return current to "HLS"
             }
-            error(if(original.first==404) "Видео по этой ссылке не найдено (HTTP 404). Обнови ссылки или выбери другой источник."
-                else "Источник не отдал видео: HTTP ${original.first}")
+            val original=verify(url)
+            fun accepted(p:MediaProbe)=p.success && p.bytes.isNotEmpty() && p.kind !in listOf("html","empty-hls","invalid-hls","unknown")
+            if(accepted(original.first)||original.first.success&&original.second=="фрагмент"&&original.first.bytes.isNotEmpty()&&original.first.kind=="unknown")return url
+            val parsed=url.toHttpUrlOrNull() ?: error("Некорректный адрес видео")
+            var detail="${original.second}: HTTP ${original.first.status}, ${original.first.kind}"
+            if(original.first.status==404 && Regex("(?i)\\.mp4/[^/]+\\.m3u8$").containsMatchIn(parsed.encodedPath)) {
+                val fallback=parsed.newBuilder().encodedPath(parsed.encodedPath.substringBeforeLast('/')).build().toString()
+                val direct=probe(fallback)
+                if(direct.success && direct.kind in listOf("mp4","video"))return fallback
+                detail+="; MP4: HTTP ${direct.status}, ${direct.kind}"
+            }
+            throw OnlineMediaUnavailable(original.first.status,detail,
+                "Источник не отдал видео. $detail. Обнови ссылку или открой плеер сайта.")
         }
         private val libraryHttp=OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
             .connectTimeout(8,TimeUnit.SECONDS).readTimeout(10,TimeUnit.SECONDS).callTimeout(12,TimeUnit.SECONDS).build()

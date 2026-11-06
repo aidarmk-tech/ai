@@ -2,7 +2,7 @@
 'use strict';
 if((window!==window.top&&!window.__lampMetadataFrame)||window.__lampOnline)return;
 HTMLMediaElement.prototype.play=function(){return Promise.reject(new DOMException('Metadata only','NotAllowedError'));};
-var state=window.__lampOnline={files:[],lists:[],playerFiles:[],playerLists:[],seen:{},errors:[],cap:480,ids:[],instances:[],xhr:[]};
+var state=window.__lampOnline={files:[],lists:[],playerFiles:[],playerLists:[],seen:{},errors:[],cap:480,ids:[],instances:[],xhr:[],shapes:[]};
 var originalParse=JSON.parse,originalStringify=JSON.stringify;
 function remember(value,kind,bound){
  try{
@@ -15,7 +15,13 @@ function remember(value,kind,bound){
   if(target.length<16)target.push(value);
  }catch(e){}
 }
-function playlist(value,bound,voice){
+function playlist(value,bound,voice,depth){
+ depth=depth||0;if(depth>5)return;
+ if(value&&typeof value==='object'&&!Array.isArray(value)){
+  if(state.shapes.length<8){var shape=Object.keys(value).slice(0,16).sort().join(',');if(state.shapes.indexOf(shape)<0)state.shapes.push(shape);}
+  ['data','result','playlist'].forEach(function(key){if(value[key]&&typeof value[key]==='object')playlist(value[key],bound,voice,depth+1);});
+  return;
+ }
  if(typeof value==='string'&&value.length<900000&&value.trim().charAt(0)==='['){try{value=originalParse(value);}catch(e){return;}}
  if(!Array.isArray(value)||!value.length||value.length>1000)return;
  if(value.some(function(v){return v&&typeof v==='object'&&(v.file||v.folder)}))remember(voice?[{title:voice,folder:value}]:value,'list',bound);
@@ -94,7 +100,7 @@ window.__lampSnapshot=function(){
  var blocked=/(недоступ(?:но|ен)[\s\S]{0,90}(?:стране|регион[ае])|заблокировано[\s\S]{0,90}правообладателя|нет видео файла)/i.exec(text);
  // Once a player is observed, unrelated page JSON cannot stand in for its playlist.
  var bound=state.ids.length||state.playerFiles.length||state.playerLists.length;
- var result={files:bound?state.playerFiles:state.files,lists:bound?state.playerLists:state.lists,cap:state.cap,blocked:blocked?blocked[0]:null,playerType:typeof window.Playerjs,ids:state.ids,xhr:state.xhr};
+ var result={files:bound?state.playerFiles:state.files,lists:bound?state.playerLists:state.lists,cap:state.cap,blocked:blocked?blocked[0]:null,playerType:typeof window.Playerjs,ids:state.ids,xhr:state.xhr,shapes:state.shapes};
  var json=originalStringify(result);return json.length<1000000?json:'{}';
 };
 })();
