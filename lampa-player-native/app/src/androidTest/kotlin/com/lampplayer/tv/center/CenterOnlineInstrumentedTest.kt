@@ -262,4 +262,54 @@ class CenterOnlineInstrumentedTest {
         }
     }
 
+
+    @Test fun webViewMediaCookiesReachNativeChecksAndExoAndStayScopedAcrossRedirects() = runBlocking {
+        MockWebServer().use { server ->
+            server.start(java.net.InetAddress.getByName("127.0.0.1"),0)
+            val first=server.url("/entry.m3u8").newBuilder().host("localhost").build().toString()
+            val second=server.url("/playlist.m3u8").newBuilder().host("127.0.0.1").build().toString()
+            val name="lamp_media_session_fixture"
+            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest):MockResponse {
+                    val cookie=request.getHeader("Cookie").orEmpty()
+                    if(request.path=="/entry.m3u8")return if(cookie.contains("$name=first")&&!cookie.contains("$name=second"))
+                        MockResponse().setResponseCode(302).setHeader("Location",second) else MockResponse().setResponseCode(404)
+                    if(!cookie.contains("$name=second")||cookie.contains("$name=first"))return MockResponse().setResponseCode(404)
+                    return if(request.path=="/segment.ts")MockResponse().setHeader("Content-Type","video/mp2t").setBody("G")
+                    else MockResponse().setBody("#EXTM3U\n#EXTINF:1,\nsegment.ts\n#EXT-X-ENDLIST")
+                }
+            }
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                com.lampplayer.tv.data.BrowserMediaSession.refresh()
+                scenario.onActivity {
+                    android.webkit.CookieManager.getInstance().apply {
+                        setCookie(first,"$name=first; Path=/")
+                        setCookie(second,"$name=second; Path=/")
+                    }
+                }
+                try {
+                    kotlinx.coroutines.withTimeout(5000) {
+                        while(android.webkit.CookieManager.getInstance().getCookie(first)?.contains("$name=first")!=true||
+                            android.webkit.CookieManager.getInstance().getCookie(second)?.contains("$name=second")!=true)kotlinx.coroutines.delay(50)
+                    }
+                    assertEquals(first,CenterOnline.playableUrl(first,emptyMap()))
+                    assertTrue(server.takeRequest().getHeader("Cookie").orEmpty().contains("$name=first"))
+                    repeat(2) { assertTrue(server.takeRequest().getHeader("Cookie").orEmpty().contains("$name=second")) }
+                    val exo=androidx.media3.datasource.DefaultHttpDataSource.Factory().setAllowCrossProtocolRedirects(true).createDataSource()
+                    try {
+                        exo.open(androidx.media3.datasource.DataSpec.Builder().setUri(android.net.Uri.parse(first)).build())
+                        assertTrue(exo.read(ByteArray(16),0,16)>0)
+                    } finally { exo.close() }
+                    assertTrue(server.takeRequest().getHeader("Cookie").orEmpty().contains("$name=first"))
+                    assertTrue(server.takeRequest().getHeader("Cookie").orEmpty().contains("$name=second"))
+                } finally {
+                    scenario.onActivity {
+                        android.webkit.CookieManager.getInstance().setCookie(first,"$name=; Max-Age=0; Path=/")
+                        android.webkit.CookieManager.getInstance().setCookie(second,"$name=; Max-Age=0; Path=/")
+                    }
+                    com.lampplayer.tv.data.BrowserMediaSession.refresh()
+                }
+            }
+        }
+    }
 }

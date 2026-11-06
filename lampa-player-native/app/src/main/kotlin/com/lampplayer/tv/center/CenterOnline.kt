@@ -38,6 +38,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
     var diagnostics: String = "not started"; private set
     suspend fun resolve(item:CenterTitle):OnlineVideo = withContext(Dispatchers.Main.immediate) {
         val source=source(item)
+        com.lampplayer.tv.data.BrowserMediaSession.refresh()
         var web:WebView?=null
         val issues=mutableListOf<String>()
         val active=AtomicBoolean(true)
@@ -52,6 +53,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
                 isFocusable=false;importantForAccessibility=android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS;alpha=0f
             }
             web=browser
+            android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(browser,true)
             browser.webChromeClient=object:WebChromeClient() {
                 override fun onConsoleMessage(message:ConsoleMessage):Boolean {
                     if(message.messageLevel()==ConsoleMessage.MessageLevel.ERROR&&message.sourceId().toHttpUrlOrNull()?.host==source.host&&issues.size<4)
@@ -186,7 +188,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
         /** Bound all reads; verify the HLS chain before launching another player. */
         suspend fun playableUrl(url:String,headers:Map<String,String>):String {
             suspend fun probe(target:String,range:Boolean=false):MediaProbe = suspendCancellableCoroutine { continuation ->
-                val call=libraryHttp.newBuilder().followRedirects(true).build().newCall(Request.Builder().url(target)
+                val call=libraryHttp.newBuilder().cookieJar(com.lampplayer.tv.data.BrowserMediaSession).followRedirects(true).build().newCall(Request.Builder().url(target)
                     .apply {
                         mediaHeaders(target,headers).forEach { (key,value)->header(key,value) }
                         // HLS clients request manifests without a byte range. Reads remain capped below.

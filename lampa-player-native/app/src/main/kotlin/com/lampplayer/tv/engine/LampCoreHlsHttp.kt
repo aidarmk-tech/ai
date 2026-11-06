@@ -25,7 +25,7 @@ internal data class HlsResolved(val video: HlsPlaylist, val audio: HlsPlaylist?,
 /** HLS does not require a server to support Range except EXT-X-BYTERANGE resources. */
 internal class LampCoreHlsHttp(private val headers: Map<String, String>, private val retryPolicy: HlsRetryPolicy = HlsRetryPolicy()) : java.io.Closeable {
     companion object {
-        private val client = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
+        private val client = OkHttpClient.Builder().cookieJar(com.lampplayer.tv.data.BrowserMediaSession).connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.SECONDS).callTimeout(20, TimeUnit.SECONDS).build()
         private val quickClient = client.newBuilder().connectTimeout(3, TimeUnit.SECONDS).readTimeout(3, TimeUnit.SECONDS).callTimeout(5, TimeUnit.SECONDS).build()
         private const val PLAYLIST_LIMIT = 1024 * 1024

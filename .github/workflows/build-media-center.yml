@@ -97,7 +97,7 @@ jobs:
           data={'versionCode':${{ github.run_number }},'versionName':'0.1.${{ github.run_number }}',
             'url':'https://github.com/${{ github.repository }}/releases/download/media-center/'+p.name,
             'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),
-            'notes':'LampMedia: исправлен приём плейлиста при создании плеера; сохранены выбранная озвучка и серия при возврате, в том числе после обновления ссылки. Выбор сезона, серии и качества внутри приложения, запуск в плеере, каталоги Киновод / Filmix / TMDB.'}
+            'notes':'LampMedia: исправлен разбор запасных ссылок Playerjs, запросы HLS приведены к браузерному формату; сессия WebView используется при проверке видео и в ExoPlayer/LampCore. Сохраняются выбранные серия, озвучка и качество.'}
           pathlib.Path('dist/version.json').write_text(json.dumps(data,ensure_ascii=False,indent=2))
           PY
       - uses: softprops/action-gh-release@v2

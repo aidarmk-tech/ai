@@ -172,6 +172,7 @@ open class MediaCenterActivity : AppCompatActivity() {
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        com.lampplayer.tv.data.BrowserMediaSession.install { url -> android.webkit.CookieManager.getInstance().getCookie(url) }
         store = CenterStore(this)
         val root = FrameLayout(this).apply { setBackgroundColor(Color.rgb(8, 13, 22)); setPadding(dp(22), dp(22), dp(18), dp(14)) }
         navigation = column().apply { setPadding(0, 0, dp(22), 0) }

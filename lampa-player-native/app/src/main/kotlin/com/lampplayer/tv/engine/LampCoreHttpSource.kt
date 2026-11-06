@@ -30,7 +30,7 @@ internal class LampCoreRangeReader(
         private const val BLOCK_BYTES = 128 * 1024
         private const val CACHE_BLOCKS = 16 // 2 MiB; no whole-film downloads
         private val contentRange = Regex("bytes (\\d+)-(\\d+)/(\\d+)")
-        private val client = OkHttpClient.Builder()
+        private val client = OkHttpClient.Builder().cookieJar(com.lampplayer.tv.data.BrowserMediaSession)
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.SECONDS)
             .callTimeout(15, TimeUnit.SECONDS)
