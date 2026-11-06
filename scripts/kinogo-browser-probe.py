@@ -7,6 +7,7 @@ def clean(text):
     return text[:18000]
 async def check(browser,url):
     context=await browser.new_context(locale="ru-RU")
+    await context.add_init_script("""(function(){var saved=window.eval;window.__setupScripts=[];window.eval=function(value){if(typeof value==='string'&&value.length<500000)window.__setupScripts.push(value);return (0,saved)(value);};})();""")
     page=await context.new_page()
     events=[];scripts=[]
     async def route(r):
@@ -23,17 +24,24 @@ async def check(browser,url):
                 hits=[]
                 for match in list(re.finditer(r'm3u8|\.mp4/|master-|new Playerjs|\.api\(.file|video_host',data))[:18]:
                     hits.append(clean(data[max(0,match.start()-220):match.end()+300]))
-                scripts.append({"path":urlparse(r.url).path,"len":len(data),"hits":hits})
+                scripts.append({"path":urlparse(r.url).path,"len":len(data),"hits":hits,"shape":clean(data[:700]) if urlparse(r.url).path.endswith("/hs.js") else ""})
             except:pass
     page.on("response",response)
     try:
         await page.goto(url,wait_until="domcontentloaded",timeout=40000)
         await page.wait_for_timeout(8000)
         inline=await page.locator("script:not([src])").all_text_contents()
+        expanded=await page.evaluate("window.__setupScripts||[]")
+        expanded_hits=[]
+        for source in expanded:
+            hits=[]
+            for m in list(re.finditer(r'new Playerjs|videoplayer|m3u8|master-|\\.mp4|document\\.cookie|withCredentials|setRequestHeader',source))[:24]:
+                hits.append(clean(source[max(0,m.start()-250):m.end()+550]))
+            expanded_hits.append({"length":len(source),"hits":hits})
         result={"source":url,"title":await page.title(),"final":page.url,
             "notice":(await page.locator("body").inner_text())[-1600:],
             "inline":[clean(x) for x in inline if re.search(r'Playerjs|videoplayer|player-file|\.m3u8',x)],
-            "scripts":scripts,"events":events[:12]}
+            "scripts":scripts,"expanded":expanded_hits,"events":events[:12]}
         print("INSPECT "+json.dumps(result,ensure_ascii=False),flush=True)
     except Exception as e:print("INSPECT "+str(e),flush=True)
     finally:await context.close()
