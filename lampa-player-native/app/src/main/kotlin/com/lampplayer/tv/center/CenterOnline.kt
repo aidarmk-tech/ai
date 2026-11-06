@@ -29,7 +29,9 @@ import java.util.Locale
 import kotlin.coroutines.resume
 
 data class OnlineEpisode(val season:Int,val number:Int,val title:String,val voice:String,val sources:Map<Int,String>,val alternatives:Map<Int,List<String>> = emptyMap())
-data class OnlineVideo(val item:CenterTitle,val episodes:List<OnlineEpisode>,val headers:Map<String,String>,val fetchedAt:Long=System.currentTimeMillis())
+data class OnlineVideo(val item:CenterTitle,val episodes:List<OnlineEpisode>,val headers:Map<String,String>,val fetchedAt:Long=System.currentTimeMillis(),val catalogItem:CenterTitle?=null) {
+    val identity get()=catalogItem ?: item
+}
 class OnlineSourceBlocked(val reason:String,message:String):IllegalStateException(message)
 class OnlineMediaUnavailable(val status:Int, val detail:String, message:String):IllegalStateException(message)
 

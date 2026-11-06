@@ -48,6 +48,10 @@ class MediaCenterUiTest {
         override suspend fun availableUpdate(): com.lampplayer.tv.update.UpdateInfo? { updateChecks++; return null }
         var nextOnline:OnlineVideo?=null
         var onlineCalls=0
+        val kinoQueries=mutableListOf<String>()
+        var kinoResults=emptyList<CenterTitle>()
+        val resolvedItems=mutableListOf<CenterTitle>()
+        override suspend fun searchKinoVod(query:String):List<CenterTitle> { kinoQueries.add(query);return kinoResults }
         val gridCalls=mutableListOf<Int>()
         val gridPages=mutableMapOf<Int,List<CenterTitle>>()
         val browseCalls=mutableListOf<Pair<CenterBrowse,Int>>()
@@ -71,7 +75,7 @@ class MediaCenterUiTest {
             if(verifyFailures.isNotEmpty())throw verifyFailures.removeFirst()
             return url
         }
-        override suspend fun resolveOnline(item:CenterTitle):OnlineVideo { onlineCalls++;return requireNotNull(nextOnline) }
+        override suspend fun resolveOnline(item:CenterTitle):OnlineVideo { onlineCalls++;resolvedItems.add(item);return requireNotNull(nextOnline) }
         override fun loadHome() { val items=(1..8).map {
             CenterTitle(it, if(it%2==0) "tv" else "movie", listOf("Тихий город","За горизонтом","Новый день","На орбите")[(it-1)%4],
                 overview="Истории, к которым хочется возвращаться. Каталог, серии и просмотр в одном приложении.", year="2026",rating="8.2")
@@ -814,6 +818,66 @@ class MediaCenterUiTest {
             toggle.performClick();frame(root)
             assertTrue(toggle.hasFocus());assertEquals("Показать полностью",toggle.text.toString())
             assertEquals(7,(all(root).first { it.tag=="detail_description" } as TextView).maxLines)
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun tmdbOnlineFindsKinovodAndPassesTheTmdbIdentityAndSourcePageToOurPlayer() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val tmdb=CenterTitle(153312,"tv","Король Талсы",original="Tulsa King",year="2022",poster="https://img.test/tmdb.jpg")
+            val source=CenterTitle(240279,"tv","Король Талсы",year="2022",provider="kinovod",sourceUrl="https://kinovod.pro/serial/240279-korol-talsy")
+            host.kinoResults=listOf(source)
+            host.nextOnline=OnlineVideo(source,listOf(OnlineEpisode(2,5,"Пятая","Voice",mapOf(720 to "https://cdn.test/five.m3u8"))),mapOf("Referer" to source.sourceUrl!!))
+            host.detailFixture(CenterDetails(tmdb,listOf(1,2),""));frame(root)
+            label(root,"Смотреть онлайн · Киновод").performClick();repeat(4){frame(root)}
+            assertEquals(setOf("Король Талсы","Tulsa King"),host.kinoQueries.toSet())
+            assertEquals(source.key,host.resolvedItems.single().key)
+            label(root,"Сезон 2").performClick();frame(root)
+            all(root).first { it.tag=="online:2:5:Voice" }.performClick();frame(root)
+            val parsed=com.lampplayer.tv.player.IntentParser.parse(shadowOf(host).nextStartedActivity)!!.second
+            assertEquals(153312,parsed.tmdbId);assertEquals(tmdb.key,parsed.contentKey)
+            assertEquals(source.sourceUrl,parsed.sourcePage);assertEquals(tmdb.poster,parsed.posterUrl)
+            assertEquals(2,parsed.seasonNumber);assertEquals(5,parsed.episodeNumber)
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun ambiguousTmdbMatchesWaitForAnExplicitChoiceAndKeepTheSelectedSource() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val tmdb=CenterTitle(777,"movie","Остров",year="2006")
+            val first=CenterTitle(101,"movie","Остров",year="2006",provider="kinovod",sourceUrl="https://kinovod.pro/film/101-one")
+            val second=first.copy(id=102,sourceUrl="https://kinovod.pro/film/102-two")
+            host.kinoResults=listOf(first,second)
+            host.nextOnline=OnlineVideo(second,listOf(OnlineEpisode(0,0,"Остров","Voice",mapOf(720 to "https://cdn.test/movie.mp4"))),emptyMap())
+            host.detailFixture(CenterDetails(tmdb,emptyList(),""));frame(root)
+            label(root,"Смотреть онлайн · Киновод").performClick();repeat(3){frame(root)}
+            assertEquals(0,host.onlineCalls);assertNull(shadowOf(host).nextStartedActivity)
+            all(root).first { it.tag=="online_match:${second.key}" }.performClick();repeat(3){frame(root)}
+            assertEquals(second.key,host.resolvedItems.single().key)
+            assertEquals(second,CenterStore(host).onlineSource(tmdb))
+            all(root).first { it.tag=="online:0:0:Voice" }.performClick();frame(root)
+            val parsed=com.lampplayer.tv.player.IntentParser.parse(shadowOf(host).nextStartedActivity)!!.second
+            assertEquals(tmdb.key,parsed.contentKey);assertEquals(second.sourceUrl,parsed.sourcePage)
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun tmdbContinueRefreshesTheSavedKinovodEpisodeWithoutSearchingOrChangingItsIdentity() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val tmdb=CenterTitle(153312,"tv","Король Талсы",year="2022")
+            val source=CenterTitle(240279,"tv","Король Талсы",year="2022",provider="kinovod",sourceUrl="https://kinovod.pro/serial/240279-korol-talsy")
+            host.nextOnline=OnlineVideo(source,listOf(OnlineEpisode(2,5,"Пятая","Voice",mapOf(720 to "https://cdn.test/fresh.m3u8"))),emptyMap())
+            CenterStore(host).remember("https://cdn.test/expired.m3u8",com.lampplayer.tv.domain.model.CardMeta(
+                tmdb.title,tmdbId=tmdb.id,contentKey=tmdb.key,sourcePage=source.sourceUrl,seasonNumber=2,episodeNumber=5,quality="720",translator="Voice"))
+            host.detailFixture(CenterDetails(tmdb,listOf(1,2),""));frame(root)
+            all(root).first { it.tag=="continue_title" }.performClick();repeat(5){frame(root)}
+            assertTrue(host.kinoQueries.isEmpty());assertEquals(source.key,host.resolvedItems.single().key)
+            val played=com.lampplayer.tv.player.IntentParser.parse(shadowOf(host).nextStartedActivity)!!
+            assertEquals("https://cdn.test/fresh.m3u8",played.first);assertEquals(tmdb.key,played.second.contentKey)
+            assertEquals(2,played.second.seasonNumber);assertEquals(5,played.second.episodeNumber)
         } finally { controller.pause().stop().destroy() }
     }
 }

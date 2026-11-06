@@ -85,4 +85,12 @@ class CenterEngineInstrumentedTest {
             Unit
         }
     }
+
+    @Test fun tmdbTitleFindsMatchingKinovodSeriesWithoutReusingItsNativeId() = runBlocking {
+        val item=CenterTitle(153312,"tv","Король Талсы",original="Tulsa King",year="2022")
+        val results=CenterCatalog().search("kinovod",CenterCatalog.defaultHost("kinovod"),item.title)
+        val matches=CenterOnlineMatch.candidates(item,results)
+        assertTrue("KinoVod search did not return the selected series",matches.any { CenterOnlineMatch.exact(item,it) })
+        assertTrue(matches.all { it.provider=="kinovod"&&it.type=="tv"&&it.id!=item.id })
+    }
 }

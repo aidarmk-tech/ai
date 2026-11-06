@@ -54,6 +54,13 @@ class CenterStore(context: Context) {
     fun setVoice(key: String, voice: String?) {
         prefs.edit().apply { if (voice == null) remove("voice_$key") else putString("voice_$key", voice) }.apply()
     }
+    fun onlineSource(item:CenterTitle):CenterTitle? = runCatching {
+        gson.fromJson(prefs.getString("online_kinovod_"+item.key,null),CenterTitle::class.java)
+    }.getOrNull()?.takeIf { CenterOnlineMatch.valid(item,it) }
+    fun setOnlineSource(item:CenterTitle,source:CenterTitle) {
+        require(CenterOnlineMatch.valid(item,source))
+        prefs.edit().putString("online_kinovod_"+item.key,gson.toJson(source)).apply()
+    }
     fun searches(): List<String> = runCatching {
         gson.fromJson<List<String>>(prefs.getString("searches", "[]"), object : TypeToken<List<String>>() {}.type)
     }.getOrNull().orEmpty().filter { it.length in 2..120 }.take(20)
@@ -104,7 +111,7 @@ class CenterStore(context: Context) {
     fun history(): List<CenterHistory> = runCatching {
         gson.fromJson<List<CenterHistory>>(prefs.getString("history", "[]"), object : TypeToken<List<CenterHistory>>() {}.type)
     }.getOrNull().orEmpty()
-    private fun historyKey(card: CardMeta) = card.contentKey ?: "${if (card.seasonNumber != null || card.episodes.isNotEmpty()) "tv" else "movie"}:${card.tmdbId ?: card.title}"
+    private fun historyKey(card: CardMeta) = card.contentKey?.removePrefix("tmdb:") ?: "${if (card.seasonNumber != null || card.episodes.isNotEmpty()) "tv" else "movie"}:${card.tmdbId ?: card.title}"
     fun removeHistory(card: CardMeta) {
         prefs.edit().putString("history", gson.toJson(history().filterNot { historyKey(it.card) == historyKey(card) })).apply()
     }

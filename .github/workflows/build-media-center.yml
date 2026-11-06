@@ -97,7 +97,7 @@ jobs:
           data={'versionCode':${{ github.run_number }},'versionName':'0.1.${{ github.run_number }}',
             'url':'https://github.com/${{ github.repository }}/releases/download/media-center/'+p.name,
             'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),
-            'notes':'Добавлен проверочный онлайн KinoKong: получение списка серий, озвучек и качества из трёх видеовкладок, запуск через LampPlayer. В плеере сайта доступны все три варианта. Доступность видео зависит от источника и региона.'}
+            'notes':'Онлайн Киновода из карточек TMDB: поиск по названию, оригинальному названию, году и типу. Выбор неоднозначных совпадений, запоминание источника и продолжение просмотра с сохранением карточки TMDB. Торренты остаются доступны.'}
           pathlib.Path('dist/version.json').write_text(json.dumps(data,ensure_ascii=False,indent=2))
           PY
       - uses: softprops/action-gh-release@v2
