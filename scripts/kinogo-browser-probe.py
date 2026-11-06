@@ -18,7 +18,7 @@ async def main():
    if path=="/17-show.html":body=ROOT
    elif path=="/one":body="<body>Видео недоступно для вашего региона</body>"
    elif path=="/two":body="<body>Нет рабочего плеера</body>"
-   elif path=="/three":body="""<script>function Playerjs(o){this.api=function(){return o.file;};}new Playerjs({id:'videoplayer',file:[{title:'Сезон 2',folder:[{title:'Дубляж',folder:[{title:'5 серия',file:'https://cdn.test/five.m3u8'}]}]}]});</script>"""
+   elif path=="/three":body="""<script>window.Playerjs=function(o){this.api=function(){return o.file;};};new Playerjs({id:'videoplayer',file:[{title:'Сезон 2',folder:[{title:'Дубляж',folder:[{title:'5 серия',file:'https://cdn.test/five.m3u8'}]}]}]});</script>"""
    else:body="""<script>JSON.parse('[{"title":"Серия 99","file":"https://cdn.test/wrong.m3u8"}]');</script>"""
    await r.fulfill(status=200,content_type="text/html; charset=utf-8",body=body)
   await context.route("**/*",route)
