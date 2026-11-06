@@ -173,13 +173,13 @@ class CenterCatalogTest {
     @Test fun newCatalogSelectionsAndTheirOwnMirrorAddressesPersist() {
         val app=RuntimeEnvironment.getApplication()
         val store=CenterStore(app)
-        for(provider in listOf("rezka","kazplay")) {
+        for(provider in listOf("kinotac","zona","kinokong")) {
             store.catalog=provider;assertEquals(provider,CenterStore(app).catalog)
             assertTrue(store.catalogHost(provider).startsWith("https://"))
             store.setCatalogHost(provider,"https://$provider.test")
             assertEquals("https://$provider.test",CenterStore(app).catalogHost(provider))
         }
-        assertEquals("https://rezka.test",store.catalogHost("rezka"))
+        assertEquals("https://kinotac.test",store.catalogHost("kinotac"))
     }
 
     @Test fun suppliedDomainsHaveIndependentEntriesAndObservedKinogoRoutes() {
@@ -228,4 +228,79 @@ class CenterCatalogTest {
         assertTrue(CenterCatalog.parse(Jsoup.parse("По вашему запросу ничего не найдено","https://catalog.test"),"kinogo").isEmpty())
     }
 
+
+    @Test fun replacementProvidersUseObservedRoutesAndSearchEncodingAndRemoveTracking() {
+        assertTrue(CenterCatalog.providers.containsAll(listOf("kinotac","zona","kinokong")))
+        assertFalse(CenterCatalog.providers.any { it in listOf("rezka","hdrezka","kazplay") })
+        for((provider,movie,tv,nextMovie) in listOf(
+            listOf("kinotac","/filmy/","/serialy/","/filmy/page/2/"),
+            listOf("zona","/film/","/series/","/film/page/2/"),
+            listOf("kinokong","/kinofilmi/","/serialo/","/kino/page/2/"))) {
+            val sections=CenterCatalog.sections(provider)
+            assertEquals(listOf("movie","tv"),sections.map { it.type })
+            assertEquals(movie,CenterCatalog.route(provider,"https://catalog.test/?ysclid=tracking",sections[0]).encodedPath)
+            assertEquals(tv,CenterCatalog.route(provider,"https://catalog.test",sections[1]).encodedPath)
+            val next=CenterCatalog.route(provider,"https://catalog.test/?ysclid=tracking",sections[0],2)
+            assertEquals(nextMovie,next.encodedPath);assertNull(next.query)
+            assertEquals("/index.php",CenterCatalog.searchRoute(provider,"https://catalog.test","Матрица").encodedPath)
+        }
+        assertTrue(CenterCatalog.searchRoute("kinokong","https://catalog.test","Матрица").encodedQuery!!.contains("story=%CC%E0%F2%F0%E8%F6%E0"))
+        assertEquals("Матрица",CenterCatalog.searchRoute("kinotac","https://catalog.test","Матрица").queryParameter("story"))
+    }
+    @Test fun kinoTacCardsKeepNativeIdsTypesCoversAndCategoryYearsWithoutInventingEpisodeCounts() {
+        val html="""<div class="th-item"><a class="th-in" href="/17-movie.html"><img src="/poster.jpg"><h2 class="th-title">Фильм</h2><div class="th-cat">Фильмы / Фильмы 2025 года / Драма</div></a></div>
+        <div class="th-item"><a class="th-in" href="/18-show.html"><img src="/show.jpg"><h2 class="th-title">Сериал</h2><div class="th-cat">Сериалы / Сериалы 2026 / Драма</div></a></div>
+        <div class="th-item"><a class="th-in" href="https://advert.test/19-wrong.html"><h2 class="th-title">Реклама</h2></a></div>"""
+        val items=CenterCatalog.parse(Jsoup.parse(html,"https://catalog.test"),"kinotac")
+        assertEquals(listOf("kinotac:movie:17","kinotac:tv:18"),items.map { it.key })
+        assertEquals(listOf("2025","2026"),items.map { it.year });assertEquals("https://catalog.test/poster.jpg",items[0].poster)
+        assertNull(items[1].updateLabel)
+    }
+    @Test fun zonaCardsReadTrailingIdsExplicitTypesRatingsAndSeasonBadges() {
+        val html="""<div class="keep-item"><img src="/poster.jpg"><div class="keep-item_meta"><span class="rating-color">8.3</span><span>2025</span><span class="bbr1">2s8e</span></div>
+        <a class="keep-item_title" href="/series/mobland-1478/">Гангстерленд</a></div>
+        <div class="keep-item"><img src="/movie.jpg"><div class="keep-item_meta">7.4 2026</div><a class="keep-item_title" href="/film/movie-90881/">Фильм</a></div>"""
+        val items=CenterCatalog.parse(Jsoup.parse(html,"https://catalog.test/series/"),"zona")
+        assertEquals("zona:tv:1478",items[0].key);assertEquals("2 сезон 8 серия",items[0].updateLabel)
+        assertEquals("8.3",items[0].rating);assertEquals("2025",items[0].year)
+        assertEquals("zona:movie:90881",items[1].key);assertNull(items[1].updateLabel)
+    }
+    @Test fun kinoKongWindows1251CatalogAndSearchExcludeNewsAndUseRealPostersInsteadOfBookmarkIcons() {
+        val html="""<html><head><meta charset="windows-1251"></head><body>
+        <div class="kino-news1"><a href="/99-news.html">Новости</a></div>
+        <div class="item"><div class="main-sliders-img"><span><img src="/templates/icon.gif"></span><img data-src="/poster.webp" src="/uploads/preload.svg"></div>
+        <div class="main-sliders-season">1-4 Сезон | 1-12 Серия</div><span class="main-sliders-imdb">7.9</span>
+        <h2 class="main-sliders-title"><a href="/61709-serial-show.html">Док — Всё в твоих руках (1-4 Сезон)</a></h2></div>
+        <article class="kg-search-hit"><a class="kg-search-hit-poster" href="/1562-movie.html"><img src="/matrix.webp"></a><a class="kg-search-hit-title" href="/1562-movie.html">Матрица (1999)</a>
+        <div class="kg-search-hit-muted">1999 Боевик</div><div class="kg-search-hit-description">Описание</div></article></body></html>"""
+        val document=Jsoup.parse(ByteArrayInputStream(html.toByteArray(charset("windows-1251"))),null,"https://catalog.test/index.php")
+        val items=CenterCatalog.parse(document,"kinokong")
+        assertEquals(2,items.size);assertEquals("kinokong:tv:61709",items[0].key);assertEquals("Док — Всё в твоих руках",items[0].title)
+        assertEquals("https://catalog.test/poster.webp",items[0].poster);assertEquals("1-4 Сезон | 1-12 Серия",items[0].updateLabel)
+        assertEquals("kinokong:movie:1562",items[1].key);assertEquals("Матрица",items[1].title);assertEquals("1999",items[1].year)
+        assertEquals("Описание",items[1].overview)
+    }
+    @Test fun removedCatalogPreferenceFallsBackWithoutDeletingSavedTitles() {
+        val app=RuntimeEnvironment.getApplication();val store=CenterStore(app)
+        val saved=CenterTitle(17,"tv","Сохранённый сериал",provider="kazplay")
+        if(!store.isFavorite(saved))store.toggle(saved)
+        store.catalog="kazplay"
+        assertEquals("tmdb",CenterStore(app).catalog)
+        assertTrue(CenterStore(app).favorites().any { it.key==saved.key })
+        for(provider in listOf("kinotac","zona","kinokong")) {
+            try { CenterCatalog.parse(Jsoup.parse("<h1>Checking your browser</h1>","https://catalog.test"),provider);fail("Accepted challenge") } catch(_:IllegalStateException) {}
+            assertTrue(CenterCatalog.parse(Jsoup.parse("По запросу ничего не найдено","https://catalog.test"),provider).isEmpty())
+        }
+    }
+    @Test fun newCatalogPaginationFiltersOtherMediaAndStopsAtTheLastObservedPage() = runBlocking {
+        okhttp3.mockwebserver.MockWebServer().use { server ->
+            fun card(id:Int,kind:String)= """<div class="keep-item"><a class="keep-item_title" href="/$kind/title-$id/">Название $id</a></div>"""
+            server.enqueue(okhttp3.mockwebserver.MockResponse().setBody(card(9,"film")+card(17,"series")+"""<a href="/series/page/2/">2</a>"""))
+            server.enqueue(okhttp3.mockwebserver.MockResponse().setBody(card(18,"series")))
+            val catalog=CenterCatalog();val section=CenterCatalog.sections("zona")[1];val base=server.url("/").toString()
+            assertEquals(listOf("zona:tv:17"),catalog.browse("zona",base,section).map { it.key })
+            assertEquals(listOf("zona:tv:18"),catalog.browse("zona",base,section,2).map { it.key })
+            assertTrue(catalog.browse("zona",base,section,3).isEmpty());assertEquals(2,server.requestCount)
+        }
+    }
 }

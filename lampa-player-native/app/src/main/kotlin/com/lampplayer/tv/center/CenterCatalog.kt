@@ -37,18 +37,20 @@ class CenterCatalog {
             .readTimeout(20,TimeUnit.SECONDS).callTimeout(30,TimeUnit.SECONDS).build()
         private const val LIMIT = 2 * 1024 * 1024L
         private const val UA = "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"
-        val providers = listOf("tmdb", "kinovod", "filmix", "rezka", "kazplay", "hdrezka", "kinogo")
+        val providers = listOf("tmdb", "kinovod", "filmix", "kinogo", "kinotac", "zona", "kinokong")
         val sites get() = providers.filter { it != "tmdb" }
         fun name(provider: String?) = when(provider) {
-            "kinovod" -> "Киновод"; "filmix" -> "Filmix"; "rezka" -> "Rezka"; "kazplay" -> "KazPlay · Қазақша"; "hdrezka" -> "HDRezka · LV · тест"; "kinogo" -> "KinoGo · KZ"; else -> "TMDB"
+            "kinovod" -> "Киновод"; "filmix" -> "Filmix"; "kinotac" -> "KinoTac"; "zona" -> "Zona.movie"; "kinokong" -> "KinoKong"; "rezka" -> "Rezka"; "kazplay" -> "KazPlay · Қазақша"; "hdrezka" -> "HDRezka · LV · тест"; "kinogo" -> "KinoGo · KZ"; else -> "TMDB"
         }
         fun defaultHost(provider: String) = when(provider) {
             "kinovod" -> "https://kinovod.pro"; "filmix" -> "https://filmix.gg"
+            "kinotac" -> "https://kinotac.org"; "zona" -> "https://zona.movie"; "kinokong" -> "https://kinokong.es"
             "rezka" -> "https://rezka.ac"; "kazplay" -> "https://kazplay.kz"
             "hdrezka" -> "https://lv.hdrezka.inc"; "kinogo" -> "https://kz.kinogo.moi"
             else -> error("Неизвестный каталог")
         }
         fun sections(provider: String): List<CenterSection> = when(provider) {
+            "kinotac", "zona", "kinokong" -> listOf(CenterSection("${provider}_movies","Фильмы","movie"),CenterSection("${provider}_series","Сериалы","tv"))
             "kazplay" -> listOf(CenterSection("kazplay_movies", "Фильмы на казахском", "movie"),
                 CenterSection("kazplay_series", "Сериалы на казахском", "tv"))
             "hdrezka" -> listOf(CenterSection("hdrezka_movies","Фильмы · HDRezka","movie"),
@@ -66,6 +68,15 @@ class CenterCatalog {
         fun route(provider: String, base: String, section: CenterSection, page: Int = 1): HttpUrl {
             require(page in 1..5000)
             val builder = base.trimEnd('/').toHttpUrl().newBuilder().query(null).fragment(null)
+            if(provider in listOf("kinotac","zona","kinokong")) {
+                require(section.id in sections(provider).map { it.id })
+                val path=when(provider) {
+                    "kinotac" -> if(section.type=="tv") "/serialy/" else "/filmy/"
+                    "zona" -> if(section.type=="tv") "/series/" else "/film/"
+                    else -> if(section.type=="tv") "/serialo/" else if(page>1) "/kino/" else "/kinofilmi/"
+                }
+                return builder.encodedPath(path+if(page>1) "page/$page/" else "").build()
+            }
             if(provider == "kazplay") {
                 require(section.country == null && section.id in sections(provider).map { it.id })
                 return builder.encodedPath(if(section.type=="tv") "/serials" else "/films")
@@ -106,7 +117,9 @@ class CenterCatalog {
             val builder=base.trimEnd('/').toHttpUrl().newBuilder().query(null).fragment(null)
             if(provider == "hdrezka") return builder.encodedPath("/search/").addQueryParameter("do","search")
                 .addQueryParameter("subaction","search").addQueryParameter("q",query).build()
-            if(provider in listOf("rezka","kinogo")) return builder.encodedPath("/index.php").addQueryParameter("do","search")
+            if(provider=="kinokong")return builder.encodedPath("/index.php").addQueryParameter("do","search")
+                .addQueryParameter("subaction","search").addEncodedQueryParameter("story",java.net.URLEncoder.encode(query,"windows-1251")).build()
+            if(provider in listOf("rezka","kinogo","kinotac","zona")) return builder.encodedPath("/index.php").addQueryParameter("do","search")
                 .addQueryParameter("subaction","search").addQueryParameter("story",query).build()
             if(provider == "kazplay") return builder.encodedPath("/api/v2/film/search").addQueryParameter("query",query).build()
             return if(provider == "kinovod") builder.encodedPath("/search").addQueryParameter("query",query).build()
@@ -208,7 +221,7 @@ class CenterCatalog {
                 val raw=link.text().trim()
                 val badge=row.selectFirst(".movie__info-lenta-body")?.text()?.takeIf { it.isNotBlank() }
                 val type=if(badge!=null || Regex("\\d+\\s*сезон",RegexOption.IGNORE_CASE).containsMatchIn(raw)) "tv" else "movie"
-                val title=raw.replace(Regex("\\s*\\((?:(?:19|20)[0-9]{2}|[0-9]+(?:[-–][0-9]+)?\\s*сезон(?:а|ов)?)\\)\\s*$"),"").trim()
+                val title=raw.replace(Regex("(?iu)\\s*\\((?:(?:19|20)[0-9]{2}|[0-9]+(?:[-–][0-9]+)?\\s*сезон(?:а|ов)?)\\)\\s*$"),"").trim()
                 if(title.isBlank()) return@mapNotNull null
                 val info=row.select(".movie__info-item").map { it.text() }
                 val year=info.firstOrNull { it.contains("Год выпуска",true) }?.let { Regex("(?:19|20)[0-9]{2}").find(it)?.value }
@@ -224,7 +237,65 @@ class CenterCatalog {
             }
             return items
         }
+        private fun parseAddedCatalog(document:Document,provider:String):List<CenterTitle> {
+            val origin=document.location().toHttpUrl()
+            val scope=document.selectFirst("#dle-content") ?: document
+            val rows=when(provider) {
+                "kinotac" -> scope.select(".th-item")
+                "zona" -> scope.select(".keep-item")
+                else -> scope.select("div.item:has(.main-sliders-title a),article.kg-search-hit")
+            }
+            val items=rows.mapNotNull { row ->
+                val link=when(provider) {
+                    "kinotac" -> row.selectFirst("a.th-in[href]")
+                    "zona" -> row.selectFirst("a.keep-item_title[href]")
+                    else -> row.selectFirst(".main-sliders-title a,.kg-search-hit-title")
+                } ?: return@mapNotNull null
+                val url=link.absolute("href")?.toHttpUrlOrNull() ?: return@mapNotNull null
+                if(url.host!=origin.host)return@mapNotNull null
+                val match=if(provider=="zona")Regex("^/(film|series)/[^/]+-([0-9]+)/?$").find(url.encodedPath)
+                    else Regex("^/([0-9]+)-[^/]+\\.html$").find(url.encodedPath)
+                val id=match?.groupValues?.get(if(provider=="zona")2 else 1)?.toIntOrNull()?.takeIf { it>0 } ?: return@mapNotNull null
+                val raw=when(provider) {
+                    "kinotac" -> row.selectFirst(".th-title")?.text().orEmpty()
+                    else -> link.text()
+                }.trim()
+                val title=raw.replace(Regex("(?iu)\\s*\\((?:(?:19|20)[0-9]{2}|[0-9]+(?:[-–][0-9]+)?\\s*сезон(?:а|ов)?)\\)\\s*$"),"").trim()
+                if(title.isBlank())return@mapNotNull null
+                val category=row.selectFirst(".th-cat")?.text().orEmpty()
+                val info=when(provider) {
+                    "kinotac" -> category
+                    "zona" -> row.selectFirst(".keep-item_meta")?.text().orEmpty()
+                    else -> row.selectFirst(".kg-search-hit-muted,.main-sliders-popup em")?.text().orEmpty()+" "+raw
+                }
+                val badge=when(provider) {
+                    "zona" -> row.selectFirst(".keep-item_meta .bbr1")?.text()
+                    "kinokong" -> row.selectFirst(".main-sliders-season,.kg-search-hit-extra")?.text()
+                    else -> null
+                }?.trim()?.takeIf { it.isNotEmpty() }
+                val type=when {
+                    provider=="zona" -> if(match!!.groupValues[1]=="series") "tv" else "movie"
+                    provider=="kinotac" -> if(Regex("(?iu)сериалы|мультсериалы").containsMatchIn(category)||origin.encodedPath.startsWith("/serialy/")) "tv" else "movie"
+                    else -> if(origin.encodedPath.startsWith("/serialo/")||Regex("^/[0-9]+-serial-").containsMatchIn(url.encodedPath)||Regex("(?iu)сезон|серия|серии").containsMatchIn(raw+" "+badge.orEmpty())) "tv" else "movie"
+                }
+                val update=badge?.let { label ->
+                    Regex("(?i)^([0-9]{1,2})s([0-9]{1,4})e$").matchEntire(label)?.let { "${it.groupValues[1]} сезон ${it.groupValues[2]} серия" } ?: label
+                }?.takeIf { type=="tv" }
+                val year=Regex("(?<![0-9])(?:19|20)[0-9]{2}(?![0-9])").find(info)?.value.orEmpty()
+                val cover=if(provider=="kinokong") row.selectFirst(".main-sliders-img > img,.kg-search-hit-poster img") else null
+                val poster=cover?.let { image -> listOf("data-src","data-original","src").firstNotNullOfOrNull { image.absolute(it) } } ?: row.poster()
+                CenterTitle(id,type,title,
+                    overview=row.selectFirst(".kg-search-hit-description,.main-sliders-popup i")?.text().orEmpty().take(8000),
+                    poster=poster,year=year,
+                    rating=row.selectFirst(if(provider=="zona") ".rating-color" else ".main-sliders-kp,.main-sliders-imdb,.kg-search-score-kp")?.text().orEmpty(),
+                    provider=provider,sourceUrl=url.toString(),updateLabel=update)
+            }.distinctBy { it.key }.take(60)
+            val empty=document.text().let { it.contains("ничего не найден",true)||it.contains("поиск не дал",true)||it.contains("не найдено",true)||it.contains("не найден",true) }
+            check(items.isNotEmpty()||rows.isEmpty()&&empty) { "${name(provider)}: не удалось прочитать карточки. Проверь адрес каталога" }
+            return items
+        }
         fun parse(document: Document, provider: String): List<CenterTitle> {
+            if(provider in listOf("kinotac","zona","kinokong"))return parseAddedCatalog(document,provider)
             if(provider=="kinogo") return parseKinogo(document)
             if(provider in listOf("rezka","kazplay","hdrezka")) return parseNew(document,provider)
             val rows = if(provider == "kinovod") document.select("ul.items > li.item") else document.select("article.shortstory, article.movie[id^=movie-]")
@@ -310,11 +381,12 @@ class CenterCatalog {
             if(previous != null && System.currentTimeMillis()-previous.at<120000 && previous.hasNext==false) return emptyList()
         }
         val document=page(url)
-        val items=parse(document,provider)
-        val hasNext = if(provider in listOf("rezka","kazplay","hdrezka","kinogo")) {
+        val parsed=parse(document,provider)
+        val items=if(provider in listOf("kinotac","zona","kinokong"))parsed.filter { it.type==section.type } else parsed
+        val hasNext = if(provider in listOf("rezka","kazplay","hdrezka","kinogo","kinotac","zona","kinokong")) {
             val next=route(provider,base,section,number+1)
             document.select("a[href]").any { link ->
-                link.absolute("href")?.toHttpUrlOrNull()?.let { it.host==next.host && it.encodedPath==next.encodedPath &&
+                link.absolute("href")?.toHttpUrlOrNull()?.let { it.host==next.host && it.encodedPath.trimEnd('/')==next.encodedPath.trimEnd('/') &&
                     (if(provider=="kazplay") it.queryParameter("page")==next.queryParameter("page") else true) } == true
             }
         } else null
@@ -323,7 +395,7 @@ class CenterCatalog {
     }
     suspend fun search(provider:String,base:String,query:String):List<CenterTitle> {
         val url=searchRoute(provider,base,query)
-        if(provider in listOf("kinovod","rezka","hdrezka","kinogo")) return parse(page(url),provider)
+        if(provider in listOf("kinovod","rezka","hdrezka","kinogo","kinotac","zona","kinokong")) return parse(page(url),provider)
         val data=request(url)
         return withContext(Dispatchers.IO) {
             if(provider=="kazplay") kazplaySearch(data.bytes.toString(Charsets.UTF_8),data.url)

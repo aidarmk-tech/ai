@@ -4,6 +4,9 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.awaitAll
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.junit.Assert.*
@@ -39,6 +42,26 @@ class CenterEngineInstrumentedTest {
                 assertEquals(32L*1024*1024,backend.engineSettings(base).get("CacheSize").asLong)
                 backend.setEngineCache(base,if(original in setOf(32,64,128,256)) original else 64)
             } finally { CenterEngineService.stop(context) }
+        }
+    }
+
+    @Test fun replacementCatalogsLoadBothMediaTypesAndRussianSearchOnAndroid() = runBlocking {
+        coroutineScope {
+            listOf("kinotac","zona","kinokong").map { provider -> async {
+                val catalog=CenterCatalog();val base=CenterCatalog.defaultHost(provider)
+                for(section in CenterCatalog.sections(provider)) {
+                    val items=catalog.browse(provider,base,section)
+                    assertTrue("$provider ${section.type}: empty catalog",items.isNotEmpty())
+                    assertTrue("$provider: wrong media identity",items.all { it.provider==provider&&it.type==section.type&&it.sourceUrl?.startsWith(base)==true })
+                    assertTrue("$provider: no covers",items.any { !it.poster.isNullOrBlank() })
+                    val next=catalog.browse(provider,base,section,2)
+                    assertTrue("$provider: no next catalog page",next.isNotEmpty())
+                    assertTrue("$provider: repeated page",next.any { row -> items.none { it.key==row.key } })
+                }
+                val results=catalog.search(provider,base,"Матрица")
+                assertTrue("$provider: Russian search failed",results.any { it.title.contains("Матриц",true) })
+            } }.awaitAll()
+            Unit
         }
     }
 }

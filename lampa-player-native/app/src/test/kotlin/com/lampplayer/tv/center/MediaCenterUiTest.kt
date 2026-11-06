@@ -686,26 +686,26 @@ class MediaCenterUiTest {
             screenshot(root,"media-center-collapsed-release-filters")
         } finally { controller.pause().stop().destroy() }
     }
-    @Test fun newCatalogsAppearInBothSelectorsAndKazakhSectionsKeepTheirMeaning() {
+    @Test fun replacementCatalogsAppearInBothSelectorsWithTheirOwnSections() {
         val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
         try {
             val host=controller.get();val root=host.findViewById<View>(android.R.id.content);frame(root)
             label(root,"Каталог: TMDB  ▾").performClick();frame(root)
             var dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
             val names=(0 until dialog.listView.adapter.count).map { dialog.listView.adapter.getItem(it).toString() }
-            assertTrue(names.contains("Rezka"));assertTrue(names.contains("KazPlay · Қазақша"))
-            assertTrue(names.contains("KinoGo · KZ"));assertTrue(names.contains("HDRezka · LV · тест"))
-            val index=names.indexOf("KazPlay · Қазақша")
+            assertFalse(names.contains("Rezka"));assertFalse(names.contains("KazPlay · Қазақша"));assertFalse(names.contains("HDRezka · LV · тест"))
+            assertTrue(names.containsAll(listOf("KinoGo · KZ","KinoTac","Zona.movie","KinoKong")))
+            val index=names.indexOf("KinoTac")
             dialog.listView.performItemClick(dialog.listView.getChildAt(index),index,index.toLong());frame(root)
-            assertEquals("kazplay",CenterStore(host).catalog)
+            assertEquals("kinotac",CenterStore(host).catalog)
             label(root,"Разделы  ▾").performClick();frame(root)
             dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
-            assertEquals(listOf("Фильмы на казахском","Сериалы на казахском"),
+            assertEquals(listOf("Фильмы","Сериалы"),
                 (0 until dialog.listView.adapter.count).map { dialog.listView.adapter.getItem(it).toString() })
             dialog.dismiss()
             all(root).first { it.tag=="menu_handle" }.performClick();frame(root)
             label(root,"Поиск").performClick();frame(root)
-            label(root,"Искать в: KazPlay · Қазақша").performClick();frame(root)
+            label(root,"Искать в: KinoTac").performClick();frame(root)
             dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
             assertEquals(CenterCatalog.providers.size,dialog.listView.adapter.count);dialog.dismiss()
         } finally { controller.pause().stop().destroy() }
