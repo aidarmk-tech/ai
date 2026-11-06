@@ -119,4 +119,45 @@ class CenterOnlineTest {
         assertFalse(CenterWebActivity.sameCardPage(source,"https://kz.kinogo.moi/login"))
     }
 
+
+    @Test fun playerjsMirrorsAreSeparateUrlsWithinTheSameEpisodeAndQuality() {
+        val raw="[720p]https://one.test/video.m3u8 or https://two.test/video.mp4,[1080p]//three.test/high.m3u8 and //four.test/high.m3u8"
+        val choices=CenterOnline.sourceCandidates(raw)
+        assertEquals(listOf("https://one.test/video.m3u8","https://two.test/video.mp4"),choices[720])
+        assertEquals(listOf("https://three.test/high.m3u8","https://four.test/high.m3u8"),choices[1080])
+        assertEquals("https://one.test/video.m3u8",CenterOnline.sources(raw)[720])
+        val snapshot=JsonParser.parseString("""{"lists":[[{"title":"Сезон 2","folder":[{"title":"Серия 5","file":"[720p]https://one.test/five.m3u8 or https://two.test/five.m3u8"}]}]]}""").asJsonObject
+        val episode=CenterOnline.decode(show,snapshot).single()
+        assertEquals(2,episode.season);assertEquals(5,episode.number)
+        assertEquals(listOf("https://one.test/five.m3u8","https://two.test/five.m3u8"),episode.alternatives[720])
+        assertTrue(CenterOnline.sourceCandidates("[720p]https://one.test/five.m3u8 or javascript:bad").isEmpty())
+        assertTrue(CenterOnline.sourceCandidates("[720p]https://one.test/a.m3u8,[720p]https://two.test/b.m3u8").isEmpty())
+    }
+    @Test fun hlsUsesNormalGetAndDeclaredMirrorRecovers404WithoutChangingQuality() = kotlinx.coroutines.runBlocking {
+        okhttp3.mockwebserver.MockWebServer().use { server ->
+            server.enqueue(okhttp3.mockwebserver.MockResponse().setResponseCode(404).setBody("<html>Missing</html>"))
+            server.enqueue(okhttp3.mockwebserver.MockResponse().setBody("#EXTM3U\n#EXTINF:1,\nsegment.ts\n#EXT-X-ENDLIST"))
+            server.enqueue(okhttp3.mockwebserver.MockResponse().setHeader("Content-Type","video/mp2t").setBody("G"))
+            val first=server.url("/missing.m3u8").toString()
+            val mirror=server.url("/available.m3u8").toString()
+            assertEquals(mirror,CenterOnline.firstPlayable(listOf(first,mirror),mapOf("Referer" to "https://source.test/")))
+            repeat(3) { assertNull(server.takeRequest().getHeader("Range")) }
+        }
+    }
+    @Test fun declaredMirrorsDoNotRetryAnAccessDenial() = kotlinx.coroutines.runBlocking {
+        okhttp3.mockwebserver.MockWebServer().use { server ->
+            server.enqueue(okhttp3.mockwebserver.MockResponse().setResponseCode(403))
+            val result=runCatching { CenterOnline.firstPlayable(listOf(server.url("/denied.m3u8").toString(),server.url("/other.m3u8").toString()),emptyMap()) }
+            assertTrue(result.exceptionOrNull() is OnlineMediaUnavailable)
+            assertEquals(1,server.requestCount)
+        }
+    }
+
+    @Test fun mediaReferrerMatchesBrowserOriginPolicyWithoutSharingPageQuery() {
+        val headers=mapOf("Referer" to "https://source.test/film/17-title?private=value#part","Origin" to "https://source.test","User-Agent" to "test")
+        assertEquals("https://source.test/",CenterOnline.mediaHeaders("https://cdn.test/movie.m3u8",headers)["Referer"])
+        assertEquals("https://source.test/film/17-title?private=value",CenterOnline.mediaHeaders("https://source.test/movie.m3u8",headers)["Referer"])
+        assertFalse(CenterOnline.mediaHeaders("http://cdn.test/movie.mp4",headers).containsKey("Referer"))
+        assertEquals("test",CenterOnline.mediaHeaders("https://cdn.test/movie.m3u8",headers)["User-Agent"])
+    }
 }

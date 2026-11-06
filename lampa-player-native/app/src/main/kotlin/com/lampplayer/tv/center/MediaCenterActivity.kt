@@ -979,8 +979,10 @@ open class MediaCenterActivity : AppCompatActivity() {
         work("Проверяю доступность видео…",onlineItem=video.item) {
             var current=video
             var selected=episode
-            var raw=selected.sources[quality] ?: error("Качество недоступно")
-            val playable=try { verifyOnlineUrl(raw,current.headers) } catch(first:Exception) {
+            fun choices(entry:OnlineEpisode)=entry.alternatives[quality]?.takeIf { it.isNotEmpty() }
+                ?: listOf(entry.sources[quality] ?: error("Качество недоступно"))
+            val initial=choices(selected)
+            val playable=try { CenterOnline.firstPlayable(initial,current.headers,::verifyOnlineUrl) } catch(first:Exception) {
                 if(first is CancellationException)throw first
                 val missing=generateSequence<Throwable>(first) { it.cause }
                     .any { it is OnlineMediaUnavailable && it.status==404 }
@@ -990,12 +992,12 @@ open class MediaCenterActivity : AppCompatActivity() {
                 check(fresh.item.key==video.item.key) { "Источник вернул другую карточку" }
                 val match=fresh.episodes.singleOrNull { it.season==episode.season && it.number==episode.number && it.voice==episode.voice }
                     ?: error("Источник изменил список серий или озвучку. Обнови список")
-                val next=match.sources[quality] ?: error("Выбранное качество исчезло. Выбери качество заново")
+                check(match.sources.containsKey(quality)) { "Выбранное качество исчезло. Выбери качество заново" }
                 onlineCache[video.item.key]=System.currentTimeMillis() to fresh
-                if(next==raw && fresh.headers==video.headers)throw first
-                current=fresh;selected=match;raw=next
+                if(choices(match)==initial && fresh.headers==video.headers)throw first
+                current=fresh;selected=match
                 // Exactly one refresh; never switch the selected episode, voice or quality.
-                verifyOnlineUrl(next,fresh.headers)
+                CenterOnline.firstPlayable(choices(match),fresh.headers,::verifyOnlineUrl)
             }
             val candidates=current.episodes.filter { it.season==selected.season && it.voice==selected.voice && it.number>0 && it.sources.containsKey(quality) }.sortedBy { it.number }
             val playlist=if(candidates.groupBy { it.number }.all { it.value.size==1 }) candidates.mapIndexed { index,entry ->
@@ -1005,7 +1007,7 @@ open class MediaCenterActivity : AppCompatActivity() {
             val meta=metadata(current.item).apply {
                 if(selected.number>0) { if(selected.season>0)addProperty("season_number",selected.season);addProperty("episode_number",selected.number) }
                 addProperty("translator",selected.voice);addProperty("quality",quality.toString())
-                addProperty("headers",Gson().toJson(current.headers))
+                addProperty("headers",Gson().toJson(CenterOnline.mediaHeaders(playable,current.headers)))
                 if(playlist.isNotEmpty()) {
                     addProperty("episodes",Gson().toJson(playlist))
                     addProperty("episode_index",playlist.indexOfFirst { it.url==playable }.coerceAtLeast(0))

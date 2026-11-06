@@ -728,7 +728,7 @@ class MediaCenterUiTest {
             assertEquals("https://cdn.test/five.m3u8",parsed.first)
             assertEquals(2,parsed.second.seasonNumber);assertEquals(5,parsed.second.episodeNumber)
             assertEquals(item.key,parsed.second.contentKey)
-            assertEquals("https://player.test/embed/movie/9",parsed.second.headers["Referer"])
+            assertEquals("https://player.test/",parsed.second.headers["Referer"])
         } finally { controller.pause().stop().destroy() }
     }
 
@@ -750,7 +750,7 @@ class MediaCenterUiTest {
             assertEquals("https://cdn.test/fresh.m3u8",parsed.first)
             assertEquals(2,parsed.second.seasonNumber);assertEquals(5,parsed.second.episodeNumber)
             assertEquals("Voice",parsed.second.translator);assertEquals("720",parsed.second.quality)
-            assertEquals("https://source.test/fresh",parsed.second.headers["Referer"])
+            assertEquals("https://source.test/",parsed.second.headers["Referer"])
         } finally { controller.pause().stop().destroy() }
     }
 
@@ -776,4 +776,26 @@ class MediaCenterUiTest {
         } finally { controller.pause().stop().destroy() }
     }
 
+
+    @Test fun missingPrimaryUsesDeclaredMirrorWithoutRefreshingOrChangingEpisode() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(240279,"tv","Король Талсы",provider="kinovod",sourceUrl="https://kinovod.pro/serial/240279-korol-talsy")
+            val primary="https://cdn.test/expired.m3u8";val mirror="https://backup.test/five.m3u8"
+            val episode=OnlineEpisode(2,5,"Пятая","Voice",mapOf(720 to primary),mapOf(720 to listOf(primary,mirror)))
+            val video=OnlineVideo(item,listOf(episode),mapOf("Referer" to item.sourceUrl!!))
+            host.verifyFailures.add(OnlineMediaUnavailable(404,"fixture","HTTP 404"))
+            host.nativeFixture(video);frame(root);label(root,"Сезон 2").performClick();frame(root)
+            all(root).first { it.tag=="online:2:5:Voice" }.performClick();frame(root)
+            val parsed=com.lampplayer.tv.player.IntentParser.parse(shadowOf(host).nextStartedActivity)!!
+            assertEquals(0,host.onlineCalls)
+            assertEquals(listOf(primary,mirror),host.verifiedUrls)
+            assertEquals(mirror,parsed.first)
+            assertEquals(2,parsed.second.seasonNumber);assertEquals(5,parsed.second.episodeNumber)
+            assertEquals("Voice",parsed.second.translator);assertEquals("720",parsed.second.quality)
+            assertEquals(mirror,parsed.second.episodes.single().url)
+            assertEquals("https://kinovod.pro/",parsed.second.headers["Referer"])
+        } finally { controller.pause().stop().destroy() }
+    }
 }

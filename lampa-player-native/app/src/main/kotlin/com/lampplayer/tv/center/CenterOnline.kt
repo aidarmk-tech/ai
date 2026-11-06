@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.Locale
 import kotlin.coroutines.resume
 
-data class OnlineEpisode(val season:Int,val number:Int,val title:String,val voice:String,val sources:Map<Int,String>)
+data class OnlineEpisode(val season:Int,val number:Int,val title:String,val voice:String,val sources:Map<Int,String>,val alternatives:Map<Int,List<String>> = emptyMap())
 data class OnlineVideo(val item:CenterTitle,val episodes:List<OnlineEpisode>,val headers:Map<String,String>,val fetchedAt:Long=System.currentTimeMillis())
 class OnlineSourceBlocked(val reason:String,message:String):IllegalStateException(message)
 class OnlineMediaUnavailable(val status:Int, val detail:String, message:String):IllegalStateException(message)
@@ -138,7 +138,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
                         if(started=="true")filmixRequested=true
                     }
                     val entries=if(allowEntries)decode(item,snapshot) else emptyList()
-                    diagnostics += " entries=${entries.size} errors=$issues"
+                    diagnostics += " entries=${entries.size} mirrors=${entries.sumOf { e -> e.alternatives.values.sumOf { maxOf(0,it.size-1) } }} hosts=${entries.flatMap { e -> e.alternatives.values.flatten().ifEmpty { e.sources.values.toList() } }.mapNotNull { it.toHttpUrlOrNull()?.host }.distinct().take(6)} errors=$issues"
                     if(entries.isNotEmpty()) {
                         val signature=Gson().toJson(entries)
                         stable=if(signature==last)stable+1 else 0;last=signature
@@ -185,9 +185,13 @@ class CenterOnline(private val activity:AppCompatActivity) {
         }
         /** Bound all reads; verify the HLS chain before launching another player. */
         suspend fun playableUrl(url:String,headers:Map<String,String>):String {
-            suspend fun probe(target:String):MediaProbe = suspendCancellableCoroutine { continuation ->
+            suspend fun probe(target:String,range:Boolean=false):MediaProbe = suspendCancellableCoroutine { continuation ->
                 val call=libraryHttp.newBuilder().followRedirects(true).build().newCall(Request.Builder().url(target)
-                    .apply { headers.forEach { (key,value)->header(key,value) };header("Range","bytes=0-65535") }.build())
+                    .apply {
+                        mediaHeaders(target,headers).forEach { (key,value)->header(key,value) }
+                        // HLS clients request manifests without a byte range. Reads remain capped below.
+                        if(range)header("Range","bytes=0-65535")
+                    }.build())
                 continuation.invokeOnCancellation { call.cancel() }
                 call.enqueue(object:okhttp3.Callback {
                     override fun onFailure(call:Call,e:java.io.IOException) { if(continuation.isActive)continuation.resumeWith(Result.failure(e)) }
@@ -218,7 +222,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
                 })
             }
             suspend fun verify(target:String):Pair<MediaProbe,String> {
-                var current=probe(target)
+                var current=probe(target,range=!target.toHttpUrlOrNull()!!.encodedPath.endsWith(".m3u8",true))
                 if(!current.success || current.kind !in listOf("hls","mp4","video"))return current to "адрес видео"
                 repeat(3) { depth ->
                     if(current.kind!="hls")return current to "фрагмент"
@@ -238,12 +242,37 @@ class CenterOnline(private val activity:AppCompatActivity) {
             var detail="${original.second}: HTTP ${original.first.status}, ${original.first.kind}"
             if(original.first.status==404 && Regex("(?i)\\.mp4/[^/]+\\.m3u8$").containsMatchIn(parsed.encodedPath)) {
                 val fallback=parsed.newBuilder().encodedPath(parsed.encodedPath.substringBeforeLast('/')).build().toString()
-                val direct=probe(fallback)
+                val direct=probe(fallback,range=true)
                 if(direct.success && direct.kind in listOf("mp4","video"))return fallback
                 detail+="; MP4: HTTP ${direct.status}, ${direct.kind}"
             }
             throw OnlineMediaUnavailable(original.first.status,detail,
                 "Источник не отдал видео. $detail. Обнови ссылку или открой плеер сайта.")
+        }
+        /** Match the browser's default strict-origin-when-cross-origin referrer behavior. */
+        fun mediaHeaders(target:String,headers:Map<String,String>):Map<String,String> {
+            val ref=headers.entries.firstOrNull { it.key.equals("Referer",true) } ?: return headers
+            val from=ref.value.toHttpUrlOrNull() ?: return headers
+            val to=target.toHttpUrlOrNull() ?: return headers
+            val result=headers.filterKeys { !it.equals("Referer",true) }.toMutableMap()
+            if(from.isHttps&&!to.isHttps)return result
+            result["Referer"]=if(from.scheme==to.scheme&&from.host==to.host&&from.port==to.port)
+                from.newBuilder().fragment(null).build().toString()
+            else from.newBuilder().encodedPath("/").query(null).fragment(null).build().toString()
+            return result
+        }
+        suspend fun firstPlayable(urls:List<String>,headers:Map<String,String>,
+            verify:suspend (String,Map<String,String>)->String = { url,values -> playableUrl(url,values) }):String {
+            require(urls.isNotEmpty()&&urls.size<=4) { "Нет адреса выбранного видео" }
+            var missing:Exception?=null
+            for(url in urls.distinct()) {
+                try { return verify(url,headers) } catch(error:Exception) {
+                    if(error is CancellationException)throw error
+                    if(!generateSequence<Throwable>(error) { it.cause }.any { it is OnlineMediaUnavailable&&it.status==404 })throw error
+                    missing=error
+                }
+            }
+            throw missing ?: IllegalStateException("Источник не отдал видео")
         }
         private val libraryHttp=OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
             .connectTimeout(8,TimeUnit.SECONDS).readTimeout(10,TimeUnit.SECONDS).callTimeout(12,TimeUnit.SECONDS).build()
@@ -277,7 +306,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
                 if(depth>12||nodes++>3000)return
                 if(value.isJsonArray) { value.asJsonArray.take(1000).forEach { walk(it,season,voice,depth+1) };return }
                 if(value.isJsonPrimitive) {
-                    if(item.type=="movie")sources(value.asString,cap).takeIf { it.isNotEmpty() }?.let { found+=OnlineEpisode(0,0,item.title,voice.ifBlank { "Основная озвучка" },it) }
+                    if(item.type=="movie")sourceCandidates(value.asString,cap).takeIf { it.isNotEmpty() }?.let { found+=OnlineEpisode(0,0,item.title,voice.ifBlank { "Основная озвучка" },it.mapValues { e -> e.value.first() },it) }
                     return
                 }
                 if(!value.isJsonObject)return
@@ -294,29 +323,42 @@ class CenterOnline(private val activity:AppCompatActivity) {
                     Regex("(?iu)(\\d{1,3})\\s*(?:серия|эпизод|episode)|(?:серия|эпизод|episode)\\s*(\\d{1,3})").find(title)?.groupValues?.drop(1)?.firstOrNull { it.isNotEmpty() }?.toIntOrNull() ?:
                     Regex("^(\\d{1,3})(?:[ .:—-]|$)").find(title)?.groupValues?.get(1)?.toIntOrNull()
                 if(item.type=="tv"&&(episode==null||episode<=0))return
-                val urls=sources(raw,cap);if(urls.isEmpty())return
+                val alternatives=sourceCandidates(raw,cap);val urls=alternatives.mapValues { it.value.first() };if(urls.isEmpty())return
                 found+=OnlineEpisode(if(item.type=="tv") numbered?.groupValues?.get(1)?.toIntOrNull() ?: nextSeason ?: 0 else 0,
-                    if(item.type=="tv")episode!! else 0,title.ifBlank { item.title },voice.ifBlank { if(item.type=="movie"&&title.isNotBlank())title else "Основная озвучка" },urls)
+                    if(item.type=="tv")episode!! else 0,title.ifBlank { item.title },voice.ifBlank { if(item.type=="movie"&&title.isNotBlank())title else "Основная озвучка" },urls,alternatives)
             }
             snapshot.getAsJsonArray("lists")?.forEach { walk(it,null,"",0) }
             if(item.type=="movie")snapshot.getAsJsonArray("files")?.forEach { walk(it,null,"",0) }
             // Repeated JSON observations are one entry. Conflicting encodes remain explicit choices, never automatic next.
-            return found.distinctBy { listOf(it.season,it.number,it.voice,it.sources) }.sortedWith(compareBy({it.season},{it.voice},{it.number}))
+            return found.distinctBy { listOf(it.season,it.number,it.voice,it.sources,it.alternatives) }.sortedWith(compareBy({it.season},{it.voice},{it.number}))
         }
-        fun sources(text:String,cap:Int=10000):Map<Int,String> {
+        fun sources(text:String,cap:Int=10000):Map<Int,String> =
+            sourceCandidates(text,cap).mapValues { it.value.first() }
+
+        /** Playerjs "or"/"and" operators declare mirrors of the same quality, not part of a URL. */
+        fun sourceCandidates(text:String,cap:Int=10000):Map<Int,List<String>> {
             if(text.length>30000||text.startsWith("#"))return emptyMap()
             val parts=if(text.trimStart().startsWith("["))text.split(Regex(",(?=\\s*\\[)")) else listOf(text)
-            val result=linkedMapOf<Int,String>();var ambiguous=false
+            val result=linkedMapOf<Int,List<String>>();var ambiguous=false
             parts.take(12).forEach { part ->
                 val label=Regex("^\\s*\\[([^]]+)]").find(part)
                 val labeledQuality=label?.groupValues?.get(1)?.let { Regex("[0-9]{3,4}").find(it)?.value?.toIntOrNull() }
                 val raw=if(label==null)part.trim() else part.substring(label.range.last+1).trim()
-                val url=(if(raw.startsWith("//"))"https:$raw" else raw).toHttpUrlOrNull() ?: return@forEach
-                val path=url.encodedPath.lowercase(Locale.ROOT)
+                val declared=raw.split(Regex("\\s+(?:or|and)\\s+(?=(?:https?:)?//)"))
+                if(declared.size>4)return@forEach
+                val urls=declared.mapNotNull { candidate ->
+                    val value=candidate.trim()
+                    val url=(if(value.startsWith("//"))"https:$value" else value).toHttpUrlOrNull() ?: return@mapNotNull null
+                    if(!Regex("(?i)\\.(m3u8|mp4|mkv|m4v|webm|mov|avi)$").containsMatchIn(url.encodedPath))return@mapNotNull null
+                    url
+                }
+                if(urls.size!=declared.size||urls.isEmpty())return@forEach
+                val path=urls.first().encodedPath.lowercase(Locale.ROOT)
                 val quality=labeledQuality ?: Regex("[_.-](2160|1440|1080|720|480|360)p?(?:[_.-]|$)").find(path)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-                if(quality>cap||!Regex("\\.(m3u8|mp4|mkv|m4v|webm|mov|avi)$").containsMatchIn(path))return@forEach
-                if(result[quality]!=null&&result[quality]!=url.toString())ambiguous=true
-                result[quality]=url.toString()
+                if(quality>cap)return@forEach
+                val choices=urls.map { it.toString() }.distinct()
+                if(result[quality]!=null&&result[quality]!=choices)ambiguous=true
+                result[quality]=choices
             }
             return if(ambiguous)emptyMap() else result
         }
