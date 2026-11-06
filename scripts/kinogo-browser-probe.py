@@ -35,7 +35,7 @@ def inspect(url):
         text=raw.decode(charset.group(1).decode() if charset else "utf-8",errors="replace")
         parser=Inspector();parser.feed(text)
         print("TITLE_META "+json.dumps({"url":final,"meta":[m for m in parser.meta if m.get("property","").startswith("og:") or m.get("itemprop") in ("datePublished","dateCreated","name")],
-            "facts":parser.facts,"json":scrub(parser.json),"paragraphs":parser.paragraphs[:15],"images":[i for i in parser.images if not i["attrs"].get("src","").startswith("data:") and not re.search(r'template|spacer|logo|banner|actors|fotos',i["attrs"].get("src",""))][:6]},ensure_ascii=False),flush=True)
+            "facts":parser.facts,"json":scrub(parser.json),"paragraphs":parser.paragraphs[:15],"images":[{"attrs":{k:("<embedded>" if v.startswith("data:") else v) for k,v in i["attrs"].items()},"parents":i["parents"]} for i in parser.images if any("full" in str(p) or "images" in str(p) for p in i["parents"])][:14]},ensure_ascii=False),flush=True)
     except Exception as e:print("TITLE_META "+json.dumps({"url":url,"error":str(e)},ensure_ascii=False),flush=True)
 with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
     list(pool.map(inspect,["https://kinotac.org/20817-korol-talsy.html","https://zona.movie/series/mobland-1478/","https://kinokong.es/61709-serial-dok-vse-v-tvoih-rukah-1-4-sezon.html"]))
