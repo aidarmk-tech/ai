@@ -58,6 +58,14 @@ async def main():
         for f in frames:
             for e in f.get("iframes",[]):
                 e["src"]=safe(e["src"]) if e.get("src") else None;e["lazy"]=safe(e["lazy"]) if e.get("lazy") else None
+        root_info=await page.evaluate("""()=>({
+            tabs:Array.from(document.querySelectorAll('a,button,li,span,div')).filter(e=>e.childElementCount===0&&/^(Смотреть онлайн|Плеер 2)$/.test(e.textContent.trim())).map(e=>({tag:e.tagName,cls:e.className,id:e.id,parent:e.parentElement.outerHTML.slice(0,2000)})).slice(0,8),
+            frames:Array.from(document.querySelectorAll('iframe')).map(e=>({id:e.id,cls:e.className,srcdoc:!!e.srcdoc,parent:e.parentElement.outerHTML.slice(0,1500)})).slice(0,4),
+            scripts:Array.from(document.scripts).map(e=>e.src).filter(Boolean),
+            inline:Array.from(document.scripts).filter(e=>!e.src&&/iframe|femd|nextembed|walking-as/.test(e.textContent)).map(e=>e.textContent.slice(0,7000))
+        })""")
+        root_info=json.loads(re.sub(r'https?://[^\\s"\\\'<>]+',"<url>",json.dumps(root_info,ensure_ascii=False)))
+        print("ROOT_INFO "+json.dumps(root_info,ensure_ascii=False),flush=True)
         print("KINOGO_INSPECT "+json.dumps({"final":page.url,"frames":frames,"events":events[:30],"scripts":js},ensure_ascii=False),flush=True)
         await context.close();await browser.close()
 asyncio.run(main())
