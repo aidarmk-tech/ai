@@ -64,7 +64,12 @@ async def main():
             scripts:Array.from(document.scripts).map(e=>e.src).filter(Boolean),
             inline:Array.from(document.scripts).filter(e=>!e.src&&/iframe|femd|nextembed|walking-as/.test(e.textContent)).map(e=>e.textContent.slice(0,7000))
         })""")
-        root_info=json.loads(re.sub(r'https?://[^\\s"\\\'<>]+',"<url>",json.dumps(root_info,ensure_ascii=False)))
+        def scrub(value):
+            if isinstance(value,str):return re.sub(r'https?://[^\s"\'<>]+',"<url>",value)
+            if isinstance(value,list):return [scrub(v) for v in value]
+            if isinstance(value,dict):return {k:scrub(v) for k,v in value.items()}
+            return value
+        root_info=scrub(root_info)
         print("ROOT_INFO "+json.dumps(root_info,ensure_ascii=False),flush=True)
         print("KINOGO_INSPECT "+json.dumps({"final":page.url,"frames":frames,"events":events[:30],"scripts":js},ensure_ascii=False),flush=True)
         await context.close();await browser.close()
