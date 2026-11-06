@@ -303,4 +303,16 @@ class CenterCatalogTest {
             assertTrue(catalog.browse("zona",base,section,3).isEmpty());assertEquals(2,server.requestCount)
         }
     }
+
+    @Test fun watchedSeriesKeepAllCatalogIdentitiesIncludingRemovedChoices() {
+        val app=RuntimeEnvironment.getApplication();app.getSharedPreferences("media_center",0).edit().clear().commit()
+        val store=CenterStore(app)
+        val providers=listOf("kinotac","zona","kinokong","kazplay","rezka","hdrezka")
+        for(provider in providers)store.remember("https://catalog.test/$provider/17",CardMeta(
+            title="Сериал $provider",contentKey="$provider:tv:17",sourcePage="https://catalog.test/$provider/17",seasonNumber=2,episodeNumber=5))
+        assertEquals(providers.map { "$it:tv:17" }.toSet(),store.mySeries().map { it.key }.toSet())
+        assertTrue(store.mySeries().all { it.sourceUrl!=null&&it.id==17 })
+        assertFalse(CenterCatalog.providers.any { it in listOf("kazplay","rezka","hdrezka") })
+        assertFalse(CenterCatalog.isSiteIdentity("tmdb"));assertFalse(CenterCatalog.isSiteIdentity("unknown"))
+    }
 }

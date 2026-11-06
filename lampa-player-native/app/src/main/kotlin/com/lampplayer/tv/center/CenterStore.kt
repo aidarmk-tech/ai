@@ -77,7 +77,7 @@ class CenterStore(context: Context) {
     fun mySeries(): List<CenterTitle> {
         val recent=history().filter { it.card.contentKey?.contains(":tv:")==true || it.card.seasonNumber!=null || it.card.episodes.isNotEmpty() }.mapNotNull {
             val card=it.card;val parts=card.contentKey?.split(':').orEmpty()
-            val provider=parts.firstOrNull()?.takeIf { p -> p in listOf("kinovod","filmix") }
+            val provider=parts.firstOrNull()?.takeIf { p -> CenterCatalog.isSiteIdentity(p) }
             val id=if(provider!=null) parts.getOrNull(2)?.toIntOrNull() else card.tmdbId
             id?.let { value -> CenterTitle(value,"tv",card.title,poster=card.posterUrl,provider=provider,sourceUrl=card.sourcePage) }
         }

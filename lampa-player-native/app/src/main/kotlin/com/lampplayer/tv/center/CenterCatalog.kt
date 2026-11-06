@@ -39,6 +39,7 @@ class CenterCatalog {
         private const val UA = "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"
         val providers = listOf("tmdb", "kinovod", "filmix", "kinogo", "kinotac", "zona", "kinokong")
         val sites get() = providers.filter { it != "tmdb" }
+        fun isSiteIdentity(provider:String?) = provider in sites || provider in listOf("rezka","kazplay","hdrezka")
         fun name(provider: String?) = when(provider) {
             "kinovod" -> "Киновод"; "filmix" -> "Filmix"; "kinotac" -> "KinoTac"; "zona" -> "Zona.movie"; "kinokong" -> "KinoKong"; "rezka" -> "Rezka"; "kazplay" -> "KazPlay · Қазақша"; "hdrezka" -> "HDRezka · LV · тест"; "kinogo" -> "KinoGo · KZ"; else -> "TMDB"
         }

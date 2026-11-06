@@ -262,7 +262,7 @@ open class MediaCenterActivity : AppCompatActivity() {
             recovery = null
             content.post {
                 val parts = card.contentKey?.split(':').orEmpty()
-                val provider = parts.firstOrNull()?.takeIf { it in CenterCatalog.sites }
+                val provider = parts.firstOrNull()?.takeIf { CenterCatalog.isSiteIdentity(it) }
                 val item = CenterTitle(parts.getOrNull(2)?.toIntOrNull() ?: card.tmdbId ?: 0,
                     if (card.seasonNumber != null || parts.getOrNull(1) == "tv") "tv" else "movie",
                     card.title, original = card.originalTitle.orEmpty(), provider = provider, sourceUrl = card.sourcePage)
@@ -1221,7 +1221,7 @@ open class MediaCenterActivity : AppCompatActivity() {
             if (!localTorrent(saved.url)) {
                 val card = saved.card
                 val key = card.contentKey?.split(':').orEmpty()
-                val provider = key.firstOrNull()?.takeIf { it in CenterCatalog.sites }
+                val provider = key.firstOrNull()?.takeIf { CenterCatalog.isSiteIdentity(it) }
                 val item = CenterTitle(key.getOrNull(2)?.toIntOrNull() ?: card.tmdbId ?: 0,
                     if (card.seasonNumber != null || key.getOrNull(1) == "tv") "tv" else "movie",
                     card.title, original = card.originalTitle.orEmpty(), overview = card.overview.orEmpty(),
