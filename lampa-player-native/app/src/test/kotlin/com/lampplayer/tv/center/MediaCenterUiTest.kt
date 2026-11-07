@@ -150,7 +150,7 @@ class MediaCenterUiTest {
             screenshot(root,"media-center-detail")
             season.requestFocus();season.performClick();frame(root)
             val second=all(root).first { it.tag=="episode:1:2" };second.requestFocus();frame(root)
-            assertTrue(all(root).filterIsInstance<TextView>().any { it.text.startsWith("Описание эпизода 2.") })
+            assertTrue((all(root).first { it.tag=="episode_summary" } as TextView).text.contains("Описание эпизода 2."))
             screenshot(root,"media-center-episodes")
             host.onBackPressedDispatcher.onBackPressed();frame(root)
             assertEquals("Сезон 1",root.findFocus()?.tag)
