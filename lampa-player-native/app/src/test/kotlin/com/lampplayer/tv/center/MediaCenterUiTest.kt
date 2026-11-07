@@ -1239,7 +1239,8 @@ class MediaCenterUiTest {
     }
 
     @Test fun online404ShowsThreePrimaryActionsAndKeepsWebsiteAndDiagnosticsUnderMore() {
-        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
         try {
             val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
             val item=CenterTitle(17,"tv","Сериал",provider="kinotac",sourceUrl="https://kinotac.org/17-show.html")
@@ -1285,6 +1286,7 @@ class MediaCenterUiTest {
             all(root).first { it.tag=="search_submit" }.performClick();repeat(4){frame(root)}
             val grid=all(root).filterIsInstance<androidx.recyclerview.widget.RecyclerView>().first { it.tag=="catalog_grid" }
             grid.scrollToPosition(29);repeat(4){frame(root)}
+            all(root).first { it.tag=="title:movie:30" }.requestFocus();repeat(4){frame(root)}
             assertTrue(host.browseCalls.any { it.second==2 })
             assertTrue(host.browseProviders.all { it=="tmdb" })
             assertTrue(host.browseCalls.all { it.first.query=="Матрица" })
