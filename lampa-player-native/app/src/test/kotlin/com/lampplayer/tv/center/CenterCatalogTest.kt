@@ -384,6 +384,7 @@ class CenterCatalogTest {
         val document=org.jsoup.Jsoup.parse(CenterOnline.kinokongDocument(item,frames),item.sourceUrl)
         assertEquals(2,document.select(".newTabs > li").size);assertEquals(1,document.select("iframe").size)
         assertEquals("eager",document.selectFirst("iframe")!!.attr("loading"))
+        assertEquals("480",document.selectFirst("iframe")!!.attr("height"));assertEquals("100%",document.selectFirst("iframe")!!.attr("width"))
         assertFalse(document.html().contains("trailer-cdn"));assertTrue(document.select("script[src]").isEmpty())
     }
 }

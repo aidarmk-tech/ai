@@ -210,6 +210,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
                 .apply { if(index==0)addClass("current") }.text("Плеер ${index+1}") }
             root.appendElement("div").attr("id","preroll").appendElement("iframe")
                 .attr("src",frames.first()).attr("data-src",frames.first()).attr("loading","eager")
+                .attr("width","100%").attr("height","480").attr("style","display:block;width:100%;height:70vh;min-height:360px;border:0")
             document.body().appendElement("script").appendChild(org.jsoup.nodes.DataNode("""
                 document.querySelectorAll('.newTabs > li').forEach(function(tab){tab.addEventListener('click',function(){
                     document.querySelectorAll('.newTabs > li').forEach(function(el){el.classList.remove('current');});
