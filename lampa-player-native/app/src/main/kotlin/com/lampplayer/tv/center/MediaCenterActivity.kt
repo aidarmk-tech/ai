@@ -445,7 +445,9 @@ open class MediaCenterActivity : AppCompatActivity() {
     }
     private fun libraryTools(request: CenterBrowse) {
         if(request.mode!="popular" || request.country.isNotBlank() || request.year!=null || request.genre!=null) content.addView(text(listOf(if(request.mode=="new") "Новые" else "Популярные",
-            request.country.takeIf { it.isNotBlank() },request.year?.toString(),request.genreName.takeIf { it.isNotBlank() }).filterNotNull().joinToString(" · "),14,accent))
+            request.country.takeIf { it.isNotBlank() },request.year?.toString(),request.genreName.takeIf { it.isNotBlank() },
+            if(request.mode=="new"&&request.year==null)"последние 6 месяцев" else null,
+            if(request.mode=="new")if(request.translatedOnly)"с русскими названиями" else "все названия" else null).filterNotNull().joinToString(" · "),14,accent))
         compactToolbar?.addView(iconButton("≡", "Подборка и фильтры") {
             val expected=gridGeneration
             job?.cancel()
@@ -462,6 +464,10 @@ open class MediaCenterActivity : AppCompatActivity() {
                         }
                     }
                     val mode=choice("Подборка",listOf("Популярные","Новые"),if(request.mode=="new")1 else 0)
+                    val translatedOnly=CheckBox(this@MediaCenterActivity).apply {
+                        tag="tmdb_translated_only";text="Новинки: только с русским названием";isChecked=request.translatedOnly
+                        form.addView(this)
+                    }
                     val countries=listOf("","RU","KZ","US")
                     val country=choice("Страна",listOf("Все страны","Россия","Казахстан","США"),countries.indexOf(request.country))
                     val genreItems=listOf(0 to "Все жанры")+genres
@@ -479,7 +485,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                         dialog.dismiss()
                         loadLibrary(request.copy(mode=if(mode.selectedItemPosition==1)"new" else "popular",
                             country=countries[country.selectedItemPosition],year=parsed,genre=selectedGenre.first.takeIf { it>0 },
-                            genreName=selectedGenre.second.takeIf { selectedGenre.first>0 }.orEmpty()))
+                            genreName=selectedGenre.second.takeIf { selectedGenre.first>0 }.orEmpty(),translatedOnly=translatedOnly.isChecked))
                     } }
                     dialog.show()
                 } catch(e:CancellationException) { throw e }
@@ -577,7 +583,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         if(request != null && request.query.isBlank()) libraryTools(request)
         if(heading=="Мои сериалы") content.addView(text("Сериалы из подписок и истории просмотра",14,muted))
         if(request?.query?.isNotBlank()==true) content.addView(text("Поиск: ${request.query} · ${CenterCatalog.name(sourceProvider)}",14,muted))
-        if (items.isEmpty()) {
+        if (items.isEmpty() && (items !is CenterTitlePage || !items.hasMore)) {
             content.addView(text(if (heading == "Избранное") "Здесь появятся фильмы и сериалы из избранного" else "Ничего не найдено", 17, muted))
             return
         }
@@ -601,7 +607,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         val type = when (nav) { "Фильмы" -> "movie"; "Сериалы" -> "tv"; else -> "all" }
         val generation = gridGeneration
         var number = firstPage
-        var busy = false; var ended = !canLoad; var failed = false
+        var busy = false; var ended = !canLoad || (initial is CenterTitlePage && !initial.hasMore); var failed = false
         val desired = when (store.cardSize) { "compact" -> 116; "large" -> 178; else -> 146 }
         val columns = ((resources.configuration.screenWidthDp - 110) / desired).coerceIn(2, 10)
         val grid = RecyclerView(this).apply {
@@ -623,17 +629,25 @@ open class MediaCenterActivity : AppCompatActivity() {
             busy = true; status.text = "Загружаю ещё…"; status.isFocusable = false
             gridJob = lifecycleScope.launch {
                 try {
-                    if(number>=500) { ended=true;status.text="Достигнут конец каталога";return@launch }
-                    val batch = if(request != null) browsePage(provider,request,number+1) else nextGridPage(provider, category, type, number + 1)
-                    if (generation != gridGeneration) return@launch
-                    val keys = loaded.mapTo(hashSetOf()) { it.key }
-                    val fresh = batch.filter { keys.add(it.key) }
-                    if (fresh.isEmpty()) ended = true else {
-                        val offset = loaded.size
-                        loaded.addAll(fresh); number++; catalogPage = number
-                        rememberScreen(); adapter.notifyItemRangeInserted(offset, fresh.size)
+                    repeat(4) {
+                        if(number>=500) { ended=true;status.text="Достигнут конец каталога";return@launch }
+                        val batch=if(request!=null)browsePage(provider,request,number+1) else nextGridPage(provider,category,type,number+1)
+                        if(generation!=gridGeneration)return@launch
+                        number++;catalogPage=number
+                        val keys=loaded.mapTo(hashSetOf()) { it.key }
+                        val fresh=batch.filter { keys.add(it.key) }
+                        val offset=loaded.size
+                        loaded.addAll(fresh)
+                        ended=if(batch is CenterTitlePage)!batch.hasMore else fresh.isEmpty()
+                        rememberScreen()
+                        if(fresh.isNotEmpty())adapter.notifyItemRangeInserted(offset,fresh.size)
+                        if(ended||fresh.isNotEmpty()) {
+                            status.text=if(ended)"Все карточки загружены" else ""
+                            return@launch
+                        }
                     }
-                    status.text = if (ended) "Все карточки загружены" else ""
+                    status.text="На этих страницах нет подходящих карточек · ОК — продолжить"
+                    status.isFocusable=true;status.isClickable=true
                 } catch (e: CancellationException) { throw e }
                 catch (_: Exception) {
                     if (generation == gridGeneration) {

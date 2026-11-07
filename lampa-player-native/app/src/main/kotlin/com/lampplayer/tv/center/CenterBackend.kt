@@ -3,6 +3,8 @@ package com.lampplayer.tv.center
 import com.google.gson.*
 import com.lampplayer.tv.data.tmdb.TmdbRepository
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import okhttp3.*
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -34,7 +36,12 @@ data class CenterFile(val id: Int, val path: String, val size: Long) {
     }
 }
 data class CenterBrowse(val type: String = "movie", val mode: String = "popular", val country: String = "",
-    val year: Int? = null, val genre: Int? = null, val genreName: String = "", val query: String = "")
+    val year: Int? = null, val genre: Int? = null, val genreName: String = "", val query: String = "", val translatedOnly: Boolean = true)
+/** Upstream pagination survives pages emptied by title filtering. */
+class CenterTitlePage(private val values: List<CenterTitle>, val hasMore: Boolean) : AbstractList<CenterTitle>() {
+    override val size: Int get() = values.size
+    override fun get(index: Int): CenterTitle = values[index]
+}
 data class CenterTorrent(val hash: String, val files: List<CenterFile>)
 
 /** HTTP catalog, configurable indexers and the local torrent engine share no UI state. */
@@ -50,16 +57,43 @@ open class CenterBackend {
         }
         private fun bitrateText(value: Double?): String? = value?.takeIf { it.isFinite() && it > 0 }
             ?.let { "%.1f Мбит/с".format(java.util.Locale.ROOT, it / 1000000.0) }
-        fun browseParameters(spec: CenterBrowse, page: Int): Map<String, String> {
+        fun browseParameters(spec: CenterBrowse, page: Int, today: String = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())): Map<String, String> {
             require(spec.type in listOf("movie", "tv", "all") && page in 1..500)
             val query = mutableMapOf("page" to page.toString(), "include_adult" to "false")
             if(spec.query.isNotBlank()) { query["query"]=spec.query; return query }
             require(spec.type != "all")
-            query["sort_by"] = if(spec.mode=="new") (if(spec.type=="tv") "first_air_date.desc" else "primary_release_date.desc") else "popularity.desc"
+            query["sort_by"] = "popularity.desc"
+            if(spec.mode=="new") {
+                val field=if(spec.type=="tv") "first_air_date" else "primary_release_date"
+                query["$field.lte"]=today
+                if(spec.year==null) {
+                    val format=java.text.SimpleDateFormat("yyyy-MM-dd",java.util.Locale.US)
+                    val start=java.util.Calendar.getInstance().apply { time=requireNotNull(format.parse(today));add(java.util.Calendar.DAY_OF_YEAR,-180) }
+                    query["$field.gte"]=format.format(start.time)
+                }
+            }
             if(spec.country.isNotBlank()) { require(spec.country in listOf("RU","KZ","US"));query["with_origin_country"]=spec.country }
             spec.year?.let { require(it in 1888..2200);query[if(spec.type=="tv") "first_air_date_year" else "primary_release_year"]=it.toString() }
             spec.genre?.let { require(it>0);query["with_genres"]=it.toString() }
             return query
+        }
+        fun russianTitle(type: String, id: Int, translations: JsonObject, aliases: JsonObject? = null): String? {
+            if(translations.num("id").toInt()!=id)return null
+            val translated=translations.getAsJsonArray("translations").orEmpty().filter { it.isJsonObject }
+                .map { it.asJsonObject }.filter { it.str("iso_639_1")=="ru" }
+                .sortedByDescending { it.str("iso_3166_1")=="RU" }
+                .firstNotNullOfOrNull { it.getAsJsonObject("data")?.str(if(type=="tv")"name" else "title")?.trim()?.takeIf(String::isNotBlank) }
+            if(translated!=null)return translated
+            if(aliases==null||aliases.num("id").toInt()!=id)return null
+            return aliases.getAsJsonArray(if(type=="tv")"results" else "titles").orEmpty()
+                .filter { it.isJsonObject }.map { it.asJsonObject }
+                .firstNotNullOfOrNull { if(it.str("iso_3166_1")=="RU")it.str("title").trim().takeIf(String::isNotBlank) else null }
+        }
+        private fun alreadyRussianTitle(o: JsonObject, type: String): Boolean {
+            val name=o.str(if(type=="tv")"name" else "title")
+            val original=o.str(if(type=="tv")"original_name" else "original_title")
+            return o.str("original_language")=="ru" ||
+                (original.isNotBlank()&&name!=original&&Regex("[А-Яа-яЁё]").containsMatchIn(name))
         }
         fun video(path: String) = Regex("(?i)\\.(mkv|mp4|avi|m4v|mov|ts|m2ts|webm|mpeg|mpg)$").containsMatchIn(path) &&
             !Regex("(?i)(?:^|[ ._/\\-])(sample|trailer|preview)(?:[ ._/\\-]|$)").containsMatchIn(path)
@@ -199,11 +233,51 @@ open class CenterBackend {
         })
     }
 
-    private suspend fun tmdb(path: String, query: Map<String, String> = emptyMap()): JsonObject {
+    protected open suspend fun tmdb(path: String, query: Map<String, String> = emptyMap()): JsonObject {
         val url = "https://api.themoviedb.org/3/$path".toHttpUrl().newBuilder()
             .addQueryParameter("api_key", TmdbRepository.API_KEY).addQueryParameter("language", "ru-RU")
         query.forEach { (k, v) -> url.addQueryParameter(k, v) }
         return JsonParser.parseString(request(url.build())).asJsonObject
+    }
+    private val translationGate=Semaphore(3)
+    private val russianNames=linkedMapOf<String,Pair<Long,String?>>()
+    private suspend fun localizePage(data: JsonObject, type: String, page: Int, hideMissing: Boolean): CenterTitlePage {
+        val rows=data.getAsJsonArray("results").orEmpty().filter { it.isJsonObject }.take(100)
+            .mapNotNull { raw -> title(raw.asJsonObject,type)?.let { raw.asJsonObject to it } }
+        val output: MutableList<CenterTitle?> = rows.map { (raw,item) ->
+            if(alreadyRussianTitle(raw,type))item else item.copy(updateLabel="Перевод не проверен")
+        }.toMutableList()
+        withTimeoutOrNull(4500) {
+            coroutineScope {
+                rows.mapIndexed { index,(raw,item) -> async {
+                    if(alreadyRussianTitle(raw,type))return@async
+                    translationGate.withPermit {
+                        try {
+                            val cached=synchronized(russianNames) { russianNames[item.key]?.takeIf { System.currentTimeMillis()-it.first<21600000L } }
+                            val name=if(cached!=null)cached.second else {
+                                val translations=tmdb("${item.type}/${item.id}/translations")
+                                check(translations.num("id").toInt()==item.id)
+                                val translated=russianTitle(item.type,item.id,translations)
+                                val found=if(translated!=null)translated else {
+                                    val aliases=tmdb("${item.type}/${item.id}/alternative_titles")
+                                    check(aliases.num("id").toInt()==item.id)
+                                    russianTitle(item.type,item.id,translations,aliases)
+                                }
+                                synchronized(russianNames) {
+                                    russianNames[item.key]=System.currentTimeMillis() to found
+                                    if(russianNames.size>256)russianNames.remove(russianNames.keys.first())
+                                }
+                                found
+                            }
+                            output[index]=if(name!=null)item.copy(title=name)
+                                else if(hideMissing)null else item.copy(updateLabel="Нет русского названия")
+                        } catch(e: CancellationException) { throw e }
+                        catch(_: Exception) { output[index]=item.copy(updateLabel="Перевод не проверен") }
+                    }
+                } }.awaitAll()
+            }
+        }
+        return CenterTitlePage(output.filterNotNull(),page<data.num("total_pages").toInt().coerceAtMost(500))
     }
     open suspend fun library(spec: CenterBrowse, page: Int = 1): List<CenterTitle> {
         val query = browseParameters(spec, page).toMutableMap()
@@ -212,7 +286,9 @@ open class CenterBackend {
             val today=java.text.SimpleDateFormat("yyyy-MM-dd",java.util.Locale.US).format(java.util.Date())
             query[if(spec.type=="tv") "first_air_date.lte" else "primary_release_date.lte"]=today
         }
-        return tmdb(route,query).getAsJsonArray("results").orEmpty().mapNotNull { title(it.asJsonObject,spec.type) }
+        val response=tmdb(route,query)
+        return if(spec.query.isBlank()&&spec.mode=="new")localizePage(response,spec.type,page,spec.translatedOnly)
+            else response.getAsJsonArray("results").orEmpty().mapNotNull { title(it.asJsonObject,spec.type) }
     }
     open suspend fun genres(type: String): List<Pair<Int,String>> {
         require(type in listOf("movie","tv"))
@@ -235,13 +311,16 @@ open class CenterBackend {
             query["sort_by"] = if (section.type == "tv") "first_air_date.desc" else "primary_release_date.desc"
             query[if (section.type == "tv") "first_air_date.lte" else "primary_release_date.lte"] = today
         }
-        return tmdb(route, query).getAsJsonArray("results").orEmpty().mapNotNull { title(it.asJsonObject, section.type) }
+        val response=tmdb(route,query)
+        return if(section.id in listOf("new_movies","new_episodes"))localizePage(response,section.type,page,true)
+            else response.getAsJsonArray("results").orEmpty().mapNotNull { title(it.asJsonObject,section.type) }
     }
     open suspend fun details(item: CenterTitle): CenterDetails {
         val o = tmdb("${item.type}/${item.id}", mapOf("append_to_response" to "credits"))
         val seasons = o.getAsJsonArray("seasons").orEmpty().map { it.asJsonObject.num("season_number").toInt() }.filter { it > 0 }
         val cast = o.getAsJsonObject("credits")?.getAsJsonArray("cast").orEmpty().take(12).map { it.asJsonObject.str("name") }
-        return CenterDetails(title(o, item.type) ?: item, seasons, cast.joinToString(", "))
+        val localized=localizePage(JsonObject().apply { add("results",JsonArray().apply { add(o) }) },item.type,1,false).firstOrNull()
+        return CenterDetails(localized ?: item, seasons, cast.joinToString(", "))
     }
     open suspend fun episodes(item: CenterTitle, season: Int): List<CenterEpisode> =
         tmdb("tv/${item.id}/season/$season").getAsJsonArray("episodes").orEmpty().map {

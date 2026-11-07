@@ -250,7 +250,7 @@ class CenterBackendTest {
         val movies=CenterBrowse(type="movie",mode="new",country="KZ",year=2024,genre=18)
         val p=CenterBackend.browseParameters(movies,3)
         assertEquals("3",p["page"]);assertEquals("KZ",p["with_origin_country"]);assertEquals("2024",p["primary_release_year"])
-        assertEquals("18",p["with_genres"]);assertEquals("primary_release_date.desc",p["sort_by"])
+        assertEquals("18",p["with_genres"]);assertEquals("popularity.desc",p["sort_by"])
         val tv=CenterBackend.browseParameters(movies.copy(type="tv"),2)
         assertEquals("2024",tv["first_air_date_year"]);assertFalse(tv.containsKey("primary_release_year"))
         val search=CenterBackend.browseParameters(CenterBrowse(type="all",query="Источники"),2)
@@ -285,4 +285,81 @@ class CenterBackendTest {
         store.rememberSearch("x");assertFalse(store.searches().contains("x"))
         store.clearSearches();assertTrue(store.searches().isEmpty());assertTrue(store.isFavorite(favorite))
     }
+
+    private class LocalizedBackend : CenterBackend() {
+        val responses=mutableMapOf<String,com.google.gson.JsonObject>()
+        val calls=mutableListOf<String>()
+        var failTranslations=false
+        override suspend fun tmdb(path:String,query:Map<String,String>):com.google.gson.JsonObject {
+            calls.add(path)
+            if(failTranslations&&path.endsWith("/translations"))error("offline")
+            return responses[path] ?: error("Unexpected request $path")
+        }
+        fun json(path:String,value:String) { responses[path]=JsonParser.parseString(value).asJsonObject }
+    }
+    @Test fun recentFeedUsesPopularityInsideDateWindowWithoutRestrictingOriginalLanguage() {
+        val movie=CenterBackend.browseParameters(CenterBrowse(mode="new"),1,"2026-11-07")
+        assertEquals("2026-05-11",movie["primary_release_date.gte"])
+        assertEquals("2026-11-07",movie["primary_release_date.lte"])
+        assertEquals("popularity.desc",movie["sort_by"])
+        assertFalse(movie.containsKey("with_original_language"))
+        val tv=CenterBackend.browseParameters(CenterBrowse(type="tv",mode="new"),2,"2026-11-07")
+        assertEquals("2026-05-11",tv["first_air_date.gte"])
+        val year=CenterBackend.browseParameters(CenterBrowse(mode="new",year=2024),1,"2026-11-07")
+        assertFalse(year.containsKey("primary_release_date.gte"))
+        assertEquals("2024",year["primary_release_year"])
+    }
+    @Test fun verifiedTranslationsAndRussianAliasesPreserveLatinBrandsAndRejectOtherIds() {
+        fun json(s:String)=JsonParser.parseString(s).asJsonObject
+        val translation=json("""{"id":5,"translations":[{"iso_639_1":"es","data":{"title":"Español"}},{"iso_639_1":"ru","iso_3166_1":"RU","data":{"title":"WALL·E","name":"Русский сериал"}}]}""")
+        assertEquals("WALL·E",CenterBackend.russianTitle("movie",5,translation))
+        assertEquals("Русский сериал",CenterBackend.russianTitle("tv",5,translation))
+        assertNull(CenterBackend.russianTitle("movie",6,translation))
+        val empty=json("""{"id":5,"translations":[]}""")
+        assertEquals("Альтернативное название",CenterBackend.russianTitle("movie",5,empty,json("""{"id":5,"titles":[{"iso_3166_1":"US","title":"Other"},{"iso_3166_1":"RU","title":"Альтернативное название"}]}""")))
+        assertEquals("Сериал",CenterBackend.russianTitle("tv",5,empty,json("""{"id":5,"results":[{"iso_3166_1":"RU","title":"Сериал"}]}""")))
+    }
+    @Test fun recentTitlesUseVerifiedNamesAndCacheWithoutChangingIdentityOrSearch() = runBlocking {
+        val b=LocalizedBackend()
+        b.json("discover/movie","""{"total_pages":3,"results":[
+          {"id":1,"title":"Русское название","original_title":"English","original_language":"en"},
+          {"id":2,"title":"Original","original_title":"Original","original_language":"es","release_date":"2026-09-01"},
+          {"id":3,"title":"한국어","original_title":"한국어","original_language":"ko"},
+          {"id":4,"title":"Brand","original_title":"Brand","original_language":"en"}]}""")
+        b.json("movie/2/translations","""{"id":2,"translations":[{"iso_639_1":"ru","data":{"title":"Перевод"}}]}""")
+        b.json("movie/3/translations","""{"id":3,"translations":[]}""")
+        b.json("movie/3/alternative_titles","""{"id":3,"titles":[]}""")
+        b.json("movie/4/translations","""{"id":4,"translations":[]}""")
+        b.json("movie/4/alternative_titles","""{"id":4,"titles":[{"iso_3166_1":"RU","title":"Brand"}]}""")
+        val request=CenterBrowse(mode="new")
+        val first=b.library(request) as CenterTitlePage
+        assertEquals(listOf("Русское название","Перевод","Brand"),first.map { it.title })
+        assertTrue(first.hasMore);assertEquals("Original",first[1].original);assertEquals("2026",first[1].year)
+        assertFalse(b.calls.contains("movie/1/translations"))
+        val count=b.calls.size
+        val all=b.library(request.copy(translatedOnly=false))
+        assertEquals(4,all.size);assertEquals("Нет русского названия",all.first { it.id==3 }.updateLabel)
+        assertEquals(count+1,b.calls.size)
+        b.responses["search/movie"]=b.responses.getValue("discover/movie")
+        assertEquals(4,b.library(request.copy(query="Original")).size)
+        b.responses["movie/2"]=b.responses.getValue("discover/movie").getAsJsonArray("results")[1].asJsonObject
+        assertEquals("Перевод",b.details(first[1]).title.title)
+    }
+    @Test fun filteredEmptyPagesKeepPaginationAndTransientFailuresAreNotCachedAsMissing() = runBlocking {
+        val b=LocalizedBackend()
+        b.json("discover/tv","""{"total_pages":2,"results":[{"id":9,"name":"Original","original_name":"Original","original_language":"en"}]}""")
+        b.json("tv/9/translations","""{"id":9,"translations":[]}""")
+        b.json("tv/9/alternative_titles","""{"id":9,"results":[]}""")
+        val request=CenterBrowse(type="tv",mode="new")
+        val empty=b.library(request) as CenterTitlePage
+        assertTrue(empty.isEmpty());assertTrue(empty.hasMore)
+        assertFalse((b.library(request,2) as CenterTitlePage).hasMore)
+        val failing=LocalizedBackend()
+        failing.responses.putAll(b.responses);failing.failTranslations=true
+        assertEquals("Перевод не проверен",failing.library(request).single().updateLabel)
+        failing.failTranslations=false
+        assertTrue(failing.library(request).isEmpty())
+        assertEquals(2,failing.calls.count { it=="tv/9/translations" })
+    }
+
 }

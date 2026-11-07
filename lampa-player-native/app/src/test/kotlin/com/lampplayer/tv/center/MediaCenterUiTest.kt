@@ -1298,4 +1298,39 @@ class MediaCenterUiTest {
             assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Поиск: Матрица · TMDB" })
         } finally { controller.pause().stop().destroy() }
     }
+
+    @Test fun recentGridSkipsFilteredEmptyPagesAndKeepsTheOriginalRequest() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val request=CenterBrowse(type="tv",mode="new",country="KZ",translatedOnly=true)
+            host.browsePages[2]=CenterTitlePage(emptyList(),true)
+            host.browsePages[3]=CenterTitlePage(listOf(CenterTitle(17,"tv","Переведённый сериал")),false)
+            host.browseFixture(CenterTitlePage(emptyList(),true),request);repeat(5) { frame(root) }
+            assertEquals(listOf(request to 2,request to 3),host.browseCalls)
+            val grid=all(root).filterIsInstance<androidx.recyclerview.widget.RecyclerView>().first { it.tag=="catalog_grid" }
+            assertEquals(1,grid.adapter!!.itemCount)
+            assertTrue(all(root).filterIsInstance<TextView>().any { it.text=="Все карточки загружены" })
+        } finally { controller.pause().stop().destroy() }
+    }
+    @Test fun severalUntranslatedPagesOfferContinuationInsteadOfReportingEnd() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val request=CenterBrowse(mode="new")
+            (2..5).forEach { host.browsePages[it]=CenterTitlePage(emptyList(),true) }
+            host.browsePages[6]=CenterTitlePage(listOf(CenterTitle(19,"movie","Новый фильм")),false)
+            host.browseFixture(CenterTitlePage(emptyList(),true),request);repeat(5) { frame(root) }
+            val status=all(root).filterIsInstance<TextView>().first { it.tag=="grid_status" }
+            assertEquals(listOf(2,3,4,5),host.browseCalls.map { it.second })
+            assertTrue(status.text.toString().contains("ОК — продолжить"))
+            status.performClick();repeat(5) { frame(root) }
+            assertEquals(listOf(2,3,4,5,6),host.browseCalls.map { it.second })
+            val grid=all(root).filterIsInstance<androidx.recyclerview.widget.RecyclerView>().first { it.tag=="catalog_grid" }
+            assertEquals(1,grid.adapter!!.itemCount)
+        } finally { controller.pause().stop().destroy() }
+    }
+
 }
