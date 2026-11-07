@@ -1,9 +1,8 @@
-name: Check KinoGo browser players
+name: Inspect LampMedia UI renders
 on:
   push:
     branches: [codex/kinogo-browser-probe]
     paths: ['scripts/kinogo-browser-probe.py', '.github/workflows/kinogo-browser-probe.yml']
-  workflow_dispatch:
 permissions:
   contents: read
   actions: read
@@ -16,9 +15,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install playwright
-      - run: playwright install --with-deps chromium
-      - name: Inspect selected KinoKong player
+      - name: Read unit-test UI renders
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python scripts/kinogo-browser-probe.py
