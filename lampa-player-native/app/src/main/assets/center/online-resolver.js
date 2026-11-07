@@ -189,7 +189,7 @@ window.__lampSnapshot=function(){
  wrapPlayer();
  var text=providerMessage();
  var blocked=/(недоступ(?:но|ен)[\s\S]{0,90}(?:стране|регион[ае])|заблокировано[\s\S]{0,90}правообладателя|нет видео файла)/i.exec(text);
- if(window.__lampMetadataFrame&&state.ids.length===0&&/^\\s*video\\s+not\\s+found\\s*!?\\s*[0-9]*\\s*$/i.test(text))blocked=['Источник сообщает, что видео не найдено'];
+ if(window.__lampMetadataFrame&&state.ids.length===0&&/^\s*video\s+not\s+found\s*!?\s*[0-9]*\s*$/i.test(text))blocked=['Источник сообщает, что видео не найдено'];
  // Once a player is observed, unrelated page JSON cannot stand in for its playlist.
  var bound=state.ids.length||state.playerFiles.length||state.playerLists.length;
  var result={files:state.modernBlocked?[]:bound?state.playerFiles:state.files,lists:state.modernBlocked?[]:bound?state.playerLists:state.lists,cap:state.cap,blocked:state.modernBlocked?"Видео заблокировано источником":blocked?blocked[0]:null,playerType:typeof window.Playerjs,ids:state.ids,xhr:state.xhr,shapes:state.shapes,jsonXhr:state.jsonXhr,modern:window.__lampModernStats?window.__lampModernStats():null,recovered:state.recovered||0,hlsRead:!!state.hlsRead,domRead:!!state.domRead,configRead:!!state.configRead};
