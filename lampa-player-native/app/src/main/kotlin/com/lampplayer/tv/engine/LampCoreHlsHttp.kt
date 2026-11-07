@@ -25,7 +25,7 @@ internal data class HlsResolved(val video: HlsPlaylist, val audio: HlsPlaylist?,
 /** HLS does not require a server to support Range except EXT-X-BYTERANGE resources. */
 internal class LampCoreHlsHttp(private val headers: Map<String, String>, private val retryPolicy: HlsRetryPolicy = HlsRetryPolicy()) : java.io.Closeable {
     companion object {
-        private val client = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
+        private val client = OkHttpClient.Builder().cookieJar(com.lampplayer.tv.data.BrowserMediaSession).connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.SECONDS).callTimeout(20, TimeUnit.SECONDS).build()
         private val quickClient = client.newBuilder().connectTimeout(3, TimeUnit.SECONDS).readTimeout(3, TimeUnit.SECONDS).callTimeout(5, TimeUnit.SECONDS).build()
         private const val PLAYLIST_LIMIT = 1024 * 1024
@@ -173,7 +173,9 @@ internal class LampCoreHlsHttp(private val headers: Map<String, String>, private
         if (headers.keys.none { it.equals("User-Agent", true) }) builder.header("User-Agent", "LampPlayer/LampCore")
         builder.header("Accept-Encoding", "identity")
         range?.let { builder.header("Range", "bytes=${it.offset}-${it.offset + it.length - 1}") }
-        val call = (if (quick) quickClient else client).newCall(builder.build())
+        val baseClient = if(quick)quickClient else client
+        val requestClient = if(headers.keys.any { it.equals("Cookie",true) })baseClient.newBuilder().cookieJar(okhttp3.CookieJar.NO_COOKIES).build() else baseClient
+        val call = requestClient.newCall(builder.build())
         calls.add(call)
         if (closed) call.cancel()
         try {

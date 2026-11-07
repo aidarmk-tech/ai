@@ -1,0 +1,4 @@
+
+lampa-player-native/app/src/main/jniLibs/**/libtorrentengine.so
+
+media-center/__pycache__/

@@ -387,6 +387,8 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun initPlayer(context: Context, url: String, card: CardMeta) {
+        if (com.lampplayer.tv.BuildConfig.MEDIA_CENTER && (com.lampplayer.tv.center.CenterEngineService.owns(url) || card.contentKey != null))
+            com.lampplayer.tv.center.CenterStore(appContext).remember(url, card)
         currentUrl = url
         currentCard = card
         launchUrl = url; launchLeftAt = null
@@ -1446,6 +1448,8 @@ class PlayerViewModel @Inject constructor(
                 iptvEpg = if (wasIptv) null else currentCard?.iptvEpg,
             )
             if (updated != null) currentCard = updated
+            if (updated != null && com.lampplayer.tv.BuildConfig.MEDIA_CENTER && (com.lampplayer.tv.center.CenterEngineService.owns(episode.url) || updated.contentKey != null))
+                com.lampplayer.tv.center.CenterStore(appContext).remember(episode.url, updated.copy(currentEpisodeIndex = episode.index))
             _uiState.update { s ->
                 s.copy(
                     currentEpisodeIndex = episode.index,
@@ -1851,9 +1855,10 @@ class PlayerViewModel @Inject constructor(
                 // Diagnostics: surface the real cause (code + HTTP status + URL tail) so a
                 // stuck torrent switch can be read off-screen instead of guessed at.
                 if (settings.diag) {
-                    val http = (error.cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.responseCode
-                    val tail = currentUrl.takeLast(70)
-                    _uiState.update { it.copy(diagText = "ERR ${error.errorCodeName}${http?.let { c -> " http=$c" } ?: ""}\n$tail") }
+                    val failure = ErrorRecoveryManager.httpFailure(error)
+                    val request = failure?.dataSpec?.uri ?: android.net.Uri.parse(currentUrl)
+                    val target = "${request.host.orEmpty()}/${request.lastPathSegment.orEmpty()}"
+                    _uiState.update { it.copy(diagText = "ERR ${error.errorCodeName}${failure?.let { " http=${it.responseCode}" } ?: ""}\n$target") }
                 }
                 // Live edge fell behind (common after a stall on HLS/IPTV) → jump to live.
                 if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
@@ -1866,7 +1871,7 @@ class PlayerViewModel @Inject constructor(
                     if (settings.engine == EngineType.AUTO && !didAutoFallback && isDecodeError(error)) {
                         fallbackToVlc()
                     } else {
-                        _uiState.update { it.copy(hasError = true, reconnecting = false, errorMessage = buildErrorMessage(error)) }
+                        _uiState.update { it.copy(hasError = true, isLoading = false, reconnecting = false, errorMessage = buildErrorMessage(error)) }
                     }
                 } else {
                     // Retry with backoff. Network errors retry indefinitely (reconnecting),
@@ -1958,7 +1963,7 @@ class PlayerViewModel @Inject constructor(
         PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED,
     )
 
-    private fun buildErrorMessage(e: PlaybackException) = when (e.errorCode) {
+    private fun buildErrorMessage(e: PlaybackException) = ErrorRecoveryManager.httpMessage(e) ?: when (e.errorCode) {
         PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED -> "Нет соединения с сервером"
         PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> "Таймаут подключения"
         PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "Сервер вернул ошибку HTTP"

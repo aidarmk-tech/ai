@@ -62,6 +62,8 @@ object IntentParser {
 
         return CardMeta(
             title = cleanTitle(str("title")).ifEmpty { extractTitleFromUrl(url) },
+            contentKey = str("content_key"),
+            sourcePage = str("source_page"),
             originalTitle = str("original_title"),
             tmdbId = int("tmdb_id"),
             imdbId = str("imdb_id"),

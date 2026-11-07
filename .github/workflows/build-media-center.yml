@@ -1,0 +1,120 @@
+name: Build LampMedia
+on:
+  push:
+    branches: [codex/media-center]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: media-center-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+      - uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.7'
+      - name: Verify and stage bundled ARM engines
+        run: python media-center/prepare_engine.py
+      - name: Test and build native media center
+        working-directory: lampa-player-native
+        run: gradle testDebugUnitTest assembleDebug --no-daemon --stacktrace -PmediaCenter=true -PverCode=${{ github.run_number }} -PverName=0.1.${{ github.run_number }}
+      - name: Verify package and signing
+        run: |
+          set -euo pipefail
+          build_tools=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          apk=lampa-player-native/app/build/outputs/apk/debug/app-debug.apk
+          "$build_tools/aapt" dump badging "$apk" | sed -n '1p' | tee package.txt
+          python - <<'PY'
+          import re
+          identity = dict(re.findall(r"(\w+)='([^']*)'", open('package.txt').read()))
+          assert identity['name'] == 'com.lampplayer.tv.center'
+          assert int(identity['versionCode']) == ${{ github.run_number }}
+          PY
+          "$build_tools/apksigner" verify --verbose --print-certs "$apk"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: LampMedia-ARM
+          path: |
+            lampa-player-native/app/build/outputs/apk/debug/app-debug.apk
+            lampa-player-native/app/build/reports/tests/testDebugUnitTest/
+            lampa-player-native/app/build/ui-preview/
+  device:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+      - uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.7'
+      - name: Verify and stage emulator engine
+        run: python media-center/prepare_engine.py --emulator
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Start and query the packaged engine on Android
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          script: cd lampa-player-native && gradle connectedDebugAndroidTest --no-daemon --stacktrace -PmediaCenter=true -PcenterEmulator=true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: LampMedia-device-reports
+          path: lampa-player-native/app/build/reports/androidTests/
+  publish:
+    needs: [android, device]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: LampMedia-ARM
+          path: package
+      - name: Stage update
+        run: |
+          set -euo pipefail
+          mkdir dist
+          apk=$(find package -name app-debug.apk -print -quit)
+          cp "$apk" dist/LampMedia-${{ github.run_number }}.apk
+          python - <<'PY'
+          import json,hashlib,pathlib
+          p=pathlib.Path('dist/LampMedia-${{ github.run_number }}.apk')
+          data={'versionCode':${{ github.run_number }},'versionName':'0.1.${{ github.run_number }}',
+            'url':'https://github.com/${{ github.repository }}/releases/download/media-center/'+p.name,
+            'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),
+            'notes':'Серии онлайн и TMDB теперь показаны компактной сеткой с прогрессом и возвратом к последнему эпизоду. Переключатели сезона, озвучки и плеера перенесены наверх. В каталоге крупно отображается название выбранного постера.'}
+          pathlib.Path('dist/version.json').write_text(json.dumps(data,ensure_ascii=False,indent=2))
+          PY
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: media-center
+          name: LampMedia — native Android TV preview
+          prerelease: true
+          body: |
+            Own native media-center preview, installed alongside LampPlayer.
+            Native TMDB / KinoVod / Filmix catalogs, country sections, episode-update badges and pinned titles.
+            Online metadata resolves in the background; native season/voice/episode/quality selection opens our player.
+            Manual website fallback remains explicit. Source availability, account and regional restrictions are respected.
+            Native torrent playback, series/episodes, favorites, history, TV back/focus restoration and engine cache controls.
+            Configure your own JacRed host or full Torznab endpoint in Sources.
+            Engine: TorrServer MatriX.148 (GPL-3.0). Corresponding upstream source:
+            https://github.com/YouROK/TorrServer/archive/refs/tags/MatriX.148.tar.gz
+            Application source and build instructions: codex/media-center branch, media-center/README.md.
+          files: |
+            dist/*.apk
+            dist/version.json

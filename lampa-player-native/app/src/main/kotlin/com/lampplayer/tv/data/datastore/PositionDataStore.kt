@@ -32,15 +32,21 @@ class PositionDataStore @Inject constructor(
         return "r${abs(h)}"
     }
 
+    private fun stableIdentity(card:CardMeta):String? {
+        val key=card.contentKey
+        return if(card.tmdbId!=null && key in listOf("tmdb:movie:${card.tmdbId}","tmdb:tv:${card.tmdbId}"))card.tmdbId.toString()
+        else key ?: card.tmdbId?.toString() ?: card.imdbId
+    }
     fun showKey(card: CardMeta): String? {
-        val id = card.tmdbId?.toString() ?: card.imdbId ?: card.title
+        val id = stableIdentity(card) ?: card.title
         return id.let { "s${it.replace(Regex("\\W"), "")}" }
     }
 
     /** Per-episode key that survives balancer URL rotation (tokens change every launch). */
     fun episodeKey(card: CardMeta?): String? {
         if (card == null || card.iptv) return null
-        val id = card.tmdbId?.toString() ?: card.imdbId ?: return null
+        if (card.contentKey?.contains(":tv:") == true && (card.episodeNumber == null || card.seasonNumber == null)) return null
+        val id = stableIdentity(card) ?: return null
         return "e${id}_${card.seasonNumber ?: 0}_${card.episodeNumber ?: 0}"
     }
 
