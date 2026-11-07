@@ -554,6 +554,7 @@ class CenterOnlineInstrumentedTest {
                         "/modern-frame" -> """<html><body><div id="player"></div><div id="trailer"></div><script src="/venom.js"></script><script>
                             function makePlayer(options){return VenomPlayer.make(options);}
                             var middleCount=2;
+                            JSON.parse('{"seasons":[{"season":3,"episodes":[{"episode":"1","source":{"file":{"720":"https://cdn.test/three.mp4","1080":"https://cdn.test/unavailable.mp4"}}}]}]}');
                             makePlayer({container:document.getElementById('player'),translation:'Voice',
                             restrictQuality:function(q){return q>720?'Unavailable':false;},
                             playlist:{seasons:[{season:2,episodes:[
@@ -651,6 +652,27 @@ class CenterOnlineInstrumentedTest {
                 val result=resolver.resolve(CenterTitle(17,"movie","Movie",provider="kinokong",sourceUrl=server.url("/17-movie.html").toString()))
                 assertEquals(setOf(720,1080),result.episodes.single().sources.keys)
                 assertEquals("Voice",result.episodes.single().voice);assertFalse(result.episodes.single().sources.values.any { it.contains("/ad.") })
+            }
+        }
+    }
+
+    @Test fun kinokongBlockedVenomFactoryDoesNotExposePreviouslyObservedUrls() = runBlocking {
+        MockWebServer().use { server ->
+            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest)=MockResponse()
+                    .setHeader("Content-Type","text/html; charset=utf-8").setBody(if(request.path=="/17-show.html")
+                        """<div id="full_17"><ul class="newTabs"><li data-iframe="/frame">Смотреть</li></ul></div>"""
+                    else """<html><body><script>
+                        JSON.parse('{"seasons":[{"season":1,"episodes":[{"episode":"1","source":{"hls":"https://cdn.test/not-allowed.m3u8"}}]}]}');
+                        window.VenomPlayer={make:function(options){return options;}};
+                        VenomPlayer.make({blocked:true,source:{hls:'https://cdn.test/not-allowed.m3u8'}});
+                        </script></body></html>""")
+            }
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val error=runCatching { resolver.resolve(CenterTitle(17,"tv","Show",provider="kinokong",sourceUrl=server.url("/17-show.html").toString())) }.exceptionOrNull()
+                assertTrue(error is OnlineSourceBlocked)
+                assertTrue(error!!.message.orEmpty().contains("заблокировано"))
             }
         }
     }

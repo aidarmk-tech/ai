@@ -3,9 +3,10 @@
 if((window!==window.top&&!window.__lampMetadataFrame)||window.__lampOnline)return;
 HTMLMediaElement.prototype.play=function(){return Promise.reject(new DOMException('Metadata only','NotAllowedError'));};
 var state=window.__lampOnline={files:[],lists:[],playerFiles:[],playerLists:[],seen:{},errors:[],cap:480,ids:[],instances:[],xhr:[],shapes:[],jsonXhr:0};
-window.__lampRecordModern=function(rows){
+window.__lampBlockModern=function(){state.modernBlocked=true;};
+window.__lampRecordModern=function(rows,bound){
  var list=rows.map(function(row){return {title:row.voice||"Основная озвучка",folder:[{id:row.id||"",title:row.title||"",season:row.season||0,episode:row.episode||0,file:row.file}]};});
- remember(list,"list",true);
+ remember(list,"list",!!bound);
 };
 var originalParse=JSON.parse,originalStringify=JSON.stringify;
 function remember(value,kind,bound){
@@ -122,7 +123,7 @@ window.__lampSnapshot=function(){
  var blocked=/(недоступ(?:но|ен)[\s\S]{0,90}(?:стране|регион[ае])|заблокировано[\s\S]{0,90}правообладателя|нет видео файла)/i.exec(text);
  // Once a player is observed, unrelated page JSON cannot stand in for its playlist.
  var bound=state.ids.length||state.playerFiles.length||state.playerLists.length;
- var result={files:bound?state.playerFiles:state.files,lists:bound?state.playerLists:state.lists,cap:state.cap,blocked:blocked?blocked[0]:null,playerType:typeof window.Playerjs,ids:state.ids,xhr:state.xhr,shapes:state.shapes,jsonXhr:state.jsonXhr,modern:window.__lampModernStats?window.__lampModernStats():null};
+ var result={files:state.modernBlocked?[]:bound?state.playerFiles:state.files,lists:state.modernBlocked?[]:bound?state.playerLists:state.lists,cap:state.cap,blocked:state.modernBlocked?"Видео заблокировано источником":blocked?blocked[0]:null,playerType:typeof window.Playerjs,ids:state.ids,xhr:state.xhr,shapes:state.shapes,jsonXhr:state.jsonXhr,modern:window.__lampModernStats?window.__lampModernStats():null};
  var json=originalStringify(result);return json.length<1000000?json:'{}';
 };
 })();
