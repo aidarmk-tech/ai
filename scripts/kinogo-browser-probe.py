@@ -31,7 +31,7 @@ def html(kind):
   </script>"""
  if kind=="sdk":
   return """<div id="player"></div><script src="/sdk.js"></script><script>
-  let playerConfigs={id:'player',file:'http://fixture.test/media/master.m3u8',autoplay:0,preload:1};
+  let playerConfigs={id:'player',file:'https://fixture.test/media/master.m3u8',autoplay:0,preload:1};
   let player=new Playerjs(playerConfigs);playerConfigs={id:'player',file:'#opaque-config'};
   </script>"""
 async def main():
@@ -43,20 +43,22 @@ async def main():
    from urllib.parse import urlsplit
    u=urlsplit(r.request.url)
    if u.hostname=="fixture.test":
-    if u.path=="/media/master.m3u8":await r.fulfill(content_type="application/vnd.apple.mpegurl",body="#EXTM3U\\n#EXT-X-VERSION:3\\n#EXT-X-TARGETDURATION:2\\n#EXTINF:2,\\nsegment.ts\\n#EXT-X-ENDLIST".replace("\\\\n","\\n"))
+    if u.path=="/media/master.m3u8":await r.fulfill(content_type="application/vnd.apple.mpegurl",body="\n".join(["#EXTM3U","#EXT-X-VERSION:3","#EXT-X-TARGETDURATION:2","#EXT-X-MEDIA-SEQUENCE:1","#EXTINF:2,","segment.ts",""]))
     elif u.path=="/media/segment.ts":await r.abort()
     elif u.path=="/sdk.js":await r.fulfill(content_type="application/javascript",body=sdk)
     elif u.path.endswith("-frame"):await r.fulfill(content_type="text/html; charset=utf-8",body="<html><body>"+html(u.path[1:-6])+"</body></html>")
     else:await r.fulfill(content_type="text/html",body="<iframe style='width:1200px;height:650px' src='/"+u.path[1:].split('.')[0]+"-frame'></iframe>")
+   elif r.request.resource_type in ("script","stylesheet"):await r.continue_()
    else:await r.abort()
   await context.route("**/*",route)
   kinds=["hls","config","dom"]+(["sdk"] if sdk else [])
   for kind in kinds:
    page=await context.new_page();page.on("pageerror",lambda e:print("JS_ERROR",str(e)[:180],flush=True))
-   await page.goto("http://fixture.test/"+kind+".html")
+   await page.goto("https://fixture.test/"+kind+".html")
    frame=next(f for f in page.frames if f!=page.main_frame)
    await frame.evaluate("window.__lampMetadataFrame=true;"+COMMON)
-   await page.wait_for_timeout(1600)
+   await page.wait_for_timeout(2200)
+   if kind=="sdk":print("SDK_API",await frame.evaluate("JSON.stringify({hls:typeof player.api(\'hls\'),log:player.api(\'log\'),video:Array.from(document.querySelectorAll(\'video\')).map(v=>({src:v.src,current:v.currentSrc}))})"),flush=True)
    snap=json.loads(await frame.evaluate("window.__lampSnapshot()"))
    print("CASE",kind,json.dumps(snap,ensure_ascii=False),flush=True)
    raw=json.dumps(snap["files"])+json.dumps(snap["lists"])
