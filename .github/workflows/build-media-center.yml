@@ -97,7 +97,7 @@ jobs:
           data={'versionCode':${{ github.run_number }},'versionName':'0.1.${{ github.run_number }}',
             'url':'https://github.com/${{ github.repository }}/releases/download/media-center/'+p.name,
             'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),
-            'notes':'Добавлен ручной выбор плеера источника для KinoKong, Zona и KinoTac. Номер плеера виден в списке серий; после ошибки можно выбрать другой. Ручной выбор сохраняется при обновлении ссылок и восстановлении из LampPlayer. Доступен возврат к автоматическому выбору.'}
+            'notes':'В TMDB добавлен выбор всех пяти онлайн-источников: Киновод, KinoGo, KinoKong, KinoTac и Zona. Отдельные привязки сайтов, сохранение TMDB-прогресса и правильное восстановление исходного источника. Исправлен перехват кнопки Влево при редактировании поиска. Включён ручной выбор плееров и восстановление после ошибки.'}
           pathlib.Path('dist/version.json').write_text(json.dumps(data,ensure_ascii=False,indent=2))
           PY
       - uses: softprops/action-gh-release@v2

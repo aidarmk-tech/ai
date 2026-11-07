@@ -53,6 +53,12 @@ class MediaCenterUiTest {
         val kinoQueries=mutableListOf<String>()
         var kinoResults=emptyList<CenterTitle>()
         val resolvedItems=mutableListOf<CenterTitle>()
+        val sourceQueries=mutableListOf<Pair<String,String>>()
+        val sourceResults=mutableMapOf<String,List<CenterTitle>>()
+        override suspend fun searchOnlineCatalog(provider:String,query:String):List<CenterTitle> {
+            if(provider=="kinovod")return searchKinoVod(query)
+            sourceQueries.add(provider to query);return sourceResults[provider].orEmpty()
+        }
         override suspend fun searchKinoVod(query:String):List<CenterTitle> { kinoQueries.add(query);return kinoResults }
         val gridCalls=mutableListOf<Int>()
         val gridPages=mutableMapOf<Int,List<CenterTitle>>()
@@ -835,7 +841,7 @@ class MediaCenterUiTest {
             host.kinoResults=listOf(source)
             host.nextOnline=OnlineVideo(source,listOf(OnlineEpisode(2,5,"Пятая","Voice",mapOf(720 to "https://cdn.test/five.m3u8"))),mapOf("Referer" to source.sourceUrl!!))
             host.detailFixture(CenterDetails(tmdb,listOf(1,2),""));frame(root)
-            label(root,"Смотреть онлайн · Киновод").performClick();repeat(4){frame(root)}
+            label(root,"Смотреть онлайн").performClick();frame(root);all(root).first { it.tag=="online_source:kinovod" }.performClick();repeat(4){frame(root)}
             assertEquals(setOf("Король Талсы","Tulsa King"),host.kinoQueries.toSet())
             assertEquals(source.key,host.resolvedItems.single().key)
             label(root,"Сезон 2").performClick();frame(root)
@@ -857,7 +863,7 @@ class MediaCenterUiTest {
             host.kinoResults=listOf(first,second)
             host.nextOnline=OnlineVideo(second,listOf(OnlineEpisode(0,0,"Остров","Voice",mapOf(720 to "https://cdn.test/movie.mp4"))),emptyMap())
             host.detailFixture(CenterDetails(tmdb,emptyList(),""));frame(root)
-            label(root,"Смотреть онлайн · Киновод").performClick();repeat(3){frame(root)}
+            label(root,"Смотреть онлайн").performClick();frame(root);all(root).first { it.tag=="online_source:kinovod" }.performClick();repeat(3){frame(root)}
             assertEquals(0,host.onlineCalls);assertNull(shadowOf(host).nextStartedActivity)
             all(root).first { it.tag=="online_match:${second.key}" }.performClick();repeat(3){frame(root)}
             assertEquals(second.key,host.resolvedItems.single().key)
@@ -1005,6 +1011,118 @@ class MediaCenterUiTest {
             assertEquals(2,host.onlineCalls);assertEquals(listOf(1),host.requestedPlayers)
             assertTrue(all(root).any { it.tag=="online:2:5:Voice" })
             assertNull(shadowOf(host).nextStartedActivity)
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    private fun tmdbSource(provider:String):CenterTitle = CenterTitle(17,"tv","Король Талсы",year="2022",provider=provider,
+        sourceUrl=when(provider) {
+            "kinovod" -> "https://kinovod.pro/serial/17-show"
+            "kinogo" -> "https://kz.kinogo.moi/17-show.html"
+            "kinokong" -> "https://kinokong.es/17-show.html"
+            "kinotac" -> "https://kinotac.org/17-show.html"
+            else -> "https://zona.movie/series/show-17/"
+        })
+
+    @Test fun tmdbCardsOfferEveryOnlineProviderAndPreserveTmdbMetadataWhenLaunchingEach() {
+        for(provider in listOf("kinogo","kinokong","kinotac","zona")) {
+            val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+            try {
+                val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+                val item=CenterTitle(153312,"tv","Король Талсы",original="Tulsa King",year="2022",poster="https://img.test/tmdb.jpg")
+                val source=tmdbSource(provider)
+                host.sourceResults[provider]=listOf(source)
+                host.nextOnline=OnlineVideo(source,listOf(OnlineEpisode(2,5,"Пятая","Voice",mapOf(720 to "https://cdn.test/five.m3u8"))),emptyMap())
+                host.detailFixture(CenterDetails(item,listOf(1,2),""));frame(root)
+                label(root,"Смотреть онлайн").performClick();frame(root)
+                assertEquals(5,all(root).count { it.tag?.toString()?.startsWith("online_source:")==true })
+                assertFalse(all(root).any { it.tag=="online_source:filmix" })
+                all(root).first { it.tag=="online_source:$provider" }.performClick();repeat(4){frame(root)}
+                assertEquals(setOf(provider),host.sourceQueries.map { it.first }.toSet())
+                assertEquals(source.key,host.resolvedItems.single().key)
+                label(root,"Сезон 2").performClick();frame(root)
+                all(root).first { it.tag=="online:2:5:Voice" }.performClick();frame(root)
+                val played=com.lampplayer.tv.player.IntentParser.parse(shadowOf(host).nextStartedActivity)!!.second
+                assertEquals(item.id,played.tmdbId);assertEquals(item.key,played.contentKey);assertEquals(item.poster,played.posterUrl)
+                assertEquals(source.sourceUrl,played.sourcePage);assertEquals(2,played.seasonNumber);assertEquals(5,played.episodeNumber)
+            } finally { controller.pause().stop().destroy() }
+        }
+    }
+
+    @Test fun switchingTmdbSourcesKeepsSeasonVoiceAndUsesTheSelectedSitesBinding() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(153312,"tv","Король Талсы",year="2022")
+            val first=tmdbSource("kinovod");val second=tmdbSource("kinotac")
+            CenterStore(host).setOnlineSource(item,first)
+            host.nextOnline=OnlineVideo(first,listOf(OnlineEpisode(2,5,"Пятая","Voice",mapOf(720 to "https://cdn.test/first.m3u8"))),emptyMap())
+            host.detailFixture(CenterDetails(item,listOf(1,2),""));frame(root)
+            label(root,"Смотреть онлайн").performClick();frame(root)
+            all(root).first { it.tag=="online_source:kinovod" }.performClick();repeat(3){frame(root)}
+            label(root,"Сезон 2").performClick();frame(root)
+            label(root,"Другой онлайн-источник").performClick();frame(root)
+            host.sourceResults["kinotac"]=listOf(second)
+            host.nextOnline=OnlineVideo(second,listOf(OnlineEpisode(2,5,"Пятая","Voice",mapOf(720 to "https://cdn.test/second.m3u8"))),emptyMap())
+            all(root).first { it.tag=="online_source:kinotac" }.performClick();repeat(4){frame(root)}
+            assertTrue(all(root).any { it.tag=="online:2:5:Voice" })
+            all(root).first { it.tag=="online:2:5:Voice" }.performClick();frame(root)
+            val played=com.lampplayer.tv.player.IntentParser.parse(shadowOf(host).nextStartedActivity)!!
+            assertEquals("https://cdn.test/second.m3u8",played.first);assertEquals(item.key,played.second.contentKey)
+            assertEquals(first,CenterStore(host).onlineSource(item,"kinovod"));assertEquals(second,CenterStore(host).onlineSource(item,"kinotac"))
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun tmdbHistoryRestoresItsOriginalProviderEvenAfterAnotherProviderWasSelected() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(153312,"tv","Король Талсы",year="2022")
+            val source=tmdbSource("kinokong")
+            CenterStore(host).apply {
+                setOnlineSource(item,source);setOnlineSource(item,tmdbSource("kinotac"))
+                remember("https://cdn.test/old.m3u8",com.lampplayer.tv.domain.model.CardMeta(item.title,tmdbId=item.id,contentKey=item.key,
+                    sourcePage=source.sourceUrl,seasonNumber=2,episodeNumber=5,quality="720",translator="Voice"))
+            }
+            host.nextOnline=OnlineVideo(source,listOf(OnlineEpisode(2,5,"Пятая","Voice",mapOf(720 to "https://cdn.test/five.m3u8"))),emptyMap())
+            host.detailFixture(CenterDetails(item,listOf(1,2),""));frame(root)
+            all(root).first { it.tag=="continue_title" }.performClick();repeat(4){frame(root)}
+            assertTrue(host.sourceQueries.isEmpty());assertTrue(host.kinoQueries.isEmpty())
+            assertEquals(source.key,host.resolvedItems.single().key)
+            val played=com.lampplayer.tv.player.IntentParser.parse(shadowOf(host).nextStartedActivity)!!
+            assertEquals(item.key,played.second.contentKey);assertEquals(source.sourceUrl,played.second.sourcePage)
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun tmdbPinnedPlayerRecoveryKeepsItsProviderAndTmdbIdentity() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(153312,"tv","Король Талсы",year="2022")
+            val source=tmdbSource("kinokong")
+            host.nextOnline=OnlineVideo(source,listOf(OnlineEpisode(2,5,"Пятая","Voice",mapOf(720 to "https://cdn.test/five.m3u8"))),emptyMap(),
+                playerIndex=1,playerCount=2,pinnedPlayer=true)
+            val card=com.lampplayer.tv.domain.model.CardMeta(item.title,tmdbId=item.id,contentKey=item.key,sourcePage=source.sourceUrl,
+                seasonNumber=2,episodeNumber=5,translator="Voice",quality="720")
+            ReflectionHelpers.setField(host,"recovery","refresh" to card);ReflectionHelpers.setField(host,"recoveryPlayer",1)
+            controller.pause().stop().start().resume().visible();repeat(4){frame(root)}
+            assertEquals(listOf(1),host.requestedPlayers)
+            val played=com.lampplayer.tv.player.IntentParser.parse(shadowOf(host).nextStartedActivity)!!.second
+            assertEquals(item.key,played.contentKey);assertEquals(source.sourceUrl,played.sourcePage);assertEquals(2,played.seasonNumber);assertEquals(5,played.episodeNumber)
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun editingASearchQueryWithLeftDoesNotOpenTheNavigationDrawer() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content);frame(root)
+            all(root).first { it.tag=="menu_handle" }.performClick();frame(root)
+            label(root,"Поиск").performClick();frame(root)
+            val query=all(root).first { it.tag=="search_query" } as android.widget.EditText
+            query.setText("Матрица");query.setSelection(4);query.requestFocus();frame(root)
+            key(root,KeyEvent.KEYCODE_DPAD_LEFT);frame(root)
+            assertFalse(all(root).first { it.tag=="Главная" }.isShown)
+            assertTrue(query.hasFocus());assertEquals(3,query.selectionStart)
         } finally { controller.pause().stop().destroy() }
     }
 }

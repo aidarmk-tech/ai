@@ -54,12 +54,19 @@ class CenterStore(context: Context) {
     fun setVoice(key: String, voice: String?) {
         prefs.edit().apply { if (voice == null) remove("voice_$key") else putString("voice_$key", voice) }.apply()
     }
-    fun onlineSource(item:CenterTitle):CenterTitle? = runCatching {
-        gson.fromJson(prefs.getString("online_kinovod_"+item.key,null),CenterTitle::class.java)
-    }.getOrNull()?.takeIf { CenterOnlineMatch.valid(item,it) }
+    fun onlineSource(item:CenterTitle,provider:String?=null):CenterTitle? {
+        fun saved(p:String)=runCatching { gson.fromJson(prefs.getString("online_"+p+"_"+item.key,null),CenterTitle::class.java) }
+            .getOrNull()?.takeIf { it.provider==p&&CenterOnlineMatch.valid(item,it) }
+        if(provider!=null)return provider.takeIf { it in CenterOnlineMatch.providers }?.let(::saved)
+        val bindings=CenterOnlineMatch.providers.mapNotNull(::saved)
+        item.sourceUrl?.let { page -> bindings.firstOrNull { CenterOnline.sameTitleNavigation(it,page) }?.let { return it.copy(sourceUrl=page) } }
+        val last=prefs.getString("online_last_"+item.key,null)
+        return bindings.firstOrNull { it.provider==last } ?: bindings.firstOrNull { it.provider=="kinovod" }
+    }
     fun setOnlineSource(item:CenterTitle,source:CenterTitle) {
         require(CenterOnlineMatch.valid(item,source))
-        prefs.edit().putString("online_kinovod_"+item.key,gson.toJson(source)).apply()
+        prefs.edit().putString("online_"+source.provider+"_"+item.key,gson.toJson(source))
+            .putString("online_last_"+item.key,source.provider).apply()
     }
     fun searches(): List<String> = runCatching {
         gson.fromJson<List<String>>(prefs.getString("searches", "[]"), object : TypeToken<List<String>>() {}.type)

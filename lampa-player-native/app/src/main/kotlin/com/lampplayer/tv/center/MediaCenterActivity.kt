@@ -253,7 +253,7 @@ open class MediaCenterActivity : AppCompatActivity() {
             val focused = window.decorView.findFocus()
             val point = IntArray(2); val edge = IntArray(2)
             focused?.getLocationOnScreen(point); content.getLocationOnScreen(edge)
-            if (focused === menuHandle || (inside(content, focused) &&
+            if (focused === menuHandle || (inside(content, focused) && focused !is EditText &&
                 (point[0] <= edge[0] + dp(24) || !inside(content, focused?.focusSearch(View.FOCUS_LEFT))))) {
                 openMenu(); return true
             }
@@ -272,12 +272,13 @@ open class MediaCenterActivity : AppCompatActivity() {
                 val item = CenterTitle(parts.getOrNull(2)?.toIntOrNull() ?: card.tmdbId ?: 0,
                     if (card.seasonNumber != null || parts.getOrNull(1) == "tv") "tv" else "movie",
                     card.title, original = card.originalTitle.orEmpty(), year=card.releaseYear?.toString().orEmpty(), provider = provider, sourceUrl = card.sourcePage)
-                val canOnline=CenterOnline.onlineSupported(provider) || CenterOnlineMatch.fromPage(item)!=null
-                val preferredPlayer=if(CenterOnline.manualPlayers(provider))recoveryPlayer ?: onlineCache[item.key]?.second?.takeIf { it.pinnedPlayer }?.playerIndex else null
+                val canOnline=provider==null || CenterOnline.onlineSupported(provider)
+                val actualProvider=provider ?: (CenterOnlineMatch.fromPage(item) ?: store.onlineSource(item))?.provider
+                val preferredPlayer=if(CenterOnline.manualPlayers(actualProvider))recoveryPlayer ?: onlineCache[item.key]?.second?.takeIf { it.pinnedPlayer }?.playerIndex else null
                 recoveryPlayer=null
                 enter {
                     when {
-                        action=="source_player" && CenterOnline.manualPlayers(provider) ->
+                        action=="source_player" && CenterOnline.manualPlayers(actualProvider) ->
                             online(item,selectedSeason=card.seasonNumber,selectedVoice=card.translator,choosePlayerAfterLoad=true)
                         action=="refresh" && canOnline -> online(item,card,refresh=true,playerIndex=preferredPlayer)
                         action=="quality" && canOnline -> {
@@ -362,7 +363,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                     if(onlineRecovery!=null)content.addView(button("Другой плеер источника") { onlineRecovery() })
                     content.addView(button("Обновить ссылки") { if(onlineRefresh!=null)onlineRefresh() else online(onlineItem,refresh=true) })
                     content.addView(button("Плеер сайта") { website(onlineItem) })
-                    if(onlineItem.provider==null)content.addView(button("Выбрать на Киноводе") { tmdbOnline(onlineItem,forceSearch=true) })
+                    if(onlineItem.provider==null)content.addView(button("Другой онлайн-источник") { showTmdbOnlineSources(onlineItem) })
                     content.addView(button("Выбрать раздачу") { find(onlineItem,null) })
                 }
                 content.addView(button("Выбрать каталог") { chooseCatalog() })
@@ -844,7 +845,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                     (pos?.let { " · ${clock(it.time)}" } ?: "")
             }
         }
-        if(movie.provider==null) copy.addView(button("Смотреть онлайн · Киновод") { enter { online(movie) } })
+        if(movie.provider==null) copy.addView(button("Смотреть онлайн") { enter { showTmdbOnlineSources(movie) } })
         if (movie.provider != null) {
             if(CenterOnline.onlineSupported(movie.provider)) {
                 copy.addView(button("Смотреть онлайн · проверка") { enter { online(movie) } })
@@ -905,31 +906,57 @@ open class MediaCenterActivity : AppCompatActivity() {
     protected open suspend fun searchKinoVod(query:String):List<CenterTitle> =
         catalogs.search("kinovod",store.catalogHost("kinovod"),query)
 
+    protected open suspend fun searchOnlineCatalog(provider:String,query:String):List<CenterTitle> =
+        if(provider=="kinovod")searchKinoVod(query) else catalogs.search(provider,store.catalogHost(provider),query)
+
+    private fun showTmdbOnlineSources(item:CenterTitle,resume:CardMeta?=null,refresh:Boolean=false,returnTo:Screen?=null,
+        selectedSeason:Int?=null,selectedVoice:String?=null) {
+        currentScreen={showTmdbOnlineSources(item,resume,refresh,returnTo,selectedSeason,selectedVoice)}
+        page="online_sources";clear("Смотреть онлайн · ${item.title}")
+        content.addView(text("Выбери источник. Доступные серии, озвучки и качество зависят от сайта.",15,muted));space(content,12)
+        CenterOnlineMatch.providers.forEach { provider ->
+            val saved=store.onlineSource(item,provider)
+            content.addView(button(CenterCatalog.name(provider)+(if(saved!=null)" · сохранён выбор" else "")) {
+                enter { tmdbOnline(item,resume,refresh,returnTo,selectedSeason,selectedVoice,sourceProvider=provider) }
+            }.apply { tag="online_source:$provider" })
+        }
+        content.addView(button("Найти торрент-раздачу") { enter { find(item,null) } })
+        content.addView(button("Назад") { back() })
+    }
+
     private fun tmdbOnline(item:CenterTitle,resume:CardMeta?=null,refresh:Boolean=false,returnTo:Screen?=null,
-        selectedSeason:Int?=null,selectedVoice:String?=null,forceSearch:Boolean=false,query:String?=null) {
+        selectedSeason:Int?=null,selectedVoice:String?=null,forceSearch:Boolean=false,query:String?=null,
+        sourceProvider:String?=null,playerIndex:Int?=null,choosePlayerAfterLoad:Boolean=false) {
+        val restored=CenterOnlineMatch.fromPage(item) ?: store.onlineSource(item)
+        val provider=sourceProvider ?: restored?.provider?.takeIf { resume!=null||refresh||choosePlayerAfterLoad }
+        if(provider==null) { showTmdbOnlineSources(item,resume,refresh,returnTo,selectedSeason,selectedVoice);return }
+        check(provider in CenterOnlineMatch.providers)
+        val name=CenterCatalog.name(provider)
         onlineReport=null
-        work("Ищу «${item.title}» на Киноводе…",onlineItem=item) {
+        work("Ищу «${item.title}» · $name…",onlineItem=item) {
             fun choose(source:CenterTitle) {
                 store.setOnlineSource(item,source)
-                content.post { online(source,resume,refresh,returnTo,selectedSeason,selectedVoice,item.copy(sourceUrl=source.sourceUrl)) }
+                content.post { online(source,resume,refresh,returnTo,selectedSeason,selectedVoice,item.copy(sourceUrl=source.sourceUrl),
+                    playerIndex=playerIndex,choosePlayerAfterLoad=choosePlayerAfterLoad) }
             }
-            val saved=if(forceSearch)null else CenterOnlineMatch.fromPage(item) ?: store.onlineSource(item)
+            val saved=if(forceSearch)null else restored?.takeIf { it.provider==provider } ?: store.onlineSource(item,provider)
             if(saved!=null) { choose(saved);return@work }
             val queries=query?.let { listOf(it) } ?: CenterOnlineMatch.queries(item)
             val results=coroutineScope { queries.map { term -> async {
-                try { Result.success(searchKinoVod(term)) } catch(e:CancellationException) { throw e } catch(e:Exception) { Result.failure<List<CenterTitle>>(e) }
+                try { Result.success(searchOnlineCatalog(provider,term)) } catch(e:CancellationException) { throw e } catch(e:Exception) { Result.failure<List<CenterTitle>>(e) }
             } }.awaitAll() }
             if(results.isNotEmpty()&&results.all { it.isFailure })throw results.first().exceptionOrNull()!!
-            val matches=CenterOnlineMatch.candidates(item,results.flatMap { it.getOrNull().orEmpty() })
+            val matches=CenterOnlineMatch.candidates(item,results.flatMap { it.getOrNull().orEmpty() }.filter { it.provider==provider })
             val exact=CenterOnlineMatch.automatic(item,matches)
             if(!forceSearch&&exact!=null)choose(exact)
-            else showTmdbOnlineChoices(item,matches,resume,refresh,returnTo,selectedSeason,selectedVoice,query ?: item.title)
+            else showTmdbOnlineChoices(item,matches,resume,refresh,returnTo,selectedSeason,selectedVoice,query ?: item.title,provider)
         }
     }
     private fun showTmdbOnlineChoices(item:CenterTitle,matches:List<CenterTitle>,resume:CardMeta?,refresh:Boolean,returnTo:Screen?,
-        selectedSeason:Int?,selectedVoice:String?,query:String) {
-        currentScreen={showTmdbOnlineChoices(item,matches,resume,refresh,returnTo,selectedSeason,selectedVoice,query)}
-        page="online_match";clear("Киновод · ${item.title}")
+        selectedSeason:Int?,selectedVoice:String?,query:String,provider:String) {
+        currentScreen={showTmdbOnlineChoices(item,matches,resume,refresh,returnTo,selectedSeason,selectedVoice,query,provider)}
+        val name=CenterCatalog.name(provider)
+        page="online_match";clear("$name · ${item.title}")
         content.addView(text("TMDB · "+facts(item),15,accent));space(content,12)
         content.addView(text(if(matches.isEmpty())"Совпадений не найдено. Попробуй другое или оригинальное название."
             else "Выбери совпадение: проверь название и год выхода.",15,muted));space(content,12)
@@ -939,20 +966,21 @@ open class MediaCenterActivity : AppCompatActivity() {
                 enter { online(source,resume,refresh,returnTo,selectedSeason,selectedVoice,item.copy(sourceUrl=source.sourceUrl)) }
             }.apply { tag="online_match:${source.key}";maxLines=2;layoutParams.height=dp(62) })
         }
-        val input=EditText(this).apply { setText(query);hint="Название на Киноводе";isSingleLine=true;setTextColor(ink);tag="online_match_query" }
+        val input=EditText(this).apply { setText(query);hint="Название · $name";isSingleLine=true;setTextColor(ink);tag="online_match_query" }
         content.addView(input)
-        content.addView(button("Искать на Киноводе") {
+        content.addView(button(if(provider=="kinovod")"Искать на Киноводе" else "Искать · $name") {
             val value=input.text.toString().trim()
             if(value.length !in 2..120)input.error="Введи от 2 до 120 символов"
-            else tmdbOnline(item,resume,refresh,returnTo,selectedSeason,selectedVoice,true,value)
+            else tmdbOnline(item,resume,refresh,returnTo,selectedSeason,selectedVoice,true,value,sourceProvider=provider)
         })
+        content.addView(button("Другой онлайн-источник") { showTmdbOnlineSources(item,resume,refresh,returnTo,selectedSeason,selectedVoice) })
         content.addView(button("Найти торрент-раздачу") { enter { find(item,null) } })
         content.addView(button("Назад") { back() })
     }
 
     private fun online(item: CenterTitle, resume: CardMeta? = null, refresh: Boolean = false, returnTo: Screen? = null,
         selectedSeason: Int? = null, selectedVoice: String? = null, catalogItem: CenterTitle? = null, playerIndex:Int?=null, choosePlayerAfterLoad:Boolean=false) {
-        if(item.provider==null) { tmdbOnline(item,resume,refresh,returnTo,selectedSeason,selectedVoice);return }
+        if(item.provider==null) { tmdbOnline(item,resume,refresh,returnTo,selectedSeason,selectedVoice,playerIndex=playerIndex,choosePlayerAfterLoad=choosePlayerAfterLoad);return }
         val identity=catalogItem ?: item
         onlineReport=null
         val previous = returnTo ?: if (resume != null && page == "online") snapshot() else null
@@ -1041,7 +1069,10 @@ open class MediaCenterActivity : AppCompatActivity() {
             content.addView(button("Плеер источника · ${video.playerIndex+1} из ${video.playerCount}"+if(video.pinnedPlayer)" · выбран" else " · авто") {
                 chooseOnlinePlayer(video,season,selectedVoice)
             })
-        if(video.catalogItem!=null)content.addView(button("Другое совпадение на Киноводе") { tmdbOnline(video.identity,forceSearch=true) })
+        if(video.catalogItem!=null) {
+            content.addView(button("Другое совпадение · ${CenterCatalog.name(video.item.provider)}") { tmdbOnline(video.identity,forceSearch=true,sourceProvider=video.item.provider) })
+            content.addView(button("Другой онлайн-источник") { showTmdbOnlineSources(video.identity,selectedSeason=season,selectedVoice=selectedVoice) })
+        }
         content.addView(button("Обновить список и ссылки") { online(video.item, refresh = true, selectedSeason = season, selectedVoice = selectedVoice, catalogItem=video.catalogItem,playerIndex=video.playerIndex.takeIf { video.pinnedPlayer }) })
         if (focusFirst && hadFocus) content.post { content.getFocusables(View.FOCUS_FORWARD).firstOrNull()?.requestFocus() }
     }
@@ -1337,7 +1368,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                     card.title, original = card.originalTitle.orEmpty(), overview = card.overview.orEmpty(),
                     poster = card.posterUrl, year=card.releaseYear?.toString().orEmpty(), provider = provider, sourceUrl = card.sourcePage)
                 content.post {
-                    if(CenterOnline.onlineSupported(provider)||CenterOnlineMatch.fromPage(item)!=null) online(item,card,refresh=true)
+                    if(provider==null||CenterOnline.onlineSupported(provider)) online(item,card,refresh=true)
                     else find(item, card.episodeNumber?.let { CenterEpisode(card.seasonNumber ?: 1, it, "", "") })
                 }
                 return@work
@@ -1367,7 +1398,7 @@ open class MediaCenterActivity : AppCompatActivity() {
     private fun website(item: CenterTitle) {
         if(item.provider==null) {
             val source=CenterOnlineMatch.fromPage(item) ?: store.onlineSource(item)
-            if(source==null) { tmdbOnline(item,forceSearch=true);return }
+            if(source==null) { showTmdbOnlineSources(item);return }
             launchWebsite(CenterOnline.source(source).toString(),metadata(item.copy(sourceUrl=source.sourceUrl)).toString(),source.provider)
             return
         }

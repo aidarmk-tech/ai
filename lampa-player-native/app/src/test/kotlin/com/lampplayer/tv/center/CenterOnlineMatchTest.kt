@@ -60,4 +60,32 @@ class CenterOnlineMatchTest {
         assertEquals(1,store.history().size);assertEquals("https://new.test/video",store.history().single().url)
         assertEquals("tmdb:tv:153312",store.mySeries().single().key)
     }
+
+    private fun sources():List<CenterTitle> = listOf(source,
+        source.copy(id=17,provider="kinogo",sourceUrl="https://kz.kinogo.moi/17-show.html"),
+        source.copy(id=18,provider="kinokong",sourceUrl="https://kinokong.es/18-show.html"),
+        source.copy(id=19,provider="kinotac",sourceUrl="https://kinotac.org/19-show.html"),
+        source.copy(id=20,provider="zona",sourceUrl="https://zona.movie/series/show-20/"))
+    @Test fun everyOnlineProviderMatchesWithoutReplacingTheTmdbIdentity() {
+        for(candidate in sources()) {
+            assertEquals(candidate,CenterOnlineMatch.automatic(tmdb,listOf(candidate)))
+            assertNull(CenterOnlineMatch.automatic(tmdb,listOf(candidate.copy(year="2023"))))
+            val restored=CenterOnlineMatch.fromPage(tmdb.copy(sourceUrl=candidate.sourceUrl))!!
+            assertEquals(candidate.key,restored.key);assertEquals(candidate.sourceUrl,restored.sourceUrl)
+        }
+        assertFalse(CenterOnlineMatch.valid(tmdb,source.copy(provider="filmix")))
+        assertNull(CenterOnlineMatch.fromPage(tmdb.copy(sourceUrl="https://unknown.test/18-show.html")))
+    }
+    @Test fun providerBindingsAreIndependentAndHistoryUrlsWinOverTheLastSelectedProvider() {
+        val store=CenterStore(RuntimeEnvironment.getApplication())
+        for(candidate in sources())store.setOnlineSource(tmdb,candidate)
+        for(candidate in sources())assertEquals(candidate,store.onlineSource(tmdb,candidate.provider))
+        assertEquals("zona",store.onlineSource(tmdb)!!.provider)
+        val kong=sources().first { it.provider=="kinokong" }
+        assertEquals(kong,store.onlineSource(tmdb.copy(sourceUrl=kong.sourceUrl)))
+        val custom=sources().first { it.provider=="kinotac" }.copy(sourceUrl="https://custom.test/19-show.html")
+        store.setOnlineSource(tmdb,custom);store.setOnlineSource(tmdb,source)
+        assertEquals(custom,store.onlineSource(tmdb.copy(sourceUrl=custom.sourceUrl)))
+        assertNull(store.onlineSource(tmdb,"filmix"))
+    }
 }
