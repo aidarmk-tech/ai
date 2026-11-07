@@ -78,6 +78,7 @@ open class MediaCenterActivity : AppCompatActivity() {
     private var job: Job? = null
     private var gridJob: Job? = null
     private var gridGeneration = 0
+    private var episodeFocus: (() -> Unit)? = null
     private var compactToolbar: LinearLayout? = null
     private var releaseFiltersExpanded = false
     private var page = "home"
@@ -329,7 +330,7 @@ open class MediaCenterActivity : AppCompatActivity() {
             }
     }
     private fun clear(title: String) {
-        gridGeneration++; gridJob?.cancel(); gridJob = null; compactToolbar = null
+        gridGeneration++; gridJob?.cancel(); gridJob = null; compactToolbar = null; episodeFocus=null
         content.removeAllViews(); scroll.scrollTo(0, 0)
         content.addView(text(title, 27).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) })
         space(content, 16)
@@ -348,7 +349,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         job = lifecycleScope.launch {
             try {
                 block()
-                if (focusContent && playerReturn == null && page != "loading") content.post { content.getFocusables(View.FOCUS_FORWARD).firstOrNull { it.isShown && it.isEnabled }?.requestFocus() }
+                if (focusContent && playerReturn == null && page != "loading") content.post { episodeFocus?.invoke() ?: content.getFocusables(View.FOCUS_FORWARD).firstOrNull { it.isShown && it.isEnabled }?.requestFocus() }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
                 page = "error"; clear("Не удалось загрузить")
@@ -554,6 +555,16 @@ open class MediaCenterActivity : AppCompatActivity() {
         if (category != null) catalogItems(provider, category, number) else backend.browse(type, page = number)
     private fun titleGrid(initial: List<CenterTitle>, heading: String, firstPage: Int, category: CenterSection?, canLoad: Boolean, request: CenterBrowse? = null) {
         val loaded = initial.distinctBy { it.key }.toMutableList()
+        val caption=content.getChildAt(0) as TextView
+        (content.getChildAt(1) as? View)?.layoutParams?.height=dp(6)
+        content.addView(text(heading,12,muted),0)
+        caption.apply {
+            tag="focused_catalog_title";maxLines=2;ellipsize=null;text=loaded.firstOrNull()?.title.orEmpty()
+            layoutParams=LinearLayout.LayoutParams(-1,dp(52))
+            androidx.core.widget.TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(this,14,22,1,android.util.TypedValue.COMPLEX_UNIT_SP)
+        }
+        fun describe(item:CenterTitle) { caption.text=item.title;caption.contentDescription=item.title }
+
         val provider = store.catalog
         val type = when (nav) { "Фильмы" -> "movie"; "Сериалы" -> "tv"; else -> "all" }
         val generation = gridGeneration
@@ -631,6 +642,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                     store.toggle(item); Toast.makeText(this@MediaCenterActivity,if(store.isFavorite(item)) "Добавлено в избранное" else "Убрано из избранного",Toast.LENGTH_SHORT).show(); true
                 }
                 holder.itemView.setOnFocusChangeListener { view, focused ->
+                    if(focused)describe(item)
                     view.background = bg(if(focused) Color.rgb(34,54,79) else panel,if(focused) accent else Color.TRANSPARENT)
                     if(focused && holder.bindingAdapterPosition >= loaded.size-columns*2) nextPage()
                 }
@@ -642,7 +654,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                 if (dy > 0 && (rv.layoutManager as GridLayoutManager).findLastVisibleItemPosition() >= loaded.size-columns*2) nextPage()
             }
         })
-        content.addView(grid,LinearLayout.LayoutParams(-1,dp((resources.configuration.screenHeightDp-155).coerceAtLeast(240))))
+        content.addView(grid,LinearLayout.LayoutParams(-1,dp((resources.configuration.screenHeightDp-190).coerceAtLeast(220))))
         content.addView(status)
         rememberScreen()
         grid.post { if (loaded.size <= columns*2) nextPage() }
@@ -662,17 +674,73 @@ open class MediaCenterActivity : AppCompatActivity() {
     private fun progressCard(item: CenterTitle, season: Int?, episode: Int?) = CardMeta(
         title = item.title, contentKey = item.key, tmdbId = item.id.takeIf { item.provider == null },
         seasonNumber = season?.takeIf { it > 0 }, episodeNumber = episode?.takeIf { it > 0 })
-    private fun episodeProgress(view: TextView, item: CenterTitle, season: Int, episode: Int, url: String) {
-        if (episode <= 0) return
-        val label = view.text.toString()
-        val last = store.history().firstOrNull { (it.card.contentKey ?: "tmdb:${if (it.card.seasonNumber != null) "tv" else "movie"}:${it.card.tmdbId}") == item.key }?.card
-        val current = last?.seasonNumber == season && last.episodeNumber == episode
+    private fun lastEpisode(item:CenterTitle)=store.history().firstOrNull {
+        (it.card.contentKey ?: "tmdb:${if(it.card.seasonNumber!=null)"tv" else "movie"}:${it.card.tmdbId}")==item.key
+    }?.card
+
+    private fun episodeProgress(view:TextView,item:CenterTitle,season:Int,episode:Int,url:String,bar:ProgressBar?=null) {
+        if(episode<=0)return
+        val label=view.text.toString();val bound=view.tag
+        val last=lastEpisode(item);val current=last!=null&&(last.seasonNumber ?: 0)==season&&last.episodeNumber==episode
+        bar?.progress=0
         lifecycleScope.launch {
-            val position = PositionDataStore(applicationContext).getPosition(url, progressCard(item, season, episode))
-            val prefix = if (position?.watched == true) "✓ " else if (current) "▶ " else ""
-            view.text = prefix + label + if (position != null && position.time > 0) " · ${clock(position.time)} · ${position.percent}%" else ""
-            if (current && position?.watched != true) view.setTextColor(accent)
+            val position=PositionDataStore(applicationContext).getPosition(url,progressCard(item,season,episode))
+            if(view.tag!=bound)return@launch
+            val prefix=if(position?.watched==true)"✓ " else if(current)"▶ " else ""
+            view.text=prefix+label+if(position!=null&&position.time>0)" · ${clock(position.time)} · ${position.percent}%" else ""
+            bar?.progress=position?.percent?.coerceIn(0,100) ?: 0
+            if(current&&position?.watched!=true)view.setTextColor(accent)
         }
+    }
+    private data class EpisodeChoice(val tag:String,val label:String,val season:Int,val number:Int,val url:String="",
+        val action:()->Unit,val longAction:(()->Unit)?=null,val onFocus:(()->Unit)?=null)
+    private class EpisodeHolder(view:View,val label:TextView,val progress:ProgressBar):RecyclerView.ViewHolder(view)
+    private fun episodeGrid(item:CenterTitle,entries:List<EpisodeChoice>,tag:String,height:Int):Pair<RecyclerView,()->Unit> {
+        val span=((resources.configuration.screenWidthDp-110)/165).coerceIn(2,7)
+        val manager=GridLayoutManager(this,span)
+        val grid=RecyclerView(this).apply {
+            this.tag=tag;layoutManager=manager;itemAnimator=null;clipToPadding=false;setPadding(dp(3),dp(4),dp(3),dp(4))
+            descendantFocusability=ViewGroup.FOCUS_AFTER_DESCENDANTS
+            addOnItemTouchListener(object:RecyclerView.SimpleOnItemTouchListener() {
+                override fun onInterceptTouchEvent(rv:RecyclerView,event:android.view.MotionEvent):Boolean {
+                    if(event.actionMasked==android.view.MotionEvent.ACTION_DOWN)rv.parent.requestDisallowInterceptTouchEvent(true)
+                    return false
+                }
+            })
+        }
+        grid.adapter=object:RecyclerView.Adapter<EpisodeHolder>() {
+            override fun getItemCount()=entries.size
+            override fun onCreateViewHolder(parent:ViewGroup,viewType:Int):EpisodeHolder {
+                val frame=FrameLayout(this@MediaCenterActivity).apply {
+                    layoutParams=RecyclerView.LayoutParams(-1,dp(90)).apply { setMargins(dp(4),dp(4),dp(4),dp(4)) }
+                }
+                val label=button("").apply { maxLines=3;ellipsize=TextUtils.TruncateAt.END;textSize=14f;setPadding(dp(12),dp(9),dp(12),dp(11)) }
+                val bar=ProgressBar(this@MediaCenterActivity,null,android.R.attr.progressBarStyleHorizontal).apply {
+                    max=100;isIndeterminate=false;isFocusable=false;progressTintList=android.content.res.ColorStateList.valueOf(accent)
+                }
+                frame.addView(label,FrameLayout.LayoutParams(-1,-1))
+                frame.addView(bar,FrameLayout.LayoutParams(-1,dp(4),Gravity.BOTTOM).apply { leftMargin=dp(10);rightMargin=dp(10);bottomMargin=dp(5) })
+                return EpisodeHolder(frame,label,bar)
+            }
+            override fun onBindViewHolder(holder:EpisodeHolder,position:Int) {
+                val entry=entries[position];holder.label.tag=entry.tag;holder.label.text=entry.label
+                paintButton(holder.label,holder.label.hasFocus())
+                holder.label.setOnClickListener { entry.action() }
+                holder.label.setOnLongClickListener { entry.longAction?.let { it();true } ?: false }
+                holder.label.setOnFocusChangeListener { view,focused -> paintButton(view,focused);if(focused)entry.onFocus?.invoke() }
+                episodeProgress(holder.label,item,entry.season,entry.number,entry.url,holder.progress)
+            }
+        }
+        val rows=(entries.size+span-1)/span
+        content.addView(grid,LinearLayout.LayoutParams(-1,dp((rows*98+8).coerceAtMost(height).coerceAtLeast(100))))
+        val focus:()->Unit={
+            val last=lastEpisode(item)
+            val index=entries.indexOfFirst { last!=null&&it.season==(last.seasonNumber ?: 0)&&it.number==last.episodeNumber }.coerceAtLeast(0)
+            manager.scrollToPositionWithOffset(index,0)
+            grid.doOnNextLayout { (grid.findViewHolderForAdapterPosition(index) as? EpisodeHolder)?.label?.requestFocus() }
+            grid.requestLayout()
+        }
+        return grid to focus
     }
     private fun shelf(items: List<CenterTitle>, prefix: String = "") {
         val width = when (store.cardSize) { "compact" -> 104; "large" -> 164; else -> 132 }
@@ -1028,53 +1096,67 @@ open class MediaCenterActivity : AppCompatActivity() {
                 playerIndex=(index-1).takeIf { index>0 })
         }.setNegativeButton("Отмена",null).show()
     }
-    protected fun showOnline(video: OnlineVideo, season: Int? = null, voice: String? = null, focusFirst: Boolean = true) {
-        val hadFocus = content.hasFocus()
-        currentScreen = { showOnline(video, season, voice, false) }; page = "online"; clear(video.identity.title)
-        video.notice?.let { message ->
-            content.addView(text(message,14,muted))
-            content.addView(button("Полный список в плеере сайта") { website(video.identity) });space(content,8)
+    protected fun showOnline(video:OnlineVideo,season:Int?=null,voice:String?=null,focusFirst:Boolean=true) {
+        val hadFocus=content.hasFocus()
+        currentScreen={showOnline(video,season,voice,false)};page="online";clear(video.identity.title)
+        video.notice?.let { message -> content.addView(text(message,14,muted));content.addView(button("Полный список в плеере сайта"){website(video.identity)});space(content,8) }
+        val seasons=video.episodes.map { it.season }.distinct().sorted()
+        val last=lastEpisode(video.identity)
+        val activeSeason=season ?: last?.takeIf { it.episodeNumber!=null }?.let { it.seasonNumber ?: 0 }?.takeIf { it in seasons }
+        val entries=video.episodes.filter { activeSeason==null||it.season==activeSeason }
+        val voices=entries.map { it.voice }.distinct()
+        val restoredVoice=last?.translator?.takeIf { season==null&&activeSeason!=null&&it in voices }
+        val selectedVoice=voice?.takeIf { it in voices } ?: restoredVoice ?: voices.singleOrNull()
+        content.addView(text(listOfNotNull(CenterCatalog.name(video.item.provider),activeSeason?.takeIf { it>0 }?.let { "Сезон $it" },selectedVoice).joinToString(" · "),15,muted));space(content,10)
+        fun chips(values:List<Pair<String,()->Unit>>,selected:String?=null):List<TextView> {
+            val strip=row()
+            val controls=values.map { (label,click) -> button(label,click).apply {
+                textSize=14f;maxLines=1;isActivated=label==selected;paintButton(this,false)
+                layoutParams=LinearLayout.LayoutParams(-2,dp(38)).apply { rightMargin=dp(7) }
+                strip.addView(this)
+            } }
+            content.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false;addView(strip) });space(content,8)
+            return controls
         }
-        val entries = video.episodes.filter { season == null || it.season == season }
-        val voices = entries.map { it.voice }.distinct()
-        val selectedVoice = voice ?: voices.singleOrNull()
-        content.addView(text(listOfNotNull(CenterCatalog.name(video.item.provider),
-            season?.takeIf { it > 0 }?.let { "Сезон $it" }, selectedVoice).joinToString(" · "), 15, muted)); space(content, 16)
-        val seasons = video.episodes.map { it.season }.distinct().sorted()
-        if (video.item.type == "tv" && season == null) {
-            seasons.forEach { value -> content.addView(button(if(value>0) "Сезон $value" else "Серии") { enter { showOnline(video, value, store.voice(video.identity.key)?.takeIf { saved -> video.episodes.any { it.season == value && it.voice == saved } }) } }) }
-        } else {
-            if (selectedVoice == null && voices.size > 1) {
-                section("Озвучка")
-                voices.forEach { value -> content.addView(button(value) { store.setVoice(video.identity.key, value); enter { showOnline(video, season, value) } }) }
-            } else {
-                content.addView(text("Удерживай ОК на серии или фильме, чтобы изменить качество", 13, muted)); space(content, 8)
-                entries.filter { it.voice == selectedVoice }.forEach { episode ->
-                    val label = if (episode.number > 0) "Серия ${episode.number} · ${episode.title}" else "Смотреть · ${episode.voice}"
-                    content.addView(button(label) { chooseOnlineQuality(video, episode) }.apply {
-                        tag = "online:${episode.season}:${episode.number}:${episode.voice}"; maxLines = 2; layoutParams.height = dp(62)
-                        setOnLongClickListener { chooseOnlineQuality(video, episode, forceChoice = true); true }
-                        episodeProgress(this, video.identity, episode.season, episode.number, episode.sources.values.firstOrNull().orEmpty())
-                    })
-                }
-                if (voices.size > 1) content.addView(button("Изменить озвучку") {
-                    AlertDialog.Builder(this).setTitle("Озвучка").setItems(voices.toTypedArray()) { _, index ->
-                        store.setVoice(video.identity.key, voices[index]); showOnline(video, season, voices[index])
-                    }.setNeutralButton("Сбросить выбор") { _, _ -> store.setVoice(video.identity.key, null); showOnline(video, season) }
-                        .setNegativeButton("Отмена", null).show()
-                })
-            }
+        val seasonControls=if(video.item.type=="tv")chips(seasons.map { value -> (if(value>0)"Сезон $value" else "Серии") to {
+            enter { showOnline(video,value,store.voice(video.identity.key)?.takeIf { saved -> video.episodes.any { it.season==value&&it.voice==saved } }) }
+        } },activeSeason?.let { if(it>0)"Сезон $it" else "Серии" }) else emptyList()
+        var voiceControls=emptyList<TextView>()
+        if((video.item.type!="tv"||activeSeason!=null)&&selectedVoice==null&&voices.size>1) {
+            content.addView(text("Озвучка",14,muted));space(content,6)
+            voiceControls=chips(voices.map { value -> value to {store.setVoice(video.identity.key,value);enter { showOnline(video,activeSeason,value) }} })
+        } else if(voices.size>1&&selectedVoice!=null&&(activeSeason!=null||video.item.type!="tv")) {
+            content.addView(button("Изменить озвучку") {
+                AlertDialog.Builder(this).setTitle("Озвучка").setItems(voices.toTypedArray()) { _,index ->
+                    store.setVoice(video.identity.key,voices[index]);showOnline(video,activeSeason,voices[index])
+                }.setNeutralButton("Сбросить выбор") { _,_->store.setVoice(video.identity.key,null);showOnline(video,activeSeason) }.setNegativeButton("Отмена",null).show()
+            }.apply { layoutParams.height=dp(38);textSize=14f })
         }
         if(CenterOnline.manualPlayers(video.item.provider)&&video.playerCount>1)
             content.addView(button("Плеер источника · ${video.playerIndex+1} из ${video.playerCount}"+if(video.pinnedPlayer)" · выбран" else " · авто") {
-                chooseOnlinePlayer(video,season,selectedVoice)
-            })
+                chooseOnlinePlayer(video,activeSeason,selectedVoice)
+            }.apply { layoutParams.height=dp(38);textSize=14f })
+        if(video.item.type=="tv"&&activeSeason==null) {
+            content.addView(text("Выбери сезон",15,muted))
+            episodeFocus={seasonControls.firstOrNull()?.requestFocus();Unit}
+        } else if(selectedVoice==null&&voices.size>1) {
+            episodeFocus={voiceControls.firstOrNull()?.requestFocus();Unit}
+        } else {
+            content.addView(text("Удерживай ОК на серии или фильме, чтобы изменить качество",13,muted));space(content,6)
+            val rows=entries.filter { it.voice==selectedVoice }.map { episode ->
+                EpisodeChoice("online:${episode.season}:${episode.number}:${episode.voice}",
+                    if(episode.number>0)"Серия ${episode.number} · ${episode.title}" else "Смотреть · ${episode.voice}",
+                    episode.season,episode.number,episode.sources.values.firstOrNull().orEmpty(),
+                    action={chooseOnlineQuality(video,episode)},longAction={chooseOnlineQuality(video,episode,forceChoice=true)})
+            }
+            episodeFocus=episodeGrid(video.identity,rows,"online_episode_grid",(resources.configuration.screenHeightDp-290).coerceAtLeast(144)).second
+        }
         if(video.catalogItem!=null) {
             content.addView(button("Другое совпадение · ${CenterCatalog.name(video.item.provider)}") { tmdbOnline(video.identity,forceSearch=true,sourceProvider=video.item.provider) })
-            content.addView(button("Другой онлайн-источник") { showTmdbOnlineSources(video.identity,selectedSeason=season,selectedVoice=selectedVoice) })
+            content.addView(button("Другой онлайн-источник") { enter { showTmdbOnlineSources(video.identity,selectedSeason=activeSeason,selectedVoice=selectedVoice) } })
         }
-        content.addView(button("Обновить список и ссылки") { online(video.item, refresh = true, selectedSeason = season, selectedVoice = selectedVoice, catalogItem=video.catalogItem,playerIndex=video.playerIndex.takeIf { video.pinnedPlayer }) })
-        if (focusFirst && hadFocus) content.post { content.getFocusables(View.FOCUS_FORWARD).firstOrNull()?.requestFocus() }
+        content.addView(button("Обновить список и ссылки") { online(video.item,refresh=true,selectedSeason=activeSeason,selectedVoice=selectedVoice,catalogItem=video.catalogItem,playerIndex=video.playerIndex.takeIf { video.pinnedPlayer }) })
+        if(focusFirst&&hadFocus)content.post { episodeFocus?.invoke() }
     }
     private fun chooseOnlineQuality(video: OnlineVideo, episode: OnlineEpisode, forceChoice: Boolean = false) {
         if (forceQualityOnce && !forceChoice) { forceQualityOnce = false; chooseOnlineQuality(video, episode, true); return }
@@ -1162,32 +1244,26 @@ open class MediaCenterActivity : AppCompatActivity() {
     private fun episodeList(item: CenterTitle, season: Int) {
         work("Загружаю серии…") { showEpisodes(item, season, backend.episodes(item, season)) }
     }
-    protected fun showEpisodes(item: CenterTitle, season: Int, episodes: List<CenterEpisode>) {
-        seasonData[item.id to season] = episodes
-        currentScreen = { showEpisodes(item, season, episodes) }; page = "episodes"; clear("${item.title} · Сезон $season")
-        if (episodes.isEmpty()) { content.addView(text("Для этого сезона пока нет серий", 18, muted)); return }
-        val columns = row()
-        val list = column()
-        val info = column().apply { setPadding(dp(22), 0, 0, 0) }
-        fun describe(episode: CenterEpisode) {
-            info.removeAllViews()
-            info.addView(artFrame(episode.name, 290, 160, episode.still ?: item.backdrop, episode.number), LinearLayout.LayoutParams(-1, dp(160)))
-            space(info, 14); info.addView(text(episode.name, 21).apply { maxLines = 2; ellipsize = TextUtils.TruncateAt.END }); space(info, 9)
-            info.addView(text(listOfNotNull(episode.airDate.takeIf { it.isNotBlank() }, episode.runtime.takeIf { it > 0 }?.let { "$it мин" }).joinToString(" · "), 13, accent))
-            space(info, 12); info.addView(text(episode.overview.ifBlank { "Описание серии пока отсутствует" }, 15, muted).apply { maxLines = 8; ellipsize = TextUtils.TruncateAt.END })
+    protected fun showEpisodes(item:CenterTitle,season:Int,episodes:List<CenterEpisode>) {
+        seasonData[item.id to season]=episodes
+        currentScreen={showEpisodes(item,season,episodes)};page="episodes";clear("${item.title} · Сезон $season")
+        if(episodes.isEmpty()) { content.addView(text("Для этого сезона пока нет серий",18,muted));return }
+        var selected=episodes.first()
+        val summary=text("",15,muted).apply { maxLines=2;ellipsize=TextUtils.TruncateAt.END;tag="episode_summary" }
+        content.addView(summary);space(content,10)
+        fun describe(episode:CenterEpisode) {
+            selected=episode
+            summary.text=listOf(episode.name,episode.airDate,episode.runtime.takeIf { it>0 }?.let { "$it мин" }.orEmpty(),episode.overview).filter { it.isNotBlank() }.joinToString(" · ")
         }
-        episodes.forEach { episode ->
-            list.addView(button("${episode.number}. ${episode.name}") { enter { find(item, episode) } }.apply {
-                episodeProgress(this, item, episode.season, episode.number, "")
-                tag = "episode:${episode.season}:${episode.number}"; maxLines = 2; ellipsize = TextUtils.TruncateAt.END
-                layoutParams.height = dp(62)
-                setOnFocusChangeListener { v, focus -> paintButton(v, focus); if (focus) describe(episode) }
-            })
-        }
-        describe(episodes.first())
-        val episodeScroll = ScrollView(this).apply { addView(list); isFillViewport = true }
-        columns.addView(episodeScroll, LinearLayout.LayoutParams(0, dp((resources.configuration.screenHeightDp - 120).coerceAtLeast(240)), 1.12f))
-        columns.addView(info, LinearLayout.LayoutParams(0, -2, 1f)); content.addView(columns)
+        describe(selected)
+        episodeFocus=episodeGrid(item,episodes.map { episode ->
+            EpisodeChoice("episode:${episode.season}:${episode.number}","${episode.number}. ${episode.name}",episode.season,episode.number,
+                action={enter { find(item,episode) }},onFocus={describe(episode)})
+        },"torrent_episode_grid",(resources.configuration.screenHeightDp-220).coerceAtLeast(160)).second
+        content.addView(button("Описание серии") {
+            AlertDialog.Builder(this).setTitle("${selected.number}. ${selected.name}")
+                .setMessage(selected.overview.ifBlank { "Описание серии пока отсутствует" }).setPositiveButton("Закрыть",null).show()
+        })
     }
     private fun find(item: CenterTitle, episode: CenterEpisode?) {
         if (store.indexer.isBlank()) { sources { find(item, episode) }; return }

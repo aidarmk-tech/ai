@@ -95,6 +95,7 @@ class MediaCenterUiTest {
         fun detailFixture(details: CenterDetails) { showDetails(details) }
         fun calls()=backend.detailCalls to backend.episodeCalls
         fun nativeFixture(video:OnlineVideo) { showOnline(video) }
+        fun episodesFixture(item:CenterTitle,season:Int,rows:List<CenterEpisode>) { showEpisodes(item,season,rows) }
     }
     private fun all(view:View):List<View> = listOf(view) + if(view is ViewGroup)
         (0 until view.childCount).flatMap { all(view.getChildAt(it)) } else emptyList()
@@ -1123,6 +1124,83 @@ class MediaCenterUiTest {
             key(root,KeyEvent.KEYCODE_DPAD_LEFT);frame(root)
             assertFalse(all(root).first { it.tag=="Главная" }.isShown)
             assertTrue(query.hasFocus());assertEquals(3,query.selectionStart)
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun onlineSeriesUseAVirtualizedGridKeepControlsAboveItAndFocusTheLastEpisode() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content);frame(root)
+            val item=CenterTitle(17,"tv","Длинный сериал",provider="kinotac",sourceUrl="https://kinotac.org/17-show.html")
+            CenterStore(host).remember("old",com.lampplayer.tv.domain.model.CardMeta(item.title,contentKey=item.key,sourcePage=item.sourceUrl,seasonNumber=2,episodeNumber=63,translator="Voice"))
+            label(root,"Каталог: TMDB  ▾").requestFocus()
+            host.nativeFixture(OnlineVideo(item,(1..100).map { OnlineEpisode(2,it,"Эпизод $it","Voice",
+                mapOf(720 to "https://cdn.test/$it.m3u8",1080 to "https://cdn.test/$it-high.m3u8")) },emptyMap(),playerCount=2))
+            repeat(6){frame(root)}
+            val grid=all(root).filterIsInstance<androidx.recyclerview.widget.RecyclerView>().first { it.tag=="online_episode_grid" }
+            val manager=grid.layoutManager as androidx.recyclerview.widget.GridLayoutManager
+            assertTrue(manager.spanCount>=2);assertEquals(100,grid.adapter!!.itemCount);assertTrue(grid.childCount<100)
+            assertEquals("online:2:63:Voice",root.findFocus()?.tag)
+            val control=label(root,"Плеер источника · 1 из 2 · авто")
+            assertTrue(control.getGlobalVisibleRect(android.graphics.Rect()))
+            val cp=IntArray(2);val gp=IntArray(2);control.getLocationOnScreen(cp);grid.getLocationOnScreen(gp)
+            assertTrue(cp[1]<gp[1])
+            key(root,KeyEvent.KEYCODE_DPAD_RIGHT);frame(root)
+            assertEquals("online:2:64:Voice",root.findFocus()?.tag)
+            key(root,KeyEvent.KEYCODE_DPAD_DOWN);frame(root)
+            val number=64+manager.spanCount
+            assertEquals("online:2:$number:Voice",root.findFocus()?.tag)
+            root.findFocus()!!.performLongClick();frame(root)
+            val dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
+            assertEquals(2,dialog.listView.adapter.count);dialog.dismiss()
+            screenshot(root,"media-center-episode-grid")
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun torrentEpisodeGridShowsTheFocusedEpisodesFullDescription() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(123,"tv","Сериал TMDB")
+            CenterStore(host).remember("old",com.lampplayer.tv.domain.model.CardMeta(item.title,contentKey=item.key,tmdbId=item.id,seasonNumber=3,episodeNumber=50))
+            host.episodesFixture(item,3,(1..100).map { CenterEpisode(3,it,"Название $it","Полное описание $it",runtime=45) })
+            frame(root)
+            // The same focus restoration is used after an asynchronous episode fetch.
+            val focus=ReflectionHelpers.getField<(() -> Unit)?>(host,"episodeFocus")!!
+            focus();repeat(5){frame(root)}
+            val grid=all(root).filterIsInstance<androidx.recyclerview.widget.RecyclerView>().first { it.tag=="torrent_episode_grid" }
+            assertTrue(grid.layoutManager is androidx.recyclerview.widget.GridLayoutManager)
+            assertEquals("episode:3:50",root.findFocus()?.tag)
+            assertTrue(label(root,"Название 50 · 45 мин · Полное описание 50").text.contains("Полное описание 50"))
+            label(root,"Описание серии").performClick();frame(root)
+            val dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
+            val body=all(dialog.window!!.decorView).filterIsInstance<TextView>().map { it.text.toString() }
+            assertTrue(body.contains("Полное описание 50"))
+            dialog.dismiss()
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun focusedPosterShowsItsFullNameWithoutChangingTheGridOrCardWidth() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val long="Очень длинное название фильма, которое должно читаться полностью при выборе карточки, вместе с продолжением названия"
+            val items=(1..20).map { CenterTitle(it,"movie",if(it==2)long else "Фильм $it") }
+            host.gridFixture(items);repeat(4){frame(root)}
+            val grid=all(root).filterIsInstance<androidx.recyclerview.widget.RecyclerView>().first { it.tag=="catalog_grid" }
+            val manager=grid.layoutManager as androidx.recyclerview.widget.GridLayoutManager
+            val first=all(root).first { it.tag=="title:movie:1" }
+            first.requestFocus();frame(root)
+            val caption=all(root).filterIsInstance<TextView>().first { it.tag=="focused_catalog_title" }
+            val span=manager.spanCount;val width=first.width;val height=caption.height
+            key(root,KeyEvent.KEYCODE_DPAD_RIGHT);frame(root)
+            assertEquals("title:movie:2",root.findFocus()?.tag);assertEquals(long,caption.text.toString())
+            assertEquals(span,manager.spanCount);assertEquals(width,root.findFocus()!!.width);assertEquals(height,caption.height)
+            assertEquals(caption.text.length,caption.layout.getLineEnd(caption.layout.lineCount-1))
+            screenshot(root,"media-center-focused-title")
         } finally { controller.pause().stop().destroy() }
     }
 }
