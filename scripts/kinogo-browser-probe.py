@@ -12,6 +12,7 @@ def read(url):
   with urllib.request.urlopen(urllib.request.Request(url,headers={"User-Agent":"Mozilla/5.0"}),timeout=30) as r:raw=r.read(2500000);final=r.url
   text=raw.decode("utf-8",errors="replace")
   print("HTTP",json.dumps({"url":safe(final),"size":len(raw),"title":re.findall("<title>(.*?)</title>",text,re.S),
+    "player_markup":[text[max(0,m.start()-400):m.start()+5500] for m in re.finditer(r'class="tabs-box2',text)][:2],
     "lines":[re.sub(r"https?[^\\s'\"<>]+","<url>",l)[:1600] for l in text.splitlines() if re.search(r"iframe|data-(?:src|player|tab)|player[12]|Плеер [12]",l,re.I)][:40]},ensure_ascii=False),flush=True)
  except Exception as e:print("HTTP_ERROR",safe(url),str(e)[:180],flush=True)
 async def inspect(browser,url):
@@ -35,7 +36,8 @@ async def inspect(browser,url):
       inline:Array.from(document.scripts).filter(e=>!e.src&&/iframe|player|Player|video/.test(e.textContent)).map(e=>e.textContent.replace(/https?:[^\\s"'<>]+/g,'<url>').slice(0,9000)).slice(-12)};
    }""")
   print("PAGE",json.dumps(await snap(),ensure_ascii=False),flush=True)
-  for label in ["Плеер 2","Плеер 2 (4K)","Плеер 2 (HD)"]:
+  for label in ["🔥 Плеер 2 (4K)","🔥 Плеер 2 (HD)","Плеер 2"]:
+
    el=page.get_by_text(label,exact=True)
    if await el.count():
     await el.first.click(timeout=4000,force=True);await page.wait_for_timeout(4000)
