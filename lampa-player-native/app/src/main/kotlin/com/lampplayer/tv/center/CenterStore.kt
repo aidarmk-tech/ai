@@ -25,6 +25,9 @@ class CenterStore(context: Context) {
     var catalog: String
         get() = prefs.getString("catalog", "tmdb").orEmpty().takeIf { it in CenterCatalog.providers } ?: "tmdb"
         set(value) { prefs.edit().putString("catalog", value).apply() }
+    var searchCatalog:String
+        get() = prefs.getString("search_catalog",null)?.takeIf { it in CenterCatalog.providers } ?: catalog
+        set(value) { require(value in CenterCatalog.providers);prefs.edit().putString("search_catalog",value).apply() }
     fun catalogHost(provider: String) = prefs.getString("host_$provider", CenterCatalog.defaultHost(provider)).orEmpty()
     fun setCatalogHost(provider: String, host: String) { prefs.edit().putString("host_$provider", host.trim().trimEnd('/')).apply() }
     fun preferredQuality(provider: String?): Int? =

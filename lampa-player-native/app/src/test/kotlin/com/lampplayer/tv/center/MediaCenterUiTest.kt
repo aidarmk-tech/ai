@@ -63,9 +63,10 @@ class MediaCenterUiTest {
         val gridCalls=mutableListOf<Int>()
         val gridPages=mutableMapOf<Int,List<CenterTitle>>()
         val browseCalls=mutableListOf<Pair<CenterBrowse,Int>>()
+        val browseProviders=mutableListOf<String>()
         val browsePages=mutableMapOf<Int,List<CenterTitle>>()
         override suspend fun browsePage(provider:String,request:CenterBrowse,number:Int):List<CenterTitle> {
-            browseCalls.add(request to number);return browsePages[number].orEmpty()
+            browseCalls.add(request to number);browseProviders.add(provider);return browsePages[number].orEmpty()
         }
         fun browseFixture(items:List<CenterTitle>,request:CenterBrowse) { showHome(items,"Результаты поиска",1,null,request) }
         fun mineFixture() { mySeriesScreen() }
@@ -93,6 +94,10 @@ class MediaCenterUiTest {
         }; showDashboard(CenterSection.all.map { section -> section to items.filter { it.type == section.type } }) }
         fun releaseFixture(items: List<CenterRelease>) { releaseList(CenterTitle(801,"movie","Sorting"),null,items) }
         fun detailFixture(details: CenterDetails) { showDetails(details) }
+        var retryCalls=0;var refreshCalls=0;var sourcePlayerCalls=0
+        fun errorFixture(error:Exception,item:CenterTitle?=null,withPlayer:Boolean=false) {
+            showFailure(error,{retryCalls++},item,if(withPlayer)({sourcePlayerCalls++}) else null,{refreshCalls++})
+        }
         fun calls()=backend.detailCalls to backend.episodeCalls
         fun nativeFixture(video:OnlineVideo) { showOnline(video) }
         fun episodesFixture(item:CenterTitle,season:Int,rows:List<CenterEpisode>) { showEpisodes(item,season,rows) }
@@ -631,6 +636,7 @@ class MediaCenterUiTest {
             val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
             val item=CenterTitle(321,"tv","Follow me")
             host.detailFixture(CenterDetails(item,listOf(1),""));frame(root)
+            all(root).first { it.tag=="detail_more" }.performClick();frame(root)
             all(root).first { it.tag=="follow_series" }.performClick();frame(root)
             assertTrue(CenterStore(host).isFollowed(item))
             all(root).first { it.tag=="follow_series" }.performClick();frame(root)
@@ -649,11 +655,13 @@ class MediaCenterUiTest {
             all(root).first { it.tag=="search_source" }.performClick();frame(root)
             val dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
             val list=dialog.listView;list.performItemClick(list.getChildAt(1),1,list.adapter.getItemId(1));frame(root)
-            assertEquals("kinovod",CenterStore(host).catalog)
+            assertEquals("tmdb",CenterStore(host).catalog)
+            assertEquals("kinovod",CenterStore(host).searchCatalog)
             assertEquals("Источник",(all(root).first { it.tag=="search_query" } as TextView).text.toString())
             assertEquals("search_source",root.findFocus()?.tag)
             all(root).first { it.tag=="search_recent:Король Талсы" }.performClick();repeat(3) { frame(root) }
             assertEquals("Король Талсы",host.browseCalls.single().first.query)
+            assertEquals(listOf("kinovod"),host.browseProviders)
             assertEquals(1,host.browseCalls.single().second)
         } finally { controller.pause().stop().destroy() }
     }
@@ -734,7 +742,7 @@ class MediaCenterUiTest {
             val item=CenterTitle(6873,"tv","Гангстерленд",provider="kinogo",sourceUrl="https://kz.kinogo.moi/6873-gangsterlend-2025.html")
             host.nextOnline=OnlineVideo(item,listOf(OnlineEpisode(2,5,"Пятая","Voice",mapOf(720 to "https://cdn.test/five.m3u8"))),mapOf("Referer" to "https://player.test/embed/movie/9"))
             host.detailFixture(CenterDetails(item,emptyList(),""));frame(root)
-            label(root,"Смотреть онлайн · проверка").performClick();frame(root)
+            label(root,"Смотреть онлайн").performClick();frame(root)
             assertEquals(1,host.onlineCalls)
             label(root,"Сезон 2").performClick();frame(root)
             all(root).first { it.tag=="online:2:5:Voice" }.performClick();frame(root)
@@ -784,6 +792,7 @@ class MediaCenterUiTest {
             assertEquals(1,host.onlineCalls);assertEquals(2,host.verifiedUrls.size)
             assertNull(shadowOf(host).nextStartedActivity)
             val before=CenterStore(host).history()
+            all(root).first { it.tag=="error_more" }.performClick();frame(root)
             label(root,"Плеер сайта").performClick();frame(root)
             val launch=shadowOf(host).nextStartedActivity
             assertTrue(launch.getBooleanExtra("site_player",false))
@@ -1201,6 +1210,90 @@ class MediaCenterUiTest {
             assertEquals(span,manager.spanCount);assertEquals(width,root.findFocus()!!.width);assertEquals(height,caption.height)
             assertEquals(caption.text.length,caption.layout.getLineEnd(caption.layout.lineCount-1))
             screenshot(root,"media-center-focused-title")
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun detailPrioritizesContinueAndAdditionalActionsExpandAndCollapseWithBack() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(17,"movie","Фильм",provider="kinotac",sourceUrl="https://kinotac.org/17-movie.html")
+            CenterStore(host).remember("old",com.lampplayer.tv.domain.model.CardMeta(item.title,contentKey=item.key,sourcePage=item.sourceUrl))
+            host.detailFixture(CenterDetails(item,emptyList(),""));frame(root)
+            val resume=all(root).first { it.tag=="continue_title" } as TextView
+            assertTrue(resume.isActivated);assertTrue(resume.textSize>=17)
+            assertEquals(listOf("continue_title","Смотреть онлайн","Найти торрент-раздачу"),
+                all(root).filterIsInstance<TextView>().filter { it.isShown&&it.isClickable&&it.tag!="menu_handle" }.take(3).map { it.tag })
+            assertFalse(all(root).first { it.tag=="favorite" }.isShown)
+            all(root).first { it.tag=="detail_more" }.performClick();frame(root)
+            assertTrue(all(root).first { it.tag=="favorite" }.isShown)
+            all(root).first { it.tag=="favorite" }.performClick();frame(root)
+            assertTrue(CenterStore(host).isFavorite(item));assertEquals("favorite",root.findFocus()?.tag)
+            host.onBackPressedDispatcher.onBackPressed();frame(root)
+            assertFalse(all(root).first { it.tag=="detail_more_panel" }.isShown)
+            assertEquals("detail_more",root.findFocus()?.tag)
+            assertTrue((all(root).first { it.tag=="continue_title" } as TextView).text.toString().startsWith("Продолжить"))
+            screenshot(root,"media-center-simple-card")
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun online404ShowsThreePrimaryActionsAndKeepsWebsiteAndDiagnosticsUnderMore() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(17,"tv","Сериал",provider="kinotac",sourceUrl="https://kinotac.org/17-show.html")
+            host.errorFixture(IllegalStateException("Не удалось открыть видео",OnlineMediaUnavailable(404,"fixture","HTTP 404")),item,true);frame(root)
+            val main=all(root).first { it.tag=="error_primary_actions" } as ViewGroup
+            assertEquals(listOf("Обновить ссылки","Другой плеер источника","Назад"),
+                (0 until main.childCount).map { (main.getChildAt(it) as TextView).text.toString() })
+            assertFalse(label(root,"Плеер сайта").isShown)
+            label(root,"Обновить ссылки").performClick();assertEquals(1,host.refreshCalls)
+            label(root,"Другой плеер источника").performClick();assertEquals(1,host.sourcePlayerCalls)
+            all(root).first { it.tag=="error_more" }.performClick();frame(root)
+            assertTrue(label(root,"Плеер сайта").isShown);assertTrue(label(root,"Повторить").isShown)
+            host.onBackPressedDispatcher.onBackPressed();frame(root)
+            assertFalse(label(root,"Плеер сайта").isShown);assertEquals("error_more",root.findFocus()?.tag)
+            screenshot(root,"media-center-simple-error")
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun blockedSourceAndCatalogNetworkErrorOfferDifferentRecoveryActions() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            fun main()=all(root).first { it.tag=="error_primary_actions" } as ViewGroup
+            fun labels()=(0 until main().childCount).map { (main().getChildAt(it) as TextView).text.toString() }
+            host.errorFixture(OnlineSourceBlocked("country","Недоступно в регионе"),CenterTitle(17,"movie","TMDB"));frame(root)
+            assertEquals(listOf("Другой онлайн-источник","Плеер сайта","Назад"),labels())
+            host.errorFixture(java.io.IOException("Сеть временно недоступна"));frame(root)
+            assertEquals(listOf("Повторить","Выбрать каталог","Назад"),labels())
+            label(root,"Повторить").performClick();assertEquals(1,host.retryCalls)
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun tmdbSearchPaginationUsesItsOwnProviderWhileTheHomeCatalogRemainsKinotac() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val store=CenterStore(host);store.catalog="kinotac";store.searchCatalog="tmdb"
+            host.browsePages[1]=(1..30).map { CenterTitle(it,"movie","Результат $it") }
+            host.browsePages[2]=(31..60).map { CenterTitle(it,"movie","Результат $it") }
+            all(root).first { it.tag=="Поиск" }.performClick();frame(root)
+            (all(root).first { it.tag=="search_query" } as android.widget.EditText).setText("Матрица")
+            all(root).first { it.tag=="search_submit" }.performClick();repeat(4){frame(root)}
+            val grid=all(root).filterIsInstance<androidx.recyclerview.widget.RecyclerView>().first { it.tag=="catalog_grid" }
+            grid.scrollToPosition(29);repeat(4){frame(root)}
+            assertTrue(host.browseCalls.any { it.second==2 })
+            assertTrue(host.browseProviders.all { it=="tmdb" })
+            assertTrue(host.browseCalls.all { it.first.query=="Матрица" })
+            assertEquals("kinotac",store.catalog);assertEquals("tmdb",CenterStore(host).searchCatalog)
+            val result=all(root).first { it.tag=="title:movie:30" };result.requestFocus();result.performClick();frame(root)
+            host.onBackPressedDispatcher.onBackPressed();repeat(3){frame(root)}
+            assertEquals("title:movie:30",root.findFocus()?.tag)
+            assertTrue(host.browseProviders.all { it=="tmdb" })
+            assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Поиск: Матрица · TMDB" })
         } finally { controller.pause().stop().destroy() }
     }
 }
