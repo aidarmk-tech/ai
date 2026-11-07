@@ -552,7 +552,9 @@ class CenterCatalog {
         val selected=CenterOnline.source(item)
         val document=page(selected)
         val frames=if(item.provider=="zona")zonaEmbeds(document,item) else kinokongEmbeds(document,item)
-        check(frames.isNotEmpty()) { "${CenterCatalog.name(item.provider)} не отдал адреса видеоплееров для выбранной карточки. Открой плеер сайта или выбери другой источник" }
+        check(frames.isNotEmpty()) { if(item.provider=="zona")
+            "Zona.movie не отдал адреса видеоплееров для выбранной карточки. Открой плеер сайта или выбери другой источник"
+            else "На выбранной странице KinoKong не найдены видеоплееры. Открой плеер сайта или выбери другой источник" }
         return frames
     }
     suspend fun detail(item:CenterTitle): CenterDetails = detailLimit.withPermit {
