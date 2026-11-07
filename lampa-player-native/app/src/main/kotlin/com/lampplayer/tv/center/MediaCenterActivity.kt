@@ -714,7 +714,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                 val frame=FrameLayout(this@MediaCenterActivity).apply {
                     layoutParams=RecyclerView.LayoutParams(-1,dp(90)).apply { setMargins(dp(4),dp(4),dp(4),dp(4)) }
                 }
-                val label=button("").apply { maxLines=3;ellipsize=TextUtils.TruncateAt.END;textSize=14f;setPadding(dp(12),dp(9),dp(12),dp(11)) }
+                val label=button("") {}.apply { maxLines=3;ellipsize=TextUtils.TruncateAt.END;textSize=14f;setPadding(dp(12),dp(9),dp(12),dp(11)) }
                 val bar=ProgressBar(this@MediaCenterActivity,null,android.R.attr.progressBarStyleHorizontal).apply {
                     max=100;isIndeterminate=false;isFocusable=false;progressTintList=android.content.res.ColorStateList.valueOf(accent)
                 }
