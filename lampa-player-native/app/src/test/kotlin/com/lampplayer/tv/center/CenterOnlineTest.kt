@@ -185,6 +185,8 @@ class CenterOnlineTest {
             assertFalse(target,CenterOnline.sameTitleNavigation(item,target))
         }
         assertTrue(runCatching { CenterOnline.source(item.copy(type="movie")) }.isFailure)
+        assertTrue(CenterWebActivity.sameCardPage("https://kinovod.pro/film/17-movie-2025","https://kinovod.pro/film/17-canonical-2026","kinovod"))
+        assertTrue(CenterWebActivity.sameCardPage("https://zona.movie/film/28-days-17","https://zona.movie/film/canonical-17/","zona"))
         assertTrue(CenterWebActivity.sameCardPage(item.sourceUrl!!,"https://zona.movie/series/canonical-1478/#player"))
         assertFalse(CenterWebActivity.sameCardPage(item.sourceUrl!!,"https://zona.movie/film/mobland-1478/"))
     }

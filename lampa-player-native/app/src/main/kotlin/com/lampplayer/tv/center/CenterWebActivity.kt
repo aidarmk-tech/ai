@@ -70,15 +70,15 @@ class CenterWebActivity : AppCompatActivity() {
                     val next=request.url.toString()
                     if(next.toHttpUrlOrNull()==null)return true
                     if(!sitePlayer||!request.isForMainFrame)return false
-                    return !sameCardPage(source.toString(),next)
+                    return !sameCardPage(source.toString(),next,intent.getStringExtra("catalog_provider"))
                 }
                 @Deprecated("Compatibility with Android 5")
-                override fun shouldOverrideUrlLoading(view:WebView,url:String) = url.toHttpUrlOrNull()==null || (sitePlayer&&!sameCardPage(source.toString(),url))
+                override fun shouldOverrideUrlLoading(view:WebView,url:String) = url.toHttpUrlOrNull()==null || (sitePlayer&&!sameCardPage(source.toString(),url,intent.getStringExtra("catalog_provider")))
                 override fun onPageStarted(view:WebView,url:String,favicon:android.graphics.Bitmap?) {
                     synchronized(streams) { streams.clear() }; native.visibility = View.GONE
                 }
                 override fun onPageFinished(view:WebView,url:String) {
-                    if((kinoGo||kinoKong||zona)&&sameCardPage(source.toString(),url))focusKinoGo()
+                    if((kinoGo||kinoKong||zona)&&sameCardPage(source.toString(),url,intent.getStringExtra("catalog_provider")))focusKinoGo()
                 }
                 override fun shouldInterceptRequest(view:WebView,request:WebResourceRequest):WebResourceResponse? {
                     val url=request.url.toString()
@@ -108,7 +108,7 @@ class CenterWebActivity : AppCompatActivity() {
     private fun focusKinoGo() {
         if(!::web.isInitialized||(!kinoGo&&!kinoKong&&!zona))return
         val source=intent.getStringExtra("url") ?: return
-        if(!sameCardPage(source,web.url ?: return))return
+        if(!sameCardPage(source,web.url ?: return,intent.getStringExtra("catalog_provider")))return
         val name=if(zona) "__lampZonaControls" else if(kinoKong) "__lampKongControls" else "__lampKinogoControls"
         web.evaluateJavascript(kinoGoControls+"\nwindow."+name+".focus("+siteTab+",true);",null)
     }
@@ -142,12 +142,12 @@ class CenterWebActivity : AppCompatActivity() {
         super.onDestroy()
     }
     companion object {
-        fun sameCardPage(source:String,target:String):Boolean {
+        fun sameCardPage(source:String,target:String,provider:String?=null):Boolean {
             val original=source.toHttpUrlOrNull() ?: return false
             val next=target.toHttpUrlOrNull() ?: return false
             if(original.scheme!=next.scheme || original.host!=next.host || original.port!=next.port)return false
             val zona=Regex("^/(film|series)/[^/]+-([0-9]+)/?$")
-            val selected=zona.matchEntire(original.encodedPath)
+            val selected=if(provider=="zona"||(provider==null&&original.encodedPath.endsWith("/")))zona.matchEntire(original.encodedPath) else null
             if(selected!=null) {
                 val match=zona.matchEntire(next.encodedPath) ?: return false
                 return match.groupValues[1]==selected.groupValues[1]&&match.groupValues[2]==selected.groupValues[2]
