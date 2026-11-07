@@ -880,4 +880,19 @@ class MediaCenterUiTest {
             assertEquals(2,played.second.seasonNumber);assertEquals(5,played.second.episodeNumber)
         } finally { controller.pause().stop().destroy() }
     }
+
+    @Test fun partialOnlineLinksAreLabeledAndKeepTheFullWebsiteListAvailable() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(95526,"tv","Это море переполнится",provider="kinokong",sourceUrl="https://kinokong.es/95526-show.html")
+            val notice="Источник отдал только часть ссылок. Полный список серий доступен в плеере сайта."
+            host.nativeFixture(OnlineVideo(item,listOf(OnlineEpisode(1,5,"Пятая","Voice",mapOf(0 to "https://cdn.test/five.m3u8"))),
+                emptyMap(),notice=notice));frame(root)
+            assertTrue(label(root,notice).isShown)
+            label(root,"Полный список в плеере сайта").performClick();frame(root)
+            val intent=shadowOf(host).nextStartedActivity
+            assertEquals(item.sourceUrl,intent.getStringExtra("url"));assertTrue(intent.getBooleanExtra("site_player",false))
+        } finally { controller.pause().stop().destroy() }
+    }
 }

@@ -544,4 +544,114 @@ class CenterOnlineInstrumentedTest {
             }
         }
     }
+
+    @Test fun kinokongReadsVenomSeasonsAndQualityMapsFromTheBoundFactory() = runBlocking {
+        MockWebServer().use { server ->
+            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest):MockResponse {
+                    val html=when(request.path) {
+                        "/17-show.html" -> """<html><body><div id="full_17"><ul class="newTabs"><li data-iframe="/modern-frame">Смотреть</li></ul></div></body></html>"""
+                        "/modern-frame" -> """<html><body><div id="player"></div><div id="trailer"></div><script src="/venom.js"></script><script>
+                            function makePlayer(options){return VenomPlayer.make(options);}
+                            var middleCount=2;
+                            makePlayer({container:document.getElementById('player'),translation:'Voice',
+                            restrictQuality:function(q){return q>720?'Unavailable':false;},
+                            playlist:{seasons:[{season:2,episodes:[
+                            {episode:'5',title:'Пятая',source:{hls:'https://cdn.test/five.m3u8'}},
+                            {episode:'6',title:'Шестая',source:{hls:'https://cdn.test/six.m3u8'}},
+                            {episode:'7',blocked:true,source:{hls:'https://cdn.test/blocked.m3u8'}}]},
+                            {season:3,episodes:[{episode:'1',source:{file:{720:'https://cdn.test/three.mp4',1080:'https://cdn.test/unavailable.mp4'}}}]}]}});
+                            makePlayer({container:document.getElementById('trailer'),playlist:{seasons:[{season:9,episodes:[
+                            {episode:'99',source:{hls:'https://cdn.test/trailer.m3u8'}}]}]}});
+                            </script></body></html>"""
+                        "/venom.js" -> """window.VenomPlayer={};Object.defineProperty(VenomPlayer,'make',{enumerable:true,get:function(){return function(options){return {options:options};};}});"""
+                        else -> "<html><body>Missing</body></html>"
+                    }
+                    return MockResponse().setHeader("Content-Type",if(request.path=="/venom.js")"application/javascript" else "text/html; charset=utf-8").setBody(html)
+                }
+            }
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val video=resolver.resolve(CenterTitle(17,"tv","Show",provider="kinokong",sourceUrl=server.url("/17-show.html").toString()))
+                assertEquals(listOf(2 to 5,2 to 6,3 to 1),video.episodes.map { it.season to it.number })
+                assertTrue(video.episodes.all { it.voice=="Voice" });assertEquals(setOf(0),video.episodes.first().sources.keys)
+                assertEquals(setOf(720),video.episodes.last().sources.keys);assertNull(video.notice)
+                assertEquals(server.url("/modern-frame").toString(),video.headers["Referer"])
+                assertTrue(resolver.diagnostics.contains("Collaps.makePlayer"));assertTrue(resolver.diagnostics.contains("rows"))
+            }
+        }
+    }
+
+    @Test fun kinokongVenomPlaylistJsonSupportsExplicitEpisodesAndExcludesBlockedRows() = runBlocking {
+        MockWebServer().use { server ->
+            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest):MockResponse = when(request.path) {
+                    "/17-show.html" -> MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody(
+                        """<div id="full_17"><ul class="newTabs"><li data-iframe="/frame">Смотреть</li></ul></div>""")
+                    "/frame" -> MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody(
+                        """<script>var x=new XMLHttpRequest();x.open('GET','/playlist');x.responseType='json';x.send();</script>""")
+                    "/playlist" -> MockResponse().setHeader("Content-Type","application/json").setBody(
+                        """{"seasons":[{"season":4,"episodes":[{"episode":"37","title":"37 серия","source":{"hls":"https://cdn.test/37.m3u8"}},
+                        {"episode":"38","blocked":true,"source":{"hls":"https://cdn.test/blocked.m3u8"}}]}],"current":{"season":4,"episode":"37"}}""")
+                    else -> MockResponse().setResponseCode(404)
+                }
+            }
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val result=resolver.resolve(CenterTitle(17,"tv","Show",provider="kinokong",sourceUrl=server.url("/17-show.html").toString()))
+                assertEquals(4,result.episodes.single().season);assertEquals(37,result.episodes.single().number)
+                assertEquals("https://cdn.test/37.m3u8",result.episodes.single().sources[0]);assertNull(result.notice)
+            }
+        }
+    }
+
+    @Test fun kinokongAllohaCorrelatesOnlyDeclaredMediaAndReportsItsPartialLinkSet() = runBlocking {
+        MockWebServer().use { server ->
+            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest):MockResponse = when(request.path) {
+                    "/17-show.html" -> MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody(
+                        """<div id="full_17"><ul class="newTabs"><li data-iframe="/frame">Смотреть</li></ul></div>""")
+                    "/frame" -> MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody("""
+                        <html><body><script>
+                        JSON.parse('{"type":"serial","active":{"season":2,"episode":5},"all":{"2":{"5":{"v":{"id":"m55","translation":"Дубляж"}},"6":{"v":{"id":"m66","translation":"Дубляж"}}}},"translationList":{"v":"Дубляж"}}');
+                        ['/api/movies/999','/api/movies/m55'].forEach(function(url){var x=new XMLHttpRequest();x.open('GET',url);x.responseType='json';x.send();});
+                        </script></body></html>""")
+                    "/api/movies/m55" -> MockResponse().setHeader("Content-Type","application/json").setBody(
+                        """{"hlsSource":[{"default":true,"quality":{"720":"https://cdn.test/five.m3u8 or https://mirror.test/five.m3u8"}}]}""")
+                    else -> MockResponse().setHeader("Content-Type","application/json").setBody(
+                        """{"hlsSource":[{"default":true,"quality":{"720":"https://cdn.test/wrong.m3u8"}}]}""")
+                }
+            }
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val result=resolver.resolve(CenterTitle(17,"tv","Show",provider="kinokong",sourceUrl=server.url("/17-show.html").toString()))
+                val episode=result.episodes.single()
+                assertEquals(2,episode.season);assertEquals(5,episode.number);assertEquals("Дубляж",episode.voice)
+                assertEquals(listOf("https://cdn.test/five.m3u8","https://mirror.test/five.m3u8"),episode.alternatives[720])
+                assertNotNull(result.notice);assertTrue(resolver.diagnostics.contains("Alloha.hlsSource"))
+            }
+        }
+    }
+
+    @Test fun kinokongVenomMovieSourceMapsKeepOnlyDeclaredQualitiesAndIgnoreAdvertisingJson() = runBlocking {
+        MockWebServer().use { server ->
+            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest):MockResponse = MockResponse()
+                    .setHeader("Content-Type","text/html; charset=utf-8").setBody(if(request.path=="/17-movie.html")
+                        """<div id="full_17"><ul class="newTabs"><li data-iframe="/frame">Смотреть</li></ul></div>"""
+                    else """<html><body><div id="player"></div><script>
+                        JSON.parse('{"source":{"hls":"https://cdn.test/ad.m3u8"}}');
+                        window.VenomPlayer={make:function(opts){return opts;}};
+                        VenomPlayer.make({container:document.getElementById('player'),translation:'Voice',source:{file:{
+                        720:'https://cdn.test/movie.mp4',1080:'https://cdn.test/movie-high.mp4'}}});
+                        </script></body></html>""")
+            }
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val result=resolver.resolve(CenterTitle(17,"movie","Movie",provider="kinokong",sourceUrl=server.url("/17-movie.html").toString()))
+                assertEquals(setOf(720,1080),result.episodes.single().sources.keys)
+                assertEquals("Voice",result.episodes.single().voice);assertFalse(result.episodes.single().sources.values.any { it.contains("/ad.") })
+            }
+        }
+    }
 }

@@ -3,6 +3,10 @@
 if((window!==window.top&&!window.__lampMetadataFrame)||window.__lampOnline)return;
 HTMLMediaElement.prototype.play=function(){return Promise.reject(new DOMException('Metadata only','NotAllowedError'));};
 var state=window.__lampOnline={files:[],lists:[],playerFiles:[],playerLists:[],seen:{},errors:[],cap:480,ids:[],instances:[],xhr:[],shapes:[],jsonXhr:0};
+window.__lampRecordModern=function(rows){
+ var list=rows.map(function(row){return {title:row.voice||"Основная озвучка",folder:[{id:row.id||"",title:row.title||"",season:row.season||0,episode:row.episode||0,file:row.file}]};});
+ remember(list,"list",true);
+};
 var originalParse=JSON.parse,originalStringify=JSON.stringify;
 function remember(value,kind,bound){
  try{
@@ -16,6 +20,7 @@ function remember(value,kind,bound){
  }catch(e){}
 }
 function playlist(value,bound,voice,depth){
+ if(window.__lampObserveModern)window.__lampObserveModern(value,!!bound);
  depth=depth||0;if(depth>5)return;
  if(typeof value==='string'&&value.length<900000&&/^\s*[\[{]/.test(value)){
   try{playlist(originalParse(value),bound,voice,depth+1);}catch(e){}
@@ -49,16 +54,17 @@ XMLHttpRequest.prototype.send=function(){
     state.jsonXhr++;
     if(state.xhr.length<12)state.xhr.push([this.status,-1]);
     playlist(this.response);
+    if(window.__lampObserveModern)window.__lampObserveModern(this.response,false,this.__lampUrl);
    }else if(!this.responseType||this.responseType==='text'){
     var text=this.responseText;
     if(state.xhr.length<12)state.xhr.push([this.status,text?text.length:0]);
-    if(text&&text.length<900000)playlist(originalParse(text));
+    if(text&&text.length<900000){var value=originalParse(text);playlist(value);if(window.__lampObserveModern)window.__lampObserveModern(value,false,this.__lampUrl);}
    }
   }catch(e){}
  });
  return send.apply(this,arguments);
 };
-if(window.fetch){var fetch=window.fetch;window.fetch=function(){return fetch.apply(this,arguments).then(function(response){try{response.clone().text().then(function(text){if(text.length<900000){try{playlist(originalParse(text));}catch(e){}}}).catch(function(){});}catch(e){}return response;});};}
+if(window.fetch){var fetch=window.fetch;window.fetch=function(){return fetch.apply(this,arguments).then(function(response){try{response.clone().text().then(function(text){if(text.length<900000){try{var value=originalParse(text);playlist(value);if(window.__lampObserveModern)window.__lampObserveModern(value,false,response.url);}catch(e){}}}).catch(function(){});}catch(e){}return response;});};}
 function wrapPlayer(){
  var original=window.Playerjs;
  if(typeof original==='function'&&!original.__lampWrapped){
@@ -116,7 +122,7 @@ window.__lampSnapshot=function(){
  var blocked=/(недоступ(?:но|ен)[\s\S]{0,90}(?:стране|регион[ае])|заблокировано[\s\S]{0,90}правообладателя|нет видео файла)/i.exec(text);
  // Once a player is observed, unrelated page JSON cannot stand in for its playlist.
  var bound=state.ids.length||state.playerFiles.length||state.playerLists.length;
- var result={files:bound?state.playerFiles:state.files,lists:bound?state.playerLists:state.lists,cap:state.cap,blocked:blocked?blocked[0]:null,playerType:typeof window.Playerjs,ids:state.ids,xhr:state.xhr,shapes:state.shapes,jsonXhr:state.jsonXhr};
+ var result={files:bound?state.playerFiles:state.files,lists:bound?state.playerLists:state.lists,cap:state.cap,blocked:blocked?blocked[0]:null,playerType:typeof window.Playerjs,ids:state.ids,xhr:state.xhr,shapes:state.shapes,jsonXhr:state.jsonXhr,modern:window.__lampModernStats?window.__lampModernStats():null};
  var json=originalStringify(result);return json.length<1000000?json:'{}';
 };
 })();

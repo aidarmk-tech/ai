@@ -29,7 +29,7 @@ import java.util.Locale
 import kotlin.coroutines.resume
 
 data class OnlineEpisode(val season:Int,val number:Int,val title:String,val voice:String,val sources:Map<Int,String>,val alternatives:Map<Int,List<String>> = emptyMap())
-data class OnlineVideo(val item:CenterTitle,val episodes:List<OnlineEpisode>,val headers:Map<String,String>,val fetchedAt:Long=System.currentTimeMillis(),val catalogItem:CenterTitle?=null) {
+data class OnlineVideo(val item:CenterTitle,val episodes:List<OnlineEpisode>,val headers:Map<String,String>,val fetchedAt:Long=System.currentTimeMillis(),val catalogItem:CenterTitle?=null,val notice:String?=null) {
     val identity get()=catalogItem ?: item
 }
 class OnlineSourceBlocked(val reason:String,message:String):IllegalStateException(message)
@@ -136,7 +136,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
                         frameInfo=(if(item.provider=="kinokong")"bootstrap=native prepared=$preparedFrames root=${observed.get("root")} " else "")+"frames=$pending replies=${candidates.size} alternate=$alternateRequested waiting=$alternatePending " + candidates.mapIndexed { index, entry ->
                             val data=entry.getAsJsonObject("snapshot") ?: JsonObject()
                             val host=entry.get("url")?.takeIf { it.isJsonPrimitive }?.asString?.toHttpUrlOrNull()?.host.orEmpty()
-                            "frame$index[host=$host player=${data.get("playerType")} ids=${data.get("ids")} files=${data.getAsJsonArray("files")?.size()} lists=${data.getAsJsonArray("lists")?.size()} xhr=${data.get("xhr")} shapes=${data.get("shapes")} json=${data.get("jsonXhr")} blocked=${data.get("blocked")?.isJsonNull==false}] "
+                            "frame$index[host=$host player=${data.get("playerType")} ids=${data.get("ids")} files=${data.getAsJsonArray("files")?.size()} lists=${data.getAsJsonArray("lists")?.size()} xhr=${data.get("xhr")} shapes=${data.get("shapes")} json=${data.get("jsonXhr")} modern=${data.get("modern")} blocked=${data.get("blocked")?.isJsonNull==false}] "
                         }.joinToString("")
                         allowEntries=usable!=null
                         // Preserve the actual packet for diagnostics even when its playlist is not understood.
@@ -161,9 +161,13 @@ class CenterOnline(private val activity:AppCompatActivity) {
                         if(stable>=4) {
                             val referer=frameReferer ?: browser.url?.takeIf { sameTitleNavigation(item,it) } ?: source.toString()
                             val origin=referer.toHttpUrlOrNull() ?: source
+                            val modern=snapshot.get("modern")?.takeIf { it.isJsonObject }?.asJsonObject
+                            val declared=modern?.get("declared")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0
+                            val pending=modern?.get("pending")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0
+                            val notice=if(declared>0&&pending>0)"Источник отдал только часть ссылок. Полный список серий доступен в плеере сайта." else null
                             return@withTimeout OnlineVideo(item,entries,mapOf(
                                 "User-Agent" to browser.settings.userAgentString,"Referer" to referer,
-                                "Origin" to origin.newBuilder().encodedPath("/").query(null).fragment(null).build().toString().trimEnd('/')))
+                                "Origin" to origin.newBuilder().encodedPath("/").query(null).fragment(null).build().toString().trimEnd('/')),notice=notice)
                         }
                     }
                     if(item.provider in listOf("kinogo","kinokong")&&entries.isEmpty()&&++emptyPasses>=20)
@@ -185,13 +189,14 @@ class CenterOnline(private val activity:AppCompatActivity) {
             addProperty("origin",source.newBuilder().encodedPath("/").query(null).fragment(null).build().toString().trimEnd('/'))
             addProperty("id",source.encodedPath.substringAfter('/').substringBefore('-').toInt())
         }
+        val modern=if(provider=="kinokong")activity.assets.open("center/modern-player-resolver.js").bufferedReader().use { it.readText() } else ""
         val controls=activity.assets.open(if(provider=="kinokong") "center/kinokong-player-controls.js" else "center/kinogo-player-controls.js").bufferedReader().use { it.readText() }
         val bridge=activity.assets.open(if(provider=="kinokong") "center/kinokong-resolver.js" else "center/kinogo-resolver.js").bufferedReader().use { it.readText() }
         return "(function(){var cfg="+config.toString()+";"+
             "var p=location.pathname;var root=window===window.top&&location.origin===cfg.origin&&p.indexOf('/'+cfg.id+'-')===0&&p.lastIndexOf('/')===0&&p.endsWith('.html');"+
             "var frame=window!==window.top&&window.parent===window.top&&/^https?:$/.test(location.protocol);"+
             "if(!root&&!frame)return;window.__lampKinogoConfig=cfg;window.__lampMetadataFrame=frame;"+
-            common+"\n"+controls+"\n"+bridge+"\n})();"
+            common+"\n"+modern+"\n"+controls+"\n"+bridge+"\n})();"
     }
     private suspend fun evaluate(web:WebView,script:String):String = suspendCancellableCoroutine { continuation ->
         web.evaluateJavascript(script) { if(continuation.isActive)continuation.resume(it ?: "null") }

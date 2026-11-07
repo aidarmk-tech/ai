@@ -976,6 +976,10 @@ open class MediaCenterActivity : AppCompatActivity() {
     protected fun showOnline(video: OnlineVideo, season: Int? = null, voice: String? = null, focusFirst: Boolean = true) {
         val hadFocus = content.hasFocus()
         currentScreen = { showOnline(video, season, voice, false) }; page = "online"; clear(video.identity.title)
+        video.notice?.let { message ->
+            content.addView(text(message,14,muted))
+            content.addView(button("Полный список в плеере сайта") { website(video.identity) });space(content,8)
+        }
         val entries = video.episodes.filter { season == null || it.season == season }
         val voices = entries.map { it.voice }.distinct()
         val selectedVoice = voice ?: voices.singleOrNull()
