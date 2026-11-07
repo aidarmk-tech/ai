@@ -103,4 +103,16 @@ class CenterEngineInstrumentedTest {
         assertTrue(frames.none { it.contains("trailer",true) })
         assertTrue(frames.any { it.contains("/embed/movie/72142") })
     }
+
+    @Test fun kinotacActualMovieAndSeriesDeclareVideoFramesWithoutTrailerOrSdkIds() = runBlocking {
+        val catalog=CenterCatalog()
+        for(item in listOf(
+            CenterTitle(20817,"tv","Король Талсы",provider="kinotac",sourceUrl="https://kinotac.org/20817-korol-talsy.html"),
+            CenterTitle(24890,"movie","Поездка в Кёнджу",provider="kinotac",sourceUrl="https://kinotac.org/24890-poezdka-v-kendzhu.html"))) {
+            val frames=catalog.onlineFrames(item)
+            assertTrue(frames.size in 1..3);assertEquals(frames.distinct(),frames)
+            assertTrue(frames.none { it.contains("/trailer/")||it.contains("cdnvideohub") })
+            assertTrue(frames.any { it.contains("/embed/movie/") })
+        }
+    }
 }

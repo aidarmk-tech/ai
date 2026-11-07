@@ -405,4 +405,27 @@ class CenterCatalogTest {
         assertEquals(2,shell.select(".newTabs > li").size);assertEquals(frames.first(),shell.selectFirst("iframe")!!.attr("src"))
         assertFalse(shell.html().contains("ads.test"))
     }
+
+    @Test fun kinotacSelectsOnlyMovieIframesAndDoesNotTurnSdkIdsOrTrailersIntoVideos() {
+        val item=CenterTitle(20817,"tv","Король Талсы",provider="kinotac",sourceUrl="https://kinotac.org/20817-korol-talsy.html")
+        val html="""<article class="full"><div class="pmovie__player tabs-block"><div>
+            <div class="tabs-block__content video-inside"><video-player id="cdnvideohubvideoplayer" data-title-id="4760854"></video-player></div>
+            <div class="tabs-block__content fplayer"><iframe src="//one.test/embed/movie/60888"></iframe></div>
+            <div class="tabs-block__content fplayer"><iframe src="about:blank" data-src="https://two.test/?movie=fixture"></iframe></div>
+            <div class="tabs-block__content fplayer"><iframe src="//one.test/embed/movie/60888"></iframe></div>
+            <div class="tabs-block__content fplay"><iframe src="//one.test/embed/trailer/60888"></iframe></div>
+            <div class="tabs-block__content fplayer"><iframe src="//one.test/embed/trailer/60888"></iframe></div>
+            <div class="tabs-block__content fplayer"><iframe src="javascript:bad"></iframe></div></div></div>
+            <input name="post_id" value="20817"><div class="comm-item"><div class="pmovie__player"><div class="tabs-block__content fplayer">
+            <iframe src="https://wrong.test/comment"></iframe></div></div></div></article><iframe src="https://wrong.test/outside"></iframe>"""
+        val frames=CenterCatalog.kinotacEmbeds(Jsoup.parse(html,item.sourceUrl),item)
+        assertEquals(listOf("https://one.test/embed/movie/60888","https://two.test/?movie=fixture"),frames)
+        assertTrue(runCatching { CenterCatalog.kinotacEmbeds(Jsoup.parse(html,"https://kinotac.org/99-other.html"),item) }.isFailure)
+        assertTrue(runCatching { CenterCatalog.kinotacEmbeds(Jsoup.parse(html.replace("value=\"20817\"","value=\"99\""),item.sourceUrl),item) }.isFailure)
+        assertTrue(runCatching { CenterCatalog.kinotacEmbeds(Jsoup.parse("<div>No selected article</div>",item.sourceUrl),item) }.isFailure)
+        assertTrue(CenterCatalog.kinotacEmbeds(Jsoup.parse("<article class='full'><video-player data-title-id='4760854'></video-player></article>",item.sourceUrl),item).isEmpty())
+        val shell=Jsoup.parse(CenterOnline.kinokongDocument(item,frames),item.sourceUrl)
+        assertEquals(2,shell.select(".newTabs > li").size);assertEquals(frames.first(),shell.selectFirst("iframe")!!.attr("src"))
+        assertFalse(shell.html().contains("4760854"));assertFalse(shell.html().contains("trailer"));assertTrue(shell.select("script[src]").isEmpty())
+    }
 }

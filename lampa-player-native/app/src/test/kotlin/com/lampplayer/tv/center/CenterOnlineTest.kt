@@ -169,7 +169,7 @@ class CenterOnlineTest {
         assertFalse(CenterOnline.sameTitleNavigation(item,"https://kinokong.es/61710-another.html"))
         assertFalse(CenterOnline.sameTitleNavigation(item,"https://other.test/61709-canonical.html"))
         assertTrue(runCatching { CenterOnline.source(item.copy(type="all")) }.isFailure)
-        assertTrue(CenterOnline.onlineSupported("zona"));assertFalse(CenterOnline.onlineSupported("kinotac"))
+        assertTrue(CenterOnline.onlineSupported("zona"));assertTrue(CenterOnline.onlineSupported("kinotac"))
         val snapshot=JsonParser.parseString("""{"lists":[[{"title":"Сезон 4","folder":[{"title":"Дубляж","folder":[{"title":"12 серия","file":"[720p]https://cdn.test/12.m3u8"}]}]}]]}""").asJsonObject
         val entry=CenterOnline.decode(item,snapshot).single()
         assertEquals(4,entry.season);assertEquals(12,entry.number);assertEquals("Дубляж",entry.voice)
@@ -189,5 +189,17 @@ class CenterOnlineTest {
         assertTrue(CenterWebActivity.sameCardPage("https://zona.movie/film/28-days-17","https://zona.movie/film/canonical-17/","zona"))
         assertTrue(CenterWebActivity.sameCardPage(item.sourceUrl!!,"https://zona.movie/series/canonical-1478/#player"))
         assertFalse(CenterWebActivity.sameCardPage(item.sourceUrl!!,"https://zona.movie/film/mobland-1478/"))
+    }
+
+    @Test fun kinotacOnlineKeepsItsOwnFlatCardIdentityAndWebsiteOrigin() {
+        val item=CenterTitle(20817,"tv","Король Талсы",provider="kinotac",sourceUrl="https://kinotac.org/20817-korol-talsy.html")
+        assertTrue(CenterOnline.onlineSupported(item.provider))
+        assertTrue(CenterOnline.sameTitleNavigation(item,"https://kinotac.org/20817-canonical.html"))
+        assertFalse(CenterOnline.sameTitleNavigation(item,"https://kinotac.org/999-other.html"))
+        assertFalse(CenterOnline.sameTitleNavigation(item,"https://foreign.test/20817-korol-talsy.html"))
+        assertFalse(CenterOnline.sameTitleNavigation(item,"http://kinotac.org/20817-korol-talsy.html"))
+        assertTrue(runCatching { CenterOnline.source(item.copy(type="all")) }.isFailure)
+        assertTrue(CenterWebActivity.sameCardPage(item.sourceUrl!!,"https://kinotac.org/20817-canonical.html#player","kinotac"))
+        assertFalse(CenterWebActivity.sameCardPage(item.sourceUrl!!,"https://kinotac.org/20818-other.html","kinotac"))
     }
 }

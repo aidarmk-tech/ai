@@ -358,6 +358,26 @@ class CenterCatalog {
             }.distinct().take(2)
         }
 
+        /** KinoTac's video iframe panels; SDK IDs and trailer panels are not stream addresses. */
+        fun kinotacEmbeds(document:Document,item:CenterTitle):List<String> {
+            require(item.provider=="kinotac")
+            check(CenterOnline.sameTitleNavigation(item,document.location())) { "KinoTac открыл другую карточку" }
+            val article=document.selectFirst("article.full") ?: error("KinoTac не отдал выбранную карточку")
+            val declared=document.selectFirst("input[name=post_id]")?.attr("value")?.toIntOrNull()
+            check(declared==null||declared==item.id) { "KinoTac отдал другую карточку" }
+            val base=document.location().toHttpUrlOrNull() ?: error("Нет адреса карточки")
+            return article.select(".pmovie__player .tabs-block__content.fplayer iframe").mapNotNull { frame ->
+                if(frame.parents().any { p -> p.id().startsWith("comm")||p.id()=="full-comms"||p.classNames().any {
+                    it.startsWith("comment")||it in setOf("comm-item","advertisement","ads","fplay","trailer","trail") } })return@mapNotNull null
+                val url=listOf(frame.attr("src"),frame.attr("data-src")).firstNotNullOfOrNull { value ->
+                    value.trim().takeIf { it.isNotEmpty()&&it!="about:blank" }?.let { base.resolve(it) }
+                } ?: return@mapNotNull null
+                if(CenterOnline.sameTitleNavigation(item,url.toString())||
+                    url.pathSegments.any { it.equals("trailer",true)||it.equals("trailer-cdn",true) })return@mapNotNull null
+                url.toString()
+            }.distinct().take(3)
+        }
+
         private fun mediaMetadata(document:Document,item:CenterTitle):JsonObject? {
             fun text(node:JsonObject,key:String)=node.get(key)?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
             fun title(value:String)=Jsoup.parse(value).text().replace(Regex("(?iu)\\s*\\((?:(?:19|20)[0-9]{2}|[0-9]+(?:[-–][0-9]+)?\\s*сезон(?:а|ов)?)\\)\\s*$"),"")
@@ -548,12 +568,17 @@ class CenterCatalog {
         }
     }
     suspend fun onlineFrames(item:CenterTitle):List<String> {
-        require(item.provider in listOf("kinokong","zona"))
+        require(item.provider in listOf("kinokong","zona","kinotac"))
         val selected=CenterOnline.source(item)
         val document=page(selected)
-        val frames=if(item.provider=="zona")zonaEmbeds(document,item) else kinokongEmbeds(document,item)
+        val frames=when(item.provider) {
+            "zona" -> zonaEmbeds(document,item)
+            "kinotac" -> kinotacEmbeds(document,item)
+            else -> kinokongEmbeds(document,item)
+        }
         check(frames.isNotEmpty()) { if(item.provider=="zona")
             "Zona.movie не отдал адреса видеоплееров для выбранной карточки. Открой плеер сайта или выбери другой источник"
+            else if(item.provider=="kinotac") "KinoTac не отдал адреса видеоплееров. Открой плеер сайта или выбери другой источник"
             else "На выбранной странице KinoKong не найдены видеоплееры. Открой плеер сайта или выбери другой источник" }
         return frames
     }

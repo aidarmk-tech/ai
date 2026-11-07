@@ -56,7 +56,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
                 isFocusable=false;importantForAccessibility=android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS;alpha=0f
             }
             web=browser
-            val preparedPage=if(item.provider in listOf("kinokong","zona")) {
+            val preparedPage=if(item.provider in listOf("kinokong","zona","kinotac")) {
                 diagnostics="bootstrap=native stage=page"
                 val frames=CenterCatalog().onlineFrames(item);preparedFrames=frames.size
                 diagnostics="bootstrap=native prepared=$preparedFrames stage=webview"
@@ -74,15 +74,15 @@ class CenterOnline(private val activity:AppCompatActivity) {
                 "Для получения списка серий обнови Android System WebView на устройстве"
             }
             val script=activity.assets.open("center/online-resolver.js").bufferedReader().use { it.readText() }
-            val injected = if(item.provider in listOf("kinogo","kinokong","zona")) kinogoScript(source,script,item.provider.orEmpty()) else script
-            val origins = if(item.provider in listOf("kinogo","kinokong","zona")) setOf("*") else setOf("${source.scheme}://${source.host}" + if(source.port!=443&&source.port!=80) ":${source.port}" else "")
+            val injected = if(item.provider in listOf("kinogo","kinokong","zona","kinotac")) kinogoScript(source,script,item.provider.orEmpty()) else script
+            val origins = if(item.provider in listOf("kinogo","kinokong","zona","kinotac")) setOf("*") else setOf("${source.scheme}://${source.host}" + if(source.port!=443&&source.port!=80) ":${source.port}" else "")
             WebViewCompat.addDocumentStartJavaScript(browser,injected,origins)
             browser.webViewClient=object:WebViewClient() {
                 override fun shouldInterceptRequest(view:WebView,request:WebResourceRequest):WebResourceResponse? {
                     val url=request.url.toString().toHttpUrlOrNull() ?: return null
                     if(request.isForMainFrame&&preparedPage!=null&&sameTitleNavigation(item,url.toString()))
                         return WebResourceResponse("text/html","UTF-8",ByteArrayInputStream(preparedPage))
-                    if(request.isForMainFrame||!url.encodedPath.endsWith("playerjs.js",true)||(item.provider !in listOf("kinogo","kinokong","zona")&&url.host!=source.host))return null
+                    if(request.isForMainFrame||!url.encodedPath.endsWith("playerjs.js",true)||(item.provider !in listOf("kinogo","kinokong","zona","kinotac")&&url.host!=source.host))return null
                     val call=libraryHttp.newCall(Request.Builder().url(url).apply {
                         request.requestHeaders.filterKeys { it.equals("User-Agent",true)||it.equals("Referer",true)||it.equals("Cookie",true) }
                             .forEach { (name,value) -> header(name,value) }
@@ -112,14 +112,14 @@ class CenterOnline(private val activity:AppCompatActivity) {
             withTimeout(30000) {
                 while(true) {
                     currentCoroutineContext().ensureActive()
-                    val raw=evaluate(browser,if(item.provider in listOf("kinogo","kinokong","zona"))
+                    val raw=evaluate(browser,if(item.provider in listOf("kinogo","kinokong","zona","kinotac"))
                         "window.__lampKinogoSnapshot ? window.__lampKinogoSnapshot() : '{}'"
                         else "window.__lampSnapshot ? window.__lampSnapshot() : '{}' ")
                     val observed=runCatching { JsonParser.parseString(JsonParser.parseString(raw).asString).asJsonObject }.getOrElse { JsonObject() }
                     var frameReferer: String?=null
                     var frameInfo=""
                     var allowEntries=true
-                    val snapshot=if(item.provider in listOf("kinogo","kinokong","zona")) {
+                    val snapshot=if(item.provider in listOf("kinogo","kinokong","zona","kinotac")) {
                         val candidates=observed.getAsJsonArray("candidates")?.toList().orEmpty()
                             .mapNotNull { it.takeIf { it.isJsonObject }?.asJsonObject }
                         val usable=candidates.firstOrNull { entry ->
@@ -133,7 +133,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
                         val alternatePending=observed.get("alternatePending")?.asBoolean ?: false
                         val allBlocked=(!alternateAvailable||alternateRequested&&!alternatePending) && pending>0 && candidates.size==pending &&
                             candidates.all { e -> e.getAsJsonObject("snapshot")?.get("blocked")?.isJsonNull==false }
-                        frameInfo=(if(item.provider in listOf("kinokong","zona"))"bootstrap=native prepared=$preparedFrames root=${observed.get("root")} " else "")+"frames=$pending replies=${candidates.size} alternate=$alternateRequested waiting=$alternatePending " + candidates.mapIndexed { index, entry ->
+                        frameInfo=(if(item.provider in listOf("kinokong","zona","kinotac"))"bootstrap=native prepared=$preparedFrames root=${observed.get("root")} " else "")+"frames=$pending replies=${candidates.size} alternate=$alternateRequested waiting=$alternatePending " + candidates.mapIndexed { index, entry ->
                             val data=entry.getAsJsonObject("snapshot") ?: JsonObject()
                             val host=entry.get("url")?.takeIf { it.isJsonPrimitive }?.asString?.toHttpUrlOrNull()?.host.orEmpty()
                             "frame$index[host=$host player=${data.get("playerType")} ids=${data.get("ids")} files=${data.getAsJsonArray("files")?.size()} lists=${data.getAsJsonArray("lists")?.size()} xhr=${data.get("xhr")} shapes=${data.get("shapes")} json=${data.get("jsonXhr")} modern=${data.get("modern")} recovered=${data.get("recovered")} hls=${data.get("hlsRead")} dom=${data.get("domRead")} config=${data.get("configRead")} blocked=${data.get("blocked")?.isJsonNull==false}] "
@@ -170,7 +170,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
                                 "Origin" to origin.newBuilder().encodedPath("/").query(null).fragment(null).build().toString().trimEnd('/')),notice=notice)
                         }
                     }
-                    if(item.provider in listOf("kinogo","kinokong","zona")&&entries.isEmpty()&&++emptyPasses>=20)
+                    if(item.provider in listOf("kinogo","kinokong","zona","kinotac")&&entries.isEmpty()&&++emptyPasses>=20)
                         evaluate(browser,"window.__lampKinogoTryAlternate ? window.__lampKinogoTryAlternate() : false")
                     delay(300)
                 }
@@ -191,9 +191,9 @@ class CenterOnline(private val activity:AppCompatActivity) {
             addProperty("path",source.encodedPath)
             addProperty("provider",provider)
         }
-        val modern=if(provider in listOf("kinokong","zona"))activity.assets.open("center/modern-player-resolver.js").bufferedReader().use { it.readText() } else ""
-        val controls=activity.assets.open(if(provider in listOf("kinokong","zona")) "center/kinokong-player-controls.js" else "center/kinogo-player-controls.js").bufferedReader().use { it.readText() }
-        val bridge=activity.assets.open(if(provider in listOf("kinokong","zona")) "center/kinokong-resolver.js" else "center/kinogo-resolver.js").bufferedReader().use { it.readText() }
+        val modern=if(provider in listOf("kinokong","zona","kinotac"))activity.assets.open("center/modern-player-resolver.js").bufferedReader().use { it.readText() } else ""
+        val controls=activity.assets.open(if(provider in listOf("kinokong","zona","kinotac")) "center/kinokong-player-controls.js" else "center/kinogo-player-controls.js").bufferedReader().use { it.readText() }
+        val bridge=activity.assets.open(if(provider in listOf("kinokong","zona","kinotac")) "center/kinokong-resolver.js" else "center/kinogo-resolver.js").bufferedReader().use { it.readText() }
         return "(function(){var cfg="+config.toString()+";"+
             "var p=location.pathname;var match=cfg.provider==='zona'?p===cfg.path:p.indexOf('/'+cfg.id+'-')===0&&p.lastIndexOf('/')===0&&p.endsWith('.html');"+
             "var root=window===window.top&&location.origin===cfg.origin&&match;"+
@@ -208,7 +208,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
 
         /** A native HTML shell keeps the source origin/Referer, without running catalog advertising/layout scripts. */
         fun kinokongDocument(item:CenterTitle,frames:List<String>):String {
-            require(item.provider in listOf("kinokong","zona")&&frames.isNotEmpty()&&frames.size<=3)
+            require(item.provider in listOf("kinokong","zona","kinotac")&&frames.isNotEmpty()&&frames.size<=3)
             source(item)
             val document=org.jsoup.nodes.Document.createShell(item.sourceUrl!!)
             document.head().appendElement("meta").attr("charset","UTF-8")
@@ -230,7 +230,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
             return document.outerHtml()
         }
 
-        fun onlineSupported(provider: String?) = provider in listOf("kinogo","kinovod","kinokong","zona")
+        fun onlineSupported(provider: String?) = provider in listOf("kinogo","kinovod","kinokong","zona","kinotac")
         private data class MediaProbe(val status:Int,val kind:String,val bytes:ByteArray,val resolved:okhttp3.HttpUrl) {
             val text get()=bytes.toString(Charsets.UTF_8).trimStart('\uFEFF',' ','\r','\n','\t')
             val success get()=status in 200..299
@@ -330,7 +330,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
             .connectTimeout(8,TimeUnit.SECONDS).readTimeout(10,TimeUnit.SECONDS).callTimeout(12,TimeUnit.SECONDS).build()
         fun source(item:CenterTitle):okhttp3.HttpUrl {
             val url=item.sourceUrl?.toHttpUrlOrNull() ?: error("Не указан адрес источника")
-            if(item.provider in listOf("kinogo","kinokong")) {
+            if(item.provider in listOf("kinogo","kinokong","kinotac")) {
                 val id=Regex("^/([0-9]+)-[^/]+\\.html$").find(url.encodedPath)?.groupValues?.get(1)?.toIntOrNull()
                 check(id==item.id && item.type in listOf("movie","tv")) { "Адрес ${CenterCatalog.name(item.provider)} не соответствует выбранному фильму или сериалу" }
                 return url
