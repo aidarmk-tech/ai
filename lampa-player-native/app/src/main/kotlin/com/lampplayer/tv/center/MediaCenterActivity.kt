@@ -956,10 +956,12 @@ open class MediaCenterActivity : AppCompatActivity() {
         val identity=catalogItem ?: item
         onlineReport=null
         val previous = returnTo ?: if (resume != null && page == "online") snapshot() else null
+        val contextSeason=selectedSeason ?: resume?.let { it.seasonNumber ?: 0 }
+        val contextVoice=selectedVoice ?: resume?.translator
         val previousVideo=onlineCache[identity.key]?.second?.takeIf { it.item.key==item.key&&it.item.sourceUrl==item.sourceUrl }
         work("Получаю список серий · ${CenterCatalog.name(item.provider)}…",onlineItem=identity,
-            onlineRecovery=previousVideo?.takeIf { it.playerCount>1 }?.let { old -> { chooseOnlinePlayer(old,selectedSeason,selectedVoice) } }
-                ?: if(playerIndex!=null)({online(item,refresh=true,selectedSeason=selectedSeason,selectedVoice=selectedVoice,catalogItem=catalogItem,choosePlayerAfterLoad=true)}) else null,
+            onlineRecovery=previousVideo?.takeIf { it.playerCount>1 }?.let { old -> { chooseOnlinePlayer(old,contextSeason,contextVoice) } }
+                ?: if(playerIndex!=null)({online(item,refresh=true,selectedSeason=contextSeason,selectedVoice=contextVoice,catalogItem=catalogItem,choosePlayerAfterLoad=true)}) else null,
             onlineRefresh={online(item,resume,refresh=true,selectedSeason=selectedSeason,selectedVoice=selectedVoice,catalogItem=catalogItem,playerIndex=playerIndex)}) {
             val cached = onlineCache[identity.key]?.takeIf { System.currentTimeMillis() - it.first < 180000 && !refresh && it.second.item.key==item.key && it.second.item.sourceUrl==item.sourceUrl && (playerIndex==null||it.second.pinnedPlayer&&it.second.playerIndex==playerIndex) }?.second
             val video = cached ?: (if(playerIndex==null)resolveOnline(item) else resolveOnlinePlayer(item,playerIndex)).copy(catalogItem=catalogItem).also {
