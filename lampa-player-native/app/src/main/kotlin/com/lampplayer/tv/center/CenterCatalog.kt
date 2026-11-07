@@ -339,6 +339,25 @@ class CenterCatalog {
             }.distinct().take(3)
         }
 
+        /** Only iframe declarations inside the selected Zona video panels. */
+        fun zonaEmbeds(document:Document,item:CenterTitle):List<String> {
+            require(item.provider=="zona")
+            check(CenterOnline.sameTitleNavigation(item,document.location())) { "Zona.movie открыла другую карточку" }
+            val base=document.location().toHttpUrlOrNull() ?: error("Нет адреса карточки")
+            return document.select(".plays > .tabs-box2 > .tabs-b2 iframe").mapNotNull { frame ->
+                if(frame.parents().any { p -> p.id().startsWith("comm-")||p.classNames().any {
+                    it.startsWith("comment")||it in setOf("comm-item","advertisement","trailer","trail","tmdbview") } })return@mapNotNull null
+                val panel=frame.parents().firstOrNull { it.hasClass("tabs-b2") } ?: return@mapNotNull null
+                if(Regex("(?iu)трейлер|trailer").containsMatchIn(panel.attr("data-title")))return@mapNotNull null
+                val values=listOf(frame.attr("src"),frame.attr("data-src"))
+                val url=values.firstNotNullOfOrNull { value -> value.trim().takeIf { it.isNotEmpty()&&it!="about:blank" }?.let { base.resolve(it) } }
+                    ?: return@mapNotNull null
+                if(CenterOnline.sameTitleNavigation(item,url.toString())||
+                    Regex("(?i)^/(?:trailer|trailer-cdn)(?:/|$)").containsMatchIn(url.encodedPath))return@mapNotNull null
+                url.toString()
+            }.distinct().take(2)
+        }
+
         private fun mediaMetadata(document:Document,item:CenterTitle):JsonObject? {
             fun text(node:JsonObject,key:String)=node.get(key)?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
             fun title(value:String)=Jsoup.parse(value).text().replace(Regex("(?iu)\\s*\\((?:(?:19|20)[0-9]{2}|[0-9]+(?:[-–][0-9]+)?\\s*сезон(?:а|ов)?)\\)\\s*$"),"")
@@ -529,10 +548,11 @@ class CenterCatalog {
         }
     }
     suspend fun onlineFrames(item:CenterTitle):List<String> {
-        require(item.provider=="kinokong")
+        require(item.provider in listOf("kinokong","zona"))
         val selected=CenterOnline.source(item)
-        val frames=kinokongEmbeds(page(selected),item)
-        check(frames.isNotEmpty()) { "На выбранной странице KinoKong не найдены видеоплееры. Открой плеер сайта или выбери другой источник" }
+        val document=page(selected)
+        val frames=if(item.provider=="zona")zonaEmbeds(document,item) else kinokongEmbeds(document,item)
+        check(frames.isNotEmpty()) { "${CenterCatalog.name(item.provider)} не отдал адреса видеоплееров для выбранной карточки. Открой плеер сайта или выбери другой источник" }
         return frames
     }
     suspend fun detail(item:CenterTitle): CenterDetails = detailLimit.withPermit {

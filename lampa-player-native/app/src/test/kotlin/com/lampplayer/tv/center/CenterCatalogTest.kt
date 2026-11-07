@@ -387,4 +387,22 @@ class CenterCatalogTest {
         assertEquals("480",document.selectFirst("iframe")!!.attr("height"));assertEquals("100%",document.selectFirst("iframe")!!.attr("width"))
         assertFalse(document.html().contains("trailer-cdn"));assertTrue(document.select("script[src]").isEmpty())
     }
+
+    @Test fun zonaUsesOnlyDeclaredVideoPanelsAndRejectsOtherCards() {
+        val item=CenterTitle(1478,"tv","Гангстерленд",provider="zona",sourceUrl="https://zona.movie/series/mobland-1478/")
+        val html="""<iframe src="https://ads.test/outside"></iframe><div class="plays"><div class="tabs-box2">
+            <div class="ttab2"><div class="tabs-sel2"><span>Плеер 1</span><span>Плеер 2</span></div></div>
+            <div class="tabs-b2"><iframe src="https://one.test/embed/17"></iframe></div>
+            <div class="tabs-b2"><iframe src="about:blank" data-src="//two.test/series/17"></iframe></div>
+            <div class="tabs-b2"><iframe src="https://one.test/embed/17"></iframe><iframe src="/trailer-cdn/17/"></iframe></div>
+            </div></div><div class="comm-item"><div class="plays"><div class="tabs-box2"><div class="tabs-b2"><iframe src="https://wrong.test/ad"></iframe></div></div></div></div>"""
+        val frames=CenterCatalog.zonaEmbeds(Jsoup.parse(html,item.sourceUrl),item)
+        assertEquals(listOf("https://one.test/embed/17","https://two.test/series/17"),frames)
+        assertTrue(runCatching { CenterCatalog.zonaEmbeds(Jsoup.parse(html,"https://zona.movie/film/mobland-1478/"),item) }.isFailure)
+        assertTrue(runCatching { CenterCatalog.zonaEmbeds(Jsoup.parse(html,"https://zona.movie/series/other-99/"),item) }.isFailure)
+        assertTrue(CenterCatalog.zonaEmbeds(Jsoup.parse("<div class='plays'><div class='tabs-box2'><span>Плеер 1</span></div></div>",item.sourceUrl),item).isEmpty())
+        val shell=Jsoup.parse(CenterOnline.kinokongDocument(item,frames),item.sourceUrl)
+        assertEquals(2,shell.select(".newTabs > li").size);assertEquals(frames.first(),shell.selectFirst("iframe")!!.attr("src"))
+        assertFalse(shell.html().contains("ads.test"))
+    }
 }

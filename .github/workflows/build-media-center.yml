@@ -97,7 +97,7 @@ jobs:
           data={'versionCode':${{ github.run_number }},'versionName':'0.1.${{ github.run_number }}',
             'url':'https://github.com/${{ github.repository }}/releases/download/media-center/'+p.name,
             'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),
-            'notes':'Улучшен онлайн KinoKong/HDVB: восстановление уже созданного PlayerJS, чтение HLS и прямого MP4 через API и привязанный видеотег. Учтены let/const playerConfigs и ID контейнеров с хешем. Исправлены сообщения о недоступном видео и ошибки для фильмов.'}
+            'notes':'Добавлен проверочный онлайн Zona.movie: чтение плееров выбранной карточки, серии и озвучки, переключение на второй плеер и запуск в LampPlayer. Плеер сайта открывается с фокусом на видео. Понятная ошибка, если Zona не публикует адреса видео.'}
           pathlib.Path('dist/version.json').write_text(json.dumps(data,ensure_ascii=False,indent=2))
           PY
       - uses: softprops/action-gh-release@v2

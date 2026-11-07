@@ -169,9 +169,23 @@ class CenterOnlineTest {
         assertFalse(CenterOnline.sameTitleNavigation(item,"https://kinokong.es/61710-another.html"))
         assertFalse(CenterOnline.sameTitleNavigation(item,"https://other.test/61709-canonical.html"))
         assertTrue(runCatching { CenterOnline.source(item.copy(type="all")) }.isFailure)
-        assertFalse(CenterOnline.onlineSupported("zona"));assertFalse(CenterOnline.onlineSupported("kinotac"))
+        assertTrue(CenterOnline.onlineSupported("zona"));assertFalse(CenterOnline.onlineSupported("kinotac"))
         val snapshot=JsonParser.parseString("""{"lists":[[{"title":"Сезон 4","folder":[{"title":"Дубляж","folder":[{"title":"12 серия","file":"[720p]https://cdn.test/12.m3u8"}]}]}]]}""").asJsonObject
         val entry=CenterOnline.decode(item,snapshot).single()
         assertEquals(4,entry.season);assertEquals(12,entry.number);assertEquals("Дубляж",entry.voice)
+    }
+
+    @Test fun zonaPreservesItsNativeIdMediaTypeAndOriginInBothPlayers() {
+        val item=CenterTitle(1478,"tv","Гангстерленд",provider="zona",sourceUrl="https://zona.movie/series/mobland-1478/")
+        assertTrue(CenterOnline.onlineSupported("zona"))
+        assertEquals("/series/mobland-1478/",CenterOnline.source(item).encodedPath)
+        assertTrue(CenterOnline.sameTitleNavigation(item,"https://zona.movie/series/canonical-1478/"))
+        for(target in listOf("https://zona.movie/film/mobland-1478/","https://zona.movie/series/other-1479/",
+            "https://other.test/series/mobland-1478/","https://zona.movie/series/mobland-1478/1-season/1-episode/")) {
+            assertFalse(target,CenterOnline.sameTitleNavigation(item,target))
+        }
+        assertTrue(runCatching { CenterOnline.source(item.copy(type="movie")) }.isFailure)
+        assertTrue(CenterWebActivity.sameCardPage(item.sourceUrl!!,"https://zona.movie/series/canonical-1478/#player"))
+        assertFalse(CenterWebActivity.sameCardPage(item.sourceUrl!!,"https://zona.movie/film/mobland-1478/"))
     }
 }

@@ -26,8 +26,9 @@ class CenterWebActivity : AppCompatActivity() {
         sitePlayer && (intent.getStringExtra("catalog_provider")=="kinogo" || intent.getStringExtra("url")?.toHttpUrlOrNull()?.host?.let { it=="kinogo.moi"||it.endsWith(".kinogo.moi") }==true)
     }
     private val kinoKong by lazy { sitePlayer && intent.getStringExtra("catalog_provider")=="kinokong" }
+    private val zona by lazy { sitePlayer && intent.getStringExtra("catalog_provider")=="zona" }
     private var siteTab=0
-    private val kinoGoControls by lazy { assets.open(if(kinoKong) "center/kinokong-player-controls.js" else "center/kinogo-player-controls.js").bufferedReader().use { it.readText() } }
+    private val kinoGoControls by lazy { assets.open(if(zona) "center/zona-player-controls.js" else if(kinoKong) "center/kinokong-player-controls.js" else "center/kinogo-player-controls.js").bufferedReader().use { it.readText() } }
     private lateinit var native: Button
     private var full: View? = null
     private var fullCallback: WebChromeClient.CustomViewCallback? = null
@@ -47,7 +48,7 @@ class CenterWebActivity : AppCompatActivity() {
             text = (if(sitePlayer) "Плеер сайта · " else "") + (media.get("title")?.asString ?: source.host); setTextColor(Color.WHITE); textSize = 17f
             maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(12,0,12,0)
         },LinearLayout.LayoutParams(0,-2,1f))
-        if(kinoGo||kinoKong) {
+        if(kinoGo||kinoKong||zona) {
             toolbar.addView(action("Плеер 1") { siteTab=0;focusKinoGo() })
             toolbar.addView(action("Плеер 2") { siteTab=1;focusKinoGo() })
             if(kinoKong)toolbar.addView(action("Плеер 3") { siteTab=2;focusKinoGo() })
@@ -77,7 +78,7 @@ class CenterWebActivity : AppCompatActivity() {
                     synchronized(streams) { streams.clear() }; native.visibility = View.GONE
                 }
                 override fun onPageFinished(view:WebView,url:String) {
-                    if((kinoGo||kinoKong)&&sameCardPage(source.toString(),url))focusKinoGo()
+                    if((kinoGo||kinoKong||zona)&&sameCardPage(source.toString(),url))focusKinoGo()
                 }
                 override fun shouldInterceptRequest(view:WebView,request:WebResourceRequest):WebResourceResponse? {
                     val url=request.url.toString()
@@ -105,10 +106,10 @@ class CenterWebActivity : AppCompatActivity() {
         web.loadUrl(source.toString()); web.requestFocus()
     }
     private fun focusKinoGo() {
-        if(!::web.isInitialized||(!kinoGo&&!kinoKong))return
+        if(!::web.isInitialized||(!kinoGo&&!kinoKong&&!zona))return
         val source=intent.getStringExtra("url") ?: return
         if(!sameCardPage(source,web.url ?: return))return
-        val name=if(kinoKong) "__lampKongControls" else "__lampKinogoControls"
+        val name=if(zona) "__lampZonaControls" else if(kinoKong) "__lampKongControls" else "__lampKinogoControls"
         web.evaluateJavascript(kinoGoControls+"\nwindow."+name+".focus("+siteTab+",true);",null)
     }
     private fun hideFull() {
@@ -145,6 +146,12 @@ class CenterWebActivity : AppCompatActivity() {
             val original=source.toHttpUrlOrNull() ?: return false
             val next=target.toHttpUrlOrNull() ?: return false
             if(original.scheme!=next.scheme || original.host!=next.host || original.port!=next.port)return false
+            val zona=Regex("^/(film|series)/[^/]+-([0-9]+)/?$")
+            val selected=zona.matchEntire(original.encodedPath)
+            if(selected!=null) {
+                val match=zona.matchEntire(next.encodedPath) ?: return false
+                return match.groupValues[1]==selected.groupValues[1]&&match.groupValues[2]==selected.groupValues[2]
+            }
             fun identity(path:String):String? = Regex("^/(?:serial/|film/)?([0-9]+)-[^/]+(?:\\.html)?$").find(path)?.groupValues?.get(1)
             val id=identity(original.encodedPath) ?: return next==original
             return identity(next.encodedPath)==id && (original.encodedPath.startsWith("/serial/")==next.encodedPath.startsWith("/serial/")) &&

@@ -469,7 +469,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         boards.firstOrNull()?.second?.firstOrNull()?.let { featured(it) }
         if (store.history().isNotEmpty()) { section("Продолжить просмотр"); historyCards(store.history().take(8)); space(content, 14) }
         if (store.catalog == "tmdb") {
-            content.addView(text("Каталоги показывают описания фильмов и сериалов. Онлайн KinoGo, KinoKong и Киновода доступен в режиме проверки; также можно выбрать торрент-раздачу.", 13, muted)); space(content, 14)
+            content.addView(text("Каталоги показывают описания фильмов и сериалов. Онлайн KinoGo, KinoKong, Zona.movie и Киновода доступен в режиме проверки; также можно выбрать торрент-раздачу.", 13, muted)); space(content, 14)
         }
         boards.forEach { (category, items) ->
             section(category.label, items.size)

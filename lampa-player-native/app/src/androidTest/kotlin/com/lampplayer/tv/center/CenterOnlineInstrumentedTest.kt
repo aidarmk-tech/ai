@@ -787,4 +787,108 @@ class CenterOnlineInstrumentedTest {
             }
         }
     }
+
+    private fun zonaPage():String = """<html><body><div class="keep-full"><h1>Selected title</h1></div>
+        <div style="height:1800px">Описание</div><div class="plays"><div class="tabs-box2"><div class="ttab2">
+        <div class="tabs-sel2"><span class="current">Плеер 1</span><span>🔥 Плеер 2 (HD)</span></div></div>
+        <div class="tabs-b2"><iframe src="/first"></iframe></div>
+        <div class="tabs-b2" style="display:none"><iframe data-src="/second"></iframe></div></div></div>
+        <div class="comm-item"><iframe src="/unrelated"></iframe></div>
+        <script>JSON.parse('{"file":"https://cdn.test/wrong.mp4"}');</script></body></html>"""
+
+    @Test fun zonaSeriesRetriesItsSecondDeclaredPlayerAndPreservesVoiceEpisodeAndReferer() = runBlocking {
+        MockWebServer().use { server ->
+            val requests=java.util.Collections.synchronizedList(mutableListOf<String>())
+            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest):MockResponse {
+                    requests.add(request.path.orEmpty())
+                    val body=when(request.path) {
+                        "/series/show-17/" -> zonaPage()
+                        "/first" -> "<html><body>Видео недоступно для вашего региона</body></html>"
+                        "/second" -> """<html><body><script>window.Playerjs=function(options){this.api=function(){return [];};};
+                            new Playerjs({id:'videoplayer',file:[{title:'Сезон 2',folder:[{title:'Дубляж',folder:[
+                            {title:'5 серия',file:'[720p]https://cdn.test/five.m3u8'},
+                            {title:'6 серия',file:'[1080p]https://cdn.test/six.m3u8'}]}]}]});</script></body></html>"""
+                        else -> "<html><body>Unrelated</body></html>"
+                    }
+                    return MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody(body)
+                }
+            }
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val item=CenterTitle(17,"tv","Show",provider="zona",sourceUrl=server.url("/series/show-17/").toString())
+                val result=resolver.resolve(item)
+                assertEquals(item.key,result.item.key)
+                assertEquals(listOf(2 to 5,2 to 6),result.episodes.map { it.season to it.number })
+                assertTrue(result.episodes.all { it.voice=="Дубляж" })
+                assertEquals(server.url("/second").toString(),result.headers["Referer"])
+                assertTrue(requests.contains("/first"));assertTrue(requests.contains("/second"));assertFalse(requests.contains("/unrelated"))
+            }
+        }
+    }
+    @Test fun zonaMovieUsesTheExistingBoundPlayerJsApi() = runBlocking {
+        MockWebServer().use { server ->
+            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest)=MockResponse().setHeader("Content-Type","text/html; charset=utf-8")
+                    .setBody(if(request.path=="/film/movie-17/")zonaPage() else """<html><body><div id="player-movie"></div><script>
+                    function Playerjs(options){this.api=function(command){
+                        if(command==='id')return options.id;if(command==='playlist_folders')return [];if(command==='hls')return {url:'https://cdn.test/movie.m3u8'};
+                        throw Error('Unexpected write: '+command);};}
+                    let player=new Playerjs({id:'player-movie'});
+                    </script></body></html>""")
+            }
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val video=resolver.resolve(CenterTitle(17,"movie","Movie",provider="zona",sourceUrl=server.url("/film/movie-17/").toString()))
+                assertEquals("https://cdn.test/movie.m3u8",video.episodes.single().sources[0])
+                assertEquals(server.url("/first").toString(),video.headers["Referer"])
+            }
+        }
+    }
+    @Test fun zonaMissingDeclarationsFailWithTheProviderNameBeforeTheResolverWait() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody(
+                "<div class='plays'><div class='tabs-box2'><div class='tabs-sel2'><span>Плеер 1</span><span>Плеер 2</span></div></div></div>"))
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val error=runCatching { resolver.resolve(CenterTitle(17,"tv","Show",provider="zona",sourceUrl=server.url("/series/show-17/").toString())) }.exceptionOrNull()
+                assertTrue(error is IllegalStateException);assertTrue(error!!.message.orEmpty().contains("Zona.movie не отдал адреса"))
+                assertEquals(1,server.requestCount)
+            }
+        }
+    }
+    @Test fun zonaWebsiteFocusesItsPlayerAndSwitchesToSecondDeclaredPanel() = runBlocking {
+        MockWebServer().use { server ->
+            val requests=java.util.Collections.synchronizedList(mutableListOf<String>())
+            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest):MockResponse {
+                    requests.add(request.path.orEmpty())
+                    return MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody(
+                        if(request.path=="/series/show-17/")zonaPage() else "<html><body>Плеер выбранной серии</body></html>")
+                }
+            }
+            val source=server.url("/series/show-17/").toString()
+            val intent=android.content.Intent(androidx.test.core.app.ApplicationProvider.getApplicationContext(),CenterWebActivity::class.java)
+                .putExtra("url",source).putExtra("site_player",true).putExtra("catalog_provider","zona").putExtra("lampa_data","""{"title":"Show"}""")
+            ActivityScenario.launch<CenterWebActivity>(intent).use { scenario ->
+                suspend fun state():com.google.gson.JsonObject {
+                    val result=kotlinx.coroutines.CompletableDeferred<String>()
+                    scenario.onActivity { it.findViewById<android.view.View>(android.R.id.content).findViewWithTag<android.webkit.WebView>("site_player_web")
+                        .evaluateJavascript("({scroll:scrollY,tab:document.querySelector('.tabs-sel2 .current')?.textContent||'',url:location.href,focused:document.activeElement?.tagName})") { value -> result.complete(value) } }
+                    return com.google.gson.JsonParser.parseString(result.await()).asJsonObject
+                }
+                kotlinx.coroutines.withTimeout(10000) { while(state().get("scroll").asInt<1000)kotlinx.coroutines.delay(100) }
+                scenario.onActivity { activity ->
+                    fun views(v:android.view.View):List<android.view.View> = listOf(v)+if(v is android.view.ViewGroup)(0 until v.childCount).flatMap { views(v.getChildAt(it)) } else emptyList()
+                    views(activity.findViewById(android.R.id.content)).filterIsInstance<android.widget.Button>().first { it.text.toString()=="Плеер 2" }.performClick()
+                }
+                kotlinx.coroutines.withTimeout(10000) { while(true) { val s=state()
+                    if(s.get("tab").asString=="🔥 Плеер 2 (HD)"&&s.get("focused").asString=="IFRAME"&&requests.contains("/second"))break
+                    kotlinx.coroutines.delay(100)
+                } }
+                assertEquals(source,state().get("url").asString);assertFalse(requests.any { it.startsWith("/trailer-cdn/") })
+            }
+        }
+    }
+
 }

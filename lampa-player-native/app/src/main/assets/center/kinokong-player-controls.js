@@ -5,7 +5,7 @@ if(window!==window.top||window.__lampKongControls)return;
 function candidate(value){if(!value)return null;try{var u=new URL(value,location.href);
  return /^https?:$/.test(u.protocol)&&!/^\/(?:trailer|trailer-cdn)(?:\/|$)/i.test(u.pathname)?u:null;
 }catch(e){return null;}}
-function selectedId(){var m=/^\/([0-9]+)-/.exec(location.pathname);return m?m[1]:null;}
+function selectedId(){if(window.__lampKinogoConfig)return String(window.__lampKinogoConfig.id);var m=/^\/([0-9]+)-/.exec(location.pathname);return m?m[1]:null;}
 function scoped(el){var id=selectedId(),owner=el.closest('[id^="full_"]');
  return !(owner&&id&&owner.id!=='full_'+id)&&!el.closest('[id^="comm-"],[class^="comment"],.comm-item');}
 function visible(el){return !!el.getClientRects().length&&getComputedStyle(el).visibility!=='hidden';}
