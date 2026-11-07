@@ -66,17 +66,84 @@ XMLHttpRequest.prototype.send=function(){
  return send.apply(this,arguments);
 };
 if(window.fetch){var fetch=window.fetch;window.fetch=function(){return fetch.apply(this,arguments).then(function(response){try{response.clone().text().then(function(text){if(text.length<900000){try{var value=originalParse(text);playlist(value);if(window.__lampObserveModern)window.__lampObserveModern(value,false,response.url);}catch(e){}}}).catch(function(){});}catch(e){}return response;});};}
+
+function mainPlayerId(id){
+ if(typeof id!=='string'||/trailer|preroll|(?:^|[_-])ads?(?:$|[_-])/i.test(id))return false;
+ if(/^(?:video)?player$/i.test(id))return true;
+ if(!window.__lampMetadataFrame)return false;
+ if(/^(?:video)?player(?:js|[12]|[-_][a-z0-9_-]{1,160})?$/i.test(id))return true;
+ try{return typeof playerConfigs!=='undefined'&&playerConfigs&&String(playerConfigs.id)===id;}catch(e){return false;}
+}
+function adElement(element){
+ for(var el=element;el&&el.nodeType===1;el=el.parentElement){
+  var label=(el.id||'')+' '+(typeof el.className==='string'?el.className:'');
+  if(/(?:^|[\s_-])(?:ads?|advert|advertisement|preroll|trailer)(?:$|[\s_-])/i.test(label)||el.hasAttribute('data-ad'))return true;
+ }
+ return false;
+}
+function validMedia(value){
+ if(typeof value!=='string'||value.length>12000)return '';
+ try{var u=new URL(value,location.href);return /^https?:$/.test(u.protocol)&&/\.(?:m3u8|mp4|mkv|m4v|webm|mov|avi)$/i.test(u.pathname)?u.href:'';}catch(e){return '';}
+}
+function knownInstance(instance,id,voice,recovered){
+ if(!instance||typeof instance.api!=='function'||!mainPlayerId(id))return null;
+ var existing=state.instances.find(function(entry){return entry.player===instance;});
+ if(existing){existing.id=existing.id||id;return existing;}
+ if(state.instances.length>=4)return null;
+ var entry={player:instance,id:id,voice:voice||''};state.instances.push(entry);
+ if(state.ids.indexOf(id)<0&&state.ids.length<12)state.ids.push(id);
+ if(recovered)state.recovered=(state.recovered||0)+1;
+ return entry;
+}
+function discoverInstance(instance){
+ try{
+  if(!instance||typeof instance.api!=='function')return;
+  if(state.instances.some(function(entry){return entry.player===instance;}))return;
+  var id=instance.api('id'),container=typeof id==='string'?document.getElementById(id):null;
+  if(!container||adElement(container))return;
+  knownInstance(instance,id,'',true);
+ }catch(e){}
+}
+function discoverPlayers(){
+ if(!window.__lampMetadataFrame)return;
+ // Known PlayerJS bindings include global lexical declarations, not just window properties.
+ try{if(typeof player!=='undefined')discoverInstance(player);}catch(e){}
+ try{if(typeof videoPlayer!=='undefined')discoverInstance(videoPlayer);}catch(e){}
+ try{if(typeof pljssglobal!=='undefined'&&pljssglobal&&typeof pljssglobal==='object'){
+  Object.keys(pljssglobal).slice(0,12).forEach(function(key){discoverInstance(pljssglobal[key]);});
+ }}catch(e){}
+}
+function readMedia(entry){
+ if(!window.__lampMetadataFrame||!mainPlayerId(entry.id))return;
+ var container=document.getElementById(entry.id);if(!container||adElement(container))return;
+ try{if(typeof playerConfigs!=='undefined'&&playerConfigs&&String(playerConfigs.id)===entry.id){playerFile(playerConfigs.file,entry.voice);state.configRead=true;}}catch(e){}
+ try{
+  var hls=entry.player.api('hls'),url=hls&&validMedia(hls.url);
+  if(url&&(!hls.media||container.contains(hls.media)&&!adElement(hls.media))){
+   playerFile(url,entry.voice);state.hlsRead=true;
+  }
+ }catch(e){}
+ // A direct MP4 is read only from the sole non-advertising video in this bound container.
+ try{
+  var videos=Array.prototype.slice.call(container.querySelectorAll('video')).filter(function(video){return !adElement(video);});
+  if(videos.length===1){
+   var direct=validMedia(videos[0].currentSrc||videos[0].getAttribute('src'));
+   if(direct){playerFile(direct,entry.voice);state.domRead=true;}
+  }
+ }catch(e){}
+}
+
 function wrapPlayer(){
  var original=window.Playerjs;
  if(typeof original==='function'&&!original.__lampWrapped){
   var wrapped=function(options){
    var id=typeof options==='string'?options:options&&options.id;
    if(state.ids.length<12&&id)state.ids.push(String(id));
-   var main=typeof id==='string'&&(/^(?:video)?player$/i.test(id)||(window.__lampMetadataFrame&&/^player(?:js|[12])?$/i.test(id))),voice=main?activeVoice():'';
+   var main=mainPlayerId(id),voice=main?activeVoice():'';
    if(main&&options&&typeof options==='object')playerFile(options.file,voice);
    var instance=Reflect.construct(original,Array.prototype.slice.call(arguments));
    if(main&&instance&&typeof instance.api==='function'){
-    if(state.instances.length<4)state.instances.push({player:instance,voice:voice});
+    knownInstance(instance,id,voice,false);
     var api=instance.api;
     try{instance.api=function(command,value){
      if(arguments.length>1&&/^(file|playlist|preload|play)$/.test(command)){
@@ -90,7 +157,8 @@ function wrapPlayer(){
   wrapped.prototype=original.prototype;Object.setPrototypeOf(wrapped,original);
   wrapped.__lampWrapped=true;window.Playerjs=wrapped;
  }
- state.instances.forEach(function(entry){try{playlist(entry.player.api('playlist_folders'),true,entry.voice);}catch(e){}});
+ discoverPlayers();
+ state.instances.forEach(function(entry){try{playlist(entry.player.api('playlist_folders'),true,entry.voice);}catch(e){}readMedia(entry);});
  if(window.user_data){state.cap=(user_data.is_user_pro_plus||user_data.is_user_loyal)?2160:(user_data.is_user_pro?720:480);}
 }
 // Catch assignment before the page immediately constructs its first player.
@@ -121,9 +189,10 @@ window.__lampSnapshot=function(){
  wrapPlayer();
  var text=providerMessage();
  var blocked=/(недоступ(?:но|ен)[\s\S]{0,90}(?:стране|регион[ае])|заблокировано[\s\S]{0,90}правообладателя|нет видео файла)/i.exec(text);
+ if(window.__lampMetadataFrame&&state.ids.length===0&&/^\\s*video\\s+not\\s+found\\s*!?\\s*[0-9]*\\s*$/i.test(text))blocked=['Источник сообщает, что видео не найдено'];
  // Once a player is observed, unrelated page JSON cannot stand in for its playlist.
  var bound=state.ids.length||state.playerFiles.length||state.playerLists.length;
- var result={files:state.modernBlocked?[]:bound?state.playerFiles:state.files,lists:state.modernBlocked?[]:bound?state.playerLists:state.lists,cap:state.cap,blocked:state.modernBlocked?"Видео заблокировано источником":blocked?blocked[0]:null,playerType:typeof window.Playerjs,ids:state.ids,xhr:state.xhr,shapes:state.shapes,jsonXhr:state.jsonXhr,modern:window.__lampModernStats?window.__lampModernStats():null};
+ var result={files:state.modernBlocked?[]:bound?state.playerFiles:state.files,lists:state.modernBlocked?[]:bound?state.playerLists:state.lists,cap:state.cap,blocked:state.modernBlocked?"Видео заблокировано источником":blocked?blocked[0]:null,playerType:typeof window.Playerjs,ids:state.ids,xhr:state.xhr,shapes:state.shapes,jsonXhr:state.jsonXhr,modern:window.__lampModernStats?window.__lampModernStats():null,recovered:state.recovered||0,hlsRead:!!state.hlsRead,domRead:!!state.domRead,configRead:!!state.configRead};
  var json=originalStringify(result);return json.length<1000000?json:'{}';
 };
 })();

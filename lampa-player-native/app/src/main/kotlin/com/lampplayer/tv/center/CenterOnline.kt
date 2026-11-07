@@ -136,7 +136,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
                         frameInfo=(if(item.provider=="kinokong")"bootstrap=native prepared=$preparedFrames root=${observed.get("root")} " else "")+"frames=$pending replies=${candidates.size} alternate=$alternateRequested waiting=$alternatePending " + candidates.mapIndexed { index, entry ->
                             val data=entry.getAsJsonObject("snapshot") ?: JsonObject()
                             val host=entry.get("url")?.takeIf { it.isJsonPrimitive }?.asString?.toHttpUrlOrNull()?.host.orEmpty()
-                            "frame$index[host=$host player=${data.get("playerType")} ids=${data.get("ids")} files=${data.getAsJsonArray("files")?.size()} lists=${data.getAsJsonArray("lists")?.size()} xhr=${data.get("xhr")} shapes=${data.get("shapes")} json=${data.get("jsonXhr")} modern=${data.get("modern")} blocked=${data.get("blocked")?.isJsonNull==false}] "
+                            "frame$index[host=$host player=${data.get("playerType")} ids=${data.get("ids")} files=${data.getAsJsonArray("files")?.size()} lists=${data.getAsJsonArray("lists")?.size()} xhr=${data.get("xhr")} shapes=${data.get("shapes")} json=${data.get("jsonXhr")} modern=${data.get("modern")} recovered=${data.get("recovered")} hls=${data.get("hlsRead")} dom=${data.get("domRead")} config=${data.get("configRead")} blocked=${data.get("blocked")?.isJsonNull==false}] "
                         }.joinToString("")
                         allowEntries=usable!=null
                         // Preserve the actual packet for diagnostics even when its playlist is not understood.
@@ -177,7 +177,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
                 @Suppress("UNREACHABLE_CODE") error("Нет списка серий")
             }
         } catch(e:TimeoutCancellationException) {
-            error("${CenterCatalog.name(item.provider)} не отдал список серий. Попробуй повторить или выбери другой источник")
+            error("${CenterCatalog.name(item.provider)} "+(if(item.type=="movie")"не отдал ссылку на видео." else "не отдал список серий.")+" Попробуй повторить или выбери другой источник")
         } finally {
             active.set(false);synchronized(libraryCalls) { libraryCalls.toList() }.forEach { it.cancel() }
             web?.let { it.stopLoading();(it.parent as? ViewGroup)?.removeView(it);it.destroy() }

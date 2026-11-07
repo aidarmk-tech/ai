@@ -676,4 +676,115 @@ class CenterOnlineInstrumentedTest {
             }
         }
     }
+
+    @Test fun kinokongRecoversAnExistingHashedPlayerFromTheRegistryAndReadsItsHlsApi() = runBlocking {
+        MockWebServer().use { server ->
+            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest)=MockResponse().setHeader("Content-Type","text/html; charset=utf-8")
+                    .setBody(if(request.path=="/17-movie.html") """<div id="full_17"><ul class="newTabs"><li data-iframe="/frame">Смотреть</li></ul></div>"""
+                    else """<html><body><div id="player-mainhash"><video id="main"></video></div><div id="player-trailer"></div><script>
+                    function Playerjs(options){this.api=function(command){
+                        if(command==='id')return options.id;
+                        if(command==='playlist_folders')return [];
+                        if(command==='hls')return {url:options.file,media:document.getElementById('main')};
+                        throw Error('Unexpected write command: '+command);};}
+                    let player=new Playerjs({id:'player-trailer',file:'https://cdn.test/trailer.m3u8'});
+                    var mainInstance=new Playerjs({id:'player-mainhash',file:'https://cdn.test/movie.m3u8'});
+                    window.pljssglobal=[player,mainInstance];
+                    </script></body></html>""")
+            }
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val video=resolver.resolve(CenterTitle(17,"movie","Movie",provider="kinokong",sourceUrl=server.url("/17-movie.html").toString()))
+                assertEquals("https://cdn.test/movie.m3u8",video.episodes.single().sources[0])
+                assertTrue(resolver.diagnostics.contains("recovered=1"));assertTrue(resolver.diagnostics.contains("hls=true"))
+                assertTrue(resolver.diagnostics.contains("player-mainhash"));assertFalse(video.episodes.single().sources.values.any { it.contains("trailer") })
+            }
+        }
+    }
+
+    @Test fun kinokongReadsMatchingLexicalPlayerConfigAfterTheConstructorWasMissed() = runBlocking {
+        MockWebServer().use { server ->
+            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest)=MockResponse().setHeader("Content-Type","text/html; charset=utf-8")
+                    .setBody(if(request.path=="/17-movie.html") """<div id="full_17"><ul class="newTabs"><li data-iframe="/frame">Смотреть</li></ul></div>"""
+                    else """<html><body><div id="video-main-105623"></div><script>
+                    function Playerjs(options){this.api=function(command){
+                        if(command==='id')return options.id;
+                        if(command==='playlist_folders')return [];
+                        if(command==='hls')return null;
+                        throw Error('Unexpected write command: '+command);};}
+                    let playerConfigs={id:'video-main-105623',file:'[720p]https://cdn.test/movie.mp4,[1080p]https://cdn.test/high.mp4'};
+                    let player=new Playerjs(playerConfigs);
+                    </script></body></html>""")
+            }
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val video=resolver.resolve(CenterTitle(17,"movie","Movie",provider="kinokong",sourceUrl=server.url("/17-movie.html").toString()))
+                assertEquals(setOf(720,1080),video.episodes.single().sources.keys)
+                assertTrue(resolver.diagnostics.contains("recovered=1"));assertTrue(resolver.diagnostics.contains("config=true"))
+            }
+        }
+    }
+
+    @Test fun kinokongReadsTheSoleBoundVideoAndExcludesAnAdvertisingVideo() = runBlocking {
+        MockWebServer().use { server ->
+            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest)=MockResponse().setHeader("Content-Type","text/html; charset=utf-8")
+                    .setBody(if(request.path=="/17-movie.html") """<div id="full_17"><ul class="newTabs"><li data-iframe="/frame">Смотреть</li></ul></div>"""
+                    else """<html><body><div id="player-dom">
+                    <video preload="none" src="https://cdn.test/movie.mp4"></video>
+                    <div class="advertisement"><video preload="none" src="https://cdn.test/ad.mp4"></video></div></div><script>
+                    function Playerjs(options){this.api=function(command){
+                        if(command==='id')return options.id;if(command==='playlist_folders')return [];if(command==='hls')return null;
+                        throw Error('Unexpected write command: '+command);};}
+                    let player=new Playerjs({id:'player-dom'});
+                    </script></body></html>""")
+            }
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val video=resolver.resolve(CenterTitle(17,"movie","Movie",provider="kinokong",sourceUrl=server.url("/17-movie.html").toString()))
+                assertEquals("https://cdn.test/movie.mp4",video.episodes.single().sources[0])
+                assertTrue(resolver.diagnostics.contains("dom=true"));assertFalse(video.episodes.single().sources.values.any { it.contains("/ad.") })
+            }
+        }
+    }
+
+    @Test fun kinokongExistingPlayerApiKeepsItsDeclaredSeriesAndEpisodeNumbers() = runBlocking {
+        MockWebServer().use { server ->
+            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest)=MockResponse().setHeader("Content-Type","text/html; charset=utf-8")
+                    .setBody(if(request.path=="/17-show.html") """<div id="full_17"><ul class="newTabs"><li data-iframe="/frame">Смотреть</li></ul></div>"""
+                    else """<html><body><div id="player-series"></div><script>
+                    function Playerjs(options){this.api=function(command){
+                        if(command==='id')return options.id;if(command==='hls')return null;
+                        if(command==='playlist_folders')return [{title:'Сезон 2',folder:[{title:'Voice',folder:[
+                        {title:'5 серия',file:'[720p]https://cdn.test/five.m3u8'},{title:'6 серия',file:'[720p]https://cdn.test/six.m3u8'}]}]}];
+                        throw Error('Unexpected write command: '+command);};}
+                    let player=new Playerjs({id:'player-series'});
+                    </script></body></html>""")
+            }
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val video=resolver.resolve(CenterTitle(17,"tv","Show",provider="kinokong",sourceUrl=server.url("/17-show.html").toString()))
+                assertEquals(listOf(2 to 5,2 to 6),video.episodes.map { it.season to it.number })
+                assertTrue(video.episodes.all { it.voice=="Voice" });assertTrue(resolver.diagnostics.contains("recovered=1"))
+            }
+        }
+    }
+
+    @Test fun kinokongExplicitVideoNotFoundReplyIsReportedAsUnavailable() = runBlocking {
+        MockWebServer().use { server ->
+            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest)=MockResponse().setHeader("Content-Type","text/html; charset=utf-8")
+                    .setBody(if(request.path=="/17-movie.html") """<div id="full_17"><ul class="newTabs"><li data-iframe="/frame">Смотреть</li></ul></div>"""
+                        else "<html><body>Video Not Found ! 888</body></html>")
+            }
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val error=runCatching { resolver.resolve(CenterTitle(17,"movie","Movie",provider="kinokong",sourceUrl=server.url("/17-movie.html").toString())) }.exceptionOrNull()
+                assertTrue(error is OnlineSourceBlocked);assertTrue(error!!.message.orEmpty().contains("видео не найдено"))
+            }
+        }
+    }
 }
