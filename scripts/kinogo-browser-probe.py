@@ -58,7 +58,7 @@ async def main():
    frame=next(f for f in page.frames if f!=page.main_frame)
    await frame.evaluate("window.__lampMetadataFrame=true;"+COMMON)
    await page.wait_for_timeout(2200)
-   if kind=="sdk":print("SDK_API",await frame.evaluate("JSON.stringify({hls:typeof player.api(\'hls\'),log:player.api(\'log\'),video:Array.from(document.querySelectorAll(\'video\')).map(v=>({src:v.src,current:v.currentSrc}))})"),flush=True)
+   if kind=="sdk":print("SDK_API",await frame.evaluate("JSON.stringify({hls:typeof player.api(\'hls\'),data:(()=>{let x=player.api(\'hls\');return {array:Array.isArray(x),keys:Object.keys(x||{}).slice(0,20),url:x?.url,media:x?.media?.id,inside:!!(x?.media&&document.getElementById(\'player\').contains(x.media)),items:Array.isArray(x)?x.slice(0,3).map(h=>({keys:Object.keys(h||{}).slice(0,12),url:h?.url,media:h?.media?.id})):null};})(),video:Array.from(document.querySelectorAll(\'video\')).map(v=>({src:v.src,current:v.currentSrc}))})"),flush=True)
    snap=json.loads(await frame.evaluate("window.__lampSnapshot()"))
    print("CASE",kind,json.dumps(snap,ensure_ascii=False),flush=True)
    raw=json.dumps(snap["files"])+json.dumps(snap["lists"])
