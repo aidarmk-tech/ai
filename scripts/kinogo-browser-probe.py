@@ -1,77 +1,53 @@
 
-import asyncio,json,urllib.request
+import asyncio,json,re,urllib.request
+from urllib.parse import urlsplit
 from playwright.async_api import async_playwright
-COMMON="(function(){\n'use strict';\nif((window!==window.top&&!window.__lampMetadataFrame)||window.__lampOnline)return;\nHTMLMediaElement.prototype.play=function(){return Promise.reject(new DOMException('Metadata only','NotAllowedError'));};\nvar state=window.__lampOnline={files:[],lists:[],playerFiles:[],playerLists:[],seen:{},errors:[],cap:480,ids:[],instances:[],xhr:[],shapes:[],jsonXhr:0};\nwindow.__lampBlockModern=function(){state.modernBlocked=true;};\nwindow.__lampRecordModern=function(rows,bound){\n var list=rows.map(function(row){return {title:row.voice||\"Основная озвучка\",folder:[{id:row.id||\"\",title:row.title||\"\",season:row.season||0,episode:row.episode||0,file:row.file}]};});\n remember(list,\"list\",!!bound);\n};\nvar originalParse=JSON.parse,originalStringify=JSON.stringify;\nfunction remember(value,kind,bound){\n try{\n  if(value==null)return;\n  var data=originalStringify(value);if(!data||data.length>900000)return;\n  var key=(bound?'player:':'')+kind+data;\n  if(state.seen[key])return;\n  state.seen[key]=1;\n  var target=bound?(kind==='file'?state.playerFiles:state.playerLists):(kind==='file'?state.files:state.lists);\n  if(target.length<16)target.push(value);\n }catch(e){}\n}\nfunction playlist(value,bound,voice,depth){\n if(window.__lampObserveModern)window.__lampObserveModern(value,!!bound);\n depth=depth||0;if(depth>5)return;\n if(typeof value==='string'&&value.length<900000&&/^\\s*[\\[{]/.test(value)){\n  try{playlist(originalParse(value),bound,voice,depth+1);}catch(e){}\n  return;\n }\n if(value&&typeof value==='object'&&!Array.isArray(value)){\n  if(state.shapes.length<8){var shape=Object.keys(value).slice(0,16).sort().join(',');if(state.shapes.indexOf(shape)<0)state.shapes.push(shape);}\n  if(value.file||value.folder)remember(voice?[{title:voice,folder:[value]}]:[value],'list',bound);\n  ['data','result','playlist'].forEach(function(key){if(value[key]!=null)playlist(value[key],bound,voice,depth+1);});\n  return;\n }\n if(!Array.isArray(value)||!value.length||value.length>1000)return;\n if(value.some(function(v){return v&&typeof v==='object'&&(v.file||v.folder)}))remember(voice?[{title:voice,folder:value}]:value,'list',bound);\n}\nfunction playerFile(value,voice){\n if(value==null||value==='')return;\n remember(voice&&!Array.isArray(value)?{title:voice,file:value}:value,'file',true);\n playlist(value,true,voice);\n if(typeof value==='string'&&value.length<900000&&/^\\s*\\[/.test(value)){try{playlist(originalParse(value),true,voice);}catch(e){}}\n}\nfunction activeVoice(){\n try{var label=document.querySelector('.player-main-block .translations li.active span[data-name]');return label?label.getAttribute('data-name')||'':'';}catch(e){return '';}\n}\nJSON.parse=function(){var result=originalParse.apply(JSON,arguments);playlist(result);return result;};\nvar open=XMLHttpRequest.prototype.open,send=XMLHttpRequest.prototype.send;\nXMLHttpRequest.prototype.open=function(method,url){this.__lampUrl=String(url);return open.apply(this,arguments);};\nXMLHttpRequest.prototype.send=function(){\n this.addEventListener('load',function(){\n  try{\n   if(this.responseType==='json'){\n    state.jsonXhr++;\n    if(state.xhr.length<12)state.xhr.push([this.status,-1]);\n    playlist(this.response);\n    if(window.__lampObserveModern)window.__lampObserveModern(this.response,false,this.__lampUrl);\n   }else if(!this.responseType||this.responseType==='text'){\n    var text=this.responseText;\n    if(state.xhr.length<12)state.xhr.push([this.status,text?text.length:0]);\n    if(text&&text.length<900000){var value=originalParse(text);playlist(value);if(window.__lampObserveModern)window.__lampObserveModern(value,false,this.__lampUrl);}\n   }\n  }catch(e){}\n });\n return send.apply(this,arguments);\n};\nif(window.fetch){var fetch=window.fetch;window.fetch=function(){return fetch.apply(this,arguments).then(function(response){try{response.clone().text().then(function(text){if(text.length<900000){try{var value=originalParse(text);playlist(value);if(window.__lampObserveModern)window.__lampObserveModern(value,false,response.url);}catch(e){}}}).catch(function(){});}catch(e){}return response;});};}\n\nfunction mainPlayerId(id){\n if(typeof id!=='string'||/trailer|preroll|(?:^|[_-])ads?(?:$|[_-])/i.test(id))return false;\n if(/^(?:video)?player$/i.test(id))return true;\n if(!window.__lampMetadataFrame)return false;\n if(/^(?:video)?player(?:js|[12]|[-_][a-z0-9_-]{1,160})?$/i.test(id))return true;\n try{return typeof playerConfigs!=='undefined'&&playerConfigs&&String(playerConfigs.id)===id;}catch(e){return false;}\n}\nfunction adElement(element){\n for(var el=element;el&&el.nodeType===1;el=el.parentElement){\n  var label=(el.id||'')+' '+(typeof el.className==='string'?el.className:'');\n  if(/(?:^|[\\s_-])(?:ads?|advert|advertisement|preroll|trailer)(?:$|[\\s_-])/i.test(label)||el.hasAttribute('data-ad'))return true;\n }\n return false;\n}\nfunction validMedia(value){\n if(typeof value!=='string'||value.length>12000)return '';\n try{var u=new URL(value,location.href);return /^https?:$/.test(u.protocol)&&/\\.(?:m3u8|mp4|mkv|m4v|webm|mov|avi)$/i.test(u.pathname)?u.href:'';}catch(e){return '';}\n}\nfunction knownInstance(instance,id,voice,recovered){\n if(!instance||typeof instance.api!=='function'||!mainPlayerId(id))return null;\n var existing=state.instances.find(function(entry){return entry.player===instance;});\n if(existing){existing.id=existing.id||id;return existing;}\n if(state.instances.length>=4)return null;\n var entry={player:instance,id:id,voice:voice||''};state.instances.push(entry);\n if(state.ids.indexOf(id)<0&&state.ids.length<12)state.ids.push(id);\n if(recovered)state.recovered=(state.recovered||0)+1;\n return entry;\n}\nfunction discoverInstance(instance){\n try{\n  if(!instance||typeof instance.api!=='function')return;\n  if(state.instances.some(function(entry){return entry.player===instance;}))return;\n  var id=instance.api('id'),container=typeof id==='string'?document.getElementById(id):null;\n  if(!container||adElement(container))return;\n  knownInstance(instance,id,'',true);\n }catch(e){}\n}\nfunction discoverPlayers(){\n if(!window.__lampMetadataFrame)return;\n // Known PlayerJS bindings include global lexical declarations, not just window properties.\n try{if(typeof player!=='undefined')discoverInstance(player);}catch(e){}\n try{if(typeof videoPlayer!=='undefined')discoverInstance(videoPlayer);}catch(e){}\n try{if(typeof pljssglobal!=='undefined'&&pljssglobal&&typeof pljssglobal==='object'){\n  Object.keys(pljssglobal).slice(0,12).forEach(function(key){discoverInstance(pljssglobal[key]);});\n }}catch(e){}\n}\nfunction readMedia(entry){\n if(!window.__lampMetadataFrame||!mainPlayerId(entry.id))return;\n var container=document.getElementById(entry.id);if(!container||adElement(container))return;\n try{if(typeof playerConfigs!=='undefined'&&playerConfigs&&String(playerConfigs.id)===entry.id){playerFile(playerConfigs.file,entry.voice);state.configRead=true;}}catch(e){}\n try{\n  var hls=entry.player.api('hls'),url=hls&&validMedia(hls.url);\n  if(url&&(!hls.media||container.contains(hls.media)&&!adElement(hls.media))){\n   playerFile(url,entry.voice);state.hlsRead=true;\n  }\n }catch(e){}\n // A direct MP4 is read only from the sole non-advertising video in this bound container.\n try{\n  var videos=Array.prototype.slice.call(container.querySelectorAll('video')).filter(function(video){return !adElement(video);});\n  if(videos.length===1){\n   var direct=validMedia(videos[0].currentSrc||videos[0].getAttribute('src'));\n   if(direct){playerFile(direct,entry.voice);state.domRead=true;}\n  }\n }catch(e){}\n}\n\nfunction wrapPlayer(){\n var original=window.Playerjs;\n if(typeof original==='function'&&!original.__lampWrapped){\n  var wrapped=function(options){\n   var id=typeof options==='string'?options:options&&options.id;\n   if(state.ids.length<12&&id)state.ids.push(String(id));\n   var main=mainPlayerId(id),voice=main?activeVoice():'';\n   if(main&&options&&typeof options==='object')playerFile(options.file,voice);\n   var instance=Reflect.construct(original,Array.prototype.slice.call(arguments));\n   if(main&&instance&&typeof instance.api==='function'){\n    knownInstance(instance,id,voice,false);\n    var api=instance.api;\n    try{instance.api=function(command,value){\n     if(arguments.length>1&&/^(file|playlist|preload|play)$/.test(command)){\n      playerFile(value,voice);\n     }\n     return api.apply(instance,arguments);\n    };}catch(e){}\n   }\n   return instance;\n  };\n  wrapped.prototype=original.prototype;Object.setPrototypeOf(wrapped,original);\n  wrapped.__lampWrapped=true;window.Playerjs=wrapped;\n }\n discoverPlayers();\n state.instances.forEach(function(entry){try{playlist(entry.player.api('playlist_folders'),true,entry.voice);}catch(e){}readMedia(entry);});\n if(window.user_data){state.cap=(user_data.is_user_pro_plus||user_data.is_user_loyal)?2160:(user_data.is_user_pro?720:480);}\n}\n// Catch assignment before the page immediately constructs its first player.\ntry {\n var playerValue=window.Playerjs;\n Object.defineProperty(window,'Playerjs',{configurable:true,enumerable:true,\n  get:function(){return playerValue;},\n  set:function(value){playerValue=value;if(typeof value==='function'&&!value.__lampWrapped)wrapPlayer();}\n });\n if(playerValue)wrapPlayer();\n}catch(e){}\nwindow.__lampInstallPlayer=wrapPlayer;\nsetInterval(wrapPlayer,50);\nfunction providerMessage(){\n if(!document.body)return '';\n // Providers can replace the whole player container with an availability notice.\n // Read visible source text while excluding comments and form/template content.\n var walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT),node,parts=[],count=0;\n while((node=walker.nextNode())&&count++<6000){\n  var parent=node.parentElement;\n  if(!parent||parent.closest('script,style,noscript,template,textarea,input,[id^=\"comment\"],[class*=\"comment\"]'))continue;\n  if(!parent.getClientRects().length||getComputedStyle(parent).visibility==='hidden')continue;\n  parts.push(node.nodeValue);\n }\n return parts.join(' ');\n}\nwindow.__lampSnapshot=function(){\n wrapPlayer();\n var text=providerMessage();\n var blocked=/(недоступ(?:но|ен)[\\s\\S]{0,90}(?:стране|регион[ае])|заблокировано[\\s\\S]{0,90}правообладателя|нет видео файла)/i.exec(text);\n if(window.__lampMetadataFrame&&state.ids.length===0&&/^\\s*video\\s+not\\s+found\\s*!?\\s*[0-9]*\\s*$/i.test(text))blocked=['Источник сообщает, что видео не найдено'];\n // Once a player is observed, unrelated page JSON cannot stand in for its playlist.\n var bound=state.ids.length||state.playerFiles.length||state.playerLists.length;\n var result={files:state.modernBlocked?[]:bound?state.playerFiles:state.files,lists:state.modernBlocked?[]:bound?state.playerLists:state.lists,cap:state.cap,blocked:state.modernBlocked?\"Видео заблокировано источником\":blocked?blocked[0]:null,playerType:typeof window.Playerjs,ids:state.ids,xhr:state.xhr,shapes:state.shapes,jsonXhr:state.jsonXhr,modern:window.__lampModernStats?window.__lampModernStats():null,recovered:state.recovered||0,hlsRead:!!state.hlsRead,domRead:!!state.domRead,configRead:!!state.configRead};\n var json=originalStringify(result);return json.length<1000000?json:'{}';\n};\n})();\n"
-def library():
+URLS=["https://zona.movie/series/mobland-1478/","https://zona.movie/film/anel-76932/"]
+def safe(value):
  try:
-  with urllib.request.urlopen(urllib.request.Request("https://api.github.com/gists/30488807abbbea8d1ccc25d44f3f9f92",headers={"Accept":"application/vnd.github+json","User-Agent":"LampMedia-test"}),timeout=20) as r:data=json.load(r)
-  entry=data["files"]["playerjs.js"]
-  if not entry.get("truncated") and entry.get("content"):return entry["content"]
-  with urllib.request.urlopen(entry["raw_url"],timeout=20) as r:return r.read(4000000).decode()
- except Exception as e:
-  print("SDK_FETCH_ERROR",type(e).__name__,flush=True);return None
-def html(kind):
- if kind=="hls":
-  return """<div id="player-mainhash"><video id="main"></video></div><div id="player-trailer"></div><script>
-  window.calls=[];function Playerjs(opts){this.api=function(k){calls.push(k);if(k==='id')return opts.id;if(k==='playlist_folders')return [];
-  if(k==='hls')return {url:opts.file,media:document.getElementById('main')};throw Error('unexpected API '+k);};}
-  let player=new Playerjs({id:'player-trailer',file:'https://media.fixture/ad.m3u8'});
-  var actual=new Playerjs({id:'player-mainhash',file:'https://media.fixture/movie.m3u8'});window.pljssglobal=[player,actual];
-  </script>"""
- if kind=="config":
-  return """<div id="player-cfg"></div><script>
-  window.calls=[];function Playerjs(opts){this.api=function(k){calls.push(k);if(k==='id')return opts.id;if(k==='playlist_folders')return [];if(k==='hls')return null;throw Error('unexpected '+k);};}
-  let playerConfigs={id:'player-cfg',file:'[720p]https://media.fixture/movie.mp4,[1080p]https://media.fixture/high.mp4'};
-  let player=new Playerjs(playerConfigs);
-  </script>"""
- if kind=="dom":
-  return """<div id="player-dom"><video src="https://media.fixture/movie.mp4"></video><div class="advertisement"><video src="https://media.fixture/ad.mp4"></video></div></div><script>
-  window.calls=[];function Playerjs(opts){this.api=function(k){calls.push(k);if(k==='id')return opts.id;if(k==='playlist_folders')return [];if(k==='hls')return null;throw Error('unexpected '+k);};}
-  let player=new Playerjs({id:'player-dom'});
-  </script>"""
- if kind=="sdk":
-  return """<div id="player"></div><script src="/sdk.js"></script><script>
-  let playerConfigs={id:'player',file:'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',autoplay:0,preload:1};
-  let player=new Playerjs(playerConfigs);playerConfigs={id:'player',file:'#opaque-config'};
-  </script>"""
+  p=urlsplit(value);return p.scheme+"://"+p.netloc+p.path
+ except:return ""
+def read(url):
+ try:
+  with urllib.request.urlopen(urllib.request.Request(url,headers={"User-Agent":"Mozilla/5.0"}),timeout=30) as r:raw=r.read(2500000);final=r.url
+  text=raw.decode("utf-8",errors="replace")
+  print("HTTP",json.dumps({"url":safe(final),"size":len(raw),"title":re.findall("<title>(.*?)</title>",text,re.S),
+    "lines":[re.sub(r"https?[^\\s'\"<>]+","<url>",l)[:1600] for l in text.splitlines() if re.search(r"iframe|data-(?:src|player|tab)|player[12]|Плеер [12]",l,re.I)][:40]},ensure_ascii=False),flush=True)
+ except Exception as e:print("HTTP_ERROR",safe(url),str(e)[:180],flush=True)
+async def inspect(browser,url):
+ context=await browser.new_context(viewport={"width":1280,"height":720});page=await context.new_page()
+ await context.add_init_script("HTMLMediaElement.prototype.play=function(){return Promise.reject(new DOMException('Metadata only','NotAllowedError'))};")
+ async def route(r):
+  if re.search(r"\.(?:m3u8|mp4|ts|m4s|mpd)(?:[?]|$)",r.request.url,re.I):await r.abort()
+  else:await r.continue_()
+ await context.route("**/*",route)
+ page.on("popup",lambda p:asyncio.create_task(p.close()))
+ try:
+  await page.goto(url,wait_until="domcontentloaded",timeout=45000);await page.wait_for_timeout(6000)
+  async def snap():
+   return await page.evaluate("""() => {
+    function safe(v){try{var u=new URL(v,location.href);return u.origin+u.pathname;}catch(e){return String(v).slice(0,100);}}
+    function attrs(el){return Object.fromEntries(Array.from(el.attributes).filter(a=>a.name!=='style').map(a=>[a.name,/src|url|frame/.test(a.name)?safe(a.value):a.value.slice(0,300)]));}
+    return {url:safe(location.href),title:document.title,
+      frames:Array.from(document.querySelectorAll('iframe')).map(e=>({attrs:attrs(e),parent:attrs(e.parentElement),grand:attrs(e.parentElement.parentElement)})),
+      tabs:Array.from(document.querySelectorAll('[data-tab],[data-player],[class*=player],[class*=Player],[class*=tab],[class*=Tab]')).filter(e=>e.children.length<6).map(e=>({tag:e.tagName,attrs:attrs(e),text:e.textContent.trim().slice(0,300)})).slice(-45),
+      scripts:Array.from(document.scripts).filter(e=>e.src).map(e=>safe(e.src)).slice(-15),
+      inline:Array.from(document.scripts).filter(e=>!e.src&&/iframe|player|Player|video/.test(e.textContent)).map(e=>e.textContent.replace(/https?:[^\\s"'<>]+/g,'<url>').slice(0,9000)).slice(-12)};
+   }""")
+  print("PAGE",json.dumps(await snap(),ensure_ascii=False),flush=True)
+  for label in ["Плеер 2","Плеер 2 (4K)","Плеер 2 (HD)"]:
+   el=page.get_by_text(label,exact=True)
+   if await el.count():
+    await el.first.click(timeout=4000,force=True);await page.wait_for_timeout(4000)
+    print("ALTERNATE",json.dumps(await snap(),ensure_ascii=False),flush=True);break
+  for f in page.frames:
+   if f==page.main_frame:continue
+   try:print("FRAME",json.dumps(await f.evaluate("({url:location.origin+location.pathname,title:document.title,text:document.body?.innerText.slice(0,800),player:typeof Playerjs,venom:typeof VenomPlayer})"),ensure_ascii=False),flush=True)
+   except Exception as e:print("FRAME_ERROR",str(e)[:150],flush=True)
+ except Exception as e:print("PAGE_ERROR",safe(url),str(e)[:200],flush=True)
+ await context.close()
 async def main():
- sdk=await asyncio.to_thread(library)
+ await asyncio.gather(*(asyncio.to_thread(read,u) for u in URLS))
  async with async_playwright() as p:
-  browser=await p.chromium.launch();context=await browser.new_context(viewport={"width":1280,"height":720})
-  await context.add_init_script("HTMLMediaElement.prototype.play=function(){return Promise.reject(new DOMException('Metadata only','NotAllowedError'));};")
-  allowed_segments=0
-  async def route(r):
-   nonlocal allowed_segments
-   from urllib.parse import urlsplit
-   u=urlsplit(r.request.url)
-   if u.hostname=="fixture.test":
-    if u.path=="/media/master.m3u8":await r.fulfill(content_type="application/vnd.apple.mpegurl",body="\n".join(["#EXTM3U","#EXT-X-VERSION:3","#EXT-X-TARGETDURATION:2","#EXT-X-MEDIA-SEQUENCE:1","#EXTINF:2,","segment.ts",""]))
-    elif u.path=="/media/segment.ts":await r.abort()
-    elif u.path=="/sdk.js":await r.fulfill(content_type="application/javascript",body=sdk)
-    elif u.path.endswith("-frame"):await r.fulfill(content_type="text/html; charset=utf-8",body="<html><body>"+html(u.path[1:-6])+"</body></html>")
-    else:await r.fulfill(content_type="text/html",body="<iframe style='width:1200px;height:650px' src='/"+u.path[1:].split('.')[0]+"-frame'></iframe>")
-   elif u.hostname=="test-streams.mux.dev":
-    if u.path.endswith(".ts"):
-     allowed_segments+=1
-     if allowed_segments>3:await r.abort();return
-    await r.continue_()
-   elif r.request.resource_type in ("script","stylesheet"):await r.continue_()
-   else:await r.abort()
-  await context.route("**/*",route)
-  kinds=["hls","config","dom"]+(["sdk"] if sdk else [])
-  for kind in kinds:
-   page=await context.new_page();page.on("pageerror",lambda e:print("JS_ERROR",str(e)[:180],flush=True))
-   await page.goto("https://fixture.test/"+kind+".html")
-   frame=next(f for f in page.frames if f!=page.main_frame)
-   await frame.evaluate("window.__lampMetadataFrame=true;"+COMMON)
-   await page.wait_for_timeout(4000 if kind=="sdk" else 1600)
-   if kind=="sdk":print("SDK_API",await frame.evaluate("JSON.stringify({hls:typeof player.api(\'hls\'),data:(()=>{let x=player.api(\'hls\');return {array:Array.isArray(x),keys:Object.keys(x||{}).slice(0,20),url:x?.url,media:x?.media?.id,inside:!!(x?.media&&document.getElementById(\'player\').contains(x.media)),items:Array.isArray(x)?x.slice(0,3).map(h=>({keys:Object.keys(h||{}).slice(0,12),url:h?.url,media:h?.media?.id})):null};})(),video:Array.from(document.querySelectorAll(\'video\')).map(v=>({src:v.src,current:v.currentSrc}))})"),flush=True)
-   snap=json.loads(await frame.evaluate("window.__lampSnapshot()"))
-   print("CASE",kind,json.dumps(snap,ensure_ascii=False),flush=True)
-   raw=json.dumps(snap["files"])+json.dumps(snap["lists"])
-   assert (("x36xhzz.m3u8" in raw) if kind=="sdk" else ("movie." in raw)) and "/ad." not in raw,kind
-   assert snap["recovered"]==1,kind
-   if kind!="sdk":assert set(await frame.evaluate("window.calls")).issubset({"id","hls","playlist_folders"})
-   await page.close()
-  print("PLAYERJS_RECOVERY_AND_HLS_OK",flush=True);await browser.close()
+  browser=await p.chromium.launch();await asyncio.gather(*(inspect(browser,u) for u in URLS));await browser.close()
 asyncio.run(main())
