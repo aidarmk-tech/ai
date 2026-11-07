@@ -93,4 +93,14 @@ class CenterEngineInstrumentedTest {
         assertTrue("KinoVod search did not return the selected series",matches.any { CenterOnlineMatch.exact(item,it) })
         assertTrue(matches.all { it.provider=="kinovod"&&it.type=="tv"&&it.id!=item.id })
     }
+
+    @Test fun kinokong82174HasTwoUniqueDeclaredVideoPlayersInItsActualHtml() = runBlocking {
+        val item=CenterTitle(82174,"tv","Невеста",provider="kinokong",
+            sourceUrl="https://kinokong.es/82174-nevesta-1-4-sezon-04-11-2026.html")
+        val frames=CenterCatalog().onlineFrames(item)
+        assertTrue("The selected card lost its declared players",frames.size in 2..3)
+        assertEquals(frames.distinct(),frames)
+        assertTrue(frames.none { it.contains("trailer",true) })
+        assertTrue(frames.any { it.contains("/embed/movie/72142") })
+    }
 }

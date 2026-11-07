@@ -44,6 +44,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
         var web:WebView?=null
         val issues=mutableListOf<String>()
         val active=AtomicBoolean(true)
+        var preparedFrames=0
         val libraryCalls=Collections.synchronizedSet(mutableSetOf<Call>())
         try {
             @SuppressLint("SetJavaScriptEnabled")
@@ -55,6 +56,12 @@ class CenterOnline(private val activity:AppCompatActivity) {
                 isFocusable=false;importantForAccessibility=android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS;alpha=0f
             }
             web=browser
+            val preparedPage=if(item.provider=="kinokong") {
+                diagnostics="bootstrap=native stage=page"
+                val frames=CenterCatalog().onlineFrames(item);preparedFrames=frames.size
+                diagnostics="bootstrap=native prepared=$preparedFrames stage=webview"
+                kinokongDocument(item,frames).toByteArray(Charsets.UTF_8)
+            } else null
             android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(browser,true)
             browser.webChromeClient=object:WebChromeClient() {
                 override fun onConsoleMessage(message:ConsoleMessage):Boolean {
@@ -73,6 +80,8 @@ class CenterOnline(private val activity:AppCompatActivity) {
             browser.webViewClient=object:WebViewClient() {
                 override fun shouldInterceptRequest(view:WebView,request:WebResourceRequest):WebResourceResponse? {
                     val url=request.url.toString().toHttpUrlOrNull() ?: return null
+                    if(request.isForMainFrame&&preparedPage!=null&&sameTitleNavigation(item,url.toString()))
+                        return WebResourceResponse("text/html","UTF-8",ByteArrayInputStream(preparedPage))
                     if(request.isForMainFrame||!url.encodedPath.endsWith("playerjs.js",true)||(item.provider !in listOf("kinogo","kinokong")&&url.host!=source.host))return null
                     val call=libraryHttp.newCall(Request.Builder().url(url).apply {
                         request.requestHeaders.filterKeys { it.equals("User-Agent",true)||it.equals("Referer",true)||it.equals("Cookie",true) }
@@ -124,7 +133,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
                         val alternatePending=observed.get("alternatePending")?.asBoolean ?: false
                         val allBlocked=(!alternateAvailable||alternateRequested&&!alternatePending) && pending>0 && candidates.size==pending &&
                             candidates.all { e -> e.getAsJsonObject("snapshot")?.get("blocked")?.isJsonNull==false }
-                        frameInfo="frames=$pending replies=${candidates.size} alternate=$alternateRequested waiting=$alternatePending " + candidates.mapIndexed { index, entry ->
+                        frameInfo=(if(item.provider=="kinokong")"bootstrap=native prepared=$preparedFrames root=${observed.get("root")} " else "")+"frames=$pending replies=${candidates.size} alternate=$alternateRequested waiting=$alternatePending " + candidates.mapIndexed { index, entry ->
                             val data=entry.getAsJsonObject("snapshot") ?: JsonObject()
                             val host=entry.get("url")?.takeIf { it.isJsonPrimitive }?.asString?.toHttpUrlOrNull()?.host.orEmpty()
                             "frame$index[host=$host player=${data.get("playerType")} ids=${data.get("ids")} files=${data.getAsJsonArray("files")?.size()} lists=${data.getAsJsonArray("lists")?.size()} xhr=${data.get("xhr")} shapes=${data.get("shapes")} json=${data.get("jsonXhr")} blocked=${data.get("blocked")?.isJsonNull==false}] "
@@ -188,6 +197,30 @@ class CenterOnline(private val activity:AppCompatActivity) {
         web.evaluateJavascript(script) { if(continuation.isActive)continuation.resume(it ?: "null") }
     }
     companion object {
+
+        /** A native HTML shell keeps the source origin/Referer, without running catalog advertising/layout scripts. */
+        fun kinokongDocument(item:CenterTitle,frames:List<String>):String {
+            require(item.provider=="kinokong"&&frames.isNotEmpty()&&frames.size<=3)
+            source(item)
+            val document=org.jsoup.nodes.Document.createShell(item.sourceUrl!!)
+            document.head().appendElement("meta").attr("charset","UTF-8")
+            val root=document.body().appendElement("div").attr("id","full_${item.id}")
+            val tabs=root.appendElement("ul").addClass("newTabs")
+            frames.forEachIndexed { index,url -> tabs.appendElement("li").attr("data-iframe",url)
+                .apply { if(index==0)addClass("current") }.text("Плеер ${index+1}") }
+            root.appendElement("div").attr("id","preroll").appendElement("iframe")
+                .attr("src",frames.first()).attr("data-src",frames.first()).attr("loading","eager")
+            document.body().appendElement("script").appendChild(org.jsoup.nodes.DataNode("""
+                document.querySelectorAll('.newTabs > li').forEach(function(tab){tab.addEventListener('click',function(){
+                    document.querySelectorAll('.newTabs > li').forEach(function(el){el.classList.remove('current');});
+                    tab.classList.add('current');var frame=document.querySelector('#preroll iframe');
+                    var url=tab.getAttribute('data-iframe');frame.setAttribute('data-src',url);
+                    if(frame.getAttribute('src')!==url)frame.setAttribute('src',url);
+                });});
+            """.trimIndent()))
+            return document.outerHtml()
+        }
+
         fun onlineSupported(provider: String?) = provider in listOf("kinogo","kinovod","kinokong")
         private data class MediaProbe(val status:Int,val kind:String,val bytes:ByteArray,val resolved:okhttp3.HttpUrl) {
             val text get()=bytes.toString(Charsets.UTF_8).trimStart('\uFEFF',' ','\r','\n','\t')

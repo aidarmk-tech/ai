@@ -401,7 +401,7 @@ class CenterOnlineInstrumentedTest {
         }
     }
 
-    private fun kongPage():String = """<html><body>
+    private fun kongPage():String = """<html><body><div id="full_17">
         <div style="height:1800px">Описание сериала</div><ul class="newTabs">
         <li class="current" data-iframe="/embed/movie/91" onclick="pick(this)">Смотреть</li>
         <li data-iframe="/provider-two" onclick="pick(this)">2 плеер</li>
@@ -411,7 +411,7 @@ class CenterOnlineInstrumentedTest {
         <iframe src="/unrelated"></iframe>
         <script>function pick(el){document.querySelector('.newTabs .current').classList.remove('current');el.classList.add('current');
         setTimeout(function(){var f=document.querySelector('#preroll iframe');f.setAttribute('data-src',el.dataset.iframe);f.src=el.dataset.iframe;},500);}
-        JSON.parse('[{"title":"Серия 99","file":"https://cdn.test/wrong.m3u8"}]');</script></body></html>"""
+        JSON.parse('[{"title":"Серия 99","file":"https://cdn.test/wrong.m3u8"}]');</script></div></body></html>"""
 
     @Test fun kinokongTriesAllThreeDeclaredVideoTabsAndKeepsTheEmbedReferer() = runBlocking {
         MockWebServer().use { server ->
@@ -448,7 +448,7 @@ class CenterOnlineInstrumentedTest {
         MockWebServer().use { server ->
             server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
                 override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest)=MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody(
-                    if(request.path=="/17-movie.html") """<html><body><ul class="newTabs"><li class="current" data-iframe="/video">Смотреть</li>
+                    if(request.path=="/17-movie.html") """<html><body><div id="full_17"></div><ul class="newTabs"><li class="current" data-iframe="/video">Смотреть</li>
                         <li class="trail" data-iframe="/trailer-cdn/17/">Трейлер</li></ul><div id="preroll"><iframe data-src="/video"></iframe></div>
                         <script>JSON.parse('{"file":"https://cdn.test/wrong.mp4"}');</script></body></html>"""
                     else """<html><body><script>window.Playerjs=function(options){this.api=function(){return [];};};
@@ -495,6 +495,52 @@ class CenterOnlineInstrumentedTest {
                     kotlinx.coroutines.delay(100)
                 } }
                 assertEquals(source,state().get("url").asString);assertFalse(requests.any { it.startsWith("/trailer-cdn/") })
+            }
+        }
+    }
+
+    @Test fun kinokongNativeBootstrapReadsDuplicateMobileTabsWithoutExecutingBrokenSiteScripts() = runBlocking {
+        MockWebServer().use { server ->
+            val requests=java.util.Collections.synchronizedList(mutableListOf<String>())
+            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest):MockResponse {
+                    val path=request.path?.substringBefore('?').orEmpty();requests.add(path)
+                    val html=when(path) {
+                        "/82174-nevesta.html" -> """<html><body><div id="full_82174">
+                            <div style="display:none"><ul class="newTabs">
+                            <li data-iframe="/embed/movie/72142">Collaps</li><li data-iframe="/provider-two">alloha</li>
+                            <li class="trail" data-iframe="/trailer-cdn/82174/">Трейлер</li></ul><div id="preroll"><iframe data-src="/embed/movie/72142" loading="lazy"></iframe></div></div>
+                            <div><ul class="newTabs"><li data-iframe="/embed/movie/72142">Collaps</li>
+                            <li data-iframe="/provider-two">alloha</li></ul><div id="preroll"><iframe data-src="/embed/movie/72142" loading="lazy"></iframe></div></div>
+                            <iframe src="/advert"></iframe><script src="/broken-site.js"></script></div></body></html>"""
+                        "/embed/movie/72142" -> """<html><body><script>JSON.parse('[{"title":"Сезон 4","folder":[{"title":"550 серия","file":"[720p]https://cdn.test/550.m3u8"}]}]');</script></body></html>"""
+                        else -> "<html><body>Not a video player</body></html>"
+                    }
+                    return MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody(html)
+                }
+            }
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val result=resolver.resolve(CenterTitle(82174,"tv","Невеста",provider="kinokong",sourceUrl=server.url("/82174-nevesta.html").toString()))
+                assertEquals(4,result.episodes.single().season);assertEquals(550,result.episodes.single().number)
+                assertEquals(server.url("/embed/movie/72142").toString(),result.headers["Referer"])
+                assertTrue(resolver.diagnostics.contains("bootstrap=native prepared=2"))
+                assertTrue(resolver.diagnostics.contains("frames=2"));assertTrue(resolver.diagnostics.contains("replies=1"))
+                assertFalse(requests.contains("/broken-site.js"));assertFalse(requests.contains("/advert"))
+                assertFalse(requests.any { it.startsWith("/trailer-cdn/") })
+            }
+        }
+    }
+
+    @Test fun kinokongMissingVideoTabsReportsThePageProblemInsteadOfWaitingForAnAlternate() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setHeader("Content-Type","text/html; charset=utf-8")
+                .setBody("""<html><body><div id="full_82174">Карточка без плеера</div></body></html>"""))
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val failure=runCatching { resolver.resolve(CenterTitle(82174,"tv","Невеста",provider="kinokong",sourceUrl=server.url("/82174-nevesta.html").toString())) }.exceptionOrNull()
+                assertNotNull(failure);assertTrue(failure!!.message.orEmpty().contains("не найдены видеоплееры"))
+                assertEquals("bootstrap=native stage=page",resolver.diagnostics)
             }
         }
     }

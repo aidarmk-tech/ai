@@ -321,6 +321,24 @@ class CenterCatalog {
             }
             return items
         }
+
+        /** Only declared non-trailer video tabs on the verified selected KinoKong page. */
+        fun kinokongEmbeds(document:Document,item:CenterTitle):List<String> {
+            require(item.provider=="kinokong")
+            check(CenterOnline.sameTitleNavigation(item,document.location())) { "KinoKong открыл другую страницу вместо выбранной карточки" }
+            check(document.getElementById("full_${item.id}")!=null) { "KinoKong не отдал выбранную карточку: проверь доступность страницы в плеере сайта" }
+            val base=document.location().toHttpUrlOrNull() ?: error("Нет адреса карточки")
+            return document.select(".newTabs > li[data-iframe]").mapNotNull { tab ->
+                if(tab.hasClass("trail")||Regex("(?iu)трейлер|trailer").containsMatchIn(tab.text()))return@mapNotNull null
+                if(tab.parents().any { p -> p.id().startsWith("comm-")||p.classNames().any { it.startsWith("comment")||it.startsWith("comm-") } ||
+                    p.id().startsWith("full_")&&p.id()!="full_${item.id}" })return@mapNotNull null
+                val value=tab.attr("data-iframe").trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                val url=base.resolve(value) ?: return@mapNotNull null
+                if(Regex("(?i)^/(?:trailer|trailer-cdn)(?:/|$)").containsMatchIn(url.encodedPath)||CenterOnline.sameTitleNavigation(item,url.toString()))return@mapNotNull null
+                url.toString()
+            }.distinct().take(3)
+        }
+
         private fun mediaMetadata(document:Document,item:CenterTitle):JsonObject? {
             fun text(node:JsonObject,key:String)=node.get(key)?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
             fun title(value:String)=Jsoup.parse(value).text().replace(Regex("(?iu)\\s*\\((?:(?:19|20)[0-9]{2}|[0-9]+(?:[-–][0-9]+)?\\s*сезон(?:а|ов)?)\\)\\s*$"),"")
@@ -509,6 +527,13 @@ class CenterCatalog {
             if(provider=="kazplay") kazplaySearch(data.bytes.toString(Charsets.UTF_8),data.url)
             else suggestions(data.bytes.toString(Charsets.UTF_8),data.url)
         }
+    }
+    suspend fun onlineFrames(item:CenterTitle):List<String> {
+        require(item.provider=="kinokong")
+        val selected=CenterOnline.source(item)
+        val frames=kinokongEmbeds(page(selected),item)
+        check(frames.isNotEmpty()) { "На выбранной странице KinoKong не найдены видеоплееры. Открой плеер сайта или выбери другой источник" }
+        return frames
     }
     suspend fun detail(item:CenterTitle): CenterDetails = detailLimit.withPermit {
         val url = item.sourceUrl?.toHttpUrlOrNull() ?: error("Нет адреса карточки")

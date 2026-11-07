@@ -12,13 +12,13 @@ window.addEventListener('message',function(event){
  records[frame.url.href]={url:actual.href,snapshot:data};
  }catch(e){}
 });
-setInterval(function(){var frames=controls.frames();if(!frames.length)controls.select(index);frames.forEach(function(f){var src=f.element.getAttribute('src');if(!src||src==='about:blank')f.element.src=f.url.href;});},300);
+setInterval(function(){var frames=controls.frames();if(!frames.length)controls.select(index);frames.forEach(function(f){var src=f.element.getAttribute('src');f.element.setAttribute('loading','eager');if(!src||src==='about:blank')f.element.src=f.url.href;});},300);
 window.__lampKinogoTryAlternate=function(){
  if(Date.now()-lastSwitch<6000||!controls.has(index+1))return false;
  index++;lastSwitch=Date.now();return controls.select(index);
 };
 window.__lampKinogoSnapshot=function(){
  var frames=controls.frames(),count=controls.count(),last=!controls.has(index+1);
- return JSON.stringify({expected:count,alternateAvailable:count>1,alternate:last,alternatePending:!frames.length,candidates:controls.urls().map(function(url){return records[url];}).filter(Boolean)});
+ return JSON.stringify({expected:count,alternateAvailable:count>1,alternate:count>1&&last,alternatePending:count>0&&!frames.length,root:controls.inspect(),candidates:controls.urls().map(function(url){return records[url];}).filter(Boolean)});
 };
 })();

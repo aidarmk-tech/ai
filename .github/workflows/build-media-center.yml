@@ -97,7 +97,7 @@ jobs:
           data={'versionCode':${{ github.run_number }},'versionName':'0.1.${{ github.run_number }}',
             'url':'https://github.com/${{ github.repository }}/releases/download/media-center/'+p.name,
             'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),
-            'notes':'Онлайн Киновода из карточек TMDB: поиск по названию, оригинальному названию, году и типу. Выбор неоднозначных совпадений, запоминание источника и продолжение просмотра с сохранением карточки TMDB. Торренты остаются доступны.'}
+            'notes':'Исправлена подготовка онлайн KinoKong: видеоплееры читаются из HTML выбранной карточки, дубли мобильной версии удаляются, плеер загружается без скриптов страницы. Улучшены переключение вкладок и диагностика отсутствующего плеера. Онлайн Киновода из TMDB сохранён.'}
           pathlib.Path('dist/version.json').write_text(json.dumps(data,ensure_ascii=False,indent=2))
           PY
       - uses: softprops/action-gh-release@v2

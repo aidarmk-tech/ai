@@ -367,4 +367,23 @@ class CenterCatalogTest {
         try { CenterCatalog.details(Jsoup.parse(html,"https://catalog.test/film/other-99/"),item);fail("Accepted another title") }
         catch(_:IllegalStateException) {}
     }
+
+    @Test fun kinokongVideoTabsAreBoundDeduplicatedAndExcludeTrailerCommentsAndForeignCards() {
+        val item=CenterTitle(82174,"tv","Невеста",provider="kinokong",sourceUrl="https://kinokong.es/82174-nevesta.html")
+        val html="""<div id="full_82174"><ul class="newTabs">
+            <li data-iframe="https://embed.test/movie/72142">Collaps</li><li data-iframe="https://two.test/?token_movie=fixture">alloha</li>
+            <li class="trail" data-iframe="/trailer-cdn/82174/">Трейлер</li><li data-iframe="javascript:bad">bad</li><li data-iframe="">empty</li></ul>
+            <div class="mobile"><ul class="newTabs"><li data-iframe="https://embed.test/movie/72142">Смотреть</li>
+            <li data-iframe="https://two.test/?token_movie=fixture">2 плеер</li></ul></div>
+            <div class="comm-item"><ul class="newTabs"><li data-iframe="https://ads.test/wrong">ad</li></ul></div></div>
+            <div id="full_999"><ul class="newTabs"><li data-iframe="https://wrong.test/movie/999">Other</li></ul></div>"""
+        val frames=CenterCatalog.kinokongEmbeds(org.jsoup.Jsoup.parse(html,item.sourceUrl),item)
+        assertEquals(listOf("https://embed.test/movie/72142","https://two.test/?token_movie=fixture"),frames)
+        assertTrue(runCatching { CenterCatalog.kinokongEmbeds(org.jsoup.Jsoup.parse(html,"https://kinokong.es/999-other.html"),item) }.isFailure)
+        assertTrue(runCatching { CenterCatalog.kinokongEmbeds(org.jsoup.Jsoup.parse("<div id='full_999'></div>",item.sourceUrl),item) }.isFailure)
+        val document=org.jsoup.Jsoup.parse(CenterOnline.kinokongDocument(item,frames),item.sourceUrl)
+        assertEquals(2,document.select(".newTabs > li").size);assertEquals(1,document.select("iframe").size)
+        assertEquals("eager",document.selectFirst("iframe")!!.attr("loading"))
+        assertFalse(document.html().contains("trailer-cdn"));assertTrue(document.select("script[src]").isEmpty())
+    }
 }
