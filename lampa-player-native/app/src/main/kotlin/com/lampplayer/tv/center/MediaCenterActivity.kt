@@ -55,11 +55,16 @@ open class MediaCenterActivity : AppCompatActivity() {
     }
     private var forceQualityOnce = false
     private var recovery: Pair<String, CardMeta>? = null
+    private var recoveryPlayer:Int?=null
     private val playerLauncher = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == android.app.Activity.RESULT_FIRST_USER) {
             val action = result.data?.getStringExtra("recovery")
             val card = runCatching { Gson().fromJson(result.data?.getStringExtra("card"), CardMeta::class.java) }.getOrNull()
-            if (action in listOf("refresh", "quality", "torrent") && card != null) recovery = action!! to card
+            if (action in listOf("refresh", "quality", "torrent", "source_player") && card != null) {
+                recovery = action!! to card
+                recoveryPlayer=result.data?.takeIf { it.getBooleanExtra("center_player_pinned",false) }
+                    ?.getIntExtra("center_player_index",-1)?.takeIf { it>=0 }
+            }
         }
     }
     private lateinit var store: CenterStore
@@ -268,11 +273,15 @@ open class MediaCenterActivity : AppCompatActivity() {
                     if (card.seasonNumber != null || parts.getOrNull(1) == "tv") "tv" else "movie",
                     card.title, original = card.originalTitle.orEmpty(), year=card.releaseYear?.toString().orEmpty(), provider = provider, sourceUrl = card.sourcePage)
                 val canOnline=CenterOnline.onlineSupported(provider) || CenterOnlineMatch.fromPage(item)!=null
+                val preferredPlayer=if(CenterOnline.manualPlayers(provider))recoveryPlayer ?: onlineCache[item.key]?.second?.takeIf { it.pinnedPlayer }?.playerIndex else null
+                recoveryPlayer=null
                 enter {
                     when {
-                        action=="refresh" && canOnline -> online(item,card,refresh=true)
+                        action=="source_player" && CenterOnline.manualPlayers(provider) ->
+                            online(item,selectedSeason=card.seasonNumber,selectedVoice=card.translator,choosePlayerAfterLoad=true)
+                        action=="refresh" && canOnline -> online(item,card,refresh=true,playerIndex=preferredPlayer)
                         action=="quality" && canOnline -> {
-                            forceQualityOnce=true;online(item,refresh=true,selectedSeason=card.seasonNumber,selectedVoice=card.translator)
+                            forceQualityOnce=true;online(item,refresh=true,selectedSeason=card.seasonNumber,selectedVoice=card.translator,playerIndex=preferredPlayer)
                         }
                         else -> find(item, card.episodeNumber?.let { CenterEpisode(card.seasonNumber ?: 1, it, "", "") })
                     }
@@ -284,7 +293,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         if (intent.getBooleanExtra("open_home", false)) {
-            playerReturn = null; recovery = null; hideMenu()
+            playerReturn = null; recovery = null; recoveryPlayer=null; hideMenu()
             navigate("Главная")
             checkAutomaticUpdates()
         }
@@ -330,7 +339,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         count?.let { heading.addView(text(it.toString(), 13, muted)) }
         content.addView(heading); space(content, 8)
     }
-    private fun work(message: String, onlineItem: CenterTitle? = null, block: suspend () -> Unit) {
+    private fun work(message: String, onlineItem: CenterTitle? = null, onlineRecovery: (() -> Unit)? = null, onlineRefresh:(()->Unit)?=null, block: suspend () -> Unit) {
         val focusContent = content.hasFocus()
         job?.cancel(); page = "loading"; clear(message)
         content.addView(ProgressBar(this), LinearLayout.LayoutParams(dp(40), dp(40)))
@@ -343,14 +352,15 @@ open class MediaCenterActivity : AppCompatActivity() {
             catch (e: Exception) {
                 page = "error"; clear("Не удалось загрузить")
                 content.addView(text(e.message ?: "Проверь соединение и настройки источника", 17, muted)); space(content, 20)
-                content.addView(button("Повторить") { work(message, onlineItem, block) })
+                content.addView(button("Повторить") { work(message, onlineItem, onlineRecovery, onlineRefresh, block) })
                 if(e is OnlineFailure) content.addView(button("Скопировать отчёт") {
                     (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager)
                         .setPrimaryClip(android.content.ClipData.newPlainText("LampMedia online",e.report))
                     Toast.makeText(this@MediaCenterActivity,"Отчёт скопирован",Toast.LENGTH_SHORT).show()
                 })
                 if(onlineItem!=null) {
-                    content.addView(button("Обновить ссылки") { online(onlineItem,refresh=true) })
+                    if(onlineRecovery!=null)content.addView(button("Другой плеер источника") { onlineRecovery() })
+                    content.addView(button("Обновить ссылки") { if(onlineRefresh!=null)onlineRefresh() else online(onlineItem,refresh=true) })
                     content.addView(button("Плеер сайта") { website(onlineItem) })
                     if(onlineItem.provider==null)content.addView(button("Выбрать на Киноводе") { tmdbOnline(onlineItem,forceSearch=true) })
                     content.addView(button("Выбрать раздачу") { find(onlineItem,null) })
@@ -881,11 +891,12 @@ open class MediaCenterActivity : AppCompatActivity() {
         if (details.actors.isNotBlank()) { space(copy, 18); copy.addView(text("В ролях", 18)); space(copy, 8); copy.addView(text(details.actors, 15, muted)) }
         body.addView(copy, LinearLayout.LayoutParams(0, -2, 1f)); content.addView(body)
     }
-    protected open suspend fun resolveOnline(item: CenterTitle): OnlineVideo {
+    protected open suspend fun resolveOnline(item: CenterTitle): OnlineVideo = resolveOnlinePlayer(item,null)
+    protected open suspend fun resolveOnlinePlayer(item:CenterTitle,playerIndex:Int?):OnlineVideo {
         val resolver=CenterOnline(this)
         fun report() = "LampMedia · ${BuildConfig.VERSION_NAME}\nИсточник: ${CenterCatalog.name(item.provider)}\nКарточка: ${item.key}\n"+
             resolver.diagnostics.substringBefore(" errors=")
-        try { return resolver.resolve(item) }
+        try { return resolver.resolve(item,playerIndex) }
         catch(e:CancellationException) { throw e }
         catch(e:Exception) { onlineReport=report();throw onlineFailure(e) }
         finally { onlineReport=report() }
@@ -940,18 +951,22 @@ open class MediaCenterActivity : AppCompatActivity() {
     }
 
     private fun online(item: CenterTitle, resume: CardMeta? = null, refresh: Boolean = false, returnTo: Screen? = null,
-        selectedSeason: Int? = null, selectedVoice: String? = null, catalogItem: CenterTitle? = null) {
+        selectedSeason: Int? = null, selectedVoice: String? = null, catalogItem: CenterTitle? = null, playerIndex:Int?=null, choosePlayerAfterLoad:Boolean=false) {
         if(item.provider==null) { tmdbOnline(item,resume,refresh,returnTo,selectedSeason,selectedVoice);return }
         val identity=catalogItem ?: item
         onlineReport=null
         val previous = returnTo ?: if (resume != null && page == "online") snapshot() else null
-        work("Получаю список серий · ${CenterCatalog.name(item.provider)}…",onlineItem=identity) {
-            val cached = onlineCache[identity.key]?.takeIf { System.currentTimeMillis() - it.first < 180000 && !refresh && it.second.item.key==item.key && it.second.item.sourceUrl==item.sourceUrl }?.second
-            val video = cached ?: resolveOnline(item).copy(catalogItem=catalogItem).also {
+        val previousVideo=onlineCache[identity.key]?.second?.takeIf { it.item.key==item.key&&it.item.sourceUrl==item.sourceUrl }
+        work("Получаю список серий · ${CenterCatalog.name(item.provider)}…",onlineItem=identity,
+            onlineRecovery=previousVideo?.takeIf { it.playerCount>1 }?.let { old -> { chooseOnlinePlayer(old,selectedSeason,selectedVoice) } }
+                ?: if(playerIndex!=null)({online(item,refresh=true,selectedSeason=selectedSeason,selectedVoice=selectedVoice,catalogItem=catalogItem,choosePlayerAfterLoad=true)}) else null,
+            onlineRefresh={online(item,resume,refresh=true,selectedSeason=selectedSeason,selectedVoice=selectedVoice,catalogItem=catalogItem,playerIndex=playerIndex)}) {
+            val cached = onlineCache[identity.key]?.takeIf { System.currentTimeMillis() - it.first < 180000 && !refresh && it.second.item.key==item.key && it.second.item.sourceUrl==item.sourceUrl && (playerIndex==null||it.second.pinnedPlayer&&it.second.playerIndex==playerIndex) }?.second
+            val video = cached ?: (if(playerIndex==null)resolveOnline(item) else resolveOnlinePlayer(item,playerIndex)).copy(catalogItem=catalogItem).also {
                 if (onlineCache.size >= 4) onlineCache.remove(onlineCache.keys.first())
                 onlineCache[identity.key] = System.currentTimeMillis() to it
             }
-            if (resume != null) {
+            if (resume != null && !choosePlayerAfterLoad) {
                 val matches = video.episodes.filter { it.season == (resume.seasonNumber ?: 0) && it.number == (resume.episodeNumber ?: 0) &&
                     (resume.translator == null || it.voice == resume.translator) }
                 val entry = matches.singleOrNull()
@@ -971,7 +986,17 @@ open class MediaCenterActivity : AppCompatActivity() {
                 (season == null || it.season == season) && it.voice == value
             } }
             showOnline(video, season, voice ?: store.voice(video.identity.key)?.takeIf { saved -> video.episodes.any { (season == null || it.season == season) && it.voice == saved } })
+            if(choosePlayerAfterLoad&&video.playerCount>1)chooseOnlinePlayer(video,season,voice)
         }
+    }
+    private fun chooseOnlinePlayer(video:OnlineVideo,season:Int?=null,voice:String?=null) {
+        if(!CenterOnline.manualPlayers(video.item.provider)||video.playerCount<=1)return
+        val labels=listOf("Автоматически"+if(!video.pinnedPlayer)" ✓" else "")+
+            (0 until video.playerCount).map { "Плеер ${it+1}"+if(video.pinnedPlayer&&video.playerIndex==it)" ✓" else "" }
+        AlertDialog.Builder(this).setTitle("Плеер источника").setItems(labels.toTypedArray()) { _,index ->
+            online(video.item,refresh=true,selectedSeason=season,selectedVoice=voice,catalogItem=video.catalogItem,
+                playerIndex=(index-1).takeIf { index>0 })
+        }.setNegativeButton("Отмена",null).show()
     }
     protected fun showOnline(video: OnlineVideo, season: Int? = null, voice: String? = null, focusFirst: Boolean = true) {
         val hadFocus = content.hasFocus()
@@ -1010,8 +1035,12 @@ open class MediaCenterActivity : AppCompatActivity() {
                 })
             }
         }
+        if(CenterOnline.manualPlayers(video.item.provider)&&video.playerCount>1)
+            content.addView(button("Плеер источника · ${video.playerIndex+1} из ${video.playerCount}"+if(video.pinnedPlayer)" · выбран" else " · авто") {
+                chooseOnlinePlayer(video,season,selectedVoice)
+            })
         if(video.catalogItem!=null)content.addView(button("Другое совпадение на Киноводе") { tmdbOnline(video.identity,forceSearch=true) })
-        content.addView(button("Обновить список и ссылки") { online(video.identity, refresh = true, selectedSeason = season, selectedVoice = selectedVoice) })
+        content.addView(button("Обновить список и ссылки") { online(video.item, refresh = true, selectedSeason = season, selectedVoice = selectedVoice, catalogItem=video.catalogItem,playerIndex=video.playerIndex.takeIf { video.pinnedPlayer }) })
         if (focusFirst && hadFocus) content.post { content.getFocusables(View.FOCUS_FORWARD).firstOrNull()?.requestFocus() }
     }
     private fun chooseOnlineQuality(video: OnlineVideo, episode: OnlineEpisode, forceChoice: Boolean = false) {
@@ -1049,10 +1078,13 @@ open class MediaCenterActivity : AppCompatActivity() {
     private fun playOnline(video: OnlineVideo, episode: OnlineEpisode, quality: Int, returnTo: Screen? = null) {
         if (System.currentTimeMillis() - video.fetchedAt > 180000) {
             online(video.identity, CardMeta(video.identity.title, seasonNumber = episode.season.takeIf { it>0 }, episodeNumber = episode.number,
-                translator = episode.voice, quality = quality.toString()), refresh = true, returnTo = returnTo ?: snapshot()); return
+                translator = episode.voice, quality = quality.toString()), refresh = true, returnTo = returnTo ?: snapshot(),playerIndex=video.playerIndex.takeIf { video.pinnedPlayer }); return
         }
         val previous=returnTo ?: snapshot()
-        work("Проверяю доступность видео…",onlineItem=video.identity) {
+        work("Проверяю доступность видео…",onlineItem=video.identity,onlineRecovery=
+            if(CenterOnline.manualPlayers(video.item.provider)&&video.playerCount>1)({chooseOnlinePlayer(video,episode.season.takeIf { it>0 },episode.voice)}) else null,
+            onlineRefresh={online(video.item,refresh=true,selectedSeason=episode.season.takeIf { it>0 },selectedVoice=episode.voice,
+                catalogItem=video.catalogItem,playerIndex=video.playerIndex.takeIf { video.pinnedPlayer })}) {
             var current=video
             var selected=episode
             fun choices(entry:OnlineEpisode)=entry.alternatives[quality]?.takeIf { it.isNotEmpty() }
@@ -1064,7 +1096,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                     .any { it is OnlineMediaUnavailable && it.status==404 }
                 if(!missing)throw first
                 onlineCache.remove(video.identity.key)
-                val fresh=resolveOnline(video.item).copy(catalogItem=video.catalogItem)
+                val fresh=(if(video.pinnedPlayer)resolveOnlinePlayer(video.item,video.playerIndex) else resolveOnline(video.item)).copy(catalogItem=video.catalogItem)
                 check(fresh.item.key==video.item.key) { "Источник вернул другую карточку" }
                 val match=fresh.episodes.singleOrNull { it.season==episode.season && it.number==episode.number && it.voice==episode.voice }
                     ?: error("Источник изменил список серий или озвучку. Обнови список")
@@ -1091,7 +1123,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                 }
             }
             val target=if(current!==video)previous?.copy(draw={showOnline(current,selected.season.takeIf { current.item.type=="tv" },selected.voice,false)}) else previous
-            launchPlayer(playable,meta.toString(),target,online=true)
+            launchPlayer(playable,meta.toString(),target,online=true,onlinePlayerCount=current.playerCount,onlinePlayerIndex=current.playerIndex,onlinePinnedPlayer=current.pinnedPlayer)
         }
     }
     private fun episodeList(item: CenterTitle, season: Int) {
@@ -1346,9 +1378,9 @@ open class MediaCenterActivity : AppCompatActivity() {
         playerReturn = if (page == "loading" && backStack.isNotEmpty()) backStack.removeLast() else snapshot()
         startActivity(Intent(this, CenterWebActivity::class.java).putExtra("url", url).putExtra("lampa_data", metadata).putExtra("site_player",true).putExtra("catalog_provider",provider))
     }
-    private fun launchPlayer(url: String, metadata: String, returnTo: Screen? = null, online: Boolean = false) {
+    private fun launchPlayer(url: String, metadata: String, returnTo: Screen? = null, online: Boolean = false, onlinePlayerCount:Int=1,onlinePlayerIndex:Int=0,onlinePinnedPlayer:Boolean=false) {
         playerReturn = returnTo ?: if (page == "loading" && backStack.isNotEmpty()) backStack.removeLast() else snapshot()
-        playerLauncher.launch(Intent(this, PlayerActivity::class.java).putExtra("media_center", true).putExtra("center_online",online).setAction(Intent.ACTION_VIEW)
+        playerLauncher.launch(Intent(this, PlayerActivity::class.java).putExtra("media_center", true).putExtra("center_online",online).putExtra("center_player_count",onlinePlayerCount).putExtra("center_player_index",onlinePlayerIndex).putExtra("center_player_pinned",onlinePinnedPlayer).setAction(Intent.ACTION_VIEW)
             .setDataAndType(android.net.Uri.parse(url), "video/*").putExtra("lampa_data", metadata))
     }
     private fun sources(after: (() -> Unit)? = null) {

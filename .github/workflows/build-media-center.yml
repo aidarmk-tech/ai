@@ -97,7 +97,7 @@ jobs:
           data={'versionCode':${{ github.run_number }},'versionName':'0.1.${{ github.run_number }}',
             'url':'https://github.com/${{ github.repository }}/releases/download/media-center/'+p.name,
             'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),
-            'notes':'Добавлен онлайн KinoTac: фильмы, сезоны, серии, озвучки и качества в LampPlayer, автоматическая проверка второго видеоплеера. Дополнительный плеер сайта доступен вручную с переключением вкладок и фокусом на видео. Трейлеры и SDK ID не становятся ссылками на фильм.'}
+            'notes':'Добавлен ручной выбор плеера источника для KinoKong, Zona и KinoTac. Номер плеера виден в списке серий; после ошибки можно выбрать другой. Ручной выбор сохраняется при обновлении ссылок и восстановлении из LampPlayer. Доступен возврат к автоматическому выбору.'}
           pathlib.Path('dist/version.json').write_text(json.dumps(data,ensure_ascii=False,indent=2))
           PY
       - uses: softprops/action-gh-release@v2

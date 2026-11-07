@@ -29,7 +29,7 @@ import java.util.Locale
 import kotlin.coroutines.resume
 
 data class OnlineEpisode(val season:Int,val number:Int,val title:String,val voice:String,val sources:Map<Int,String>,val alternatives:Map<Int,List<String>> = emptyMap())
-data class OnlineVideo(val item:CenterTitle,val episodes:List<OnlineEpisode>,val headers:Map<String,String>,val fetchedAt:Long=System.currentTimeMillis(),val catalogItem:CenterTitle?=null,val notice:String?=null) {
+data class OnlineVideo(val item:CenterTitle,val episodes:List<OnlineEpisode>,val headers:Map<String,String>,val fetchedAt:Long=System.currentTimeMillis(),val catalogItem:CenterTitle?=null,val notice:String?=null,val playerIndex:Int=0,val playerCount:Int=1,val pinnedPlayer:Boolean=false) {
     val identity get()=catalogItem ?: item
 }
 class OnlineSourceBlocked(val reason:String,message:String):IllegalStateException(message)
@@ -38,13 +38,15 @@ class OnlineMediaUnavailable(val status:Int, val detail:String, message:String):
 /** Resolves the selected provider's own player metadata, without showing a website or starting video. */
 class CenterOnline(private val activity:AppCompatActivity) {
     var diagnostics: String = "not started"; private set
-    suspend fun resolve(item:CenterTitle):OnlineVideo = withContext(Dispatchers.Main.immediate) {
+    suspend fun resolve(item:CenterTitle,preferredPlayer:Int?=null):OnlineVideo = withContext(Dispatchers.Main.immediate) {
+        require(preferredPlayer==null||(manualPlayers(item.provider)&&preferredPlayer>=0)) { "Выбор плеера недоступен для этого источника" }
         val source=source(item)
         com.lampplayer.tv.data.BrowserMediaSession.refresh()
         var web:WebView?=null
         val issues=mutableListOf<String>()
         val active=AtomicBoolean(true)
         var preparedFrames=0
+        var declaredFrames=emptyList<String>()
         val libraryCalls=Collections.synchronizedSet(mutableSetOf<Call>())
         try {
             @SuppressLint("SetJavaScriptEnabled")
@@ -58,7 +60,10 @@ class CenterOnline(private val activity:AppCompatActivity) {
             web=browser
             val preparedPage=if(item.provider in listOf("kinokong","zona","kinotac")) {
                 diagnostics="bootstrap=native stage=page"
-                val frames=CenterCatalog().onlineFrames(item);preparedFrames=frames.size
+                declaredFrames=CenterCatalog().onlineFrames(item)
+                check(preferredPlayer==null||preferredPlayer in declaredFrames.indices) { "Выбранный плеер больше недоступен. Верни автоматический выбор" }
+                val frames=preferredPlayer?.let { listOf(declaredFrames[it]) } ?: declaredFrames
+                preparedFrames=frames.size
                 diagnostics="bootstrap=native prepared=$preparedFrames stage=webview"
                 kinokongDocument(item,frames).toByteArray(Charsets.UTF_8)
             } else null
@@ -117,6 +122,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
                         else "window.__lampSnapshot ? window.__lampSnapshot() : '{}' ")
                     val observed=runCatching { JsonParser.parseString(JsonParser.parseString(raw).asString).asJsonObject }.getOrElse { JsonObject() }
                     var frameReferer: String?=null
+                    var resolvedPlayer=preferredPlayer ?: 0
                     var frameInfo=""
                     var allowEntries=true
                     val snapshot=if(item.provider in listOf("kinogo","kinokong","zona","kinotac")) {
@@ -127,6 +133,11 @@ class CenterOnline(private val activity:AppCompatActivity) {
                             data!=null && (data.get("blocked")==null || data.get("blocked").isJsonNull) && decode(item,data).isNotEmpty()
                         }
                         frameReferer=usable?.get("url")?.takeIf { it.isJsonPrimitive }?.asString
+                        if(declaredFrames.isNotEmpty()&&usable!=null) {
+                            val declared=usable.get("sourceUrl")?.takeIf { it.isJsonPrimitive }?.asString
+                            resolvedPlayer=declaredFrames.indexOf(declared)
+                            check(resolvedPlayer>=0) { "Не удалось определить выбранный плеер" }
+                        }
                         val pending=observed.get("expected")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0
                         val alternateAvailable=observed.get("alternateAvailable")?.asBoolean ?: false
                         val alternateRequested=observed.get("alternate")?.asBoolean ?: false
@@ -167,7 +178,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
                             val notice=if(declared>0&&pending>0)"Источник отдал только часть ссылок. Полный список серий доступен в плеере сайта." else null
                             return@withTimeout OnlineVideo(item,entries,mapOf(
                                 "User-Agent" to browser.settings.userAgentString,"Referer" to referer,
-                                "Origin" to origin.newBuilder().encodedPath("/").query(null).fragment(null).build().toString().trimEnd('/')),notice=notice)
+                                "Origin" to origin.newBuilder().encodedPath("/").query(null).fragment(null).build().toString().trimEnd('/')),notice=notice,playerIndex=resolvedPlayer,playerCount=declaredFrames.size.coerceAtLeast(1),pinnedPlayer=preferredPlayer!=null)
                         }
                     }
                     if(item.provider in listOf("kinogo","kinokong","zona","kinotac")&&entries.isEmpty()&&++emptyPasses>=20)
@@ -230,6 +241,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
             return document.outerHtml()
         }
 
+        fun manualPlayers(provider:String?)=provider in listOf("kinokong","zona","kinotac")
         fun onlineSupported(provider: String?) = provider in listOf("kinogo","kinovod","kinokong","zona","kinotac")
         private data class MediaProbe(val status:Int,val kind:String,val bytes:ByteArray,val resolved:okhttp3.HttpUrl) {
             val text get()=bytes.toString(Charsets.UTF_8).trimStart('\uFEFF',' ','\r','\n','\t')

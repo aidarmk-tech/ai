@@ -932,6 +932,7 @@ class CenterOnlineInstrumentedTest {
                 assertTrue(video.episodes.all { it.voice=="Дубляж" });assertEquals(setOf(720,1080),video.episodes.last().sources.keys)
                 assertEquals(server.url("/second").toString(),video.headers["Referer"])
                 assertTrue(requests.contains("/first"));assertTrue(requests.contains("/second"))
+                assertEquals(1,video.playerIndex);assertEquals(2,video.playerCount);assertFalse(video.pinnedPlayer)
                 assertFalse(requests.any { it in listOf("/sdk.js","/unrelated","/embed/trailer/17") })
             }
         }
@@ -988,4 +989,71 @@ class CenterOnlineInstrumentedTest {
         }
     }
 
+
+    @Test fun explicitlySelectedPlayerLoadsOnlyThatEmbedAndKeepsItsOriginalIndexAndReferer() = runBlocking {
+        for(provider in listOf("kinokong","zona","kinotac"))MockWebServer().use { server ->
+            val requests=java.util.Collections.synchronizedList(mutableListOf<String>())
+            val path=if(provider=="zona")"/series/show-17/" else "/17-show.html"
+            val page=when(provider) {
+                "zona" -> zonaPage()
+                "kinotac" -> tacPage()
+                else -> """<div id="full_17"><ul class="newTabs"><li data-iframe="/first">1</li><li data-iframe="/second">2</li></ul></div>"""
+            }
+            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest):MockResponse {
+                    requests.add(request.path.orEmpty())
+                    return MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody(
+                        if(request.path==path)page else """<html><body><script>
+                        window.Playerjs=function(options){this.api=function(){return [];};};
+                        new Playerjs({id:'videoplayer',file:[{title:'Сезон 2',folder:[{title:'Voice',folder:[
+                        {title:'5 серия',file:'[720p]https://cdn.test/five.m3u8'}]}]}]});</script></body></html>""")
+                }
+            }
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val video=resolver.resolve(CenterTitle(17,"tv","Show",provider=provider,sourceUrl=server.url(path).toString()),1)
+                assertEquals(1,video.playerIndex);assertEquals(2,video.playerCount);assertTrue(video.pinnedPlayer)
+                assertEquals(2 to 5,video.episodes.single().let { it.season to it.number })
+                assertEquals(server.url("/second").toString(),video.headers["Referer"])
+                assertTrue(requests.contains("/second"));assertFalse(requests.contains("/first"))
+                assertFalse(requests.any { it.contains("trailer")||it=="/sdk.js"||it=="/unrelated" })
+            }
+        }
+    }
+
+    @Test fun pinnedPlayerRefusalNeverFallsBackToAnotherWorkingEmbed() = runBlocking {
+        MockWebServer().use { server ->
+            val requests=java.util.Collections.synchronizedList(mutableListOf<String>())
+            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest):MockResponse {
+                    requests.add(request.path.orEmpty())
+                    return MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody(
+                        when(request.path) {
+                            "/series/show-17/" -> zonaPage()
+                            "/second" -> "<html><body>Видео недоступно для вашего региона</body></html>"
+                            else -> """<html><body><script>JSON.parse('[{"title":"Сезон 2","folder":[{"title":"5 серия","file":"https://cdn.test/five.m3u8"}]}]');</script></body></html>"""
+                        })
+                }
+            }
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val failure=runCatching { resolver.resolve(CenterTitle(17,"tv","Show",provider="zona",sourceUrl=server.url("/series/show-17/").toString()),1) }.exceptionOrNull()
+                assertTrue(failure is OnlineSourceBlocked);assertEquals("country",(failure as OnlineSourceBlocked).reason)
+                assertTrue(requests.contains("/second"));assertFalse(requests.contains("/first"))
+            }
+        }
+    }
+
+    @Test fun aRemovedPlayerIndexFailsBeforeAnyEmbedIsOpened() = runBlocking {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setHeader("Content-Type","text/html; charset=utf-8").setBody(
+                """<div id="full_17"><ul class="newTabs"><li data-iframe="/first">1</li></ul></div>"""))
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val failure=runCatching { resolver.resolve(CenterTitle(17,"tv","Show",provider="kinokong",sourceUrl=server.url("/17-show.html").toString()),1) }.exceptionOrNull()
+                assertTrue(failure!!.message.orEmpty().contains("Выбранный плеер больше недоступен"))
+                assertEquals(1,server.requestCount)
+            }
+        }
+    }
 }

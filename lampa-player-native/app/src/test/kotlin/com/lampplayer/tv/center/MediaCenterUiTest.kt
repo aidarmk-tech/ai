@@ -48,6 +48,8 @@ class MediaCenterUiTest {
         override suspend fun availableUpdate(): com.lampplayer.tv.update.UpdateInfo? { updateChecks++; return null }
         var nextOnline:OnlineVideo?=null
         var onlineCalls=0
+        val requestedPlayers=mutableListOf<Int?>()
+        val resolveFailures=java.util.ArrayDeque<Exception>()
         val kinoQueries=mutableListOf<String>()
         var kinoResults=emptyList<CenterTitle>()
         val resolvedItems=mutableListOf<CenterTitle>()
@@ -75,7 +77,10 @@ class MediaCenterUiTest {
             if(verifyFailures.isNotEmpty())throw verifyFailures.removeFirst()
             return url
         }
-        override suspend fun resolveOnline(item:CenterTitle):OnlineVideo { onlineCalls++;resolvedItems.add(item);return requireNotNull(nextOnline) }
+        override suspend fun resolveOnline(item:CenterTitle):OnlineVideo { onlineCalls++;resolvedItems.add(item);if(resolveFailures.isNotEmpty())throw resolveFailures.removeFirst();return requireNotNull(nextOnline) }
+        override suspend fun resolveOnlinePlayer(item:CenterTitle,playerIndex:Int?):OnlineVideo {
+            onlineCalls++;resolvedItems.add(item);requestedPlayers.add(playerIndex);if(resolveFailures.isNotEmpty())throw resolveFailures.removeFirst();return requireNotNull(nextOnline)
+        }
         override fun loadHome() { val items=(1..8).map {
             CenterTitle(it, if(it%2==0) "tv" else "movie", listOf("Тихий город","За горизонтом","Новый день","На орбите")[(it-1)%4],
                 overview="Истории, к которым хочется возвращаться. Каталог, серии и просмотр в одном приложении.", year="2026",rating="8.2")
@@ -893,6 +898,113 @@ class MediaCenterUiTest {
             label(root,"Полный список в плеере сайта").performClick();frame(root)
             val intent=shadowOf(host).nextStartedActivity
             assertEquals(item.sourceUrl,intent.getStringExtra("url"));assertTrue(intent.getBooleanExtra("site_player",false))
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun failedVideoCanChooseAnotherSourcePlayerAndKeepSeasonVoiceAndTitle() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(17,"tv","Show",provider="kinotac",sourceUrl="https://kinotac.org/17-show.html")
+            val episode=OnlineEpisode(2,5,"Пятая","Voice",mapOf(720 to "https://cdn.test/bad.m3u8"))
+            val first=OnlineVideo(item,listOf(episode),emptyMap(),playerCount=2)
+            host.nextOnline=first.copy(episodes=listOf(episode.copy(sources=mapOf(720 to "https://cdn.test/good.m3u8"))),playerIndex=1,pinnedPlayer=true)
+            host.verifyFailures.add(java.io.IOException("Нет соединения"))
+            host.nativeFixture(first);frame(root);label(root,"Сезон 2").performClick();frame(root)
+            all(root).first { it.tag=="online:2:5:Voice" }.performClick();frame(root)
+            assertNull(shadowOf(host).nextStartedActivity)
+            label(root,"Другой плеер источника").performClick();frame(root)
+            val dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
+            dialog.listView.performItemClick(dialog.listView.adapter.getView(2,null,dialog.listView),2,2);frame(root)
+            assertEquals(listOf(1),host.requestedPlayers)
+            assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Плеер источника · 2 из 2 · выбран" })
+            all(root).first { it.tag=="online:2:5:Voice" }.performClick();frame(root)
+            val intent=shadowOf(host).nextStartedActivity;val played=com.lampplayer.tv.player.IntentParser.parse(intent)!!
+            assertEquals("https://cdn.test/good.m3u8",played.first);assertEquals(item.key,played.second.contentKey)
+            assertEquals(2,played.second.seasonNumber);assertEquals(5,played.second.episodeNumber);assertEquals("Voice",played.second.translator)
+            assertEquals(2,intent.getIntExtra("center_player_count",1));assertEquals(1,intent.getIntExtra("center_player_index",0));assertTrue(intent.getBooleanExtra("center_player_pinned",false))
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun refreshingA404KeepsThePinnedPlayerInsteadOfReturningToAutomaticSelection() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(17,"tv","Show",provider="zona",sourceUrl="https://zona.movie/series/show-17/")
+            val episode=OnlineEpisode(2,5,"Пятая","Voice",mapOf(720 to "https://cdn.test/expired.m3u8"))
+            val video=OnlineVideo(item,listOf(episode),emptyMap(),playerIndex=1,playerCount=2,pinnedPlayer=true)
+            host.nextOnline=video.copy(episodes=listOf(episode.copy(sources=mapOf(720 to "https://cdn.test/fresh.m3u8"))))
+            host.verifyFailures.add(OnlineMediaUnavailable(404,"fixture","HTTP 404"))
+            host.nativeFixture(video);frame(root);label(root,"Сезон 2").performClick();frame(root)
+            all(root).first { it.tag=="online:2:5:Voice" }.performClick();frame(root)
+            assertEquals(listOf(1),host.requestedPlayers);assertEquals(1,host.onlineCalls)
+            val played=com.lampplayer.tv.player.IntentParser.parse(shadowOf(host).nextStartedActivity)!!
+            assertEquals("https://cdn.test/fresh.m3u8",played.first);assertEquals(2,played.second.seasonNumber);assertEquals(5,played.second.episodeNumber)
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun sourcePlayerRecoveryFromLampPlayerOpensTheChooserWithoutReplayingTheBrokenVideo() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(17,"tv","Show",provider="kinokong",sourceUrl="https://kinokong.es/17-show.html")
+            host.nextOnline=OnlineVideo(item,listOf(OnlineEpisode(2,5,"Пятая","Voice",mapOf(720 to "https://cdn.test/five.m3u8"))),emptyMap(),playerCount=2)
+            val card=com.lampplayer.tv.domain.model.CardMeta(item.title,contentKey=item.key,sourcePage=item.sourceUrl,seasonNumber=2,episodeNumber=5,translator="Voice",quality="720")
+            ReflectionHelpers.setField(host,"recovery","source_player" to card)
+            controller.pause().stop().start().resume().visible();frame(root)
+            assertNull(shadowOf(host).nextStartedActivity)
+            val dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
+            assertEquals("Автоматически ✓",dialog.listView.adapter.getItem(0).toString())
+            assertEquals(3,dialog.listView.adapter.count)
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun returningToAutomaticPlayerSelectionUsesTheNormalResolver() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(17,"movie","Movie",provider="kinotac",sourceUrl="https://kinotac.org/17-movie.html")
+            val video=OnlineVideo(item,listOf(OnlineEpisode(0,0,"Movie","Voice",mapOf(720 to "https://cdn.test/movie.mp4"))),emptyMap(),playerIndex=1,playerCount=2,pinnedPlayer=true)
+            host.nextOnline=video.copy(playerIndex=0,pinnedPlayer=false)
+            host.nativeFixture(video);frame(root)
+            label(root,"Плеер источника · 2 из 2 · выбран").performClick();frame(root)
+            val dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
+            dialog.listView.performItemClick(dialog.listView.adapter.getView(0,null,dialog.listView),0,0);frame(root)
+            assertEquals(1,host.onlineCalls);assertTrue(host.requestedPlayers.isEmpty())
+            assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Плеер источника · 1 из 2 · авто" })
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun refreshRecoveryKeepsTheSelectedPlayerEvenWhenTheOnlineCacheWasLost() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(17,"tv","Show",provider="kinotac",sourceUrl="https://kinotac.org/17-show.html")
+            host.nextOnline=OnlineVideo(item,listOf(OnlineEpisode(2,5,"Пятая","Voice",mapOf(720 to "https://cdn.test/five.m3u8"))),emptyMap(),playerIndex=1,playerCount=2,pinnedPlayer=true)
+            val card=com.lampplayer.tv.domain.model.CardMeta(item.title,contentKey=item.key,sourcePage=item.sourceUrl,seasonNumber=2,episodeNumber=5,translator="Voice",quality="720")
+            ReflectionHelpers.setField(host,"recovery","refresh" to card);ReflectionHelpers.setField(host,"recoveryPlayer",1)
+            controller.pause().stop().start().resume().visible();frame(root)
+            assertEquals(listOf(1),host.requestedPlayers)
+            val played=com.lampplayer.tv.player.IntentParser.parse(shadowOf(host).nextStartedActivity)!!
+            assertEquals(2,played.second.seasonNumber);assertEquals(5,played.second.episodeNumber)
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun aRemovedPinnedPlayerCanReturnToAutomaticSelectionAfterCacheLoss() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(17,"tv","Show",provider="kinotac",sourceUrl="https://kinotac.org/17-show.html")
+            host.nextOnline=OnlineVideo(item,listOf(OnlineEpisode(2,5,"Пятая","Voice",mapOf(720 to "https://cdn.test/five.m3u8"))),emptyMap())
+            host.resolveFailures.add(IllegalStateException("Выбранный плеер больше недоступен"))
+            val card=com.lampplayer.tv.domain.model.CardMeta(item.title,contentKey=item.key,sourcePage=item.sourceUrl,seasonNumber=2,episodeNumber=5,translator="Voice",quality="720")
+            ReflectionHelpers.setField(host,"recovery","refresh" to card);ReflectionHelpers.setField(host,"recoveryPlayer",1)
+            controller.pause().stop().start().resume().visible();frame(root)
+            assertNull(shadowOf(host).nextStartedActivity)
+            label(root,"Другой плеер источника").performClick();frame(root)
+            assertEquals(2,host.onlineCalls);assertEquals(listOf(1),host.requestedPlayers)
+            assertTrue(all(root).any { it.tag=="online:2:5:Voice" })
+            assertNull(shadowOf(host).nextStartedActivity)
         } finally { controller.pause().stop().destroy() }
     }
 }

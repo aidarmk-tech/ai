@@ -272,7 +272,9 @@ class PlayerActivity : AppCompatActivity() {
             val actions = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.VERTICAL }
             // Read current metadata on click: the user may have advanced to another episode.
             val recoveryActions = if(intent.getBooleanExtra("center_online",false))
-                listOf("refresh" to "Обновить ссылку","quality" to "Выбрать качество","torrent" to "Выбрать раздачу")
+                listOf("refresh" to "Обновить ссылку","quality" to "Выбрать качество")+
+                    (if(intent.getIntExtra("center_player_count",1)>1)listOf("source_player" to "Другой плеер источника") else emptyList())+
+                    listOf("torrent" to "Выбрать раздачу")
                 else listOf("torrent" to "Выбрать другую раздачу")
             recoveryActions.forEach { (action, title) ->
                 val button = android.widget.Button(this).apply {
@@ -280,7 +282,9 @@ class PlayerActivity : AppCompatActivity() {
                     setOnClickListener {
                         val card = vm.uiState.value.card ?: return@setOnClickListener
                         setResult(android.app.Activity.RESULT_FIRST_USER, Intent().putExtra("recovery", action)
-                            .putExtra("card", com.google.gson.Gson().toJson(card)))
+                            .putExtra("card", com.google.gson.Gson().toJson(card))
+                            .putExtra("center_player_index",intent.getIntExtra("center_player_index",0))
+                            .putExtra("center_player_pinned",intent.getBooleanExtra("center_player_pinned",false)))
                         finish()
                     }
                 }

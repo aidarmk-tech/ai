@@ -9,7 +9,7 @@ window.addEventListener('message',function(event){
  var frame=controls.frames().find(function(f){return f.element.contentWindow===event.source;});if(!frame)return;
  try{var actual=new URL(event.data.frameUrl);if(!/^https?:$/.test(actual.protocol)||actual.origin!==event.origin)return;
  var data=JSON.parse(event.data.data);if(!data||!Array.isArray(data.files)||!Array.isArray(data.lists))return;
- records[frame.url.href]={url:actual.href,snapshot:data};
+ records[frame.url.href]={url:actual.href,sourceUrl:frame.url.href,snapshot:data};
  }catch(e){}
 });
 setInterval(function(){var frames=controls.frames();if(!frames.length)controls.select(index);frames.forEach(function(f){var src=f.element.getAttribute('src');f.element.setAttribute('loading','eager');if(!src||src==='about:blank')f.element.src=f.url.href;});},300);
