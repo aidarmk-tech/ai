@@ -31,7 +31,7 @@ def html(kind):
   </script>"""
  if kind=="sdk":
   return """<div id="player"></div><script src="/sdk.js"></script><script>
-  let playerConfigs={id:'player',file:'https://fixture.test/media/master.m3u8',autoplay:0,preload:1};
+  let playerConfigs={id:'player',file:'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',autoplay:0,preload:1};
   let player=new Playerjs(playerConfigs);playerConfigs={id:'player',file:'#opaque-config'};
   </script>"""
 async def main():
@@ -39,7 +39,9 @@ async def main():
  async with async_playwright() as p:
   browser=await p.chromium.launch();context=await browser.new_context(viewport={"width":1280,"height":720})
   await context.add_init_script("HTMLMediaElement.prototype.play=function(){return Promise.reject(new DOMException('Metadata only','NotAllowedError'));};")
+  allowed_segments=0
   async def route(r):
+   nonlocal allowed_segments
    from urllib.parse import urlsplit
    u=urlsplit(r.request.url)
    if u.hostname=="fixture.test":
@@ -48,6 +50,11 @@ async def main():
     elif u.path=="/sdk.js":await r.fulfill(content_type="application/javascript",body=sdk)
     elif u.path.endswith("-frame"):await r.fulfill(content_type="text/html; charset=utf-8",body="<html><body>"+html(u.path[1:-6])+"</body></html>")
     else:await r.fulfill(content_type="text/html",body="<iframe style='width:1200px;height:650px' src='/"+u.path[1:].split('.')[0]+"-frame'></iframe>")
+   elif u.hostname=="test-streams.mux.dev":
+    if u.path.endswith(".ts"):
+     allowed_segments+=1
+     if allowed_segments>3:await r.abort();return
+    await r.continue_()
    elif r.request.resource_type in ("script","stylesheet"):await r.continue_()
    else:await r.abort()
   await context.route("**/*",route)
@@ -57,12 +64,12 @@ async def main():
    await page.goto("https://fixture.test/"+kind+".html")
    frame=next(f for f in page.frames if f!=page.main_frame)
    await frame.evaluate("window.__lampMetadataFrame=true;"+COMMON)
-   await page.wait_for_timeout(2200)
+   await page.wait_for_timeout(4000 if kind=="sdk" else 1600)
    if kind=="sdk":print("SDK_API",await frame.evaluate("JSON.stringify({hls:typeof player.api(\'hls\'),data:(()=>{let x=player.api(\'hls\');return {array:Array.isArray(x),keys:Object.keys(x||{}).slice(0,20),url:x?.url,media:x?.media?.id,inside:!!(x?.media&&document.getElementById(\'player\').contains(x.media)),items:Array.isArray(x)?x.slice(0,3).map(h=>({keys:Object.keys(h||{}).slice(0,12),url:h?.url,media:h?.media?.id})):null};})(),video:Array.from(document.querySelectorAll(\'video\')).map(v=>({src:v.src,current:v.currentSrc}))})"),flush=True)
    snap=json.loads(await frame.evaluate("window.__lampSnapshot()"))
    print("CASE",kind,json.dumps(snap,ensure_ascii=False),flush=True)
    raw=json.dumps(snap["files"])+json.dumps(snap["lists"])
-   assert (("master.m3u8" in raw) if kind=="sdk" else ("movie." in raw)) and "/ad." not in raw,kind
+   assert (("x36xhzz.m3u8" in raw) if kind=="sdk" else ("movie." in raw)) and "/ad." not in raw,kind
    assert snap["recovered"]==1,kind
    if kind!="sdk":assert set(await frame.evaluate("window.calls")).issubset({"id","hls","playlist_folders"})
    await page.close()
