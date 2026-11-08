@@ -407,7 +407,7 @@ open class MediaCenterActivity : AppCompatActivity() {
     }
     protected open fun loadHome() {
         selected = null; catalogPage = 1
-        if (nav != "Главная") { loadLibrary(CenterBrowse(type=if(nav=="Сериалы") "tv" else "movie")); return }
+        if (nav != "Главная") { loadLibrary(store.libraryBrowse(if(nav=="Сериалы") "tv" else "movie")); return }
         work("Загружаю ${CenterCatalog.name(store.catalog)}…") {
             val provider = store.catalog; val limiter = Semaphore(3)
             val results = coroutineScope { CenterCatalog.sections(provider).map { section -> async {
@@ -434,20 +434,37 @@ open class MediaCenterActivity : AppCompatActivity() {
     protected fun mySeriesScreen() {
         showHome(store.mySeries(),"Мои сериалы")
     }
-    private fun loadLibrary(request: CenterBrowse) {
+    protected fun loadLibrary(request: CenterBrowse) {
         if(store.catalog!="tmdb") {
             val section=CenterCatalog.sections(store.catalog).first { it.type==request.type && it.country==null }
             loadCategory(section); return
         }
+        store.rememberLibraryBrowse(request)
         work("Загружаю каталог…") {
             showHome(browsePage("tmdb",request,1),if(request.type=="tv") "Сериалы" else "Фильмы",1,null,request)
         }
     }
     private fun libraryTools(request: CenterBrowse) {
-        if(request.mode!="popular" || request.country.isNotBlank() || request.year!=null || request.genre!=null) content.addView(text(listOf(if(request.mode=="new") "Новые" else "Популярные",
-            request.country.takeIf { it.isNotBlank() },request.year?.toString(),request.genreName.takeIf { it.isNotBlank() },
-            if(request.mode=="new"&&request.year==null)"последние 6 месяцев" else null,
-            if(request.mode=="new")if(request.translatedOnly)"с русскими названиями" else "все названия" else null).filterNotNull().joinToString(" · "),14,accent))
+        val chips=row()
+        fun chip(label:String,tagName:String,next:CenterBrowse) {
+            chips.addView(iconButton("×",label) { loadLibrary(next) }.apply {
+                tag="library_filter_$tagName";contentDescription="Убрать фильтр: $label"
+            })
+        }
+        if(request.mode=="new")chip(
+            listOfNotNull("Новые",if(request.year==null)"6 месяцев" else null,
+                if(request.translatedOnly)"русские названия" else "все названия").joinToString(" · "),
+            "mode",request.copy(mode="popular"))
+        if(request.country.isNotBlank())chip(when(request.country) { "RU"->"Россия";"KZ"->"Казахстан";else->"США" },
+            "country",request.copy(country=""))
+        request.year?.let { chip(it.toString(),"year",request.copy(year=null)) }
+        request.genre?.let { chip(request.genreName.ifBlank { "Жанр" },"genre",request.copy(genre=null,genreName="")) }
+        if(chips.childCount>0) {
+            chips.addView(iconButton("↺","Сбросить всё") { loadLibrary(CenterBrowse(type=request.type)) }.apply { tag="library_filters_reset" })
+            content.addView(HorizontalScrollView(this).apply {
+                tag="library_active_filters";isHorizontalScrollBarEnabled=false;addView(chips)
+            },LinearLayout.LayoutParams(-1,dp(38)))
+        }
         compactToolbar?.addView(iconButton("≡", "Подборка и фильтры") {
             val expected=gridGeneration
             job?.cancel()
@@ -623,7 +640,17 @@ open class MediaCenterActivity : AppCompatActivity() {
         }
         val status = text("", 14, muted).apply { tag = "grid_status"; setPadding(dp(8),dp(8),dp(8),dp(8)) }
         lateinit var adapter: RecyclerView.Adapter<Poster>
-        fun rememberScreen() { currentScreen = { showHome(loaded.toList(), heading, number, category, request,provider) } }
+        fun rememberScreen() {
+            val remembered=CenterTitlePage(loaded.toList(),!ended)
+            currentScreen={
+                val items=when(heading) {
+                    "Избранное" -> CenterTitlePage(store.favorites(),false)
+                    "Мои сериалы" -> CenterTitlePage(store.mySeries(),false)
+                    else -> remembered
+                }
+                showHome(items,heading,number,category,request,provider)
+            }
+        }
         fun nextPage() {
             if (busy || ended || failed || generation != gridGeneration || page != "home") return
             busy = true; status.text = "Загружаю ещё…"; status.isFocusable = false
@@ -657,6 +684,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                 } finally { busy = false }
             }
         }
+        if(ended&&canLoad)status.text="Все карточки загружены"
         status.setOnClickListener { failed = false; nextPage() }
         adapter = object : RecyclerView.Adapter<Poster>() {
             override fun getItemCount() = loaded.size
@@ -684,9 +712,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                 holder.art.removeAllViews()
                 holder.art.addView(catalogArt(item,desired,desired*3/2),FrameLayout.LayoutParams(-1,-1))
                 holder.itemView.setOnClickListener { enter { detail(item) } }
-                holder.itemView.setOnLongClickListener {
-                    store.toggle(item); Toast.makeText(this@MediaCenterActivity,if(store.isFavorite(item)) "Добавлено в избранное" else "Убрано из избранного",Toast.LENGTH_SHORT).show(); true
-                }
+                holder.itemView.setOnLongClickListener { posterActions(item,holder.itemView);true }
                 holder.itemView.setOnFocusChangeListener { view, focused ->
                     if(focused)describe(item)
                     view.background = bg(if(focused) Color.rgb(34,54,79) else panel,if(focused) accent else Color.TRANSPARENT)
@@ -812,14 +838,30 @@ open class MediaCenterActivity : AppCompatActivity() {
                 holder.art.removeAllViews(); holder.art.addView(catalogArt(item, width, artHeight), FrameLayout.LayoutParams(-1, -1))
                 holder.itemView.tag = prefix + if (item.provider == null) "title:${item.type}:${item.id}" else "title:${item.key}"
                 holder.itemView.setOnClickListener { enter { detail(item) } }
-                holder.itemView.setOnLongClickListener { store.toggle(item); Toast.makeText(this@MediaCenterActivity,
-                    if (store.isFavorite(item)) "Добавлено в избранное" else "Убрано из избранного", Toast.LENGTH_SHORT).show(); true }
+                holder.itemView.setOnLongClickListener { posterActions(item,holder.itemView);true }
                 holder.itemView.setOnFocusChangeListener { v, focus ->
                     v.background = bg(if (focus) Color.rgb(34, 54, 79) else panel, if (focus) accent else Color.TRANSPARENT)
                     v.animate().scaleX(if (focus) 1.025f else 1f).scaleY(if (focus) 1.025f else 1f).setDuration(100).start()
                 }
             }
         }, cardHeight + 22)
+    }
+    private fun posterActions(item:CenterTitle,anchor:View) {
+        val screen=snapshot()
+        val actions=mutableListOf<Pair<String,()->Unit>>()
+        actions.add("Открыть карточку" to { anchor.performClick();Unit })
+        fun change(label:String,action:()->Unit) {
+            actions.add(label to {
+                action()
+                Toast.makeText(this,label,Toast.LENGTH_SHORT).show()
+                screen?.let(::restore);Unit
+            })
+        }
+        change(if(store.isFavorite(item))"Убрать из избранного" else "В избранное") { store.toggle(item) }
+        change(if(store.isPinned(item))"Открепить с главной" else "Закрепить на главной") { store.pin(item) }
+        if(item.type=="tv")change(if(store.isFollowed(item))"Не отслеживать сериал" else "Отслеживать сериал") { store.toggleFollow(item) }
+        AlertDialog.Builder(this).setTitle(item.title).setItems(actions.map { it.first }.toTypedArray()) { _,index -> actions[index].second() }
+            .setNegativeButton("Отмена",null).show()
     }
     private class Poster(view: View, val art: FrameLayout, val title: TextView, val info: TextView) : RecyclerView.ViewHolder(view)
     private fun historyScreen() {

@@ -68,6 +68,9 @@ class MediaCenterUiTest {
         override suspend fun browsePage(provider:String,request:CenterBrowse,number:Int):List<CenterTitle> {
             browseCalls.add(request to number);browseProviders.add(provider);return browsePages[number].orEmpty()
         }
+        fun libraryFixture(request:CenterBrowse) { loadLibrary(request) }
+        fun favoritesFixture() { showHome(CenterStore(this).favorites(),"Избранное") }
+        var realLibraryNavigation=false
         fun browseFixture(items:List<CenterTitle>,request:CenterBrowse) { showHome(items,"Результаты поиска",1,null,request) }
         fun mineFixture() { mySeriesScreen() }
         var failGrid=false
@@ -88,7 +91,7 @@ class MediaCenterUiTest {
         override suspend fun resolveOnlinePlayer(item:CenterTitle,playerIndex:Int?):OnlineVideo {
             onlineCalls++;resolvedItems.add(item);requestedPlayers.add(playerIndex);if(resolveFailures.isNotEmpty())throw resolveFailures.removeFirst();return requireNotNull(nextOnline)
         }
-        override fun loadHome() { val items=(1..8).map {
+        override fun loadHome() { if(realLibraryNavigation) { super.loadHome();return };val items=(1..8).map {
             CenterTitle(it, if(it%2==0) "tv" else "movie", listOf("Тихий город","За горизонтом","Новый день","На орбите")[(it-1)%4],
                 overview="Истории, к которым хочется возвращаться. Каталог, серии и просмотр в одном приложении.", year="2026",rating="8.2")
         }; showDashboard(CenterSection.all.map { section -> section to items.filter { it.type == section.type } }) }
@@ -1330,6 +1333,93 @@ class MediaCenterUiTest {
             assertEquals(listOf(2,3,4,5,6),host.browseCalls.map { it.second })
             val grid=all(root).filterIsInstance<androidx.recyclerview.widget.RecyclerView>().first { it.tag=="catalog_grid" }
             assertEquals(1,grid.adapter!!.itemCount)
+        } finally { controller.pause().stop().destroy() }
+    }
+
+
+    @Test fun savedLibraryFiltersAreReusedOnNavigationAndEachChipClearsOnlyItsField() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val request=CenterBrowse(type="movie",mode="new",country="KZ",year=2026,genre=18,genreName="Драма",translatedOnly=false)
+            val store=CenterStore(host);store.catalog="tmdb";store.rememberLibraryBrowse(request)
+            val series=CenterBrowse(type="tv",country="RU");store.rememberLibraryBrowse(series)
+            host.browsePages[1]=CenterTitlePage(listOf(CenterTitle(42,"movie","Тихий город")),false)
+            host.realLibraryNavigation=true
+            all(root).first { it.tag=="Фильмы" }.performClick();repeat(4) { frame(root) }
+            assertEquals(request to 1,host.browseCalls.last())
+            assertTrue(all(root).any { it.tag=="library_filter_country" })
+            screenshot(root,"media-center-active-library-filters")
+            all(root).first { it.tag=="library_filter_country" }.performClick();repeat(4) { frame(root) }
+            assertEquals(request.copy(country="") to 1,host.browseCalls.last())
+            assertEquals(request.copy(country=""),CenterStore(host).libraryBrowse("movie"))
+            assertFalse(all(root).any { it.tag=="library_filter_country" })
+            assertTrue(all(root).any { it.tag=="library_filter_year" })
+            all(root).first { it.tag=="library_filters_reset" }.performClick();repeat(4) { frame(root) }
+            assertEquals(CenterBrowse() to 1,host.browseCalls.last())
+            assertFalse(all(root).any { it.tag=="library_active_filters" })
+            assertEquals(series,CenterStore(host).libraryBrowse("tv"))
+            all(root).first { it.tag=="Сериалы" }.performClick();repeat(4) { frame(root) }
+            assertEquals(series to 1,host.browseCalls.last())
+        } finally { controller.pause().stop().destroy() }
+    }
+    @Test fun returningToFinishedCatalogDoesNotRequestAnotherPage() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            host.browseFixture(CenterTitlePage(listOf(CenterTitle(43,"movie","Конец каталога")),false),CenterBrowse(mode="new"))
+            repeat(4) { frame(root) }
+            val poster=all(root).first { it.tag=="title:movie:43" };poster.requestFocus();poster.performClick();frame(root)
+            host.onBackPressedDispatcher.onBackPressed();repeat(4) { frame(root) }
+            assertTrue(host.browseCalls.isEmpty())
+            assertEquals("title:movie:43",root.findFocus()?.tag)
+            assertTrue(all(root).filterIsInstance<TextView>().any { it.text=="Все карточки загружены" })
+        } finally { controller.pause().stop().destroy() }
+    }
+    @Test fun posterMenuRequiresExplicitActionAndOffersSeriesFollowingAndPinning() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(44,"tv","Мой сериал");val store=CenterStore(host)
+            host.browseFixture(CenterTitlePage(listOf(item),false),CenterBrowse(type="tv"));repeat(3) { frame(root) }
+            fun poster()=all(root).first { it.tag=="title:tv:44" }
+            fun dialog()=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
+            fun choose(text:String) {
+                val d=dialog();val list=d.listView
+                val index=(0 until list.adapter.count).first { list.adapter.getItem(it).toString()==text }
+                list.performItemClick(list.adapter.getView(index,null,list),index,index.toLong());repeat(3) { frame(root) }
+            }
+            poster().requestFocus();poster().performLongClick();frame(root)
+            assertFalse(store.isFavorite(item));assertFalse(store.isPinned(item));assertFalse(store.isFollowed(item))
+            screenshot(dialog().window!!.decorView,"media-center-poster-actions")
+            dialog().getButton(android.content.DialogInterface.BUTTON_NEGATIVE).performClick();frame(root)
+            assertFalse(store.isFavorite(item))
+            poster().performLongClick();frame(root);choose("В избранное")
+            assertTrue(store.isFavorite(item));assertEquals("title:tv:44",root.findFocus()?.tag)
+            poster().performLongClick();frame(root);choose("Закрепить на главной")
+            assertTrue(store.isPinned(item))
+            poster().performLongClick();frame(root);choose("Отслеживать сериал")
+            assertTrue(store.isFollowed(item))
+            assertEquals(0,host.onlineCalls);assertNull(shadowOf(host).nextStartedActivity)
+        } finally { controller.pause().stop().destroy() }
+    }
+    @Test fun removingFavoriteFromPosterMenuRefreshesTheFavoritesGrid() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(45,"movie","Избранный фильм");val store=CenterStore(host);store.toggle(item)
+            host.favoritesFixture();repeat(3) { frame(root) }
+            all(root).first { it.tag=="title:movie:45" }.performLongClick();frame(root)
+            val dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
+            val list=dialog.listView
+            val index=(0 until list.adapter.count).first { list.adapter.getItem(it).toString()=="Убрать из избранного" }
+            list.performItemClick(list.adapter.getView(index,null,list),index,index.toLong());repeat(3) { frame(root) }
+            assertFalse(store.isFavorite(item))
+            assertFalse(all(root).any { it.tag=="title:movie:45" })
+            assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString().startsWith("Здесь появятся фильмы") })
         } finally { controller.pause().stop().destroy() }
     }
 

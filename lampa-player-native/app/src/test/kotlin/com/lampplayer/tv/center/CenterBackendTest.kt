@@ -362,4 +362,32 @@ class CenterBackendTest {
         assertEquals(2,failing.calls.count { it=="tv/9/translations" })
     }
 
+
+    @Test fun catalogPreferencesPersistPerTypeWithoutSavingSearchOrAffectingSiteChoice() {
+        val context=RuntimeEnvironment.getApplication()
+        val store=CenterStore(context)
+        store.catalog="kinotac";store.searchCatalog="kinovod"
+        val movies=CenterBrowse(mode="new",country="KZ",year=2026,genre=18,genreName="Драма",translatedOnly=false)
+        store.rememberLibraryBrowse(movies)
+        val series=CenterBrowse(type="tv",country="RU",genre=35,genreName="Комедия")
+        store.rememberLibraryBrowse(series)
+        val reopened=CenterStore(context)
+        assertEquals(movies,reopened.libraryBrowse("movie"))
+        assertEquals(series,reopened.libraryBrowse("tv"))
+        assertEquals("kinotac",reopened.catalog);assertEquals("kinovod",reopened.searchCatalog)
+        assertTrue(runCatching { store.rememberLibraryBrowse(movies.copy(query="Private search")) }.isFailure)
+        assertEquals(movies,store.libraryBrowse("movie"))
+        store.rememberLibraryBrowse(CenterBrowse(type="movie"))
+        assertEquals(CenterBrowse(),reopened.libraryBrowse("movie"))
+        assertEquals(series,reopened.libraryBrowse("tv"))
+    }
+    @Test fun catalogPreferencesIgnoreInvalidSavedFilterValues() {
+        val context=RuntimeEnvironment.getApplication()
+        context.getSharedPreferences("media_center",android.content.Context.MODE_PRIVATE).edit()
+            .putString("browse_movie_mode","unknown").putString("browse_movie_country","XX")
+            .putInt("browse_movie_year",4).putInt("browse_movie_genre",-1).apply()
+        assertEquals(CenterBrowse(),CenterStore(context).libraryBrowse("movie"))
+        assertTrue(runCatching { CenterStore(context).libraryBrowse("all") }.isFailure)
+    }
+
 }

@@ -28,6 +28,29 @@ class CenterStore(context: Context) {
     var searchCatalog:String
         get() = prefs.getString("search_catalog",null)?.takeIf { it in CenterCatalog.providers } ?: catalog
         set(value) { require(value in CenterCatalog.providers);prefs.edit().putString("search_catalog",value).apply() }
+    /** Browsing preferences belong to each TMDB media type; search text is never persisted here. */
+    fun libraryBrowse(type: String): CenterBrowse {
+        require(type in listOf("movie","tv"))
+        val key="browse_$type"
+        return CenterBrowse(type=type,
+            mode=prefs.getString("${key}_mode","popular").takeIf { it=="new" } ?: "popular",
+            country=prefs.getString("${key}_country","").orEmpty().takeIf { it in listOf("","RU","KZ","US") }.orEmpty(),
+            year=prefs.getInt("${key}_year",0).takeIf { it in 1888..2200 },
+            genre=prefs.getInt("${key}_genre",0).takeIf { it>0 },
+            genreName=prefs.getString("${key}_genre_name","").orEmpty().take(100),
+            translatedOnly=prefs.getBoolean("${key}_translated_only",true))
+    }
+    fun rememberLibraryBrowse(value: CenterBrowse) {
+        require(value.type in listOf("movie","tv") && value.query.isBlank())
+        require(value.mode in listOf("popular","new") && value.country in listOf("","RU","KZ","US"))
+        require(value.year==null||value.year in 1888..2200)
+        require(value.genre==null||value.genre>0)
+        val key="browse_${value.type}"
+        prefs.edit().putString("${key}_mode",value.mode).putString("${key}_country",value.country)
+            .putInt("${key}_year",value.year ?: 0).putInt("${key}_genre",value.genre ?: 0)
+            .putString("${key}_genre_name",value.genreName.take(100))
+            .putBoolean("${key}_translated_only",value.translatedOnly).apply()
+    }
     fun catalogHost(provider: String) = prefs.getString("host_$provider", CenterCatalog.defaultHost(provider)).orEmpty()
     fun setCatalogHost(provider: String, host: String) { prefs.edit().putString("host_$provider", host.trim().trimEnd('/')).apply() }
     fun preferredQuality(provider: String?): Int? =
