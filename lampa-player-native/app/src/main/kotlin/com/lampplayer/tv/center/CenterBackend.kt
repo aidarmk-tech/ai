@@ -77,6 +77,23 @@ open class CenterBackend {
             spec.genre?.let { require(it>0);query["with_genres"]=it.toString() }
             return query
         }
+        fun sectionParameters(section:CenterSection,page:Int,today:String = java.text.SimpleDateFormat("yyyy-MM-dd",java.util.Locale.US).format(java.util.Date())):Pair<String,Map<String,String>> {
+            require(section.type in listOf("movie","tv")&&page in 1..500)
+            val kind=when(section.id) { "new_movies","new_series"->"recent";"new_episodes"->"airing";else->section.kind }
+            if(kind=="trending")return "trending/${section.type}/week" to mapOf("page" to page.toString())
+            if(kind=="airing") {
+                require(section.type=="tv")
+                return "tv/on_the_air" to mapOf("page" to page.toString(),"timezone" to "Asia/Almaty")
+            }
+            val query=browseParameters(CenterBrowse(type=section.type,mode=if(kind=="recent")"new" else "popular",
+                country=section.country.orEmpty(),genre=section.genre),page,today).toMutableMap()
+            query[if(section.type=="tv")"first_air_date.lte" else "primary_release_date.lte"]=today
+            if(kind=="top") {
+                query["sort_by"]="vote_average.desc"
+                query["vote_count.gte"]=if(section.type=="tv")"200" else "1000"
+            }
+            return "discover/${section.type}" to query
+        }
         fun russianTitle(type: String, id: Int, translations: JsonObject, aliases: JsonObject? = null): String? {
             if(translations.num("id").toInt()!=id)return null
             val translated=translations.getAsJsonArray("translations").orEmpty().filter { it.isJsonObject }
@@ -303,17 +320,8 @@ open class CenterBackend {
         return response.getAsJsonArray("results").orEmpty().mapNotNull { title(it.asJsonObject, type) }
     }
     open suspend fun section(section: CenterSection, page: Int = 1): List<CenterTitle> {
-        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
-        val route = when (section.id) { "new_movies" -> "movie/now_playing"; "new_episodes" -> "tv/on_the_air"; else -> "discover/${section.type}" }
-        val query = mutableMapOf("page" to page.toString(), "include_adult" to "false")
-        section.country?.let {
-            query["with_origin_country"] = it
-            query["sort_by"] = if (section.type == "tv") "first_air_date.desc" else "primary_release_date.desc"
-            query[if (section.type == "tv") "first_air_date.lte" else "primary_release_date.lte"] = today
-        }
-        val response=tmdb(route,query)
-        return if(section.id in listOf("new_movies","new_episodes"))localizePage(response,section.type,page,true)
-            else response.getAsJsonArray("results").orEmpty().mapNotNull { title(it.asJsonObject,section.type) }
+        val (route,query)=sectionParameters(section,page)
+        return localizePage(tmdb(route,query),section.type,page,section.country==null)
     }
     open suspend fun details(item: CenterTitle): CenterDetails {
         val o = tmdb("${item.type}/${item.id}", mapOf("append_to_response" to "credits"))

@@ -428,4 +428,25 @@ class CenterCatalogTest {
         assertEquals(2,shell.select(".newTabs > li").size);assertEquals(frames.first(),shell.selectFirst("iframe")!!.attr("src"))
         assertFalse(shell.html().contains("4760854"));assertFalse(shell.html().contains("trailer"));assertTrue(shell.select("script[src]").isEmpty())
     }
+
+    @Test fun categoriesHaveClearProviderSpecificGroupsAndABoundedHomeSet() {
+        val home=CenterCatalog.homeSections("tmdb")
+        assertEquals(listOf("new_movies","new_series","trending_movies","trending_series","ru_movies","ru_series","kz_movies","kz_series"),home.map { it.id })
+        assertTrue(home.all { it.description.isNotBlank() })
+        val all=CenterCatalog.sections("tmdb")
+        assertEquals(all.size,all.distinctBy { it.id }.size)
+        assertTrue(all.first { it.id=="new_episodes" }.label=="Сериалы в эфире")
+        assertFalse(all.any { it.label=="Новые серии" })
+        val groups=CenterCatalog.sectionGroups("tmdb")
+        assertEquals(listOf("Фильмы","Сериалы","Жанры фильмов","Жанры сериалов","Страны"),groups.map { it.first })
+        assertEquals(all.map { it.id }.toSet(),groups.flatMap { it.second }.map { it.id }.toSet())
+        for(provider in CenterCatalog.sites) {
+            assertEquals(CenterCatalog.sections(provider),CenterCatalog.homeSections(provider))
+            assertTrue(CenterCatalog.sections(provider).all { it.genre==null })
+            assertFalse(CenterCatalog.sections(provider).any { it.label=="Новые серии"||it.label=="Новинки" })
+            assertEquals(CenterCatalog.sections(provider).map { it.id }.toSet(),
+                CenterCatalog.sectionGroups(provider).flatMap { it.second }.map { it.id }.toSet())
+        }
+    }
+
 }

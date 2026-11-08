@@ -18,7 +18,8 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /** Explicit catalog routes observed on the providers; country filters never use title matching. */
-data class CenterSection(val id: String, val label: String, val type: String, val country: String? = null) {
+data class CenterSection(val id: String, val label: String, val type: String, val country: String? = null,
+    val kind: String = "popular", val genre: Int? = null, val description: String = "") {
     companion object {
         val all = listOf(
             CenterSection("new_movies", "Новинки", "movie"),
@@ -27,6 +28,26 @@ data class CenterSection(val id: String, val label: String, val type: String, va
             CenterSection("ru_movies", "Русские фильмы", "movie", "RU"),
             CenterSection("kz_movies", "Казахстанское кино", "movie", "KZ"),
             CenterSection("kz_series", "Казахстанские сериалы", "tv", "KZ"))
+        val tmdbHome = listOf(
+            CenterSection("new_movies","Свежие фильмы","movie",kind="recent",description="Премьеры за 180 дней · заметные фильмы выше"),
+            CenterSection("new_series","Новые сериалы","tv",kind="recent",description="Начались за 180 дней · новые сезоны старых сериалов сюда не входят"),
+            CenterSection("trending_movies","Фильмы недели","movie",kind="trending",description="Сейчас в тренде · популярность за неделю"),
+            CenterSection("trending_series","Сериалы недели","tv",kind="trending",description="Сейчас в тренде · популярность за неделю"),
+            all.first { it.id=="ru_movies" }.copy(description="Производство России · по популярности"),
+            all.first { it.id=="ru_series" }.copy(description="Производство России · по популярности"),
+            all.first { it.id=="kz_movies" }.copy(description="Производство Казахстана · по популярности"),
+            all.first { it.id=="kz_series" }.copy(description="Производство Казахстана · по популярности"))
+        val tmdb = tmdbHome + listOf(
+            CenterSection("new_episodes","Сериалы в эфире","tv",kind="airing",description="Показы в ближайшие 7 дней по расписанию"),
+            CenterSection("top_movies","Высоко оценённые фильмы","movie",kind="top",description="По оценке · не менее 1000 голосов"),
+            CenterSection("top_series","Высоко оценённые сериалы","tv",kind="top",description="По оценке · не менее 200 голосов")) +
+            listOf("movie","tv").flatMap { type ->
+                listOf(35 to "Комедии",18 to "Драмы",9648 to "Детективы",
+                    (if(type=="tv")10765 else 878) to "Фантастика",
+                    (if(type=="tv")10759 else 12) to "Приключения",16 to "Мультфильмы").map { (genre,name) ->
+                    CenterSection("genre_${type}_$genre",name,type,genre=genre,description="По популярности · все годы")
+                }
+            }
     }
 }
 
@@ -51,6 +72,7 @@ class CenterCatalog {
             else -> error("Неизвестный каталог")
         }
         fun sections(provider: String): List<CenterSection> = when(provider) {
+            "tmdb" -> CenterSection.tmdb
             "kinotac", "zona", "kinokong" -> listOf(CenterSection("${provider}_movies","Фильмы","movie"),CenterSection("${provider}_series","Сериалы","tv"))
             "kazplay" -> listOf(CenterSection("kazplay_movies", "Фильмы на казахском", "movie"),
                 CenterSection("kazplay_series", "Сериалы на казахском", "tv"))
@@ -64,7 +86,24 @@ class CenterCatalog {
             "rezka" -> CenterSection.all.filter { it.country != "KZ" }.map {
                 when(it.id) { "new_movies" -> it.copy(label="Фильмы · Rezka"); "new_episodes" -> it.copy(label="Сериалы · Rezka"); else -> it }
             }
-            else -> CenterSection.all
+            else -> CenterSection.all.map { section ->
+                when(section.id) {
+                    "new_movies" -> section.copy(label="Фильмы",description="В порядке каталога сайта")
+                    "new_episodes" -> section.copy(label="Сериалы",description="В порядке каталога сайта")
+                    else -> section
+                }
+            }
+        }
+        fun homeSections(provider:String):List<CenterSection> = if(provider=="tmdb")CenterSection.tmdbHome else sections(provider)
+        fun sectionGroups(provider:String):List<Pair<String,List<CenterSection>>> {
+            val all=sections(provider)
+            return listOf(
+                "Фильмы" to all.filter { it.type=="movie"&&it.country==null&&it.genre==null },
+                "Сериалы" to all.filter { it.type=="tv"&&it.country==null&&it.genre==null },
+                "Жанры фильмов" to all.filter { it.type=="movie"&&it.genre!=null },
+                "Жанры сериалов" to all.filter { it.type=="tv"&&it.genre!=null },
+                "Страны" to all.filter { it.country!=null }
+            ).filter { it.second.isNotEmpty() }
         }
         fun route(provider: String, base: String, section: CenterSection, page: Int = 1): HttpUrl {
             require(page in 1..5000)

@@ -410,7 +410,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         if (nav != "Главная") { loadLibrary(store.libraryBrowse(if(nav=="Сериалы") "tv" else "movie")); return }
         work("Загружаю ${CenterCatalog.name(store.catalog)}…") {
             val provider = store.catalog; val limiter = Semaphore(3)
-            val results = coroutineScope { CenterCatalog.sections(provider).map { section -> async {
+            val results = coroutineScope { CenterCatalog.homeSections(provider).map { section -> async {
                 section to runCatching {
                     limiter.withPermit { catalogItems(provider, section) }
                 }.also { result -> result.exceptionOrNull()?.let { if (it is CancellationException) throw it } }
@@ -422,7 +422,7 @@ open class MediaCenterActivity : AppCompatActivity() {
     }
     private suspend fun catalogItems(provider: String, section: CenterSection, number: Int = 1) =
         if (provider == "tmdb") backend.section(section, number) else catalogs.browse(provider, store.catalogHost(provider), section, number)
-    private fun loadCategory(section: CenterSection, number: Int = 1) {
+    protected fun loadCategory(section: CenterSection, number: Int = 1) {
         work("${section.label} · ${CenterCatalog.name(store.catalog)}…") {
             showHome(catalogItems(store.catalog, section, number), section.label, number, section)
         }
@@ -509,18 +509,26 @@ open class MediaCenterActivity : AppCompatActivity() {
                 catch(_:Exception) { Toast.makeText(this@MediaCenterActivity,"Не удалось загрузить жанры. Попробуй ещё раз",Toast.LENGTH_SHORT).show() }
             }
         }.apply { tag="library_filters" })
-        if(request.type=="tv") compactToolbar?.addView(iconButton("▷", "Новые серии · эфир") { enter { loadCategory(CenterSection.all.first { it.id=="new_episodes" }) } })
+        if(request.type=="tv") compactToolbar?.addView(iconButton("▷", "Сериалы в эфире") { enter { loadCategory(CenterSection.tmdb.first { it.id=="new_episodes" }) } })
     }
     private fun catalogTools() {
         val tools = row(); compactToolbar = tools
         tools.addView(iconButton("▦", "Каталог: ${CenterCatalog.name(store.catalog)}  ▾") { chooseCatalog() })
-        tools.addView(iconButton("☰", "Разделы  ▾") {
-            val sections = CenterCatalog.sections(store.catalog)
-            AlertDialog.Builder(this).setTitle("Что посмотреть").setItems(sections.map { it.label }.toTypedArray()) { _, index ->
-                enter { loadCategory(sections[index]) }
-            }.show()
-        })
+        tools.addView(iconButton("☰", "Разделы  ▾") { categoryGroups() })
         content.addView(tools); space(content, 8)
+    }
+    private fun categoryGroups() {
+        val provider=store.catalog
+        val groups=CenterCatalog.sectionGroups(provider)
+        AlertDialog.Builder(this).setTitle("Что посмотреть")
+            .setItems(groups.map { it.first }.toTypedArray()) { _,index ->
+                val (label,sections)=groups[index]
+                if(sections.size==1)enter { loadCategory(sections.first()) }
+                else AlertDialog.Builder(this).setTitle(label)
+                    .setItems(sections.map { it.label }.toTypedArray()) { _,position ->
+                        enter { loadCategory(sections[position]) }
+                    }.setNegativeButton("Все разделы") { _,_->categoryGroups() }.show()
+            }.setNegativeButton("Закрыть",null).show()
     }
     private fun chooseCatalog() {
         val ids = CenterCatalog.providers
@@ -531,16 +539,15 @@ open class MediaCenterActivity : AppCompatActivity() {
     }
     protected fun showDashboard(boards: List<Pair<CenterSection, List<CenterTitle>>>, unavailable: List<String> = emptyList()) {
         currentScreen = { showDashboard(boards, unavailable) }; page = "home"; clear("Главная"); catalogTools()
-        val pinned = store.pinned()
-        if (pinned.isNotEmpty()) { section("Закреплённое", pinned.size); shelf(pinned, "pinned:") }
-        boards.firstOrNull()?.second?.firstOrNull()?.let { featured(it) }
-        if (store.history().isNotEmpty()) { section("Продолжить просмотр"); historyCards(store.history().take(8)); space(content, 14) }
-        if (store.catalog == "tmdb") {
-            content.addView(text("Каталоги показывают описания фильмов и сериалов. Онлайн KinoGo, KinoKong, KinoTac, Zona.movie и Киновода доступен в режиме проверки; также можно выбрать торрент-раздачу.", 13, muted)); space(content, 14)
-        }
-        boards.forEach { (category, items) ->
-            section(category.label, items.size)
-            if (items.isEmpty()) content.addView(text("В этом каталоге пока ничего нет", 15, muted)) else shelf(items, "${category.id}:")
+        if (store.history().isNotEmpty()) { section("Продолжить просмотр"); historyCards(store.history().take(8)); space(content,14) }
+        val pinned=store.pinned()
+        if(pinned.isNotEmpty()) { section("Закреплённое");shelf(pinned,"pinned:");space(content,14) }
+        val visibleBoards=boards.filter { (_,items) -> items.isNotEmpty() || (items is CenterTitlePage&&items.hasMore) }
+        if(visibleBoards.isEmpty())content.addView(text("Подборки пока пусты. Открой разделы или выбери другой каталог.",15,muted))
+        visibleBoards.forEach { (category, items) ->
+            section(category.label)
+            if(category.description.isNotBlank())content.addView(text(category.description,13,muted).apply { tag="section_info:${category.id}" })
+            if(items.isNotEmpty())shelf(items,"${category.id}:")
             content.addView(button("Все: ${category.label}   ›") { enter { loadCategory(category) } }); space(content, 14)
         }
         if (unavailable.isNotEmpty()) content.addView(text("Не загрузились: ${unavailable.joinToString()}. Можно обновить подборки или сменить каталог.", 14, muted))
@@ -598,6 +605,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         currentScreen = { showHome(items, heading, pageNumber, category, request,sourceProvider) }; page = "home"; clear(heading)
         if (category != null || request != null || heading=="Мои сериалы") catalogTools()
         if(request != null && request.query.isBlank()) libraryTools(request)
+        if(category?.description?.isNotBlank()==true)content.addView(text(category.description,14,muted).apply { tag="category_description" })
         if(heading=="Мои сериалы") content.addView(text("Сериалы из подписок и истории просмотра",14,muted))
         if(request?.query?.isNotBlank()==true) content.addView(text("Поиск: ${request.query} · ${CenterCatalog.name(sourceProvider)}",14,muted))
         if (items.isEmpty() && (items !is CenterTitlePage || !items.hasMore)) {

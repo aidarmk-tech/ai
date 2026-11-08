@@ -30,6 +30,11 @@ import java.util.concurrent.TimeUnit
 class MediaCenterUiTest {
     class FakeBackend : CenterBackend() {
         override suspend fun genres(type:String)=listOf(18 to "Драма",35 to "Комедия")
+        val sectionCalls=mutableListOf<Pair<CenterSection,Int>>()
+        override suspend fun section(section:CenterSection,page:Int):List<CenterTitle> {
+            sectionCalls.add(section to page)
+            return CenterTitlePage(listOf(CenterTitle(880,section.type,"Выбранная подборка")),false)
+        }
         var detailCalls=0; var episodeCalls=0
         override suspend fun details(item:CenterTitle):CenterDetails {
             detailCalls++
@@ -79,6 +84,7 @@ class MediaCenterUiTest {
             if(failGrid) { failGrid=false;error("temporary") }
             return gridPages[number].orEmpty()
         }
+        fun dashboardFixture(boards:List<Pair<CenterSection,List<CenterTitle>>>) { showDashboard(boards) }
         fun gridFixture(items:List<CenterTitle>) { showHome(items,"Grid",1,null) }
         val verifyFailures=java.util.ArrayDeque<Exception>()
         val verifiedUrls=mutableListOf<String>()
@@ -1420,6 +1426,56 @@ class MediaCenterUiTest {
             assertFalse(store.isFavorite(item))
             assertFalse(all(root).any { it.tag=="title:movie:45" })
             assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString().startsWith("Здесь появятся фильмы") })
+        } finally { controller.pause().stop().destroy() }
+    }
+
+
+    @Test fun groupedCategoriesSelectTheExactGenreAndExplainTheRecipe() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            CenterStore(host).catalog="tmdb"
+            host.dashboardFixture(CenterSection.tmdbHome.map { it to listOf(CenterTitle(8,it.type,"Выбор")) });frame(root)
+            fun dialog()=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
+            fun choose(text:String) {
+                val list=dialog().listView
+                val index=(0 until list.adapter.count).first { list.adapter.getItem(it).toString()==text }
+                list.performItemClick(list.adapter.getView(index,null,list),index,index.toLong());repeat(3) { frame(root) }
+            }
+            label(root,"Разделы  ▾").performClick();frame(root)
+            assertEquals(listOf("Фильмы","Сериалы","Жанры фильмов","Жанры сериалов","Страны"),
+                (0 until dialog().listView.adapter.count).map { dialog().listView.adapter.getItem(it).toString() })
+            choose("Жанры сериалов")
+            choose("Фантастика")
+            assertEquals("genre_tv_10765",host.backend.sectionCalls.last().first.id)
+            assertEquals(10765,host.backend.sectionCalls.last().first.genre)
+            assertTrue(all(root).filterIsInstance<TextView>().any { it.tag=="category_description"&&it.text=="По популярности · все годы" })
+            host.onBackPressedDispatcher.onBackPressed();repeat(3) { frame(root) }
+            label(root,"Разделы  ▾").performClick();frame(root);choose("Сериалы")
+            assertTrue((0 until dialog().listView.adapter.count).map { dialog().listView.adapter.getItem(it).toString() }.containsAll(listOf("Новые сериалы","Сериалы недели","Сериалы в эфире")))
+            choose("Новые сериалы")
+            assertEquals("new_series",host.backend.sectionCalls.last().first.id)
+            assertTrue(all(root).filterIsInstance<TextView>().any { it.tag=="category_description"&&it.text.contains("180 дней") })
+        } finally { controller.pause().stop().destroy() }
+    }
+    @Test fun homePrioritizesContinueThenPinsAndShowsRecipesWithoutEmptyShelves() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val store=CenterStore(host);store.catalog="tmdb"
+            val item=CenterTitle(71,"movie","Мой фильм",year="2026")
+            store.pin(item)
+            store.remember("https://cdn.test/history.mp4",com.lampplayer.tv.domain.model.CardMeta("Продолжить мой фильм",tmdbId=72))
+            val boards=CenterSection.tmdbHome.map { section ->
+                section to if(section.id=="trending_series")emptyList() else listOf(item.copy(type=section.type))
+            }
+            host.dashboardFixture(boards);repeat(4) { frame(root) }
+            val texts=all(root).filterIsInstance<TextView>().map { it.text.toString() }
+            assertTrue(texts.indexOf("Продолжить просмотр")<texts.indexOf("Закреплённое"))
+            assertTrue(texts.indexOf("Закреплённое")<texts.indexOf("Свежие фильмы"))
+            assertFalse(texts.contains("Сериалы недели"))
+            assertTrue(texts.contains("Премьеры за 180 дней · заметные фильмы выше"))
+            screenshot(root,"media-center-category-home")
         } finally { controller.pause().stop().destroy() }
     }
 

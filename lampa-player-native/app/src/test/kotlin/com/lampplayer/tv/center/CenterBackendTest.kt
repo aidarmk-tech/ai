@@ -390,4 +390,41 @@ class CenterBackendTest {
         assertTrue(runCatching { CenterStore(context).libraryBrowse("all") }.isFailure)
     }
 
+
+    @Test fun categoryRecipesSeparatePremieresTrendsRatingsGenresAndAirDates() {
+        val today="2026-11-08"
+        fun recipe(id:String)=CenterBackend.sectionParameters(CenterSection.tmdb.first { it.id==id },3,today)
+        val movies=recipe("new_movies")
+        assertEquals("discover/movie",movies.first);assertEquals("3",movies.second["page"])
+        assertEquals("2026-05-12",movies.second["primary_release_date.gte"])
+        assertEquals(today,movies.second["primary_release_date.lte"])
+        assertEquals("popularity.desc",movies.second["sort_by"])
+        val series=recipe("new_series")
+        assertEquals("discover/tv",series.first);assertEquals("2026-05-12",series.second["first_air_date.gte"])
+        assertEquals("trending/movie/week",recipe("trending_movies").first)
+        assertEquals("trending/tv/week",recipe("trending_series").first)
+        assertFalse(recipe("trending_movies").second.containsKey("primary_release_date.gte"))
+        assertEquals("tv/on_the_air",recipe("new_episodes").first)
+        assertEquals("Asia/Almaty",recipe("new_episodes").second["timezone"])
+        val rated=recipe("top_movies").second
+        assertEquals("vote_average.desc",rated["sort_by"]);assertEquals("1000",rated["vote_count.gte"])
+        assertEquals("200",recipe("top_series").second["vote_count.gte"])
+        assertEquals("878",recipe("genre_movie_878").second["with_genres"])
+        assertEquals("10765",recipe("genre_tv_10765").second["with_genres"])
+        val kz=recipe("kz_movies").second
+        assertEquals("KZ",kz["with_origin_country"]);assertEquals("popularity.desc",kz["sort_by"])
+        assertFalse(kz.containsKey("primary_release_date.gte"));assertFalse(kz.containsKey("vote_count.gte"))
+    }
+    @Test fun sectionLocalizationRetainsCountryTitlesAndPreservesUpstreamPages() = runBlocking {
+        val b=LocalizedBackend()
+        b.json("discover/movie","""{"total_pages":4,"results":[{"id":99,"title":"Туған жер","original_title":"Туған жер","original_language":"kk"}]}""")
+        b.json("movie/99/translations","""{"id":99,"translations":[]}""")
+        b.json("movie/99/alternative_titles","""{"id":99,"titles":[]}""")
+        val kz=b.section(CenterSection.tmdb.first { it.id=="kz_movies" }) as CenterTitlePage
+        assertEquals("Туған жер",kz.single().title);assertEquals("Нет русского названия",kz.single().updateLabel)
+        assertTrue(kz.hasMore)
+        val fresh=b.section(CenterSection.tmdb.first { it.id=="new_movies" }) as CenterTitlePage
+        assertTrue(fresh.isEmpty());assertTrue(fresh.hasMore)
+    }
+
 }
