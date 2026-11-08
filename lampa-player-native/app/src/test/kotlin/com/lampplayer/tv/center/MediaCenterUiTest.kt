@@ -1508,12 +1508,14 @@ class MediaCenterUiTest {
         } finally { controller.pause().stop().destroy() }
     }
     @Test fun menuCancellationRestoresTheFocusedPoster() {
-        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
         try {
             val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
             repeat(4){frame(root)}
             val poster=all(root).first { it.isFocusable && (it.tag as? String)?.startsWith("new_movies:")==true }
-            poster.requestFocus();frame(root)
+            assertTrue(poster.requestFocus());frame(root)
+            assertEquals(poster.tag,host.window.decorView.findFocus()?.tag)
             all(root).first { it.tag=="menu_handle" }.performClick();frame(root)
             host.onBackPressedDispatcher.onBackPressed();frame(root)
             assertEquals(poster.tag,host.window.decorView.findFocus()?.tag)
