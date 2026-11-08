@@ -201,7 +201,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                 layoutParams = LinearLayout.LayoutParams(-1, dp(38)).apply { bottomMargin = dp(4) }
                 setOnKeyListener { _, key, event ->
                     if (key == KeyEvent.KEYCODE_DPAD_RIGHT && event.action == KeyEvent.ACTION_DOWN) {
-                        content.getFocusables(View.FOCUS_FORWARD).firstOrNull { it.isShown && it.isEnabled }?.requestFocus() == true
+                        closeMenu();true
                     } else false
                 }
             })
@@ -222,7 +222,10 @@ open class MediaCenterActivity : AppCompatActivity() {
         navigation.visibility = View.GONE
         root.addView(navigation, FrameLayout.LayoutParams(dp(220), -1))
         root.viewTreeObserver.addOnGlobalFocusChangeListener { _, focused ->
-            if (menuOpen && focused != null && inside(content, focused)) hideMenu()
+            if (focused != null && inside(content, focused)) {
+                menuReturnTag=focused.tag as? String
+                if(menuOpen)hideMenu()
+            }
         }
         setContentView(root)
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -239,6 +242,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         }
         return false
     }
+    private var menuReturnTag:String?=null
     private fun openMenu() {
         exitPressedAt = null
         menuOpen = true; menuHandle.visibility = View.INVISIBLE
@@ -254,7 +258,8 @@ open class MediaCenterActivity : AppCompatActivity() {
     }
     private fun closeMenu() {
         hideMenu()
-        content.getFocusables(View.FOCUS_FORWARD).firstOrNull { it.isShown && it.isEnabled }?.requestFocus()
+        (menuReturnTag?.let { findTag(content,it) }?.takeIf { it.isShown && it.isEnabled }
+            ?: content.getFocusables(View.FOCUS_FORWARD).firstOrNull { it.isShown && it.isEnabled })?.requestFocus()
             ?: menuHandle.requestFocus()
     }
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -340,6 +345,7 @@ open class MediaCenterActivity : AppCompatActivity() {
             }
     }
     private fun clear(title: String) {
+        menuReturnTag=null
         gridGeneration++; gridJob?.cancel(); gridJob = null; compactToolbar = null; episodeFocus=null
         content.removeAllViews(); scroll.scrollTo(0, 0)
         content.addView(text(title, 27).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) })

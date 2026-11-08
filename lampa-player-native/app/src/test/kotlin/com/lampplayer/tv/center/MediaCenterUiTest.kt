@@ -30,8 +30,12 @@ import java.util.concurrent.TimeUnit
 class MediaCenterUiTest {
     class FakeBackend : CenterBackend() {
         override suspend fun genres(type:String)=listOf(18 to "Драма",35 to "Комедия")
+        var failSections=false
+        var sectionGate:kotlinx.coroutines.CompletableDeferred<Unit>?=null
         val sectionCalls=mutableListOf<Pair<CenterSection,Int>>()
         override suspend fun section(section:CenterSection,page:Int):List<CenterTitle> {
+            sectionGate?.await()
+            if(failSections)error("Offline fixture")
             sectionCalls.add(section to page)
             return CenterTitlePage(listOf(CenterTitle(880,section.type,"Выбранная подборка")),false)
         }
@@ -102,6 +106,7 @@ class MediaCenterUiTest {
             CenterTitle(it, if(it%2==0) "tv" else "movie", listOf("Тихий город","За горизонтом","Новый день","На орбите")[(it-1)%4],
                 overview="Истории, к которым хочется возвращаться. Каталог, серии и просмотр в одном приложении.", year="2026",rating="8.2")
         }; showDashboard(CenterSection.all.map { section -> section to items.filter { it.type == section.type } }) }
+        fun realHomeFixture() { super.loadHome() }
         fun releaseFixture(items: List<CenterRelease>) { releaseList(CenterTitle(801,"movie","Sorting"),null,items) }
         fun detailFixture(details: CenterDetails) { showDetails(details) }
         var retryCalls=0;var refreshCalls=0;var sourcePlayerCalls=0
@@ -1477,6 +1482,38 @@ class MediaCenterUiTest {
             assertFalse(texts.contains("Сериалы недели"))
             assertTrue(texts.contains("Премьеры за 180 дней · заметные фильмы выше"))
             screenshot(root,"media-center-category-home")
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun localHomeSurvivesPendingAndFailedNetworkShelves() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val store=CenterStore(host);store.catalog="tmdb"
+            store.pin(CenterTitle(88001,"movie","Локальное закрепление"))
+            store.remember("https://local.test/continue",com.lampplayer.tv.domain.model.CardMeta("Локальное продолжение",tmdbId=88002))
+            val gate=kotlinx.coroutines.CompletableDeferred<Unit>()
+            host.backend.sectionGate=gate;host.backend.failSections=true
+            host.realHomeFixture();repeat(4){frame(root)}
+            assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Продолжить просмотр" })
+            assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Закреплённое" })
+            gate.complete(Unit);repeat(8){frame(root)}
+            val texts=all(root).filterIsInstance<TextView>().map { it.text.toString() }
+            assertTrue(texts.contains("Продолжить просмотр"));assertTrue(texts.contains("Закреплённое"))
+            assertFalse(texts.contains("Не удалось загрузить"))
+            assertTrue(texts.any { it.startsWith("Не загрузились:") })
+        } finally { controller.pause().stop().destroy() }
+    }
+    @Test fun menuCancellationRestoresTheFocusedPoster() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            repeat(4){frame(root)}
+            val poster=all(root).first { it.isFocusable && (it.tag as? String)?.startsWith("new_movies:")==true }
+            poster.requestFocus();frame(root)
+            all(root).first { it.tag=="menu_handle" }.performClick();frame(root)
+            host.onBackPressedDispatcher.onBackPressed();frame(root)
+            assertEquals(poster.tag,host.window.decorView.findFocus()?.tag)
         } finally { controller.pause().stop().destroy() }
     }
 
