@@ -257,8 +257,9 @@ open class MediaCenterActivity : AppCompatActivity() {
         navigation.visibility = View.GONE; menuHandle.visibility = View.VISIBLE
     }
     private fun closeMenu() {
+        val returnTag=menuReturnTag
         hideMenu()
-        (menuReturnTag?.let { findTag(content,it) }?.takeIf { it.isShown && it.isEnabled }
+        (returnTag?.let { findTag(content,it) }?.takeIf { it.isShown && it.isEnabled }
             ?: content.getFocusables(View.FOCUS_FORWARD).firstOrNull { it.isShown && it.isEnabled })?.requestFocus()
             ?: menuHandle.requestFocus()
     }
