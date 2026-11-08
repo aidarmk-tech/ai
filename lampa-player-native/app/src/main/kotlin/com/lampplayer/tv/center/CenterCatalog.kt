@@ -423,6 +423,22 @@ class CenterCatalog {
             }.distinct().take(3)
         }
 
+        /** KinoGo video panels only; omit trailers, comments and unrelated iframe destinations. */
+        fun kinogoEmbeds(document:Document,item:CenterTitle):List<String> {
+            require(item.provider=="kinogo")
+            check(CenterOnline.sameTitleNavigation(item,document.location())) { "KinoGo открыл другую карточку" }
+            val base=document.location().toHttpUrl()
+            return document.select("#preroll > .box iframe").mapNotNull { frame ->
+                if(frame.parents().any { p -> p.id().startsWith("comm")||p.classNames().any {
+                    it.startsWith("comment")||it in setOf("comm-item","advertisement","ads","trailer","trail") } })return@mapNotNull null
+                val url=listOf(frame.attr("src"),frame.attr("data-src")).firstNotNullOfOrNull { value ->
+                    value.trim().takeIf { it.isNotEmpty()&&it!="about:blank" }?.let { base.resolve(it) }
+                } ?: return@mapNotNull null
+                if(!Regex("^/embed/movie/[0-9]+/?$").matches(url.encodedPath)&&!url.host.startsWith("walking-as."))return@mapNotNull null
+                url.toString()
+            }.distinct().take(2)
+        }
+
         /** Only iframe declarations inside the selected Zona video panels. */
         fun zonaEmbeds(document:Document,item:CenterTitle):List<String> {
             require(item.provider=="zona")
@@ -657,14 +673,17 @@ class CenterCatalog {
         }
     }
     suspend fun onlineFrames(item:CenterTitle):List<String> {
-        require(item.provider in listOf("kinokong","zona","kinotac"))
+        require(item.provider in listOf("kinogo","kinokong","zona","kinotac"))
         val selected=CenterOnline.source(item)
         val document=page(selected)
         val frames=when(item.provider) {
+            "kinogo" -> kinogoEmbeds(document,item)
             "zona" -> zonaEmbeds(document,item)
             "kinotac" -> kinotacEmbeds(document,item)
             else -> kinokongEmbeds(document,item)
         }
+        // Older KinoGo layouts create their second tab dynamically: retain their existing browser path.
+        if(item.provider=="kinogo")return frames
         check(frames.isNotEmpty()) { if(item.provider=="zona")
             "Zona.movie не отдал адреса видеоплееров для выбранной карточки. Открой плеер сайта или выбери другой источник"
             else if(item.provider=="kinotac") "KinoTac не отдал адреса видеоплееров. Открой плеер сайта или выбери другой источник"

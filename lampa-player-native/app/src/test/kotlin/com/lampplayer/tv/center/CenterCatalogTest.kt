@@ -449,4 +449,21 @@ class CenterCatalogTest {
         }
     }
 
+    @Test fun kinogoNativeFramesExcludeTrailersAndCommentsAndBindTheSelectedCard() {
+        val item=CenterTitle(6873,"tv","Гангстерленд",provider="kinogo",sourceUrl="https://catalog.test/6873-show.html")
+        val html="""<div id="preroll">
+            <div class="box"><iframe data-src="//api.nextembed.ws/embed/movie/81816"></iframe></div>
+            <div class="box"><iframe data-src="https&#58;//walking-as.example/?token_movie=public"></iframe></div>
+            <div class="box"><iframe data-src="https://api.nextembed.ws/embed/trailer/81816"></iframe></div>
+            <div class="box comment"><iframe src="https://bad.test/embed/movie/99"></iframe></div>
+            <div class="box"><iframe src="https://ads.test/advert"></iframe></div></div>"""
+        val frames=CenterCatalog.kinogoEmbeds(Jsoup.parse(html,item.sourceUrl),item)
+        assertEquals(listOf("https://api.nextembed.ws/embed/movie/81816","https://walking-as.example/?token_movie=public"),frames)
+        val shell=Jsoup.parse(CenterOnline.kinokongDocument(item,frames),item.sourceUrl)
+        assertEquals(frames,shell.select(".newTabs > li").map { it.attr("data-iframe") })
+        assertEquals(1,shell.select("iframe").size)
+        assertTrue(runCatching { CenterCatalog.kinogoEmbeds(Jsoup.parse(html,"https://catalog.test/99-other.html"),item) }.isFailure)
+        assertTrue(CenterCatalog.kinogoEmbeds(Jsoup.parse("<iframe data-src='/embed/movie/9'></iframe>",item.sourceUrl),item).isEmpty())
+    }
+
 }

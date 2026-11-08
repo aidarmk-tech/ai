@@ -1056,4 +1056,41 @@ class CenterOnlineInstrumentedTest {
             }
         }
     }
+    @Test fun kinogoNativeShellReadsVenomWithoutRunningCatalogIframeReplacement() = runBlocking {
+        MockWebServer().use { server ->
+            val requests=java.util.Collections.synchronizedList(mutableListOf<String>())
+            server.dispatcher=object:okhttp3.mockwebserver.Dispatcher() {
+                override fun dispatch(request:okhttp3.mockwebserver.RecordedRequest):MockResponse {
+                    val path=request.path?.substringBefore('?').orEmpty();requests.add(path)
+                    val body=when(path) {
+                        "/6873-show.html" -> """<html><body><ul class="player-tabs"><li>Смотреть онлайн</li><li>Плеер 2</li><li>Трейлер</li></ul>
+                            <div id="preroll"><div class="box"><iframe data-src="/embed/movie/81816"></iframe></div>
+                            <div class="box"><iframe data-src="/embed/trailer/81816"></iframe></div></div>
+                            <script src="/catalog-replacement.js"></script></body></html>"""
+                        "/catalog-replacement.js" -> "document.querySelector('#preroll').innerHTML='<iframe></iframe>';"
+                        "/embed/movie/81816" -> """<html><body><div id="player"></div><div id="trailer"></div><script src="/venom.js"></script><script>
+                            function makePlayer(options){return VenomPlayer.make(options);}var middleCount=2;
+                            makePlayer({container:document.getElementById('player'),playlist:{seasons:[{season:1,episodes:[
+                            {episode:'1',title:'Первая',hls:'https://cdn.test/first.m3u8'},
+                            {episode:'2',title:'Вторая',hls:'https://cdn.test/second.m3u8'}]}]}});
+                            VenomPlayer.make({container:document.getElementById('trailer'),source:{hls:'https://cdn.test/trailer.m3u8'}});
+                            </script></body></html>"""
+                        "/venom.js" -> "window.VenomPlayer={make:function(options){return {options:options};}};"
+                        else -> "<html><body>Unknown page</body></html>"
+                    }
+                    return MockResponse().setHeader("Content-Type",if(path.endsWith(".js"))"application/javascript" else "text/html; charset=utf-8").setBody(body)
+                }
+            }
+            ActivityScenario.launch(MediaCenterActivity::class.java).use { scenario ->
+                lateinit var resolver:CenterOnline;scenario.onActivity { resolver=CenterOnline(it) }
+                val video=resolver.resolve(CenterTitle(6873,"tv","Гангстерленд",provider="kinogo",sourceUrl=server.url("/6873-show.html").toString()))
+                assertEquals(listOf(1 to 1,1 to 2),video.episodes.map { it.season to it.number })
+                assertTrue(resolver.diagnostics.contains("bootstrap=native prepared=1"))
+                assertEquals(server.url("/embed/movie/81816").toString(),video.headers["Referer"])
+                assertFalse(requests.contains("/catalog-replacement.js"));assertFalse(requests.contains("/embed/trailer/81816"))
+                assertFalse(video.episodes.any { it.sources.values.any { url -> url.contains("trailer") } })
+            }
+        }
+    }
+
 }

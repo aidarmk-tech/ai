@@ -58,14 +58,14 @@ class CenterOnline(private val activity:AppCompatActivity) {
                 isFocusable=false;importantForAccessibility=android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS;alpha=0f
             }
             web=browser
-            val preparedPage=if(item.provider in listOf("kinokong","zona","kinotac")) {
+            val preparedPage=if(item.provider in listOf("kinogo","kinokong","zona","kinotac")) {
                 diagnostics="bootstrap=native stage=page"
                 declaredFrames=CenterCatalog().onlineFrames(item)
                 check(preferredPlayer==null||preferredPlayer in declaredFrames.indices) { "Выбранный плеер больше недоступен. Верни автоматический выбор" }
                 val frames=preferredPlayer?.let { listOf(declaredFrames[it]) } ?: declaredFrames
                 preparedFrames=frames.size
                 diagnostics="bootstrap=native prepared=$preparedFrames stage=webview"
-                kinokongDocument(item,frames).toByteArray(Charsets.UTF_8)
+                if(frames.isNotEmpty())kinokongDocument(item,frames).toByteArray(Charsets.UTF_8) else null
             } else null
             android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(browser,true)
             browser.webChromeClient=object:WebChromeClient() {
@@ -79,7 +79,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
                 "Для получения списка серий обнови Android System WebView на устройстве"
             }
             val script=activity.assets.open("center/online-resolver.js").bufferedReader().use { it.readText() }
-            val injected = if(item.provider in listOf("kinogo","kinokong","zona","kinotac")) kinogoScript(source,script,item.provider.orEmpty()) else script
+            val injected = if(item.provider in listOf("kinogo","kinokong","zona","kinotac")) kinogoScript(source,script,item.provider.orEmpty(),preparedPage!=null) else script
             val origins = if(item.provider in listOf("kinogo","kinokong","zona","kinotac")) setOf("*") else setOf("${source.scheme}://${source.host}" + if(source.port!=443&&source.port!=80) ":${source.port}" else "")
             WebViewCompat.addDocumentStartJavaScript(browser,injected,origins)
             browser.webViewClient=object:WebViewClient() {
@@ -144,7 +144,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
                         val alternatePending=observed.get("alternatePending")?.asBoolean ?: false
                         val allBlocked=(!alternateAvailable||alternateRequested&&!alternatePending) && pending>0 && candidates.size==pending &&
                             candidates.all { e -> e.getAsJsonObject("snapshot")?.get("blocked")?.isJsonNull==false }
-                        frameInfo=(if(item.provider in listOf("kinokong","zona","kinotac"))"bootstrap=native prepared=$preparedFrames root=${observed.get("root")} " else "")+"frames=$pending replies=${candidates.size} alternate=$alternateRequested waiting=$alternatePending " + candidates.mapIndexed { index, entry ->
+                        frameInfo=(if(preparedPage!=null)"bootstrap=native prepared=$preparedFrames root=${observed.get("root")} " else "")+"frames=$pending replies=${candidates.size} alternate=$alternateRequested waiting=$alternatePending " + candidates.mapIndexed { index, entry ->
                             val data=entry.getAsJsonObject("snapshot") ?: JsonObject()
                             val host=entry.get("url")?.takeIf { it.isJsonPrimitive }?.asString?.toHttpUrlOrNull()?.host.orEmpty()
                             "frame$index[host=$host player=${data.get("playerType")} ids=${data.get("ids")} files=${data.getAsJsonArray("files")?.size()} lists=${data.getAsJsonArray("lists")?.size()} xhr=${data.get("xhr")} shapes=${data.get("shapes")} json=${data.get("jsonXhr")} modern=${data.get("modern")} recovered=${data.get("recovered")} hls=${data.get("hlsRead")} dom=${data.get("domRead")} config=${data.get("configRead")} blocked=${data.get("blocked")?.isJsonNull==false}] "
@@ -194,7 +194,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
             web?.let { it.stopLoading();(it.parent as? ViewGroup)?.removeView(it);it.destroy() }
         }
     }
-    private fun kinogoScript(source:okhttp3.HttpUrl, common:String,provider:String):String {
+    private fun kinogoScript(source:okhttp3.HttpUrl, common:String,provider:String,nativeFrames:Boolean):String {
         val config=JsonObject().apply {
             addProperty("session",java.util.UUID.randomUUID().toString())
             addProperty("origin",source.newBuilder().encodedPath("/").query(null).fragment(null).build().toString().trimEnd('/'))
@@ -202,9 +202,9 @@ class CenterOnline(private val activity:AppCompatActivity) {
             addProperty("path",source.encodedPath)
             addProperty("provider",provider)
         }
-        val modern=if(provider in listOf("kinokong","zona","kinotac"))activity.assets.open("center/modern-player-resolver.js").bufferedReader().use { it.readText() } else ""
-        val controls=activity.assets.open(if(provider in listOf("kinokong","zona","kinotac")) "center/kinokong-player-controls.js" else "center/kinogo-player-controls.js").bufferedReader().use { it.readText() }
-        val bridge=activity.assets.open(if(provider in listOf("kinokong","zona","kinotac")) "center/kinokong-resolver.js" else "center/kinogo-resolver.js").bufferedReader().use { it.readText() }
+        val modern=activity.assets.open("center/modern-player-resolver.js").bufferedReader().use { it.readText() }
+        val controls=activity.assets.open(if(nativeFrames||provider in listOf("kinokong","zona","kinotac")) "center/kinokong-player-controls.js" else "center/kinogo-player-controls.js").bufferedReader().use { it.readText() }
+        val bridge=activity.assets.open(if(nativeFrames||provider in listOf("kinokong","zona","kinotac")) "center/kinokong-resolver.js" else "center/kinogo-resolver.js").bufferedReader().use { it.readText() }
         return "(function(){var cfg="+config.toString()+";"+
             "var p=location.pathname;var match=cfg.provider==='zona'?p===cfg.path:p.indexOf('/'+cfg.id+'-')===0&&p.lastIndexOf('/')===0&&p.endsWith('.html');"+
             "var root=window===window.top&&location.origin===cfg.origin&&match;"+
@@ -219,7 +219,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
 
         /** A native HTML shell keeps the source origin/Referer, without running catalog advertising/layout scripts. */
         fun kinokongDocument(item:CenterTitle,frames:List<String>):String {
-            require(item.provider in listOf("kinokong","zona","kinotac")&&frames.isNotEmpty()&&frames.size<=3)
+            require(item.provider in listOf("kinogo","kinokong","zona","kinotac")&&frames.isNotEmpty()&&frames.size<=3)
             source(item)
             val document=org.jsoup.nodes.Document.createShell(item.sourceUrl!!)
             document.head().appendElement("meta").attr("charset","UTF-8")
@@ -241,7 +241,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
             return document.outerHtml()
         }
 
-        fun manualPlayers(provider:String?)=provider in listOf("kinokong","zona","kinotac")
+        fun manualPlayers(provider:String?)=provider in listOf("kinogo","kinokong","zona","kinotac")
         fun onlineSupported(provider: String?) = provider in listOf("kinogo","kinovod","kinokong","zona","kinotac")
         private data class MediaProbe(val status:Int,val kind:String,val bytes:ByteArray,val resolved:okhttp3.HttpUrl) {
             val text get()=bytes.toString(Charsets.UTF_8).trimStart('\uFEFF',' ','\r','\n','\t')
