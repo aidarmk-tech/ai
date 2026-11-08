@@ -237,7 +237,7 @@ class CenterCatalogTest {
             listOf("zona","/film/","/series/","/film/page/2/"),
             listOf("kinokong","/kinofilmi/","/serialo/","/kino/page/2/"))) {
             val sections=CenterCatalog.sections(provider)
-            assertEquals(listOf("movie","tv"),sections.map { it.type })
+            assertEquals(if(provider=="kinokong") listOf("movie","tv","all") else listOf("movie","tv"),sections.map { it.type })
             assertEquals(movie,CenterCatalog.route(provider,"https://catalog.test/?ysclid=tracking",sections[0]).encodedPath)
             assertEquals(tv,CenterCatalog.route(provider,"https://catalog.test",sections[1]).encodedPath)
             val next=CenterCatalog.route(provider,"https://catalog.test/?ysclid=tracking",sections[0],2)
