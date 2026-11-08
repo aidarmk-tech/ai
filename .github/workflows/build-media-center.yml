@@ -97,7 +97,7 @@ jobs:
           data={'versionCode':${{ github.run_number }},'versionName':'0.1.${{ github.run_number }}',
             'url':'https://github.com/${{ github.repository }}/releases/download/media-center/'+p.name,
             'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),
-            'notes':'Улучшено автообновление: повтор запроса и отдельная ошибка сети. Смена онлайн-источника сохраняет серию и таймкод. Статусы Моих сериалов, порядок и скрытие полок, отдельные закреплённые фильмы/сериалы. Экспорт и восстановление библиотеки и прогресса через системный выбор файлов.'}
+            'notes':'KinoKong: отдельный раздел и полка ТВ-шоу и передачи. Подгрузка страниц, распознавание выпусков и открытие программ в существующем онлайн-плеере.'}
           pathlib.Path('dist/version.json').write_text(json.dumps(data,ensure_ascii=False,indent=2))
           PY
       - uses: softprops/action-gh-release@v2

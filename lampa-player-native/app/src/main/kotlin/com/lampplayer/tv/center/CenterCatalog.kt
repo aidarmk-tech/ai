@@ -84,7 +84,9 @@ class CenterCatalog {
                 CenterSection("cartoon_movies", "Мультфильмы", "movie"),
                 CenterSection("cartoon_series", "Мультсериалы", "tv"))
             "tmdb" -> CenterSection.tmdb
-            "kinotac", "zona", "kinokong" -> listOf(CenterSection("${provider}_movies","Фильмы","movie"),CenterSection("${provider}_series","Сериалы","tv"))
+            "kinokong" -> listOf(CenterSection("kinokong_movies","Фильмы","movie"),CenterSection("kinokong_series","Сериалы","tv"),
+                CenterSection("kinokong_shows","ТВ-шоу и передачи","all",kind="shows",description="Шоу, передачи и документальные программы · в порядке каталога KinoKong"))
+            "kinotac", "zona" -> listOf(CenterSection("${provider}_movies","Фильмы","movie"),CenterSection("${provider}_series","Сериалы","tv"))
             "kazplay" -> listOf(CenterSection("kazplay_movies", "Фильмы на казахском", "movie"),
                 CenterSection("kazplay_series", "Сериалы на казахском", "tv"))
             "hdrezka" -> listOf(CenterSection("hdrezka_movies","Фильмы · HDRezka","movie"),
@@ -113,7 +115,8 @@ class CenterCatalog {
                 "Сериалы" to all.filter { it.type=="tv"&&it.country==null&&it.genre==null },
                 "Жанры фильмов" to all.filter { it.type=="movie"&&it.genre!=null },
                 "Жанры сериалов" to all.filter { it.type=="tv"&&it.genre!=null },
-                "Страны" to all.filter { it.country!=null }
+                "Страны" to all.filter { it.country!=null },
+                "ТВ-шоу и передачи" to all.filter { it.kind=="shows" }
             ).filter { it.second.isNotEmpty() }
         }
         fun route(provider: String, base: String, section: CenterSection, page: Int = 1): HttpUrl {
@@ -129,7 +132,7 @@ class CenterCatalog {
                 val path=when(provider) {
                     "kinotac" -> if(section.type=="tv") "/serialy/" else "/filmy/"
                     "zona" -> if(section.type=="tv") "/series/" else "/film/"
-                    else -> if(section.type=="tv") "/serialo/" else if(page>1) "/kino/" else "/kinofilmi/"
+                    else -> if(section.id=="kinokong_shows") "/doc/" else if(section.type=="tv") "/serialo/" else if(page>1) "/kino/" else "/kinofilmi/"
                 }
                 return builder.encodedPath(path+if(page>1) "page/$page/" else "").build()
             }
@@ -361,7 +364,7 @@ class CenterCatalog {
                 val type=when {
                     provider=="zona" -> if(match!!.groupValues[1]=="series") "tv" else "movie"
                     provider=="kinotac" -> if(Regex("(?iu)сериалы|мультсериалы").containsMatchIn(category)||origin.encodedPath.startsWith("/serialy/")) "tv" else "movie"
-                    else -> if(origin.encodedPath.startsWith("/serialo/")||Regex("^/[0-9]+-serial-").containsMatchIn(url.encodedPath)||Regex("(?iu)сезон|серия|серии").containsMatchIn(raw+" "+badge.orEmpty())) "tv" else "movie"
+                    else -> if(origin.encodedPath.startsWith("/serialo/")||Regex("^/[0-9]+-serial-").containsMatchIn(url.encodedPath)||Regex("(?iu)сезон|серия|серии").containsMatchIn(raw+" "+badge.orEmpty())||Regex("(?iu)\\bвыпуск(?:и|ов|а)?\\b").containsMatchIn(badge.orEmpty())) "tv" else "movie"
                 }
                 val update=badge?.let { label ->
                     Regex("(?i)^([0-9]{1,2})s([0-9]{1,4})e$").matchEntire(label)?.let { "${it.groupValues[1]} сезон ${it.groupValues[2]} серия" } ?: label
@@ -652,7 +655,7 @@ class CenterCatalog {
         }
         val document=page(url)
         val parsed=parse(document,provider)
-        val items=if(provider in listOf("kinotac","zona","kinokong"))parsed.filter { it.type==section.type } else parsed
+        val items=if(provider in listOf("kinotac","zona","kinokong")&&section.type!="all")parsed.filter { it.type==section.type } else parsed
         val hasNext = if(provider in listOf("rezka","kazplay","hdrezka","kinogo","kinotac","zona","kinokong")) {
             val next=route(provider,base,section,number+1)
             document.select("a[href]").any { link ->

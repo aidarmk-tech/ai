@@ -466,4 +466,18 @@ class CenterCatalogTest {
         assertTrue(CenterCatalog.kinogoEmbeds(Jsoup.parse("<iframe data-src='/embed/movie/9'></iframe>",item.sourceUrl),item).isEmpty())
     }
 
+    @Test fun kinoKongShowsUseTheirOwnPagedCatalogAndEpisodeBadgesWithoutMisclassifyingFilms() {
+        val section=CenterCatalog.sections("kinokong").single { it.kind=="shows" }
+        assertEquals("/doc/",CenterCatalog.route("kinokong","https://catalog.test",section).encodedPath)
+        assertEquals("/doc/page/3/",CenterCatalog.route("kinokong","https://catalog.test",section,3).encodedPath)
+        assertEquals(listOf(section),CenterCatalog.sectionGroups("kinokong").single { it.first=="ТВ-шоу и передачи" }.second)
+        fun row(id:Int,title:String,badge:String)="""<div class="item"><div class="main-sliders-title"><a href="/$id-program.html">$title</a></div>
+            <div class="main-sliders-season">$badge</div></div>"""
+        val html="<div id='dle-content'>"+row(17,"Моя передача (2026)","1-9 Выпуск")+row(18,"Выпускной (2026)","")+"</div>"
+        val items=CenterCatalog.parse(Jsoup.parse(html,"https://catalog.test/doc/"),"kinokong")
+        assertEquals(listOf("kinokong:tv:17","kinokong:movie:18"),items.map { it.key })
+        assertEquals("1-9 Выпуск",items.first().updateLabel)
+        assertTrue(CenterStore(RuntimeEnvironment.getApplication()).homeOrder("kinokong").contains(section.id))
+    }
+
 }
