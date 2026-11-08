@@ -47,6 +47,7 @@ class MediaCenterUiTest {
     }
     class Host : MediaCenterActivity() {
         override val backend=FakeBackend()
+        val categoryCalls get()=backend.sectionCalls
         var updateChecks = 0
         var uptime = 10000L
         override fun elapsedTime() = uptime
@@ -1447,14 +1448,14 @@ class MediaCenterUiTest {
                 (0 until dialog().listView.adapter.count).map { dialog().listView.adapter.getItem(it).toString() })
             choose("Жанры сериалов")
             choose("Фантастика")
-            assertEquals("genre_tv_10765",host.backend.sectionCalls.last().first.id)
-            assertEquals(10765,host.backend.sectionCalls.last().first.genre)
+            assertEquals("genre_tv_10765",host.categoryCalls.last().first.id)
+            assertEquals(10765,host.categoryCalls.last().first.genre)
             assertTrue(all(root).filterIsInstance<TextView>().any { it.tag=="category_description"&&it.text=="По популярности · все годы" })
             host.onBackPressedDispatcher.onBackPressed();repeat(3) { frame(root) }
             label(root,"Разделы  ▾").performClick();frame(root);choose("Сериалы")
             assertTrue((0 until dialog().listView.adapter.count).map { dialog().listView.adapter.getItem(it).toString() }.containsAll(listOf("Новые сериалы","Сериалы недели","Сериалы в эфире")))
             choose("Новые сериалы")
-            assertEquals("new_series",host.backend.sectionCalls.last().first.id)
+            assertEquals("new_series",host.categoryCalls.last().first.id)
             assertTrue(all(root).filterIsInstance<TextView>().any { it.tag=="category_description"&&it.text.contains("180 дней") })
         } finally { controller.pause().stop().destroy() }
     }
