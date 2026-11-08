@@ -1596,4 +1596,21 @@ class MediaCenterUiTest {
         } finally { controller.pause().stop().destroy() }
     }
 
+    @Test fun editingHomeShelvesFromSettingsKeepsTheSettingsScreen() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            all(root).first { it.tag=="Настройки" }.performClick();frame(root)
+            label(root,"Полки главной").performClick();frame(root)
+            var dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
+            dialog.listView.performItemClick(dialog.listView.adapter.getView(0,null,dialog.listView),0,0);frame(root)
+            dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
+            dialog.listView.performItemClick(dialog.listView.adapter.getView(2,null,dialog.listView),2,2);frame(root)
+            dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
+            dialog.dismiss();repeat(3){frame(root)}
+            assertTrue(all(root).filterIsInstance<TextView>().any { it.isShown&&it.text.toString()=="Настройки" })
+            assertTrue("continue" in CenterStore(host).homeHidden(CenterStore(host).catalog))
+        } finally { controller.pause().stop().destroy() }
+    }
+
 }

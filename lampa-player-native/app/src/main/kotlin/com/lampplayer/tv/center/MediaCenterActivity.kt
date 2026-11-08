@@ -628,9 +628,9 @@ open class MediaCenterActivity : AppCompatActivity() {
                         val order=ids.toMutableList();val target=(index+if(action==0)-1 else 1).coerceIn(0,order.lastIndex)
                         java.util.Collections.swap(order,index,target);store.setHomeOrder(provider,order)
                     }
-                    loadHome();homeSettings()
+                    if(nav=="Главная")loadHome();homeSettings()
                 }.setNegativeButton("Назад"){_,_->homeSettings()}.show()
-            }.setNeutralButton("По умолчанию"){_,_->store.resetHome(provider);loadHome()}.setNegativeButton("Закрыть",null).show()
+            }.setNeutralButton("По умолчанию"){_,_->store.resetHome(provider);if(nav=="Главная")loadHome()}.setNegativeButton("Закрыть",null).show()
     }
     private fun artFrame(title: String, width: Int, height: Int, url: String?, seed: Int = 0): FrameLayout {
         val frame = FrameLayout(this)
