@@ -2,7 +2,7 @@
 import io,json,os,time,urllib.request,urllib.error,zipfile,re,html
 TOKEN=os.environ["GITHUB_TOKEN"]
 BASE="https://api.github.com/repos/aidarmk-tech/ai"
-RUN=42449978379
+RUN=42450289468
 def api(path):
     req=urllib.request.Request(BASE+path,headers={"Authorization":"Bearer "+TOKEN,"Accept":"application/vnd.github+json","User-Agent":"LampMedia-check"})
     with urllib.request.urlopen(req,timeout=30) as r:return json.load(r)
