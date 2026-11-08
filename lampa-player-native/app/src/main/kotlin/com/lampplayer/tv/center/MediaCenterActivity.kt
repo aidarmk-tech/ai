@@ -1848,11 +1848,19 @@ open class MediaCenterActivity : AppCompatActivity() {
         content.addView(button("Проверить обновление") { update() })
         content.addView(button("Полки главной"){homeSettings()})
         content.addView(button("Торрент-движок · состояние и буфер") { enter { engineScreen() } })
-        content.addView(button("Сохранить резервную копию") { exportBackupLauncher.launch("LampMedia-backup.json") })
+        content.addView(button("Сохранить резервную копию") {
+            runCatching { exportBackupLauncher.launch("LampMedia-backup.json") }.onFailure {
+                Toast.makeText(this,"На устройстве нет доступного приложения для выбора файлов",Toast.LENGTH_LONG).show()
+            }
+        })
         content.addView(button("Восстановить из резервной копии") {
             AlertDialog.Builder(this).setTitle("Восстановить библиотеку?")
                 .setMessage("История, избранное, сериалы и прогресс будут объединены с текущими. Более свежий прогресс сохранится. Адреса подключений и ключи доступа не переносятся.")
-                .setNegativeButton("Отмена",null).setPositiveButton("Выбрать файл"){_,_->importBackupLauncher.launch(arrayOf("application/json","text/plain","application/octet-stream"))}.show()
+                .setNegativeButton("Отмена",null).setPositiveButton("Выбрать файл"){_,_->
+                    runCatching { importBackupLauncher.launch(arrayOf("application/json","text/plain","application/octet-stream")) }.onFailure {
+                        Toast.makeText(this,"На устройстве нет доступного приложения для выбора файлов",Toast.LENGTH_LONG).show()
+                    }
+                }.show()
         })
         content.addView(button("Очистить историю просмотра") {
             AlertDialog.Builder(this).setTitle("Очистить историю?").setMessage("Избранное и настройки сохранятся")
