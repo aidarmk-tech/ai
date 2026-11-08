@@ -1,3 +1,4 @@
+# Inspect the uploaded unit artifact after the build completes.
 import io,json,os,time,urllib.request,urllib.error,zipfile,re,html
 TOKEN=os.environ["GITHUB_TOKEN"]
 BASE="https://api.github.com/repos/aidarmk-tech/ai"
