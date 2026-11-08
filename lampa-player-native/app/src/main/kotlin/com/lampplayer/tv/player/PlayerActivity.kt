@@ -281,7 +281,8 @@ class PlayerActivity : AppCompatActivity() {
                     text = title; isFocusable = true; tag = "recovery_$action"
                     setOnClickListener {
                         val original = vm.uiState.value.card ?: return@setOnClickListener
-                        val card=original.copy(startPositionMs=vm.positionMs().takeIf { it>0 } ?: original.startPositionMs,fromStart=false)
+                        val position=vm.positionMs()
+                        val card=original.copy(startPositionMs=position.takeIf { it>0 } ?: original.startPositionMs,fromStart=original.fromStart&&position<=0)
                         setResult(android.app.Activity.RESULT_FIRST_USER, Intent().putExtra("recovery", action)
                             .putExtra("card", com.google.gson.Gson().toJson(card))
                             .putExtra("center_player_index",intent.getIntExtra("center_player_index",0))

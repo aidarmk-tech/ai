@@ -1525,16 +1525,21 @@ class MediaCenterUiTest {
     }
 
     @Test fun switchingSitesCarriesTheExactEpisodeAndTimestampIntoTheNewPlayerIntent() {
+        for(fromStart in listOf(false,true)) {
         val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
         try {
             val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
             val item=CenterTitle(153312,"tv","Король Талсы",year="2022")
             val first=tmdbSource("kinovod");val second=tmdbSource("kinotac")
             val card=com.lampplayer.tv.domain.model.CardMeta(item.title,tmdbId=item.id,contentKey=item.key,
-                seasonNumber=2,episodeNumber=5,translator="Voice",quality="720",startPositionMs=425000)
+                seasonNumber=2,episodeNumber=5,translator="Voice",quality="720",fromStart=fromStart)
             CenterStore(host).setOnlineSource(item,first)
             kotlinx.coroutines.runBlocking { com.lampplayer.tv.data.datastore.PositionDataStore(host).savePosition("https://video.test/old",card,
-                com.lampplayer.tv.domain.model.PlaybackPosition(time=425.0)) }
+                com.lampplayer.tv.domain.model.PlaybackPosition(time=425.0,updated=100)) }
+            val movie=card.copy(title="Другой фильм с тем же числом ID",contentKey="tmdb:movie:${item.id}",seasonNumber=null,episodeNumber=null)
+            CenterStore(host).remember("https://video.test/movie",movie)
+            kotlinx.coroutines.runBlocking { com.lampplayer.tv.data.datastore.PositionDataStore(host).savePosition("https://video.test/movie",movie,
+                com.lampplayer.tv.domain.model.PlaybackPosition(time=900.0,updated=200)) }
             host.onlineFixture(OnlineVideo(first,listOf(OnlineEpisode(2,5,"Пятая","Voice",mapOf(720 to "https://video.test/old"))),emptyMap(),catalogItem=item,resumeCard=card),2,"Voice")
             repeat(3){frame(root)}
             label(root,"Другой онлайн-источник").performClick();repeat(6){frame(root)}
@@ -1545,9 +1550,12 @@ class MediaCenterUiTest {
             val played=com.lampplayer.tv.player.IntentParser.parse(shadowOf(host).nextStartedActivity)!!
             assertEquals("https://video.test/new",played.first)
             assertEquals(item.key,played.second.contentKey);assertEquals(2,played.second.seasonNumber)
-            assertEquals(5,played.second.episodeNumber);assertEquals(425000L,played.second.startPositionMs)
+            assertEquals(5,played.second.episodeNumber)
+            if(fromStart){assertTrue(played.second.fromStart);assertNull(played.second.startPositionMs)}
+            else assertEquals(425000L,played.second.startPositionMs)
             assertEquals("Voice",played.second.translator)
         } finally { controller.pause().stop().destroy() }
+        }
     }
     @Test fun selectingAnotherEpisodeDoesNotReuseTheTransferredTimestamp() {
         val controller=Robolectric.buildActivity(Host::class.java).setup().visible()

@@ -1216,10 +1216,12 @@ open class MediaCenterActivity : AppCompatActivity() {
         val remembered=explicit ?: sourceContext?.takeIf { it.first==item.key }?.second ?: lastEpisode(item)
         work("Сохраняю место просмотра…") {
             val context=(remembered?.takeIf { season==null||it.seasonNumber==season } ?: progressCard(item,season,null)).let { it.copy(translator=voice ?: it.translator) }
-            val saved=store.history().firstOrNull { it.card.contentKey==item.key || (item.provider==null&&it.card.tmdbId==item.id) }
+            val saved=store.history().firstOrNull {
+                (it.card.contentKey ?: "tmdb:${if(it.card.seasonNumber!=null||it.card.episodes.isNotEmpty())"tv" else "movie"}:${it.card.tmdbId}")==item.key
+            }
             val position=if(remembered!=null||saved!=null)PositionDataStore(applicationContext).getPosition(saved?.url.orEmpty(),context) else null
-            val resume=context.copy(startPositionMs=context.startPositionMs?.takeIf { it>0 }
-                ?: position?.time?.takeIf { it>0 }?.let { (it*1000).toLong() },fromStart=false)
+            val resume=context.copy(startPositionMs=if(context.fromStart)0L else context.startPositionMs?.takeIf { it>0 }
+                ?: position?.time?.takeIf { it>0 }?.let { (it*1000).toLong() },fromStart=context.fromStart)
             fun select(title:CenterTitle) {
                 val currentProvider=item.provider ?: CenterOnlineMatch.fromPage(item)?.provider ?: store.onlineSource(item)?.provider
                 showTmdbOnlineSources(title,resume,selectedSeason=resume.seasonNumber ?: season,selectedVoice=resume.translator ?: voice,
@@ -1486,8 +1488,10 @@ open class MediaCenterActivity : AppCompatActivity() {
             val meta=metadata(current.identity).apply {
                 addProperty("content_key",current.identity.key)
                 current.resumeCard?.takeIf { (it.seasonNumber ?: 0)==selected.season&&(it.episodeNumber ?: 0)==selected.number }?.let { resume ->
-                    resume.startPositionMs?.takeIf { it>0 }?.let { addProperty("position",it) }
-                    resume.timelineTime?.takeIf { it>0 }?.let { addProperty("timeline_time",it) }
+                    if(resume.fromStart)addProperty("from_start",true) else {
+                        resume.startPositionMs?.takeIf { it>0 }?.let { addProperty("position",it) }
+                        resume.timelineTime?.takeIf { it>0 }?.let { addProperty("timeline_time",it) }
+                    }
                 }
                 if(selected.number>0) { if(selected.season>0)addProperty("season_number",selected.season);addProperty("episode_number",selected.number) }
                 addProperty("translator",selected.voice);addProperty("quality",quality.toString())

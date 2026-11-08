@@ -18,10 +18,12 @@ class CenterBackup(private val context:Context) {
         }
     }
     suspend fun export():String = withContext(Dispatchers.IO) {
-        val positions=PositionDataStore(context).backupEntries()
+        val progress=PositionDataStore(context);val positions=progress.backupEntries()
+        val store=CenterStore(context);val library=store.backupEntries()
+        store.validateBackup(library);progress.validateBackup(positions)
         val root=JsonObject().apply {
             addProperty("format","LampMedia");addProperty("version",1);addProperty("createdAt",System.currentTimeMillis())
-            add("library",gson.toJsonTree(CenterStore(context).backupEntries()));add("positions",gson.toJsonTree(positions))
+            add("library",gson.toJsonTree(library));add("positions",gson.toJsonTree(positions))
         }
         gson.toJson(root).also { require(it.toByteArray(Charsets.UTF_8).size<=LIMIT){"Резервная копия превышает 16 МБ"} }
     }

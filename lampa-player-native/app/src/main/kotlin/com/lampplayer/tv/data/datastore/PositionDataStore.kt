@@ -111,7 +111,12 @@ class PositionDataStore @Inject constructor(
         return runCatching { gson.fromJson(json, ShowData::class.java) }.getOrNull()
     }
     suspend fun backupEntries():Map<String,String> = context.positionDataStore.data.firstOrNull()?.asMap().orEmpty()
-        .mapNotNull { (key,value) -> (value as? String)?.let { key.name to it } }.toMap()
+        .mapNotNull { (key,value) -> (value as? String)?.let { json ->
+            key.name to if(key.name.startsWith("s"))json else runCatching {
+                val position=gson.fromJson(json,PlaybackPosition::class.java)
+                gson.toJson(position.copy(percent=position.percent.coerceIn(0,100)))
+            }.getOrDefault(json)
+        } }.toMap()
 
     suspend fun mergeBackup(entries:Map<String,String>):Int {
         validateBackup(entries)
