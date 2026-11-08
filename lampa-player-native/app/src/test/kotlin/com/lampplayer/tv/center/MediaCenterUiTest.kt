@@ -107,6 +107,9 @@ class MediaCenterUiTest {
                 overview="Истории, к которым хочется возвращаться. Каталог, серии и просмотр в одном приложении.", year="2026",rating="8.2")
         }; showDashboard(CenterSection.all.map { section -> section to items.filter { it.type == section.type } }) }
         fun realHomeFixture() { super.loadHome() }
+        fun failHomeAfter(gate:kotlinx.coroutines.CompletableDeferred<Unit>) {
+            backend.sectionGate=gate;backend.failSections=true
+        }
         fun releaseFixture(items: List<CenterRelease>) { releaseList(CenterTitle(801,"movie","Sorting"),null,items) }
         fun detailFixture(details: CenterDetails) { showDetails(details) }
         var retryCalls=0;var refreshCalls=0;var sourcePlayerCalls=0
@@ -1493,7 +1496,7 @@ class MediaCenterUiTest {
             store.pin(CenterTitle(88001,"movie","Локальное закрепление"))
             store.remember("https://local.test/continue",com.lampplayer.tv.domain.model.CardMeta("Локальное продолжение",tmdbId=88002))
             val gate=kotlinx.coroutines.CompletableDeferred<Unit>()
-            host.backend.sectionGate=gate;host.backend.failSections=true
+            host.failHomeAfter(gate)
             host.realHomeFixture();repeat(4){frame(root)}
             assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Продолжить просмотр" })
             assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Закреплённое" })
