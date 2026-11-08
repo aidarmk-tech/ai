@@ -408,18 +408,32 @@ open class MediaCenterActivity : AppCompatActivity() {
     protected open fun loadHome() {
         selected = null; catalogPage = 1
         if (nav != "Главная") { loadLibrary(store.libraryBrowse(if(nav=="Сериалы") "tv" else "movie")); return }
-        work("Загружаю ${CenterCatalog.name(store.catalog)}…") {
-            val provider = store.catalog; val limiter = Semaphore(3)
-            val results = coroutineScope { CenterCatalog.homeSections(provider).map { section -> async {
-                section to runCatching {
-                    limiter.withPermit { catalogItems(provider, section) }
-                }.also { result -> result.exceptionOrNull()?.let { if (it is CancellationException) throw it } }
-            } }.awaitAll() }
-            val boards = results.mapNotNull { (section, result) -> result.getOrNull()?.let { section to it } }
-            if (boards.isEmpty()) throw results.firstNotNullOf { it.second.exceptionOrNull() }
-            showDashboard(boards, results.filter { it.second.isFailure }.map { it.first.label })
+        job?.cancel()
+        val provider=store.catalog
+        val boards=mutableListOf<Pair<CenterSection,List<CenterTitle>>>()
+        val unavailable=mutableListOf<String>()
+        showDashboard(emptyList(),loading=true)
+        val status=text("Загружаю подборки ${CenterCatalog.name(provider)}…",14,muted)
+        content.addView(status)
+        job=lifecycleScope.launch {
+            val limiter=Semaphore(3)
+            coroutineScope { CenterCatalog.homeSections(provider).map { category -> launch {
+                val result=try { Result.success(limiter.withPermit { catalogItems(provider,category) }) }
+                    catch(e:CancellationException) { throw e }
+                    catch(e:Exception) { Result.failure<List<CenterTitle>>(e) }
+                result.fold(onSuccess={ items ->
+                    boards.add(category to items)
+                    dashboardBoard(category,items)
+                },onFailure={ unavailable.add(category.label) })
+                // Capture immutable copies for Back: later network completions cannot alter a saved screen.
+                val savedBoards=boards.toList();val savedUnavailable=unavailable.toList()
+                currentScreen={showDashboard(savedBoards,savedUnavailable)}
+            } }.joinAll() }
+            status.text=if(unavailable.isEmpty()) "Подборки обновлены" else
+                "Не загрузились: ${unavailable.joinToString()}. Можно обновить подборки или сменить каталог."
         }
     }
+
     private suspend fun catalogItems(provider: String, section: CenterSection, number: Int = 1) =
         if (provider == "tmdb") backend.section(section, number) else catalogs.browse(provider, store.catalogHost(provider), section, number)
     protected fun loadCategory(section: CenterSection, number: Int = 1) {
@@ -537,21 +551,23 @@ open class MediaCenterActivity : AppCompatActivity() {
                 store.catalog = ids[index]; dialog.dismiss(); navigate("Главная")
             }.setNegativeButton("Закрыть", null).show()
     }
-    protected fun showDashboard(boards: List<Pair<CenterSection, List<CenterTitle>>>, unavailable: List<String> = emptyList()) {
+    protected fun showDashboard(boards: List<Pair<CenterSection, List<CenterTitle>>>, unavailable: List<String> = emptyList(), loading:Boolean=false) {
         currentScreen = { showDashboard(boards, unavailable) }; page = "home"; clear("Главная"); catalogTools()
         if (store.history().isNotEmpty()) { section("Продолжить просмотр"); historyCards(store.history().take(8)); space(content,14) }
         val pinned=store.pinned()
         if(pinned.isNotEmpty()) { section("Закреплённое");shelf(pinned,"pinned:");space(content,14) }
         val visibleBoards=boards.filter { (_,items) -> items.isNotEmpty() || (items is CenterTitlePage&&items.hasMore) }
-        if(visibleBoards.isEmpty())content.addView(text("Подборки пока пусты. Открой разделы или выбери другой каталог.",15,muted))
-        visibleBoards.forEach { (category, items) ->
-            section(category.label)
-            if(category.description.isNotBlank())content.addView(text(category.description,13,muted).apply { tag="section_info:${category.id}" })
-            if(items.isNotEmpty())shelf(items,"${category.id}:")
-            content.addView(button("Все: ${category.label}   ›") { enter { loadCategory(category) } }); space(content, 14)
-        }
+        if(visibleBoards.isEmpty()&&!loading)content.addView(text("Подборки пока пусты. Открой разделы или выбери другой каталог.",15,muted))
+        visibleBoards.forEach { (category,items) -> dashboardBoard(category,items) }
         if (unavailable.isNotEmpty()) content.addView(text("Не загрузились: ${unavailable.joinToString()}. Можно обновить подборки или сменить каталог.", 14, muted))
         content.addView(button("Обновить подборки") { catalogs.clearCache(); loadHome() })
+    }
+    private fun dashboardBoard(category:CenterSection,items:List<CenterTitle>) {
+        if(items.isEmpty() && !(items is CenterTitlePage && items.hasMore))return
+        section(category.label)
+        if(category.description.isNotBlank())content.addView(text(category.description,13,muted).apply { tag="section_info:${category.id}" })
+        if(items.isNotEmpty())shelf(items,"${category.id}:")
+        content.addView(button("Все: ${category.label}   ›") { enter { loadCategory(category) } });space(content,14)
     }
     private fun artFrame(title: String, width: Int, height: Int, url: String?, seed: Int = 0): FrameLayout {
         val frame = FrameLayout(this)
@@ -945,7 +961,7 @@ open class MediaCenterActivity : AppCompatActivity() {
             if (action == EditorInfo.IME_ACTION_SEARCH || event?.let { it.keyCode == KeyEvent.KEYCODE_ENTER && it.action == KeyEvent.ACTION_DOWN } == true) { search(); true } else false
         }
         content.addView(button("Искать в: ${CenterCatalog.name(store.searchCatalog)}") {
-            val providers=CenterCatalog.providers
+            val providers=CenterCatalog.searchProviders
             AlertDialog.Builder(this).setTitle("Каталог для поиска")
                 .setSingleChoiceItems(providers.map { CenterCatalog.name(it) }.toTypedArray(),providers.indexOf(store.searchCatalog)) { dialog,index ->
                     store.searchCatalog=providers[index];dialog.dismiss();searchScreen(query.text.toString())
@@ -1648,7 +1664,7 @@ open class MediaCenterActivity : AppCompatActivity() {
     private fun catalogSettings() {
         val form = column().apply { setPadding(dp(24), dp(10), dp(24), 0) }
         form.addView(text("Адрес сайта для каждого каталога. Зеркало должно сохранять его формат страниц.", 15, muted))
-        val fields = CenterCatalog.sites.associateWith { provider ->
+        val fields = (CenterCatalog.sites + "num").associateWith { provider ->
             EditText(this).apply {
                 hint = CenterCatalog.name(provider); setText(store.catalogHost(provider)); isSingleLine = true
                 setTextColor(ink); contentDescription = CenterCatalog.name(provider)

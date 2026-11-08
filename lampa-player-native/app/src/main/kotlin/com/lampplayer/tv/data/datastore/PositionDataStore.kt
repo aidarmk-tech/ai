@@ -34,8 +34,8 @@ class PositionDataStore @Inject constructor(
 
     private fun stableIdentity(card:CardMeta):String? {
         val key=card.contentKey
-        return if(card.tmdbId!=null && key in listOf("tmdb:movie:${card.tmdbId}","tmdb:tv:${card.tmdbId}"))card.tmdbId.toString()
-        else key ?: card.tmdbId?.toString() ?: card.imdbId
+        if (!key.isNullOrBlank()) return key
+        return card.tmdbId?.let { "tmdb:${if(card.seasonNumber!=null || card.episodes.isNotEmpty()) "tv" else "movie"}:$it" } ?: card.imdbId
     }
     fun showKey(card: CardMeta): String? {
         val id = stableIdentity(card) ?: card.title
@@ -63,14 +63,18 @@ class PositionDataStore @Inject constructor(
         }
     }
 
-    /** URL key first (exact stream), then the stable episode key (URL rotated). */
+    /** Compare one atomic snapshot: returning to an old URL must not rewind the episode. */
     suspend fun getPosition(url: String, card: CardMeta?): PlaybackPosition? {
-        getPosition(url)?.let { return it }
-        val k = episodeKey(card) ?: return null
-        val json = context.positionDataStore.data
-            .map { it[stringPreferencesKey(k)] }
-            .firstOrNull() ?: return null
-        return runCatching { gson.fromJson(json, PlaybackPosition::class.java) }.getOrNull()
+        val prefs=context.positionDataStore.data.firstOrNull() ?: return null
+        fun read(key:String?) = key?.let { prefs[stringPreferencesKey(it)] }?.let {
+            runCatching { gson.fromJson(it,PlaybackPosition::class.java) }.getOrNull()
+        }
+        val episode=episodeKey(card)
+        // Old numeric episode keys are unambiguous only with a complete TV episode tuple.
+        val legacy=card?.takeIf { it.tmdbId!=null && it.seasonNumber!=null && it.episodeNumber!=null &&
+            (it.contentKey==null || it.contentKey=="tmdb:tv:${it.tmdbId}") }
+            ?.let { "e${it.tmdbId}_${it.seasonNumber}_${it.episodeNumber}" }
+        return listOfNotNull(read(episode),read(keyOf(url)),read(legacy)).maxByOrNull { it.updated }
     }
 
     suspend fun getPosition(url: String): PlaybackPosition? {

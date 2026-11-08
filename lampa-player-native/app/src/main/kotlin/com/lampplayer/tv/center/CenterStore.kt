@@ -26,8 +26,8 @@ class CenterStore(context: Context) {
         get() = prefs.getString("catalog", "tmdb").orEmpty().takeIf { it in CenterCatalog.providers } ?: "tmdb"
         set(value) { prefs.edit().putString("catalog", value).apply() }
     var searchCatalog:String
-        get() = prefs.getString("search_catalog",null)?.takeIf { it in CenterCatalog.providers } ?: catalog
-        set(value) { require(value in CenterCatalog.providers);prefs.edit().putString("search_catalog",value).apply() }
+        get() = prefs.getString("search_catalog",null)?.takeIf { it in CenterCatalog.searchProviders } ?: catalog.takeIf { it in CenterCatalog.searchProviders } ?: "tmdb"
+        set(value) { require(value in CenterCatalog.searchProviders);prefs.edit().putString("search_catalog",value).apply() }
     /** Browsing preferences belong to each TMDB media type; search text is never persisted here. */
     fun libraryBrowse(type: String): CenterBrowse {
         require(type in listOf("movie","tv"))

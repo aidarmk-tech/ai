@@ -58,13 +58,15 @@ class CenterCatalog {
             .readTimeout(20,TimeUnit.SECONDS).callTimeout(30,TimeUnit.SECONDS).build()
         private const val LIMIT = 2 * 1024 * 1024L
         private const val UA = "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"
-        val providers = listOf("tmdb", "kinovod", "filmix", "kinogo", "kinotac", "zona", "kinokong")
-        val sites get() = providers.filter { it != "tmdb" }
+        val providers = listOf("tmdb", "num", "kinovod", "filmix", "kinogo", "kinotac", "zona", "kinokong")
+        val sites get() = providers.filter { it != "tmdb" && it != "num" }
+        val searchProviders get() = providers.filter { it != "num" }
         fun isSiteIdentity(provider:String?) = provider in sites || provider in listOf("rezka","kazplay","hdrezka")
         fun name(provider: String?) = when(provider) {
-            "kinovod" -> "Киновод"; "filmix" -> "Filmix"; "kinotac" -> "KinoTac"; "zona" -> "Zona.movie"; "kinokong" -> "KinoKong"; "rezka" -> "Rezka"; "kazplay" -> "KazPlay · Қазақша"; "hdrezka" -> "HDRezka · LV · тест"; "kinogo" -> "KinoGo · KZ"; else -> "TMDB"
+            "num" -> "NUM"; "kinovod" -> "Киновод"; "filmix" -> "Filmix"; "kinotac" -> "KinoTac"; "zona" -> "Zona.movie"; "kinokong" -> "KinoKong"; "rezka" -> "Rezka"; "kazplay" -> "KazPlay · Қазақша"; "hdrezka" -> "HDRezka · LV · тест"; "kinogo" -> "KinoGo · KZ"; else -> "TMDB"
         }
         fun defaultHost(provider: String) = when(provider) {
+            "num" -> "https://np.flowbyte.cc"
             "kinovod" -> "https://kinovod.pro"; "filmix" -> "https://filmix.gg"
             "kinotac" -> "https://kinotac.org"; "zona" -> "https://zona.movie"; "kinokong" -> "https://kinokong.es"
             "rezka" -> "https://rezka.ac"; "kazplay" -> "https://kazplay.kz"
@@ -72,6 +74,15 @@ class CenterCatalog {
             else -> error("Неизвестный каталог")
         }
         fun sections(provider: String): List<CenterSection> = when(provider) {
+            "num" -> listOf(
+                CenterSection("movies_new", "Новые фильмы", "movie", description="Новые поступления NUM · наличие раздачи проверяется при запуске"),
+                CenterSection("tv_shows", "Сериалы", "tv"),
+                CenterSection("movies_ru_new", "Новые русские фильмы", "movie", "RU"),
+                CenterSection("tv_shows_ru", "Русские сериалы", "tv", "RU"),
+                CenterSection("movies_4k_new", "Новинки 4K", "movie", description="Метка каталога NUM · качество выбранной раздачи проверяется отдельно"),
+                CenterSection("movies", "Все фильмы", "movie"),
+                CenterSection("cartoon_movies", "Мультфильмы", "movie"),
+                CenterSection("cartoon_series", "Мультсериалы", "tv"))
             "tmdb" -> CenterSection.tmdb
             "kinotac", "zona", "kinokong" -> listOf(CenterSection("${provider}_movies","Фильмы","movie"),CenterSection("${provider}_series","Сериалы","tv"))
             "kazplay" -> listOf(CenterSection("kazplay_movies", "Фильмы на казахском", "movie"),
@@ -108,6 +119,11 @@ class CenterCatalog {
         fun route(provider: String, base: String, section: CenterSection, page: Int = 1): HttpUrl {
             require(page in 1..5000)
             val builder = base.trimEnd('/').toHttpUrl().newBuilder().query(null).fragment(null)
+            if(provider == "num") {
+                require(section.id in sections(provider).map { it.id })
+                return builder.encodedPath("/${section.id}").addQueryParameter("page",page.toString())
+                    .addQueryParameter("language","ru").build()
+            }
             if(provider in listOf("kinotac","zona","kinokong")) {
                 require(section.id in sections(provider).map { it.id })
                 val path=when(provider) {
@@ -179,6 +195,35 @@ class CenterCatalog {
                     original=str("original_name"),poster=origin.resolve(str("poster").replace("/thumbs/w40/","/thumbs/w220/"))?.toString(),year=str("year"),
                     provider="filmix",sourceUrl=url.toString(),updateLabel=str("last_serie").takeIf { it.isNotBlank() })
             }.distinctBy { it.key }.take(60)
+        }
+        /** NUM uses TMDB IDs, just like its upstream client; never create a site identity. */
+        fun numPage(json: String, section: CenterSection, number: Int): CenterTitlePage {
+            val root = JsonParser.parseString(json).asJsonObject
+            val rows = root.get("results")?.takeIf { it.isJsonArray }?.asJsonArray
+                ?: error("NUM: изменился формат каталога")
+            fun image(value: String, size: String): String? {
+                if(value.isBlank()) return null
+                if(value.startsWith("/") && !value.startsWith("//")) return "https://image.tmdb.org/t/p/$size$value"
+                val url=value.toHttpUrlOrNull() ?: return null
+                return url.newBuilder().scheme("https").build().toString()
+            }
+            val items=rows.mapNotNull { value ->
+                val row=value.takeIf { it.isJsonObject }?.asJsonObject ?: return@mapNotNull null
+                fun str(key:String)=row.get(key)?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
+                val id=str("id").toIntOrNull()?.takeIf { it>0 } ?: return@mapNotNull null
+                val type=str("media_type").ifBlank { section.type }
+                if(type !in listOf("movie","tv")) return@mapNotNull null
+                val title=str(if(type=="tv")"name" else "title").trim()
+                if(title.isBlank()) return@mapNotNull null
+                CenterTitle(id,type,title,original=str(if(type=="tv")"original_name" else "original_title"),
+                    overview=str("overview"),poster=image(str("poster_path"),"w500"),
+                    backdrop=image(str("backdrop_path"),"w1280"),
+                    year=str(if(type=="tv")"first_air_date" else "release_date").take(4),
+                    rating=str("vote_average"))
+            }.distinctBy { it.key }
+            val total=root.get("total_pages")?.takeIf { it.isJsonPrimitive }?.asString?.toIntOrNull()
+                ?: error("NUM: нет данных о страницах")
+            return CenterTitlePage(items,number<total)
         }
         private fun Element.absolute(attr: String) = absUrl(attr).takeIf { it.toHttpUrlOrNull() != null }
         private fun Element.poster(): String? {
@@ -583,6 +628,11 @@ class CenterCatalog {
         if(number>1) {
             val previous = synchronized(cache) { cache[route(provider,base,section,number-1).toString()] }
             if(previous != null && System.currentTimeMillis()-previous.at<120000 && previous.hasNext==false) return emptyList()
+        }
+        if(provider=="num") {
+            val items=numPage(request(url).bytes.toString(Charsets.UTF_8),section,number)
+            synchronized(cache) { cache[url.toString()]=Cache(System.currentTimeMillis(),items,items.hasMore) }
+            return items
         }
         val document=page(url)
         val parsed=parse(document,provider)

@@ -741,7 +741,7 @@ class MediaCenterUiTest {
             label(root,"Поиск").performClick();frame(root)
             label(root,"Искать в: KinoTac").performClick();frame(root)
             dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
-            assertEquals(CenterCatalog.providers.size,dialog.listView.adapter.count);dialog.dismiss()
+            assertEquals(CenterCatalog.searchProviders.size,dialog.listView.adapter.count);dialog.dismiss()
         } finally { controller.pause().stop().destroy() }
     }
 
