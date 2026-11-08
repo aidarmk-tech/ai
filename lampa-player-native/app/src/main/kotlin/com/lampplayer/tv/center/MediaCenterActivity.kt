@@ -46,8 +46,10 @@ open class MediaCenterActivity : AppCompatActivity() {
     private var automaticUpdate: com.lampplayer.tv.update.UpdateInfo? = null
     private var updatePrompt: AlertDialog? = null
     private var updateBusy = false
+    private var updateStatus:String?=null
     protected open fun elapsedTime(): Long = android.os.SystemClock.elapsedRealtime()
     private var onlineReport: String? = null
+    private var sourceContext:Pair<String,CardMeta>?=null
     private class OnlineFailure(message:String, val report:String, cause:Exception):IllegalStateException(message,cause)
     private fun onlineFailure(error:Exception):OnlineFailure {
         val message=(error.message ?: "Не удалось открыть видео").replace(Regex("https?://\\S+"),"<ссылка>").take(300)
@@ -60,11 +62,29 @@ open class MediaCenterActivity : AppCompatActivity() {
         if (result.resultCode == android.app.Activity.RESULT_FIRST_USER) {
             val action = result.data?.getStringExtra("recovery")
             val card = runCatching { Gson().fromJson(result.data?.getStringExtra("card"), CardMeta::class.java) }.getOrNull()
-            if (action in listOf("refresh", "quality", "torrent", "source_player") && card != null) {
+            if (action in listOf("refresh", "quality", "torrent", "source_player", "source") && card != null) {
                 recovery = action!! to card
                 recoveryPlayer=result.data?.takeIf { it.getBooleanExtra("center_player_pinned",false) }
                     ?.getIntExtra("center_player_index",-1)?.takeIf { it>=0 }
             }
+        }
+    }
+    private val exportBackupLauncher=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if(uri!=null)work("Сохраняю резервную копию…") {
+            val json=CenterBackup(applicationContext).export()
+            withContext(Dispatchers.IO){contentResolver.openOutputStream(uri,"wt")?.use { it.write(json.toByteArray(Charsets.UTF_8)) } ?: error("Не удалось открыть файл для записи")}
+            settings();Toast.makeText(this@MediaCenterActivity,"Резервная копия сохранена",Toast.LENGTH_LONG).show()
+        }
+    }
+    private val importBackupLauncher=registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
+        if(uri!=null)work("Восстанавливаю библиотеку…") {
+            val json=withContext(Dispatchers.IO){contentResolver.openInputStream(uri)?.use { input ->
+                val buffer=java.io.ByteArrayOutputStream();val chunk=ByteArray(8192)
+                while(true){val count=input.read(chunk);if(count<0)break;require(buffer.size()+count<=CenterBackup.LIMIT){"Файл превышает 16 МБ"};buffer.write(chunk,0,count)}
+                buffer.toString("UTF-8")
+            } ?: error("Не удалось открыть файл")}
+            val summary=CenterBackup(applicationContext).restore(json)
+            settings();AlertDialog.Builder(this@MediaCenterActivity).setTitle("Резервная копия").setMessage(summary).setPositiveButton("Готово",null).show()
         }
     }
     private lateinit var store: CenterStore
@@ -81,6 +101,8 @@ open class MediaCenterActivity : AppCompatActivity() {
     private var episodeFocus: (() -> Unit)? = null
     private var detailMoreKey:String?=null
     private var compactToolbar: LinearLayout? = null
+    private var seriesFilter:String?=null
+    private var homeSlots=emptyMap<String,LinearLayout>()
     private var releaseFiltersExpanded = false
     private var page = "home"
     private var nav = "Главная"
@@ -295,11 +317,12 @@ open class MediaCenterActivity : AppCompatActivity() {
                 recoveryPlayer=null
                 enter {
                     when {
+                        action=="source" && canOnline -> chooseOtherSource(item,card)
                         action=="source_player" && CenterOnline.manualPlayers(actualProvider) ->
-                            online(item,selectedSeason=card.seasonNumber,selectedVoice=card.translator,choosePlayerAfterLoad=true)
+                            online(item,card,selectedSeason=card.seasonNumber,selectedVoice=card.translator,choosePlayerAfterLoad=true)
                         action=="refresh" && canOnline -> online(item,card,refresh=true,playerIndex=preferredPlayer)
                         action=="quality" && canOnline -> {
-                            forceQualityOnce=true;online(item,refresh=true,selectedSeason=card.seasonNumber,selectedVoice=card.translator,playerIndex=preferredPlayer)
+                            forceQualityOnce=true;online(item,card,refresh=true,selectedSeason=card.seasonNumber,selectedVoice=card.translator,playerIndex=preferredPlayer)
                         }
                         else -> find(item, card.episodeNumber?.let { CenterEpisode(card.seasonNumber ?: 1, it, "", "") })
                     }
@@ -321,15 +344,18 @@ open class MediaCenterActivity : AppCompatActivity() {
         updatePrompt?.dismiss(); updatePrompt = null
         super.onPause()
     }
-    protected open suspend fun availableUpdate(): com.lampplayer.tv.update.UpdateInfo? = UpdateManager.check(BuildConfig.VERSION_CODE)
+    protected open suspend fun availableUpdate(): com.lampplayer.tv.update.UpdateInfo? = UpdateManager.checkStrict(BuildConfig.VERSION_CODE)
     protected open fun checkAutomaticUpdates() {
         if (!store.autoUpdates || updateBusy || automaticUpdate != null) return
         updateBusy = true
         lifecycleScope.launch {
             try {
                 automaticUpdate = availableUpdate()
+                updateStatus=automaticUpdate?.let { "Доступна версия ${it.versionName}" } ?: "Проверено: установлена последняя версия"
                 offerAutomaticUpdate()
-            } finally { updateBusy = false }
+            } catch(e:CancellationException){throw e}
+            catch(e:Exception){updateStatus="Не удалось проверить обновление. Повтори проверку вручную"}
+            finally { updateBusy = false }
         }
     }
     private fun offerAutomaticUpdate() {
@@ -346,7 +372,7 @@ open class MediaCenterActivity : AppCompatActivity() {
             }
     }
     private fun clear(title: String) {
-        menuReturnTag=null
+        menuReturnTag=null;homeSlots=emptyMap()
         gridGeneration++; gridJob?.cancel(); gridJob = null; compactToolbar = null; episodeFocus=null
         content.removeAllViews(); scroll.scrollTo(0, 0)
         content.addView(text(title, 27).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) })
@@ -382,7 +408,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         val torrent:Pair<String,()->Unit> = "Выбрать раздачу" to { onlineItem?.let { find(it,null) } }
         val catalog:Pair<String,()->Unit> = "Выбрать каталог" to { chooseCatalog() }
         val player=onlineRecovery?.let { "Другой плеер источника" to it }
-        val source=onlineItem?.takeIf { it.provider==null }?.let { item -> "Другой онлайн-источник" to { showTmdbOnlineSources(item) } }
+        val source=onlineItem?.let { item -> "Другой онлайн-источник" to { chooseOtherSource(item) } }
         val alternative=player ?: source ?: if(onlineItem!=null)site else catalog
         val causes=generateSequence<Throwable>(error){it.cause}.take(8).toList()
         val blocked=onlineItem!=null&&causes.any { it is OnlineSourceBlocked }
@@ -424,7 +450,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         content.addView(status)
         job=lifecycleScope.launch {
             val limiter=Semaphore(3)
-            coroutineScope { CenterCatalog.homeSections(provider).map { category -> launch {
+            coroutineScope { CenterCatalog.homeSections(provider).filter { it.id !in store.homeHidden(provider) }.map { category -> launch {
                 val result=try { Result.success(limiter.withPermit { catalogItems(provider,category) }) }
                     catch(e:CancellationException) { throw e }
                     catch(e:Exception) { Result.failure<List<CenterTitle>>(e) }
@@ -453,7 +479,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         else if(request.query.isNotBlank() && number==1) catalogs.search(provider,store.catalogHost(provider),request.query)
         else emptyList()
     protected fun mySeriesScreen() {
-        showHome(store.mySeries(),"Мои сериалы")
+        showHome(store.mySeries().filter { seriesFilter==null||store.seriesStatus(it.key)==seriesFilter },"Мои сериалы")
     }
     protected fun loadLibrary(request: CenterBrowse) {
         if(store.catalog!="tmdb") {
@@ -560,21 +586,51 @@ open class MediaCenterActivity : AppCompatActivity() {
     }
     protected fun showDashboard(boards: List<Pair<CenterSection, List<CenterTitle>>>, unavailable: List<String> = emptyList(), loading:Boolean=false) {
         currentScreen = { showDashboard(boards, unavailable) }; page = "home"; clear("Главная"); catalogTools()
-        if (store.history().isNotEmpty()) { section("Продолжить просмотр"); historyCards(store.history().take(8)); space(content,14) }
-        val pinned=store.pinned()
-        if(pinned.isNotEmpty()) { section("Закреплённое");shelf(pinned,"pinned:");space(content,14) }
+        val provider=store.catalog;val hidden=store.homeHidden(provider)
+        homeSlots=(store.homeOrder(provider)+boards.map { it.first.id }).distinct().filterNot { it in hidden }.associateWith { column().apply {visibility=View.GONE;content.addView(this)} }
+        if(store.history().isNotEmpty())homeSlot("continue") { section("Продолжить просмотр");historyCards(store.history().take(8));space(content,14) }
+        listOf("movie" to "pinned_movies","tv" to "pinned_series").forEach { (type,key) ->
+            val pinned=store.pinned().filter { it.type==type }
+            if(pinned.isNotEmpty())homeSlot(key){section(if(type=="tv")"Закреплённые сериалы" else "Закреплённые фильмы");shelf(pinned,"pinned:");space(content,14)}
+        }
         val visibleBoards=boards.filter { (_,items) -> items.isNotEmpty() || (items is CenterTitlePage&&items.hasMore) }
         if(visibleBoards.isEmpty()&&!loading)content.addView(text("Подборки пока пусты. Открой разделы или выбери другой каталог.",15,muted))
         visibleBoards.forEach { (category,items) -> dashboardBoard(category,items) }
         if (unavailable.isNotEmpty()) content.addView(text("Не загрузились: ${unavailable.joinToString()}. Можно обновить подборки или сменить каталог.", 14, muted))
+        content.addView(button("Полки главной"){homeSettings()})
         content.addView(button("Обновить подборки") { catalogs.clearCache(); loadHome() })
+    }
+    private fun homeSlot(key:String,draw:()->Unit) {
+        val slot=homeSlots[key] ?: return
+        slot.removeAllViews();slot.visibility=View.VISIBLE
+        val start=content.childCount;draw()
+        while(content.childCount>start){val view=content.getChildAt(start);content.removeViewAt(start);slot.addView(view)}
     }
     private fun dashboardBoard(category:CenterSection,items:List<CenterTitle>) {
         if(items.isEmpty() && !(items is CenterTitlePage && items.hasMore))return
-        section(category.label)
-        if(category.description.isNotBlank())content.addView(text(category.description,13,muted).apply { tag="section_info:${category.id}" })
-        if(items.isNotEmpty())shelf(items,"${category.id}:")
-        content.addView(button("Все: ${category.label}   ›") { enter { loadCategory(category) } });space(content,14)
+        homeSlot(category.id) {
+            section(category.label)
+            if(category.description.isNotBlank())content.addView(text(category.description,13,muted).apply { tag="section_info:${category.id}" })
+            if(items.isNotEmpty())shelf(items,"${category.id}:")
+            content.addView(button("Все: ${category.label}   ›") { enter { loadCategory(category) } });space(content,14)
+        }
+    }
+    private fun homeSettings() {
+        val provider=store.catalog
+        val names=mapOf("continue" to "Продолжить просмотр","pinned_movies" to "Закреплённые фильмы","pinned_series" to "Закреплённые сериалы")+
+            CenterCatalog.homeSections(provider).associate { it.id to it.label }
+        val ids=store.homeOrder(provider)
+        AlertDialog.Builder(this).setTitle("Полки · ${CenterCatalog.name(provider)}")
+            .setItems(ids.map { (if(it in store.homeHidden(provider))"Скрыта · " else "")+names[it] }.toTypedArray()) { _,index ->
+                val key=ids[index]
+                AlertDialog.Builder(this).setTitle(names[key]).setItems(arrayOf("Выше","Ниже",if(key in store.homeHidden(provider))"Показать" else "Скрыть")) { _,action ->
+                    if(action==2)store.toggleHomeShelf(provider,key) else {
+                        val order=ids.toMutableList();val target=(index+if(action==0)-1 else 1).coerceIn(0,order.lastIndex)
+                        java.util.Collections.swap(order,index,target);store.setHomeOrder(provider,order)
+                    }
+                    loadHome();homeSettings()
+                }.setNegativeButton("Назад"){_,_->homeSettings()}.show()
+            }.setNeutralButton("По умолчанию"){_,_->store.resetHome(provider);loadHome()}.setNegativeButton("Закрыть",null).show()
     }
     private fun artFrame(title: String, width: Int, height: Int, url: String?, seed: Int = 0): FrameLayout {
         val frame = FrameLayout(this)
@@ -629,7 +685,16 @@ open class MediaCenterActivity : AppCompatActivity() {
         if (category != null || request != null || heading=="Мои сериалы") catalogTools()
         if(request != null && request.query.isBlank()) libraryTools(request)
         if(category?.description?.isNotBlank()==true)content.addView(text(category.description,14,muted).apply { tag="category_description" })
-        if(heading=="Мои сериалы") content.addView(text("Сериалы из подписок и истории просмотра",14,muted))
+        if(heading=="Мои сериалы") {
+            content.addView(text("Сериалы из подписок и истории просмотра",14,muted))
+            content.addView(button("Статус · "+(CenterStore.seriesStatuses[seriesFilter] ?: "Все")) {
+                val keys=listOf<String?>(null)+CenterStore.seriesStatuses.keys
+                AlertDialog.Builder(this).setTitle("Мои сериалы").setItems(keys.map { CenterStore.seriesStatuses[it] ?: "Все" }.toTypedArray()) { _,index ->
+                    seriesFilter=keys[index];mySeriesScreen()
+                }.setNegativeButton("Закрыть",null).show()
+            }.apply {tag="series_filter"})
+            content.addView(text("Удерживай ОК: статус сериала и следующая известная серия",13,muted))
+        }
         if(request?.query?.isNotBlank()==true) content.addView(text("Поиск: ${request.query} · ${CenterCatalog.name(sourceProvider)}",14,muted))
         if (items.isEmpty() && (items !is CenterTitlePage || !items.hasMore)) {
             content.addView(text(if (heading == "Избранное") "Здесь появятся фильмы и сериалы из избранного" else "Ничего не найдено", 17, muted))
@@ -676,7 +741,7 @@ open class MediaCenterActivity : AppCompatActivity() {
             currentScreen={
                 val items=when(heading) {
                     "Избранное" -> CenterTitlePage(store.favorites(),false)
-                    "Мои сериалы" -> CenterTitlePage(store.mySeries(),false)
+                    "Мои сериалы" -> CenterTitlePage(store.mySeries().filter { seriesFilter==null||store.seriesStatus(it.key)==seriesFilter },false)
                     else -> remembered
                 }
                 showHome(items,heading,number,category,request,provider)
@@ -738,7 +803,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                 holder.info.text = item.updateLabel ?: facts(item)
                 if(heading=="Мои сериалы") {
                     val saved=store.history().firstOrNull { (it.card.contentKey ?: "tmdb:tv:${it.card.tmdbId}")==item.key }
-                    if(saved!=null) holder.info.text=listOfNotNull(saved.card.seasonNumber?.let { "Сезон $it" },saved.card.episodeNumber?.let { "Серия $it" }).joinToString(" · ")
+                    if(saved!=null) holder.info.text=listOfNotNull(item.updateLabel,saved.card.seasonNumber?.let { "Сезон $it" },saved.card.episodeNumber?.let { "Серия $it" }).joinToString(" · ")
                 }
                 holder.art.removeAllViews()
                 holder.art.addView(catalogArt(item,desired,desired*3/2),FrameLayout.LayoutParams(-1,-1))
@@ -890,9 +955,25 @@ open class MediaCenterActivity : AppCompatActivity() {
         }
         change(if(store.isFavorite(item))"Убрать из избранного" else "В избранное") { store.toggle(item) }
         change(if(store.isPinned(item))"Открепить с главной" else "Закрепить на главной") { store.pin(item) }
-        if(item.type=="tv")change(if(store.isFollowed(item))"Не отслеживать сериал" else "Отслеживать сериал") { store.toggleFollow(item) }
+        if(item.type=="tv") {
+            change(if(store.isFollowed(item))"Не отслеживать сериал" else "Отслеживать сериал") { store.toggleFollow(item) }
+            actions.add("Статус сериала · "+CenterStore.seriesStatuses[store.seriesStatus(item.key)] to { seriesStatusDialog(item){screen?.let(::restore)} })
+            store.nextKnownEpisode(item)?.let { next -> actions.add("Следующая серия: ${next.first} сезон · ${next.second} серия" to { nextKnown(item,next) }) }
+        }
         AlertDialog.Builder(this).setTitle(item.title).setItems(actions.map { it.first }.toTypedArray()) { _,index -> actions[index].second() }
             .setNegativeButton("Отмена",null).show()
+    }
+    private fun seriesStatusDialog(item:CenterTitle,changed:()->Unit) {
+        val keys=CenterStore.seriesStatuses.keys.toList()
+        AlertDialog.Builder(this).setTitle("Статус · ${item.title}").setSingleChoiceItems(CenterStore.seriesStatuses.values.toTypedArray(),keys.indexOf(store.seriesStatus(item.key))) { dialog,index ->
+            store.setSeriesStatus(item.key,keys[index]);dialog.dismiss();changed()
+        }.setNegativeButton("Отмена",null).show()
+    }
+    private fun nextKnown(item:CenterTitle,next:Pair<Int,Int>) {
+        val source=if(item.provider==null)store.onlineSource(item) else item
+        val card=progressCard(item,next.first,next.second).copy(quality=(store.preferredQuality(source?.provider) ?: 0).toString())
+        enter { if(source!=null)online(source,card,selectedSeason=next.first,catalogItem=item.takeIf { it.provider==null })
+            else online(item,card,selectedSeason=next.first) }
     }
     private class Poster(view: View, val art: FrameLayout, val title: TextView, val info: TextView) : RecyclerView.ViewHolder(view)
     private fun historyScreen() {
@@ -1069,6 +1150,10 @@ open class MediaCenterActivity : AppCompatActivity() {
             store.pin(movie);showDetails(details);content.post {findTag(content,"pin")?.requestFocus()}
         }.apply {tag="pin"})
         if(movie.provider!=null&&canOnline)moreActions.addView(button("Плеер сайта"){website(movie)})
+        if(movie.type=="tv") {
+            moreActions.addView(button("Статус сериала · "+CenterStore.seriesStatuses[store.seriesStatus(movie.key)]) { seriesStatusDialog(movie){showDetails(details)} })
+            store.nextKnownEpisode(movie)?.let { next -> moreActions.addView(button("Следующая серия: ${next.first} сезон · ${next.second} серия"){nextKnown(movie,next)}) }
+        }
         moreActions.addView(button("Открыть свою magnet-ссылку / .torrent"){magnet(movie,null)})
         space(copy, 12)
         val descriptionHeader=row()
@@ -1109,11 +1194,15 @@ open class MediaCenterActivity : AppCompatActivity() {
         if(provider=="kinovod")searchKinoVod(query) else catalogs.search(provider,store.catalogHost(provider),query)
 
     private fun showTmdbOnlineSources(item:CenterTitle,resume:CardMeta?=null,refresh:Boolean=false,returnTo:Screen?=null,
-        selectedSeason:Int?=null,selectedVoice:String?=null) {
-        currentScreen={showTmdbOnlineSources(item,resume,refresh,returnTo,selectedSeason,selectedVoice)}
+        selectedSeason:Int?=null,selectedVoice:String?=null,excludedProvider:String?=null) {
+        currentScreen={showTmdbOnlineSources(item,resume,refresh,returnTo,selectedSeason,selectedVoice,excludedProvider)}
         page="online_sources";clear("Смотреть онлайн · ${item.title}")
         content.addView(text("Выбери источник. Доступные серии, озвучки и качество зависят от сайта.",15,muted));space(content,12)
-        CenterOnlineMatch.providers.forEach { provider ->
+        resume?.let { card ->
+            content.addView(text(listOfNotNull(card.seasonNumber?.let { "Сезон $it" },card.episodeNumber?.let { "Серия $it" },
+                card.translator,card.startPositionMs?.takeIf { it>0 }?.let { "Продолжить с ${clock(it/1000.0)}" }).joinToString(" · "),14,accent))
+        }
+        CenterOnlineMatch.providers.filter { it!=excludedProvider }.forEach { provider ->
             val saved=store.onlineSource(item,provider)
             content.addView(button(CenterCatalog.name(provider)+(if(saved!=null)" · сохранён выбор" else "")) {
                 enter { tmdbOnline(item,resume,refresh,returnTo,selectedSeason,selectedVoice,sourceProvider=provider) }
@@ -1121,6 +1210,33 @@ open class MediaCenterActivity : AppCompatActivity() {
         }
         content.addView(button("Найти торрент-раздачу") { enter { find(item,null) } })
         content.addView(button("Назад") { back() })
+    }
+
+    private fun chooseOtherSource(item:CenterTitle,explicit:CardMeta?=null,season:Int?=null,voice:String?=null) {
+        val remembered=explicit ?: sourceContext?.takeIf { it.first==item.key }?.second ?: lastEpisode(item)
+        work("Сохраняю место просмотра…") {
+            val context=(remembered?.takeIf { season==null||it.seasonNumber==season } ?: progressCard(item,season,null)).let { it.copy(translator=voice ?: it.translator) }
+            val saved=store.history().firstOrNull { it.card.contentKey==item.key || (item.provider==null&&it.card.tmdbId==item.id) }
+            val position=if(remembered!=null||saved!=null)PositionDataStore(applicationContext).getPosition(saved?.url.orEmpty(),context) else null
+            val resume=context.copy(startPositionMs=context.startPositionMs?.takeIf { it>0 }
+                ?: position?.time?.takeIf { it>0 }?.let { (it*1000).toLong() },fromStart=false)
+            fun select(title:CenterTitle) {
+                val currentProvider=item.provider ?: CenterOnlineMatch.fromPage(item)?.provider ?: store.onlineSource(item)?.provider
+                showTmdbOnlineSources(title,resume,selectedSeason=resume.seasonNumber ?: season,selectedVoice=resume.translator ?: voice,
+                    excludedProvider=currentProvider)
+            }
+            if(item.provider==null){select(item);return@work}
+            val matches=backend.browse(item.type,item.title).filter { it.provider==null&&it.type==item.type }.distinctBy { it.key }
+            val exact=matches.filter { CenterOnlineMatch.exact(it,item) }.singleOrNull()
+            if(exact!=null){store.setOnlineSource(exact,item);select(exact);return@work}
+            currentScreen={chooseOtherSource(item,resume,season,voice)};page="online_match";clear("Проверь фильм перед сменой источника")
+            content.addView(text("${item.title} · ${item.year}. Выбери ту же карточку TMDB, чтобы сохранить место просмотра.",15,muted))
+            matches.forEach { candidate -> content.addView(button(candidate.title+" · "+facts(candidate)) {
+                store.setOnlineSource(candidate,item);select(candidate)
+            }) }
+            if(matches.isEmpty())content.addView(text("Совпадение в TMDB не найдено. Открой поиск или выбери другой плеер сайта.",15,muted))
+            content.addView(button("Назад"){back()})
+        }
     }
 
     private fun tmdbOnline(item:CenterTitle,resume:CardMeta?=null,refresh:Boolean=false,returnTo:Screen?=null,
@@ -1181,6 +1297,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         selectedSeason: Int? = null, selectedVoice: String? = null, catalogItem: CenterTitle? = null, playerIndex:Int?=null, choosePlayerAfterLoad:Boolean=false) {
         if(item.provider==null) { tmdbOnline(item,resume,refresh,returnTo,selectedSeason,selectedVoice,playerIndex=playerIndex,choosePlayerAfterLoad=choosePlayerAfterLoad);return }
         val identity=catalogItem ?: item
+        if(resume!=null)sourceContext=identity.key to resume
         onlineReport=null
         val previous = returnTo ?: if (resume != null && page == "online") snapshot() else null
         val contextSeason=selectedSeason ?: resume?.let { it.seasonNumber ?: 0 }
@@ -1191,10 +1308,13 @@ open class MediaCenterActivity : AppCompatActivity() {
                 ?: if(playerIndex!=null)({online(item,refresh=true,selectedSeason=contextSeason,selectedVoice=contextVoice,catalogItem=catalogItem,choosePlayerAfterLoad=true)}) else null,
             onlineRefresh={online(item,resume,refresh=true,selectedSeason=selectedSeason,selectedVoice=selectedVoice,catalogItem=catalogItem,playerIndex=playerIndex)}) {
             val cached = onlineCache[identity.key]?.takeIf { System.currentTimeMillis() - it.first < 180000 && !refresh && it.second.item.key==item.key && it.second.item.sourceUrl==item.sourceUrl && (playerIndex==null||it.second.pinnedPlayer&&it.second.playerIndex==playerIndex) }?.second
-            val video = cached ?: (if(playerIndex==null)resolveOnline(item) else resolveOnlinePlayer(item,playerIndex)).copy(catalogItem=catalogItem).also {
+            val loaded = cached ?: (if(playerIndex==null)resolveOnline(item) else resolveOnlinePlayer(item,playerIndex)).copy(catalogItem=catalogItem).also {
                 if (onlineCache.size >= 4) onlineCache.remove(onlineCache.keys.first())
                 onlineCache[identity.key] = System.currentTimeMillis() to it
             }
+            val video=loaded.copy(resumeCard=resume ?: loaded.resumeCard)
+            store.rememberEpisodes(video.identity,video.episodes)
+            if(resume!=null)sourceContext=identity.key to resume
             if (resume != null && !choosePlayerAfterLoad) {
                 val matches = video.episodes.filter { it.season == (resume.seasonNumber ?: 0) && it.number == (resume.episodeNumber ?: 0) &&
                     (resume.translator == null || it.voice == resume.translator) }
@@ -1223,7 +1343,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         val labels=listOf("Автоматически"+if(!video.pinnedPlayer)" ✓" else "")+
             (0 until video.playerCount).map { "Плеер ${it+1}"+if(video.pinnedPlayer&&video.playerIndex==it)" ✓" else "" }
         AlertDialog.Builder(this).setTitle("Плеер источника").setItems(labels.toTypedArray()) { _,index ->
-            online(video.item,refresh=true,selectedSeason=season,selectedVoice=voice,catalogItem=video.catalogItem,
+            online(video.item,video.resumeCard,refresh=true,selectedSeason=season,selectedVoice=voice,catalogItem=video.catalogItem,
                 playerIndex=(index-1).takeIf { index>0 })
         }.setNegativeButton("Отмена",null).show()
     }
@@ -1284,8 +1404,11 @@ open class MediaCenterActivity : AppCompatActivity() {
         }
         if(video.catalogItem!=null) {
             content.addView(button("Другое совпадение · ${CenterCatalog.name(video.item.provider)}") { tmdbOnline(video.identity,forceSearch=true,sourceProvider=video.item.provider) })
-            content.addView(button("Другой онлайн-источник") { enter { showTmdbOnlineSources(video.identity,selectedSeason=activeSeason,selectedVoice=selectedVoice) } })
+            content.addView(button("Другой онлайн-источник") { enter { chooseOtherSource(video.identity,video.resumeCard,activeSeason,selectedVoice) } })
         }
+        if(video.catalogItem==null)content.addView(button("Другой онлайн-источник") {
+            enter { chooseOtherSource(video.identity,video.resumeCard,activeSeason,selectedVoice) }
+        })
         content.addView(button("Обновить список и ссылки") { online(video.item,refresh=true,selectedSeason=activeSeason,selectedVoice=selectedVoice,catalogItem=video.catalogItem,playerIndex=video.playerIndex.takeIf { video.pinnedPlayer }) })
         if(focusFirst&&hadFocus)content.post { episodeFocus?.invoke() }
     }
@@ -1323,13 +1446,15 @@ open class MediaCenterActivity : AppCompatActivity() {
     }
     private fun playOnline(video: OnlineVideo, episode: OnlineEpisode, quality: Int, returnTo: Screen? = null) {
         if (System.currentTimeMillis() - video.fetchedAt > 180000) {
-            online(video.identity, CardMeta(video.identity.title, seasonNumber = episode.season.takeIf { it>0 }, episodeNumber = episode.number,
-                translator = episode.voice, quality = quality.toString()), refresh = true, returnTo = returnTo ?: snapshot(),playerIndex=video.playerIndex.takeIf { video.pinnedPlayer }); return
+            online(video.identity, (video.resumeCard?.takeIf { (it.seasonNumber ?: 0)==episode.season&&(it.episodeNumber ?: 0)==episode.number } ?: CardMeta(video.identity.title)).copy(
+                seasonNumber=episode.season.takeIf { it>0 },episodeNumber=episode.number,translator=episode.voice,quality=quality.toString()), refresh = true, returnTo = returnTo ?: snapshot(),playerIndex=video.playerIndex.takeIf { video.pinnedPlayer }); return
         }
         val previous=returnTo ?: snapshot()
+        sourceContext=video.identity.key to (video.resumeCard?.takeIf { (it.seasonNumber ?: 0)==episode.season&&(it.episodeNumber ?: 0)==episode.number } ?: progressCard(video.identity,episode.season,episode.number)).copy(
+            seasonNumber=episode.season.takeIf { it>0 },episodeNumber=episode.number.takeIf { it>0 },translator=episode.voice,quality=quality.toString())
         work("Проверяю доступность видео…",onlineItem=video.identity,onlineRecovery=
             if(CenterOnline.manualPlayers(video.item.provider)&&video.playerCount>1)({chooseOnlinePlayer(video,episode.season.takeIf { it>0 },episode.voice)}) else null,
-            onlineRefresh={online(video.item,refresh=true,selectedSeason=episode.season.takeIf { it>0 },selectedVoice=episode.voice,
+            onlineRefresh={online(video.item,video.resumeCard,refresh=true,selectedSeason=episode.season.takeIf { it>0 },selectedVoice=episode.voice,
                 catalogItem=video.catalogItem,playerIndex=video.playerIndex.takeIf { video.pinnedPlayer })}) {
             var current=video
             var selected=episode
@@ -1342,7 +1467,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                     .any { it is OnlineMediaUnavailable && it.status==404 }
                 if(!missing)throw first
                 onlineCache.remove(video.identity.key)
-                val fresh=(if(video.pinnedPlayer)resolveOnlinePlayer(video.item,video.playerIndex) else resolveOnline(video.item)).copy(catalogItem=video.catalogItem)
+                val fresh=(if(video.pinnedPlayer)resolveOnlinePlayer(video.item,video.playerIndex) else resolveOnline(video.item)).copy(catalogItem=video.catalogItem,resumeCard=video.resumeCard)
                 check(fresh.item.key==video.item.key) { "Источник вернул другую карточку" }
                 val match=fresh.episodes.singleOrNull { it.season==episode.season && it.number==episode.number && it.voice==episode.voice }
                     ?: error("Источник изменил список серий или озвучку. Обнови список")
@@ -1360,6 +1485,10 @@ open class MediaCenterActivity : AppCompatActivity() {
             } else emptyList()
             val meta=metadata(current.identity).apply {
                 addProperty("content_key",current.identity.key)
+                current.resumeCard?.takeIf { (it.seasonNumber ?: 0)==selected.season&&(it.episodeNumber ?: 0)==selected.number }?.let { resume ->
+                    resume.startPositionMs?.takeIf { it>0 }?.let { addProperty("position",it) }
+                    resume.timelineTime?.takeIf { it>0 }?.let { addProperty("timeline_time",it) }
+                }
                 if(selected.number>0) { if(selected.season>0)addProperty("season_number",selected.season);addProperty("episode_number",selected.number) }
                 addProperty("translator",selected.voice);addProperty("quality",quality.toString())
                 addProperty("headers",Gson().toJson(CenterOnline.mediaHeaders(playable,current.headers)))
@@ -1711,8 +1840,16 @@ open class MediaCenterActivity : AppCompatActivity() {
             settings()
         })
         content.addView(text("При запуске проверяем новую версию. Установку подтверждает Android.", 13, muted))
+        updateStatus?.let { content.addView(text(it,14,muted).apply {tag="update_status"}) }
         content.addView(button("Проверить обновление") { update() })
+        content.addView(button("Полки главной"){homeSettings()})
         content.addView(button("Торрент-движок · состояние и буфер") { enter { engineScreen() } })
+        content.addView(button("Сохранить резервную копию") { exportBackupLauncher.launch("LampMedia-backup.json") })
+        content.addView(button("Восстановить из резервной копии") {
+            AlertDialog.Builder(this).setTitle("Восстановить библиотеку?")
+                .setMessage("История, избранное, сериалы и прогресс будут объединены с текущими. Более свежий прогресс сохранится. Адреса подключений и ключи доступа не переносятся.")
+                .setNegativeButton("Отмена",null).setPositiveButton("Выбрать файл"){_,_->importBackupLauncher.launch(arrayOf("application/json","text/plain","application/octet-stream"))}.show()
+        })
         content.addView(button("Очистить историю просмотра") {
             AlertDialog.Builder(this).setTitle("Очистить историю?").setMessage("Избранное и настройки сохранятся")
                 .setNegativeButton("Отмена", null).setPositiveButton("Очистить") { _, _ -> store.clearHistory(); Toast.makeText(this, "История очищена", Toast.LENGTH_SHORT).show() }.show()
@@ -1757,7 +1894,7 @@ open class MediaCenterActivity : AppCompatActivity() {
     }
     private fun update(available: com.lampplayer.tv.update.UpdateInfo? = null) {
         work("Проверяю обновление…") {
-            val update = available ?: UpdateManager.check(BuildConfig.VERSION_CODE)
+            val update = available ?: availableUpdate()
             if (update == null) { settings(); Toast.makeText(this@MediaCenterActivity, "Установлена последняя версия", Toast.LENGTH_SHORT).show() }
             else {
                 val file = UpdateManager.download(this@MediaCenterActivity, update.url, update.sha256) ?: error("Загрузка обновления не удалась")

@@ -121,7 +121,7 @@ class CenterStore(context: Context) {
             val id=if(provider!=null) parts.getOrNull(2)?.toIntOrNull() else card.tmdbId
             id?.let { value -> CenterTitle(value,"tv",card.title,poster=card.posterUrl,provider=provider,sourceUrl=card.sourcePage) }
         }
-        return (followed()+recent).distinctBy { it.key }
+        return (followed()+recent).distinctBy { it.key }.map { it.copy(updateLabel=seriesStatuses[seriesStatus(it.key)]) }
     }
     fun pinned(): List<CenterTitle> = runCatching {
         gson.fromJson<List<CenterTitle>>(prefs.getString("pinned", "[]"), object : TypeToken<List<CenterTitle>>() {}.type)
@@ -154,7 +154,101 @@ class CenterStore(context: Context) {
         list.add(0, CenterHistory(url, card, System.currentTimeMillis()))
         prefs.edit().putString("history", gson.toJson(list.take(30))).apply()
     }
+    fun seriesStatus(key:String):String = prefs.getString("series_status_$key","watching").orEmpty()
+        .takeIf { it in seriesStatuses } ?: "watching"
+    fun setSeriesStatus(key:String,status:String){require(status in seriesStatuses);prefs.edit().putString("series_status_$key",status).apply()}
+    fun rememberEpisodes(item:CenterTitle,episodes:List<OnlineEpisode>){
+        if(item.type!="tv")return
+        val known=episodes.filter { it.season>0&&it.number>0&&it.sources.isNotEmpty() }.map { it.season to it.number }.distinct()
+        prefs.edit().putString("known_episodes_${item.key}",gson.toJson(known.take(1000).map { "${it.first}:${it.second}" })).apply()
+    }
+    fun nextKnownEpisode(item:CenterTitle):Pair<Int,Int>? {
+        val last=history().firstOrNull { it.card.contentKey==item.key || (item.provider==null&&it.card.tmdbId==item.id&&it.card.seasonNumber!=null) }?.card ?: return null
+        val season=last.seasonNumber ?: return null;val number=last.episodeNumber ?: return null
+        val known=stringList("known_episodes_${item.key}")
+        return (season to number+1).takeIf { "${it.first}:${it.second}" in known }
+    }
+    private fun stringList(key:String):List<String> = runCatching {
+        gson.fromJson<List<String>>(prefs.getString(key,"[]"),object:TypeToken<List<String>>(){}.type)
+    }.getOrNull().orEmpty()
+    fun homeOrder(provider:String):List<String> {
+        val defaults=listOf("continue","pinned_movies","pinned_series")+CenterCatalog.homeSections(provider).map { it.id }
+        return (stringList("home_order_$provider").filter { it in defaults }+defaults).distinct()
+    }
+    fun homeHidden(provider:String)=stringList("home_hidden_$provider").toSet()
+    fun setHomeOrder(provider:String,order:List<String>){
+        require(order.toSet()==homeOrder(provider).toSet()&&order.size==order.distinct().size)
+        prefs.edit().putString("home_order_$provider",gson.toJson(order)).apply()
+    }
+    fun toggleHomeShelf(provider:String,id:String){
+        require(id in homeOrder(provider));val hidden=homeHidden(provider).toMutableSet()
+        if(!hidden.add(id))hidden.remove(id)
+        prefs.edit().putString("home_hidden_$provider",gson.toJson(hidden)).apply()
+    }
+    fun resetHome(provider:String){prefs.edit().remove("home_order_$provider").remove("home_hidden_$provider").apply()}
+
+    private fun backupKey(key:String)=key in setOf("favorites","pinned","followed","history","searches","card_size","search_catalog","catalog") ||
+        listOf("voice_","quality_","online_","series_status_","known_episodes_","home_order_","home_hidden_","browse_").any { key.startsWith(it) }
+    fun backupEntries():Map<String,String> = prefs.all.filterKeys(::backupKey).mapValues { (key,value) ->
+        if(key=="history")gson.toJson(history().map { it.copy(card=it.card.copy(headers=emptyMap())) }) else value.toString()
+    }
+    fun validateBackup(entries:Map<String,String>) {
+        require(entries.size<=10000){"Слишком много записей библиотеки"}
+        entries.forEach { (key,value) ->
+            require(backupKey(key)&&key.length<=600&&value.length<=4*1024*1024){"Неверное поле резервной копии"}
+            when {
+                key in listOf("favorites","pinned","followed") -> {
+                    val items=gson.fromJson<List<CenterTitle>>(value,object:TypeToken<List<CenterTitle>>(){}.type)
+                    require(items.size<=1000&&items.all { it.id>0&&it.type in listOf("movie","tv")&&it.title.isNotBlank() }){"Неверные карточки библиотеки"}
+                }
+                key=="history" -> {
+                    val items=gson.fromJson<List<CenterHistory>>(value,object:TypeToken<List<CenterHistory>>(){}.type)
+                    require(items.size<=1000&&items.all { it.at>=0&&it.card.title.isNotBlank()&&it.url.toHttpUrlOrNull()!=null }){"Неверная история просмотра"}
+                }
+                key=="searches"||key.startsWith("home_")||key.startsWith("known_episodes_") -> {
+                    val items=gson.fromJson<List<String>>(value,object:TypeToken<List<String>>(){}.type)
+                    require(items.size<=1000&&items.all { it.length<=600 }){"Неверный список в резервной копии"}
+                }
+                key.startsWith("quality_") -> require(value.toIntOrNull() in 0..10000){"Неверное качество"}
+                key.startsWith("series_status_") -> require(value in seriesStatuses){"Неверный статус сериала"}
+                key.startsWith("online_")&&!key.startsWith("online_last_") -> {
+                    val item=gson.fromJson(value,CenterTitle::class.java)
+                    require(item.id>0&&item.provider in CenterOnlineMatch.providers&&item.title.isNotBlank()&&runCatching { CenterOnline.source(item) }.isSuccess){"Неверная привязка источника"}
+                }
+                key.startsWith("browse_")&&(key.endsWith("_year")||key.endsWith("_genre")) -> require(value.toIntOrNull()!=null)
+                key.startsWith("browse_")&&key.endsWith("_translated_only") -> require(value in listOf("true","false"))
+            }
+        }
+    }
+    fun mergeBackup(entries:Map<String,String>):Int {
+        validateBackup(entries)
+        val edit=prefs.edit();var imported=0
+        entries.forEach { (key,value) ->
+            when {
+                key in listOf("favorites","pinned","followed") -> {
+                    val incoming=gson.fromJson<List<CenterTitle>>(value,object:TypeToken<List<CenterTitle>>(){}.type)
+                    val existing=when(key){"favorites"->favorites();"pinned"->pinned();else->followed()}
+                    val merged=(existing+incoming).distinctBy { it.key }.take(if(key=="pinned")30 else 200)
+                    edit.putString(key,gson.toJson(merged));imported+=(merged.size-existing.size).coerceAtLeast(0)
+                }
+                key=="history" -> {
+                    val incoming=gson.fromJson<List<CenterHistory>>(value,object:TypeToken<List<CenterHistory>>(){}.type).map { it.copy(card=it.card.copy(headers=emptyMap())) }
+                    val existing=history();val merged=(existing+incoming).sortedByDescending { it.at }.distinctBy { historyKey(it.card) }.take(30)
+                    edit.putString(key,gson.toJson(merged));imported+=(merged.size-existing.size).coerceAtLeast(0)
+                }
+                !prefs.contains(key) -> {
+                    if(key.startsWith("quality_")||key.startsWith("browse_")&&(key.endsWith("_year")||key.endsWith("_genre")))edit.putInt(key,value.toInt())
+                    else if(key.startsWith("browse_")&&key.endsWith("_translated_only"))edit.putBoolean(key,value.toBoolean())
+                    else edit.putString(key,value)
+                    imported++
+                }
+            }
+        }
+        check(edit.commit()){ "Не удалось сохранить библиотеку" };return imported
+    }
+
     companion object {
+        val seriesStatuses=linkedMapOf("watching" to "Смотрю","unwatched" to "Есть непросмотренные","waiting" to "Жду продолжения","done" to "Досмотрено")
         fun rebase(url: String, base: String): String {
             val original = url.toHttpUrlOrNull() ?: return url
             val target = base.toHttpUrlOrNull() ?: return url

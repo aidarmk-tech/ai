@@ -110,4 +110,35 @@ class PositionDataStore @Inject constructor(
             .firstOrNull() ?: return null
         return runCatching { gson.fromJson(json, ShowData::class.java) }.getOrNull()
     }
+    suspend fun backupEntries():Map<String,String> = context.positionDataStore.data.firstOrNull()?.asMap().orEmpty()
+        .mapNotNull { (key,value) -> (value as? String)?.let { key.name to it } }.toMap()
+
+    suspend fun mergeBackup(entries:Map<String,String>):Int {
+        validateBackup(entries)
+        var imported=0
+        context.positionDataStore.edit { prefs -> entries.forEach { (name,json) ->
+            val key=stringPreferencesKey(name);val existing=prefs[key]
+            val replace=existing==null || (!name.startsWith("s")&&runCatching {
+                gson.fromJson(json,PlaybackPosition::class.java).updated > gson.fromJson(existing,PlaybackPosition::class.java).updated
+            }.getOrDefault(true))
+            if(replace){prefs[key]=json;imported++}
+        } }
+        return imported
+    }
+    fun validateBackup(entries:Map<String,String>) {
+        require(entries.size<=50000){"Слишком много записей прогресса"}
+        entries.forEach { (key,json) ->
+            require(key.length in 2..500&&key.first() in "res"&&json.length<=8000){"Неверная запись прогресса"}
+            require(com.google.gson.JsonParser.parseString(json).isJsonObject){"Неверный формат прогресса"}
+            if(key.startsWith("s")) {
+                val data=gson.fromJson(json,ShowData::class.java)
+                require(listOfNotNull(data.introEnd,data.creditsStart).all { it.isFinite()&&it>=0 }){"Неверные метки интро"}
+                require(listOfNotNull(data.audio,data.subtitle).all { it>=-1 }){"Неверные настройки дорожек"}
+            } else {
+                val data=gson.fromJson(json,PlaybackPosition::class.java)
+                require(data.time.isFinite()&&data.duration.isFinite()&&data.time>=0&&data.duration>=0&&data.percent in 0..100&&data.updated>=0){"Неверное время просмотра"}
+            }
+        }
+    }
+
 }

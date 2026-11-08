@@ -7,6 +7,7 @@ import android.content.pm.Signature
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.ensureActive
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
@@ -34,16 +35,36 @@ object UpdateManager {
         "https://github.com/aidarmk-tech/ai/releases/download/media-center/version.json"
         else "https://github.com/aidarmk-tech/ai/releases/download/auto/version.json"
 
-    /** Returns update info if version.json advertises a newer versionCode, else null. */
-    suspend fun check(currentCode: Int): UpdateInfo? = withContext(Dispatchers.IO) {
-        runCatching {
-            val txt = httpGet(VERSION_URL) ?: return@runCatching null
-            val o = JSONObject(txt)
-            val code = o.optInt("versionCode", 0)
-            val url = o.optString("url", "")
-            if (code <= currentCode || url.isBlank()) return@runCatching null
-            UpdateInfo(code, o.optString("versionName", ""), url, o.optString("notes", ""), o.optString("sha256", ""))
-        }.getOrNull()
+    /** Legacy LampPlayer callers keep their nullable background API. LampMedia uses checkStrict. */
+    suspend fun check(currentCode:Int):UpdateInfo? = try { checkStrict(currentCode) }
+        catch(e:kotlinx.coroutines.CancellationException) { throw e } catch(_:Exception) { null }
+
+    suspend fun checkStrict(currentCode:Int):UpdateInfo? = withContext(Dispatchers.IO) {
+        checkUsing(currentCode) { httpGet(VERSION_URL+"?check="+System.currentTimeMillis()) }
+    }
+
+    /** Only transient transport errors are retried; an invalid manifest is never 'up to date'. */
+    internal suspend fun checkUsing(currentCode:Int,load:suspend ()->String):UpdateInfo? {
+        var last:java.io.IOException?=null
+        repeat(2) { attempt ->
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            val txt=try { load() } catch(e:java.io.IOException) {
+                last=e
+                if(attempt==0)kotlinx.coroutines.delay(600)
+                return@repeat
+            }
+            return parseManifest(txt,currentCode)
+        }
+        throw java.io.IOException("Не удалось проверить обновление. Проверь соединение и повтори",last)
+    }
+    internal fun parseManifest(txt:String,currentCode:Int):UpdateInfo? {
+        val o=try { JSONObject(txt) } catch(e:Exception) { throw IllegalStateException("Сервер вернул неверные данные обновления",e) }
+        val code=o.optInt("versionCode",0);val name=o.optString("versionName","")
+        val url=o.optString("url","");val hash=o.optString("sha256","")
+        check(code>0&&name.isNotBlank()&&url.startsWith("https://")&&Regex("[0-9a-fA-F]{64}").matches(hash)) {
+            "Сервер вернул неполные данные обновления. Повтори позднее"
+        }
+        return if(code<=currentCode)null else UpdateInfo(code,name,url,o.optString("notes",""),hash)
     }
 
     /**
@@ -128,8 +149,16 @@ object UpdateManager {
         return sigs.map { md.digest(it.toByteArray()).joinToString("") { b -> "%02x".format(b) } }.toSet()
     }
 
-    private fun httpGet(url: String): String? =
-        runCatching { openStream(url).use { it.readBytes().toString(Charsets.UTF_8) } }.getOrNull()
+    private fun httpGet(url:String):String = openStream(url).use {
+        val bytes=it.readBytesLimited(1024*1024)
+        bytes.toString(Charsets.UTF_8)
+    }
+    private fun java.io.InputStream.readBytesLimited(limit:Int):ByteArray {
+        val out=java.io.ByteArrayOutputStream();val buffer=ByteArray(8192)
+        while(true){val n=read(buffer);if(n<0)break
+            check(out.size()+n<=limit){"Слишком большой ответ сервера обновления"};out.write(buffer,0,n)}
+        return out.toByteArray()
+    }
 
     /** HTTPS-only, with a bounded redirect chain that must also stay HTTPS. */
     private fun openStream(url: String): java.io.InputStream {
@@ -138,6 +167,8 @@ object UpdateManager {
         while (true) {
             val c = (u.openConnection() as HttpURLConnection).apply {
                 connectTimeout = 15000; readTimeout = 30000
+                useCaches = false
+                setRequestProperty("Cache-Control","no-cache, no-store")
                 instanceFollowRedirects = false   // inspect each hop ourselves
                 setRequestProperty("User-Agent", "LampPlayer")
             }
@@ -147,7 +178,8 @@ object UpdateManager {
                 require(next.protocol.equals("https", true)) { "refusing HTTPS→HTTP downgrade in update redirect" }
                 u = next; continue
             }
-            return c.inputStream
+            if(code !in 200..299){c.disconnect();throw java.io.IOException("Сервер обновления вернул HTTP $code")}
+            return object:java.io.FilterInputStream(c.inputStream){override fun close(){try{super.close()}finally{c.disconnect()}}}
         }
     }
 }

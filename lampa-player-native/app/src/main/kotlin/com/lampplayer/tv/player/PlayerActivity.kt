@@ -272,7 +272,7 @@ class PlayerActivity : AppCompatActivity() {
             val actions = android.widget.LinearLayout(this).apply { orientation = android.widget.LinearLayout.VERTICAL }
             // Read current metadata on click: the user may have advanced to another episode.
             val recoveryActions = if(intent.getBooleanExtra("center_online",false))
-                listOf("refresh" to "Обновить ссылку","quality" to "Выбрать качество")+
+                listOf("refresh" to "Обновить ссылку","quality" to "Выбрать качество","source" to "Другой онлайн-источник")+
                     (if(intent.getIntExtra("center_player_count",1)>1)listOf("source_player" to "Другой плеер источника") else emptyList())+
                     listOf("torrent" to "Выбрать раздачу")
                 else listOf("torrent" to "Выбрать другую раздачу")
@@ -280,7 +280,8 @@ class PlayerActivity : AppCompatActivity() {
                 val button = android.widget.Button(this).apply {
                     text = title; isFocusable = true; tag = "recovery_$action"
                     setOnClickListener {
-                        val card = vm.uiState.value.card ?: return@setOnClickListener
+                        val original = vm.uiState.value.card ?: return@setOnClickListener
+                        val card=original.copy(startPositionMs=vm.positionMs().takeIf { it>0 } ?: original.startPositionMs,fromStart=false)
                         setResult(android.app.Activity.RESULT_FIRST_USER, Intent().putExtra("recovery", action)
                             .putExtra("card", com.google.gson.Gson().toJson(card))
                             .putExtra("center_player_index",intent.getIntExtra("center_player_index",0))

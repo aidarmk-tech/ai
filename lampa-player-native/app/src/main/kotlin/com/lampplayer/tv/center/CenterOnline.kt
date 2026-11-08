@@ -29,7 +29,7 @@ import java.util.Locale
 import kotlin.coroutines.resume
 
 data class OnlineEpisode(val season:Int,val number:Int,val title:String,val voice:String,val sources:Map<Int,String>,val alternatives:Map<Int,List<String>> = emptyMap())
-data class OnlineVideo(val item:CenterTitle,val episodes:List<OnlineEpisode>,val headers:Map<String,String>,val fetchedAt:Long=System.currentTimeMillis(),val catalogItem:CenterTitle?=null,val notice:String?=null,val playerIndex:Int=0,val playerCount:Int=1,val pinnedPlayer:Boolean=false) {
+data class OnlineVideo(val item:CenterTitle,val episodes:List<OnlineEpisode>,val headers:Map<String,String>,val fetchedAt:Long=System.currentTimeMillis(),val catalogItem:CenterTitle?=null,val notice:String?=null,val playerIndex:Int=0,val playerCount:Int=1,val pinnedPlayer:Boolean=false,val resumeCard:com.lampplayer.tv.domain.model.CardMeta?=null) {
     val identity get()=catalogItem ?: item
 }
 class OnlineSourceBlocked(val reason:String,message:String):IllegalStateException(message)

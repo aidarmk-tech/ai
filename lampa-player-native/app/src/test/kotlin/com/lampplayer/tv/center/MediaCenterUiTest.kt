@@ -53,9 +53,10 @@ class MediaCenterUiTest {
         override val backend=FakeBackend()
         val categoryCalls get()=backend.sectionCalls
         var updateChecks = 0
+        var updateFailure:Exception?=null
         var uptime = 10000L
         override fun elapsedTime() = uptime
-        override suspend fun availableUpdate(): com.lampplayer.tv.update.UpdateInfo? { updateChecks++; return null }
+        override suspend fun availableUpdate(): com.lampplayer.tv.update.UpdateInfo? { updateChecks++;updateFailure?.let {throw it}; return null }
         var nextOnline:OnlineVideo?=null
         var onlineCalls=0
         val requestedPlayers=mutableListOf<Int?>()
@@ -83,6 +84,7 @@ class MediaCenterUiTest {
         var realLibraryNavigation=false
         fun browseFixture(items:List<CenterTitle>,request:CenterBrowse) { showHome(items,"Результаты поиска",1,null,request) }
         fun mineFixture() { mySeriesScreen() }
+        fun onlineFixture(video:OnlineVideo,season:Int?=null,voice:String?=null) { showOnline(video,season,voice) }
         var failGrid=false
         override suspend fun nextGridPage(provider:String,category:CenterSection?,type:String,number:Int):List<CenterTitle> {
             gridCalls.add(number)
@@ -1480,8 +1482,8 @@ class MediaCenterUiTest {
             }
             host.dashboardFixture(boards);repeat(4) { frame(root) }
             val texts=all(root).filterIsInstance<TextView>().map { it.text.toString() }
-            assertTrue(texts.indexOf("Продолжить просмотр")<texts.indexOf("Закреплённое"))
-            assertTrue(texts.indexOf("Закреплённое")<texts.indexOf("Свежие фильмы"))
+            assertTrue(texts.indexOf("Продолжить просмотр")<texts.indexOf("Закреплённые фильмы"))
+            assertTrue(texts.indexOf("Закреплённые фильмы")<texts.indexOf("Свежие фильмы"))
             assertFalse(texts.contains("Сериалы недели"))
             assertTrue(texts.contains("Премьеры за 180 дней · заметные фильмы выше"))
             screenshot(root,"media-center-category-home")
@@ -1499,10 +1501,10 @@ class MediaCenterUiTest {
             host.failHomeAfter(gate)
             host.realHomeFixture();repeat(4){frame(root)}
             assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Продолжить просмотр" })
-            assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Закреплённое" })
+            assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Закреплённые фильмы" })
             gate.complete(Unit);repeat(8){frame(root)}
             val texts=all(root).filterIsInstance<TextView>().map { it.text.toString() }
-            assertTrue(texts.contains("Продолжить просмотр"));assertTrue(texts.contains("Закреплённое"))
+            assertTrue(texts.contains("Продолжить просмотр"));assertTrue(texts.contains("Закреплённые фильмы"))
             assertFalse(texts.contains("Не удалось загрузить"))
             assertTrue(texts.any { it.startsWith("Не загрузились:") })
         } finally { controller.pause().stop().destroy() }
@@ -1519,6 +1521,70 @@ class MediaCenterUiTest {
             all(root).first { it.tag=="menu_handle" }.performClick();frame(root)
             host.onBackPressedDispatcher.onBackPressed();frame(root)
             assertEquals(poster.tag,host.window.decorView.findFocus()?.tag)
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun switchingSitesCarriesTheExactEpisodeAndTimestampIntoTheNewPlayerIntent() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(153312,"tv","Король Талсы",year="2022")
+            val first=tmdbSource("kinovod");val second=tmdbSource("kinotac")
+            val card=com.lampplayer.tv.domain.model.CardMeta(item.title,tmdbId=item.id,contentKey=item.key,
+                seasonNumber=2,episodeNumber=5,translator="Voice",quality="720",startPositionMs=425000)
+            CenterStore(host).setOnlineSource(item,first)
+            kotlinx.coroutines.runBlocking { com.lampplayer.tv.data.datastore.PositionDataStore(host).savePosition("https://video.test/old",card,
+                com.lampplayer.tv.domain.model.PlaybackPosition(time=425.0)) }
+            host.onlineFixture(OnlineVideo(first,listOf(OnlineEpisode(2,5,"Пятая","Voice",mapOf(720 to "https://video.test/old"))),emptyMap(),catalogItem=item,resumeCard=card),2,"Voice")
+            repeat(3){frame(root)}
+            label(root,"Другой онлайн-источник").performClick();repeat(6){frame(root)}
+            assertFalse(all(root).any { it.tag=="online_source:kinovod" })
+            host.sourceResults["kinotac"]=listOf(second)
+            host.nextOnline=OnlineVideo(second,listOf(OnlineEpisode(2,5,"Пятая","Voice",mapOf(720 to "https://video.test/new"))),emptyMap())
+            all(root).first { it.tag=="online_source:kinotac" }.performClick();repeat(8){frame(root)}
+            val played=com.lampplayer.tv.player.IntentParser.parse(shadowOf(host).nextStartedActivity)!!
+            assertEquals("https://video.test/new",played.first)
+            assertEquals(item.key,played.second.contentKey);assertEquals(2,played.second.seasonNumber)
+            assertEquals(5,played.second.episodeNumber);assertEquals(425000L,played.second.startPositionMs)
+            assertEquals("Voice",played.second.translator)
+        } finally { controller.pause().stop().destroy() }
+    }
+    @Test fun selectingAnotherEpisodeDoesNotReuseTheTransferredTimestamp() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val item=CenterTitle(123,"tv","Show",provider="kinovod",sourceUrl="https://kinovod.pro/serial/123-show")
+            val card=com.lampplayer.tv.domain.model.CardMeta(item.title,seasonNumber=2,episodeNumber=5,startPositionMs=425000)
+            host.onlineFixture(OnlineVideo(item,listOf(OnlineEpisode(2,6,"Шестая","Voice",mapOf(720 to "https://video.test/six"))),emptyMap(),resumeCard=card),2,"Voice")
+            repeat(3){frame(root)}
+            all(root).first { it.tag=="online:2:6:Voice" }.performClick();frame(root)
+            val played=com.lampplayer.tv.player.IntentParser.parse(shadowOf(host).nextStartedActivity)!!.second
+            assertEquals(6,played.episodeNumber);assertNull(played.startPositionMs)
+        } finally { controller.pause().stop().destroy() }
+    }
+    @Test fun hiddenAndReorderedHomeShelvesRenderInTheSavedOrder() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content);val store=CenterStore(host)
+            store.catalog="tmdb";store.pin(CenterTitle(18,"movie","Pin"))
+            store.remember("https://video.test/old",com.lampplayer.tv.domain.model.CardMeta("History",tmdbId=19))
+            val order=store.homeOrder("tmdb");store.setHomeOrder("tmdb",listOf("new_movies")+order.filterNot { it=="new_movies" })
+            store.toggleHomeShelf("tmdb","new_series")
+            host.dashboardFixture(CenterSection.tmdbHome.map { it to listOf(CenterTitle(18,it.type,"Card")) });repeat(4){frame(root)}
+            val texts=all(root).filterIsInstance<TextView>().map { it.text.toString() }
+            assertTrue(texts.indexOf("Свежие фильмы")<texts.indexOf("Продолжить просмотр"))
+            assertFalse(texts.contains("Новые сериалы"));assertTrue(texts.contains("Закреплённые фильмы"))
+        } finally { controller.pause().stop().destroy() }
+    }
+    @Test fun manualUpdateNetworkFailureShowsRetryInsteadOfTheLatestVersionMessage() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            host.updateFailure=java.io.IOException("Не удалось проверить обновление")
+            all(root).first { it.tag=="Настройки" }.performClick();frame(root)
+            label(root,"Проверить обновление").performClick();repeat(3){frame(root)}
+            assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Не удалось загрузить" })
+            assertTrue(label(root,"Повторить").isShown)
         } finally { controller.pause().stop().destroy() }
     }
 
