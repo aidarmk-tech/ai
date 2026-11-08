@@ -1,20 +1,34 @@
-import re,json,datetime,urllib.request,urllib.parse,concurrent.futures
-key=re.search(r'const val API_KEY = "([^"]+)"',open("lampa-player-native/app/src/main/kotlin/com/lampplayer/tv/data/tmdb/TmdbRepository.kt",encoding="utf-8").read()).group(1)
-today=datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=5))).date()
-def get(path,params={}):
- q=urllib.parse.urlencode({"api_key":key,"language":"ru-RU",**params})
- with urllib.request.urlopen("https://api.themoviedb.org/3/"+path+"?"+q,timeout=30) as r:return json.load(r)
-def inspect(kind,mode):
- field="first_air_date" if kind=="tv" else "primary_release_date"
- p={"sort_by":field+".desc","include_adult":"false",field+".lte":str(today)}
- if mode=="recent_popular":p.update({"sort_by":"popularity.desc",field+".gte":str(today-datetime.timedelta(days=180))})
- data=get("discover/"+kind,p)
- rows=[{"id":x["id"],"title":x.get("title",x.get("name")),"original":x.get("original_title",x.get("original_name")),"lang":x.get("original_language"),"votes":x.get("vote_count"),"date":x.get("release_date",x.get("first_air_date"))} for x in data.get("results",[])]
- print("FEED",json.dumps({"kind":kind,"mode":mode,"pages":data.get("total_pages"),"rows":rows},ensure_ascii=False),flush=True)
- for row in rows[:5]:
-  if not re.search("[А-Яа-яЁё]",row["title"] or ""):
-   t=get(kind+"/"+str(row["id"])+"/translations")
-   ru=[x.get("data") for x in t.get("translations",[]) if x.get("iso_639_1")=="ru"]
-   print("TRANSLATION",json.dumps({"kind":kind,"id":row["id"],"title":row["title"],"ru":ru},ensure_ascii=False),flush=True)
-with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
- list(pool.map(lambda x:inspect(*x),[(k,m) for k in ["movie","tv"] for m in ["date","recent_popular"]]))
+import io,json,os,time,urllib.request,urllib.error,zipfile,re,html
+TOKEN=os.environ["GITHUB_TOKEN"]
+BASE="https://api.github.com/repos/aidarmk-tech/ai"
+RUN=42441753441
+def api(path):
+    req=urllib.request.Request(BASE+path,headers={"Authorization":"Bearer "+TOKEN,"Accept":"application/vnd.github+json","User-Agent":"LampMedia-check"})
+    with urllib.request.urlopen(req,timeout=30) as r:return json.load(r)
+artifact=None
+for _ in range(20):
+    artifact=next((a for a in api(f"/actions/runs/{RUN}/artifacts")["artifacts"] if a["name"]=="LampMedia-ARM"),None)
+    if artifact:break
+    time.sleep(10)
+if not artifact:
+    print("No unit-test artifact yet");raise SystemExit(0)
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self,*args,**kwargs):return None
+req=urllib.request.Request(BASE+f'/actions/artifacts/{artifact["id"]}/zip',headers={"Authorization":"Bearer "+TOKEN,"User-Agent":"LampMedia-check"})
+try:
+    response=urllib.request.build_opener(NoRedirect()).open(req,timeout=30)
+except urllib.error.HTTPError as e:
+    if e.code not in (301,302,303,307,308):raise
+    response=urllib.request.urlopen(e.headers["Location"],timeout=60)
+with response:blob=response.read()
+with zipfile.ZipFile(io.BytesIO(blob)) as z:
+    for name in z.namelist():
+        if name.endswith("com.lampplayer.tv.center.MediaCenterUiTest.html"):
+            content=z.read(name).decode()
+            errors=re.findall(r"<pre>(.*?)</pre>",content,re.S)
+            for error in errors[:6]:print("FAILURE_DETAIL",html.unescape(re.sub("<[^>]+>","",error))[:6500])
+        if name.endswith(("media-center-active-library-filters.png","media-center-poster-actions.png")):
+            import base64
+            png=z.read(name)
+            if len(png)<400000:print("RENDER "+json.dumps({"name":name,"png":base64.b64encode(png).decode()}))
+    print("Inspection complete")
