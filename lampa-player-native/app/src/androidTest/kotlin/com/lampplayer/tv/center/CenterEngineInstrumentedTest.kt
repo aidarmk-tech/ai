@@ -52,7 +52,8 @@ class CenterEngineInstrumentedTest {
                 for(section in CenterCatalog.sections(provider)) {
                     val items=catalog.browse(provider,base,section)
                     assertTrue("$provider ${section.type}: empty catalog",items.isNotEmpty())
-                    assertTrue("$provider: wrong media identity",items.all { it.provider==provider&&it.type==section.type&&it.sourceUrl?.startsWith(base)==true })
+                    assertTrue("$provider: wrong media identity",items.all { it.provider==provider&&it.type in (if(section.type=="all") setOf("movie","tv") else setOf(section.type))&&it.sourceUrl?.startsWith(base)==true })
+                    if(section.kind=="shows") assertTrue("KinoKong shows lost episodic programmes",items.any { it.type=="tv"&&!it.updateLabel.isNullOrBlank() })
                     assertTrue("$provider: no covers",items.any { !it.poster.isNullOrBlank() })
                     val next=catalog.browse(provider,base,section,2)
                     assertTrue("$provider: no next catalog page",next.isNotEmpty())
