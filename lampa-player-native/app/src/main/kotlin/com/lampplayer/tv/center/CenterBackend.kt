@@ -38,7 +38,11 @@ data class CenterFile(val id: Int, val path: String, val size: Long) {
 data class CenterBrowse(val type: String = "movie", val mode: String = "popular", val country: String = "",
     val year: Int? = null, val genre: Int? = null, val genreName: String = "", val query: String = "", val translatedOnly: Boolean = true)
 /** Upstream pagination survives pages emptied by title filtering. */
-class CenterTitlePage(private val values: List<CenterTitle>, val hasMore: Boolean) : AbstractList<CenterTitle>() {
+class CenterTitlePage(
+    private val values: List<CenterTitle>,
+    val hasMore: Boolean,
+    val sourcePage: Int? = null
+) : AbstractList<CenterTitle>() {
     override val size: Int get() = values.size
     override fun get(index: Int): CenterTitle = values[index]
 }

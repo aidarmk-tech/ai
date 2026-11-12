@@ -462,8 +462,14 @@ open class MediaCenterActivity : AppCompatActivity() {
                 val savedBoards=boards.toList();val savedUnavailable=unavailable.toList()
                 currentScreen={showDashboard(savedBoards,savedUnavailable)}
             } }.joinAll() }
-            status.text=if(unavailable.isEmpty()) "Подборки обновлены" else
-                "Не загрузились: ${unavailable.joinToString()}. Можно обновить подборки или сменить каталог."
+            val numUnavailable = provider == "num" && unavailable.isNotEmpty() &&
+                boards.none { (_, items) -> items.isNotEmpty() || (items is CenterTitlePage && items.hasMore) }
+            status.text = when {
+                numUnavailable -> "Не удалось получить подборки NUM. Можно повторить загрузку или открыть TMDB."
+                unavailable.isEmpty() -> "Подборки обновлены"
+                else -> "Не загрузились: ${unavailable.joinToString()}. Можно обновить подборки или сменить каталог."
+            }
+            if (numUnavailable) content.addView(button("Открыть каталог TMDB") { switchCatalog("tmdb") })
         }
     }
 
@@ -471,7 +477,9 @@ open class MediaCenterActivity : AppCompatActivity() {
         if (provider == "tmdb") backend.section(section, number) else catalogs.browse(provider, store.catalogHost(provider), section, number)
     protected fun loadCategory(section: CenterSection, number: Int = 1) {
         work("${section.label} · ${CenterCatalog.name(store.catalog)}…") {
-            showHome(catalogItems(store.catalog, section, number), section.label, number, section)
+            val items = catalogItems(store.catalog, section, number)
+            val sourcePage = (items as? CenterTitlePage)?.sourcePage ?: number
+            showHome(items, section.label, sourcePage, section)
         }
     }
     protected open suspend fun browsePage(provider: String, request: CenterBrowse, number: Int): List<CenterTitle> =
@@ -581,8 +589,13 @@ open class MediaCenterActivity : AppCompatActivity() {
         val ids = CenterCatalog.providers
         AlertDialog.Builder(this).setTitle("Каталог фильмов и сериалов")
             .setSingleChoiceItems(ids.map { CenterCatalog.name(it) }.toTypedArray(), ids.indexOf(store.catalog)) { dialog, index ->
-                store.catalog = ids[index]; dialog.dismiss(); navigate("Главная")
+                dialog.dismiss()
+                switchCatalog(ids[index])
             }.setNegativeButton("Закрыть", null).show()
+    }
+    private fun switchCatalog(provider: String) {
+        store.catalog = provider
+        navigate("Главная")
     }
     protected fun showDashboard(boards: List<Pair<CenterSection, List<CenterTitle>>>, unavailable: List<String> = emptyList(), loading:Boolean=false) {
         currentScreen = { showDashboard(boards, unavailable) }; page = "home"; clear("Главная"); catalogTools()
@@ -594,9 +607,17 @@ open class MediaCenterActivity : AppCompatActivity() {
             if(pinned.isNotEmpty())homeSlot(key){section(if(type=="tv")"Закреплённые сериалы" else "Закреплённые фильмы");shelf(pinned,"pinned:");space(content,14)}
         }
         val visibleBoards=boards.filter { (_,items) -> items.isNotEmpty() || (items is CenterTitlePage&&items.hasMore) }
-        if(visibleBoards.isEmpty()&&!loading)content.addView(text("Подборки пока пусты. Открой разделы или выбери другой каталог.",15,muted))
+        val numUnavailable = provider == "num" && visibleBoards.isEmpty() && unavailable.isNotEmpty()
+        if (visibleBoards.isEmpty() && !loading && !numUnavailable) {
+            content.addView(text("Подборки пока пусты. Открой разделы или выбери другой каталог.", 15, muted))
+        }
         visibleBoards.forEach { (category,items) -> dashboardBoard(category,items) }
-        if (unavailable.isNotEmpty()) content.addView(text("Не загрузились: ${unavailable.joinToString()}. Можно обновить подборки или сменить каталог.", 14, muted))
+        if (numUnavailable) {
+            content.addView(text("Не удалось получить подборки NUM. Можно повторить загрузку или открыть TMDB.", 14, muted))
+            content.addView(button("Открыть каталог TMDB") { switchCatalog("tmdb") })
+        } else if (unavailable.isNotEmpty()) {
+            content.addView(text("Не загрузились: ${unavailable.joinToString()}. Можно обновить подборки или сменить каталог.", 14, muted))
+        }
         content.addView(button("Полки главной"){homeSettings()})
         content.addView(button("Обновить подборки") { catalogs.clearCache(); loadHome() })
     }
@@ -610,6 +631,9 @@ open class MediaCenterActivity : AppCompatActivity() {
         if(items.isEmpty() && !(items is CenterTitlePage && items.hasMore))return
         homeSlot(category.id) {
             section(category.label)
+            if (items is CenterTitlePage && items.sourcePage == 2) {
+                content.addView(text("NUM: первая страница пуста. Показаны карточки со второй страницы.", 13, muted))
+            }
             if(category.description.isNotBlank())content.addView(text(category.description,13,muted).apply { tag="section_info:${category.id}" })
             if(items.isNotEmpty())shelf(items,"${category.id}:")
             content.addView(button("Все: ${category.label}   ›") { enter { loadCategory(category) } });space(content,14)

@@ -5,6 +5,10 @@ import com.lampplayer.tv.data.datastore.PositionDataStore
 import com.lampplayer.tv.domain.model.CardMeta
 import com.lampplayer.tv.domain.model.PlaybackPosition
 import kotlinx.coroutines.runBlocking
+import okhttp3.Call
+import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -52,6 +56,47 @@ class CenterNumAndResumeTest {
         assertFalse(CenterCatalog.numPage("""{"total_pages":1,"results":[]}""",section,1).hasMore)
         assertTrue(runCatching { CenterCatalog.numPage("{}",section,1) }.isFailure)
     }
+    @Test fun numRecoversFromAnEmptyFirstPageWithoutLosingItsPagination() = runBlocking {
+        MockWebServer().use { server ->
+            val empty = """{"page":1,"total_pages":1,"total_results":0,"results":[]}"""
+            server.enqueue(MockResponse().setBody(empty))
+            server.enqueue(MockResponse().setBody(
+                """{"page":2,"total_pages":3,"results":[{"id":17,"title":"Фильм"}]}"""
+            ))
+            val http = OkHttpClient()
+            val catalog = CenterCatalog(Call.Factory { request ->
+                val local = server.url(request.url.encodedPath + "?" + request.url.encodedQuery)
+                http.newCall(request.newBuilder().url(local).build())
+            })
+            val base = CenterCatalog.defaultHost("num")
+            val section = CenterCatalog.sections("num").first()
+            val page = catalog.browse("num", base, section) as CenterTitlePage
+            assertEquals(listOf("tmdb:movie:17"), page.map { it.key })
+            assertEquals(2, page.sourcePage)
+            assertTrue(page.hasMore)
+            assertEquals("/movies_new?page=1&language=ru", server.takeRequest().path)
+            assertEquals("/movies_new?page=2&language=ru", server.takeRequest().path)
+            server.enqueue(MockResponse().setBody(
+                """{"page":3,"total_pages":3,"results":[{"id":19,"title":"Следующий фильм"}]}"""
+            ))
+            val next = catalog.browse("num", base, section, requireNotNull(page.sourcePage) + 1) as CenterTitlePage
+            assertEquals("tmdb:movie:19", next.single().key)
+            assertFalse(next.hasMore)
+            assertEquals("/movies_new?page=3&language=ru", server.takeRequest().path)
+
+            catalog.clearCache()
+            server.enqueue(MockResponse().setBody(empty))
+            server.enqueue(MockResponse().setBody(empty))
+            val unavailable = runCatching { catalog.browse("num", base, section) }
+            assertTrue(unavailable.exceptionOrNull()?.message.orEmpty().startsWith("NUM сейчас не отдаёт"))
+            server.enqueue(MockResponse().setBody(
+                """{"page":1,"total_pages":1,"results":[{"id":18,"title":"Новинка"}]}"""
+            ))
+            assertEquals("tmdb:movie:18", catalog.browse("num", base, section).single().key)
+            assertEquals(6, server.requestCount)
+        }
+    }
+
     @Test fun numCatalogUsesExplicitTmdbSearchFallback() {
         val store=CenterStore(RuntimeEnvironment.getApplication())
         store.catalog="num"

@@ -52,7 +52,7 @@ data class CenterSection(val id: String, val label: String, val type: String, va
 }
 
 /** Read-only site catalogs. Playback remains a separate, explicit user action. */
-class CenterCatalog {
+class CenterCatalog(private val calls: Call.Factory = http) {
     companion object {
         private val http = OkHttpClient.Builder().connectTimeout(10,TimeUnit.SECONDS)
             .readTimeout(20,TimeUnit.SECONDS).callTimeout(30,TimeUnit.SECONDS).build()
@@ -226,7 +226,7 @@ class CenterCatalog {
             }.distinctBy { it.key }
             val total=root.get("total_pages")?.takeIf { it.isJsonPrimitive }?.asString?.toIntOrNull()
                 ?: error("NUM: нет данных о страницах")
-            return CenterTitlePage(items,number<total)
+            return CenterTitlePage(items,number<total,sourcePage=number)
         }
         private fun Element.absolute(attr: String) = absUrl(attr).takeIf { it.toHttpUrlOrNull() != null }
         private fun Element.poster(): String? {
@@ -617,7 +617,7 @@ class CenterCatalog {
     }
     private data class Page(val bytes:ByteArray,val url:String)
     private suspend fun request(url: HttpUrl): Page = suspendCancellableCoroutine { continuation ->
-        val call=http.newCall(Request.Builder().url(url).header("User-Agent",UA).apply {
+        val call=calls.newCall(Request.Builder().url(url).header("User-Agent",UA).apply {
             if(url.encodedPath.startsWith("/api/")) header("X-Requested-With","XMLHttpRequest")
         }.build())
         continuation.invokeOnCancellation { call.cancel() }
@@ -649,8 +649,23 @@ class CenterCatalog {
             if(previous != null && System.currentTimeMillis()-previous.at<120000 && previous.hasNext==false) return emptyList()
         }
         if(provider=="num") {
-            val items=numPage(request(url).bytes.toString(Charsets.UTF_8),section,number)
-            synchronized(cache) { cache[url.toString()]=Cache(System.currentTimeMillis(),items,items.hasMore) }
+            var items = numPage(request(url).bytes.toString(Charsets.UTF_8), section, number)
+            val publicHost = defaultHost("num").toHttpUrl().host
+            // The public API can advertise an empty catalog while page 2 still has entries.
+            if (url.host == publicHost && number == 1 && items.isEmpty() && !items.hasMore) {
+                val next = route(provider, base, section, 2)
+                items = numPage(request(next).bytes.toString(Charsets.UTF_8), section, 2)
+                check(items.isNotEmpty()) { "NUM сейчас не отдаёт карточки. Обнови подборки позже или выбери другой каталог." }
+            }
+            synchronized(cache) {
+                val at = System.currentTimeMillis()
+                val sourcePage = items.sourcePage ?: number
+                if (sourcePage != number) {
+                    val source = route(provider, base, section, sourcePage)
+                    cache[source.toString()] = Cache(at, items, items.hasMore)
+                }
+                cache[url.toString()] = Cache(at, items, items.hasMore)
+            }
             return items
         }
         val document=page(url)

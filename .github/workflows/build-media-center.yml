@@ -97,7 +97,7 @@ jobs:
           data={'versionCode':${{ github.run_number }},'versionName':'0.1.${{ github.run_number }}',
             'url':'https://github.com/${{ github.repository }}/releases/download/media-center/'+p.name,
             'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),
-            'notes':'KinoKong: отдельный раздел и полка ТВ-шоу и передачи. Подгрузка страниц, распознавание выпусков и открытие программ в существующем онлайн-плеере.'}
+            'notes':'NUM: восстановление подборок со второй страницы при пустом первом ответе. Если NUM недоступен, можно открыть TMDB с главной.'}
           pathlib.Path('dist/version.json').write_text(json.dumps(data,ensure_ascii=False,indent=2))
           PY
       - uses: softprops/action-gh-release@v2
