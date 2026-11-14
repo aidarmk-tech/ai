@@ -762,13 +762,15 @@ class MediaCenterUiTest {
             val tmdb=CenterTitle(153312,"tv","Король Талсы",original="Tulsa King",year="2022")
             host.sourceResults["kinokong"]=listOf(CenterTitle(18,"movie","Король Талсы (2022) 1-2 сезон",year="2022",provider="kinokong",sourceUrl="https://kinokong.es/18-show.html"))
             host.detailFixture(CenterDetails(tmdb,emptyList(),""));repeat(3) { frame(root) }
-            val queried=host.sourceQueries.size
-            assertTrue("prefetch queried every site",host.sourceQueries.map { it.first }.toSet()==CenterOnlineMatch.providers.toSet())
+            // Киновод в тестовом окружении отвечает через searchKinoVod, остальные сайты — через sourceQueries.
+            val queried=host.sourceQueries.size+host.kinoQueries.size
+            assertEquals(CenterOnlineMatch.providers.toSet()-"kinovod",host.sourceQueries.map { it.first }.toSet())
+            assertTrue(host.kinoQueries.isNotEmpty())
             host.showTmdbOnlineSources(tmdb);repeat(3) { frame(root) }
             assertEquals("KinoKong · карточка найдена",(all(root).first { it.tag=="online_source:kinokong" } as TextView).text.toString())
             assertEquals("Не найдено на Zona","Zona.movie · не найдено",(all(root).first { it.tag=="online_source:zona" } as TextView).text.toString())
             all(root).first { it.tag=="online_source:kinokong" }.performClick();repeat(4) { frame(root) }
-            assertEquals("выбор сайта не повторяет поиск",queried,host.sourceQueries.size)
+            assertEquals("выбор сайта не повторяет поиск",queried,host.sourceQueries.size+host.kinoQueries.size)
             assertEquals("tv",CenterStore(host).onlineSource(tmdb,"kinokong")?.type)
         } finally { controller.pause().stop().destroy() }
     }
