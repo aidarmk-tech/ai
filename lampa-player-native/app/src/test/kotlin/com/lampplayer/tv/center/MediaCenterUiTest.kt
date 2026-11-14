@@ -1063,7 +1063,9 @@ class MediaCenterUiTest {
                 host.sourceResults[provider]=listOf(source)
                 host.nextOnline=OnlineVideo(source,listOf(OnlineEpisode(2,5,"Пятая","Voice",mapOf(720 to "https://cdn.test/five.m3u8"))),emptyMap())
                 host.detailFixture(CenterDetails(item,listOf(1,2),""));frame(root)
-                label(root,"Смотреть онлайн").performClick();frame(root)
+                val manual = all(root).filterIsInstance<TextView>().firstOrNull { it.text == "Выбрать источник" }
+                (manual ?: label(root, "Смотреть онлайн")).performClick()
+                frame(root)
                 assertEquals(5,all(root).count { it.tag?.toString()?.startsWith("online_source:")==true })
                 assertFalse(all(root).any { it.tag=="online_source:filmix" })
                 all(root).first { it.tag=="online_source:$provider" }.performClick();repeat(4){frame(root)}
