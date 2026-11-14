@@ -104,6 +104,16 @@ class CenterStore(context: Context) {
         prefs.edit().putString("online_"+source.provider+"_"+item.key,gson.toJson(source))
             .putString("online_last_"+item.key,source.provider).apply()
     }
+    /**
+     * Привязка, найденная автоматически (поиск везде, предзагрузка): записывается, только если для этого сайта
+     * ещё нет выбора, и не меняет сайт, который пользователь выбрал последним.
+     */
+    fun suggestOnlineSource(item:CenterTitle,source:CenterTitle):Boolean {
+        if(!CenterOnlineMatch.valid(item,source)||source.type!=item.type||onlineSource(item,source.provider)!=null)return false
+        val edit=prefs.edit().putString("online_"+source.provider+"_"+item.key,gson.toJson(source))
+        if(!prefs.contains("online_last_"+item.key))edit.putString("online_last_"+item.key,source.provider)
+        edit.apply();return true
+    }
     fun searches(): List<String> = runCatching {
         gson.fromJson<List<String>>(prefs.getString("searches", "[]"), object : TypeToken<List<String>>() {}.type)
     }.getOrNull().orEmpty().filter { it.length in 2..120 }.take(20)

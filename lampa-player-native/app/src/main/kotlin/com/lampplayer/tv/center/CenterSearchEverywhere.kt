@@ -30,6 +30,29 @@ internal fun MediaCenterActivity.searchEverywhere(term: String) {
     val providers = CenterCatalog.searchProviders
     val status = text("", 14, muted).also { content.addView(it) }
     space(content, 10)
+    // Сводный ряд: одна карточка на произведение, со списком сайтов, где оно найдено.
+    val mergedSlot = column().also { content.addView(it) }
+    var mergedShown = ""
+    fun showMerged(final: Boolean) {
+        val found = everywhereResults.mapValues { (it.value as? EverywhereResult.Found)?.items.orEmpty() }
+        val merged = CenterUnified.merge(found["tmdb"].orEmpty(), found - "tmdb")
+        val signature = merged.joinToString { it.main.key + it.providers }
+        if (signature == mergedShown || (mergedSlot.hasFocus() && !final)) return
+        val hadFocus = mergedSlot.hasFocus()
+        mergedShown = signature
+        // Однозначные совпадения становятся источниками карточки TMDB, не затирая выбор пользователя.
+        merged.forEach { title -> title.confirmed.forEach { store.suggestOnlineSource(title.main, it) } }
+        mergedSlot.removeAllViews()
+        if (merged.isEmpty()) return
+        moveInto(mergedSlot) {
+            section("Все результаты", merged.size)
+            content.addView(text("Одно произведение — одна карточка. В подписи — где оно найдено.", 13, muted))
+            shelf(merged.map { it.main.copy(updateLabel = CenterUnified.label(it)) }, "everywhere:all:")
+            space(content, 18)
+            section("По каталогам")
+        }
+        if (hadFocus) mergedSlot.post { mergedSlot.getFocusables(View.FOCUS_FORWARD).firstOrNull()?.requestFocus() }
+    }
     val slots = providers.associateWith { provider ->
         column().also { slot ->
             content.addView(slot)
@@ -71,10 +94,13 @@ internal fun MediaCenterActivity.searchEverywhere(term: String) {
             space(content, 14)
         }
         refreshStatus()
+        showMerged(providers.all { it in everywhereResults })
         // Первый найденный ряд получает фокус, если пользователь ещё никуда не перешёл.
-        val focusFree = content.findFocus() == null || hadFocus
-        if (focusFree && result is EverywhereResult.Found && result.items.isNotEmpty())
-            slot.post { slot.getFocusables(View.FOCUS_FORWARD).firstOrNull()?.requestFocus() }
+        val focusFree = (content.findFocus() == null || hadFocus) && !mergedSlot.hasFocus()
+        if (focusFree && result is EverywhereResult.Found && result.items.isNotEmpty()) {
+            val target = mergedSlot.takeIf { it.childCount > 0 } ?: slot
+            target.post { target.getFocusables(View.FOCUS_FORWARD).firstOrNull()?.requestFocus() }
+        }
     }
 
     providers.filter { it in everywhereResults }.forEach { show(it, everywhereResults.getValue(it)) }

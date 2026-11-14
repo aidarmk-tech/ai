@@ -51,6 +51,8 @@ class MediaCenterUiTest {
     }
     class Host : MediaCenterActivity() {
         override val backend=FakeBackend()
+        var prefetch=false
+        override val prefetchEnabled get()=prefetch
         val categoryCalls get()=backend.sectionCalls
         var updateChecks = 0
         var updateFailure:Exception?=null
@@ -752,6 +754,43 @@ class MediaCenterUiTest {
         } finally { controller.pause().stop().destroy() }
     }
 
+    @Test fun detailPrefetchMarksSitesAndReusesResultsWhenASiteIsChosen() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            host.prefetch=true
+            val tmdb=CenterTitle(153312,"tv","Король Талсы",original="Tulsa King",year="2022")
+            host.sourceResults["kinokong"]=listOf(CenterTitle(18,"movie","Король Талсы (2022) 1-2 сезон",year="2022",provider="kinokong",sourceUrl="https://kinokong.es/18-show.html"))
+            host.detailFixture(CenterDetails(tmdb,emptyList(),""));repeat(3) { frame(root) }
+            val queried=host.sourceQueries.size
+            assertTrue("prefetch queried every site",host.sourceQueries.map { it.first }.toSet()==CenterOnlineMatch.providers.toSet())
+            host.showTmdbOnlineSources(tmdb);repeat(3) { frame(root) }
+            assertEquals("KinoKong · карточка найдена",(all(root).first { it.tag=="online_source:kinokong" } as TextView).text.toString())
+            assertEquals("Не найдено на Zona","Zona.movie · не найдено",(all(root).first { it.tag=="online_source:zona" } as TextView).text.toString())
+            all(root).first { it.tag=="online_source:kinokong" }.performClick();repeat(4) { frame(root) }
+            assertEquals("выбор сайта не повторяет поиск",queried,host.sourceQueries.size)
+            assertEquals("tv",CenterStore(host).onlineSource(tmdb,"kinokong")?.type)
+        } finally { controller.pause().stop().destroy() }
+    }
+    @Test fun searchEverywhereShowsOneCardPerTitleAndBindsExactSiteMatches() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val tmdb=CenterTitle(153312,"tv","Король Талсы",original="Tulsa King",year="2022")
+            val kong=CenterTitle(18,"movie","Король Талсы / Tulsa King",year="2022",provider="kinokong",sourceUrl="https://kinokong.es/18-show.html")
+            val gogo=CenterTitle(17,"tv","Король Талсы 2 сезон",year="2022",provider="kinogo",sourceUrl="https://kz.kinogo.moi/17-show.html")
+            host.everywhereResults.clear();host.everywhereTerm="Король"
+            host.everywhereResults["tmdb"]=EverywhereResult.Found(listOf(tmdb))
+            host.everywhereResults["kinokong"]=EverywhereResult.Found(listOf(kong))
+            host.everywhereResults["kinogo"]=EverywhereResult.Found(listOf(gogo))
+            CenterCatalog.searchProviders.filterNot { it in host.everywhereResults }.forEach { host.everywhereResults[it]=EverywhereResult.Found(emptyList()) }
+            host.searchEverywhere("Король");repeat(3) { frame(root) }
+            val merged=all(root).filter { (it.tag as? String)?.startsWith("everywhere:all:")==true }
+            assertEquals(1,merged.size)
+            assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Сериал · 2022 · TMDB, KinoKong, KinoGo · KZ" })
+            assertNotNull(CenterStore(host).onlineSource(tmdb,"kinokong"));assertNotNull(CenterStore(host).onlineSource(tmdb,"kinogo"))
+        } finally { controller.pause().stop().destroy() }
+    }
     @Test fun longReleaseListsCreateOnlyVisibleRows() {
         val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
         try {

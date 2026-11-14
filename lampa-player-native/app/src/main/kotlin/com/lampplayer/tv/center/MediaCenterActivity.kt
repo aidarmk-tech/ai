@@ -60,6 +60,10 @@ open class MediaCenterActivity : AppCompatActivity() {
     internal val engineBackend get() = backend
     internal suspend fun searchCatalogPage(provider: String, request: CenterBrowse, number: Int) = browsePage(provider, request, number)
     internal var everywhereTerm: String? = null
+    internal suspend fun searchSite(provider: String, query: String) = searchOnlineCatalog(provider, query)
+    /** Фоновый поиск совпадений на сайтах при открытии карточки TMDB (отключается в тестах с подсчётом запросов). */
+    internal open val prefetchEnabled = true
+    internal val matchPrefetch = linkedMapOf<String, MatchPrefetch>()
     internal val everywhereResults = mutableMapOf<String, EverywhereResult>()
     internal suspend fun checkForUpdate() = availableUpdate()
     protected open fun elapsedTime(): Long = android.os.SystemClock.elapsedRealtime()
@@ -1192,6 +1196,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         }
         val canOnline=movie.provider==null||CenterOnline.onlineSupported(movie.provider)
         val savedSource = if (movie.provider == null) store.onlineSource(movie) else null
+        if (canOnline && savedSource == null) prefetchMatches(movie)
         if (canOnline) {
             val label = savedSource?.let { "Смотреть · ${CenterCatalog.name(it.provider)}" } ?: "Смотреть онлайн"
             val watch = button(label) {
@@ -1293,11 +1298,19 @@ open class MediaCenterActivity : AppCompatActivity() {
             content.addView(text(listOfNotNull(card.seasonNumber?.let { "Сезон $it" },card.episodeNumber?.let { "Серия $it" },
                 card.translator,card.startPositionMs?.takeIf { it>0 }?.let { "Продолжить с ${clock(it/1000.0)}" }).joinToString(" · "),14,accent))
         }
+        val unsaved=mutableMapOf<String,TextView>()
         CenterOnlineMatch.providers.filter { it!=excludedProvider }.forEach { provider ->
             val saved=store.onlineSource(item,provider)
             content.addView(button(CenterCatalog.name(provider)+(if(saved!=null)" · сохранён выбор" else "")) {
                 enter { tmdbOnline(item,resume,refresh,returnTo,selectedSeason,selectedVoice,sourceProvider=provider) }
-            }.apply { tag="online_source:$provider" })
+            }.apply { tag="online_source:$provider";if(saved==null)unsaved[provider]=this })
+        }
+        // Если поиск по сайтам уже идёт в фоне, отмечаем, где карточка нашлась.
+        if(unsaved.isNotEmpty()&&matchPrefetch.containsKey(item.key)) lifecycleScope.launch {
+            unsaved.forEach { (provider,view) ->
+                val label=prefetchLabel(item,prefetchedMatches(item,provider))
+                if(view.isAttachedToWindow&&label.isNotEmpty()) view.text=CenterCatalog.name(provider)+label
+            }
         }
         content.addView(button("Найти торрент-раздачу") { enter { find(item,null) } })
         content.addView(button("Назад") { back() })
@@ -1350,7 +1363,8 @@ open class MediaCenterActivity : AppCompatActivity() {
             val saved=if(forceSearch)null else restored?.takeIf { it.provider==provider } ?: store.onlineSource(item,provider)
             if(saved!=null) { choose(saved);return@work }
             val queries=query?.let { listOf(it) } ?: CenterOnlineMatch.queries(item)
-            val results=coroutineScope { queries.map { term -> async {
+            val prefetched=if(query==null) prefetchedMatches(item,provider) else null
+            val results=if(prefetched!=null) listOf(Result.success(prefetched)) else coroutineScope { queries.map { term -> async {
                 try { Result.success(searchOnlineCatalog(provider,term)) } catch(e:CancellationException) { throw e } catch(e:Exception) { Result.failure<List<CenterTitle>>(e) }
             } }.awaitAll() }
             if(results.isNotEmpty()&&results.all { it.isFailure })throw results.first().exceptionOrNull()!!
