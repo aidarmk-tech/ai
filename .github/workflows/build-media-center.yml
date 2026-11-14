@@ -97,7 +97,7 @@ jobs:
           data={'versionCode':${{ github.run_number }},'versionName':'0.1.${{ github.run_number }}',
             'url':'https://github.com/${{ github.repository }}/releases/download/media-center/'+p.name,
             'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),
-            'notes':'NUM: восстановление подборок со второй страницы при пустом первом ответе. Если NUM недоступен, можно открыть TMDB с главной.'}
+            'notes':'Быстрый запуск с сохранённым источником. Главная сохраняет подборки при обновлении и показывает последние загруженные карточки при сбое.'}
           pathlib.Path('dist/version.json').write_text(json.dumps(data,ensure_ascii=False,indent=2))
           PY
       - uses: softprops/action-gh-release@v2

@@ -20,6 +20,8 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.doOnNextLayout
 import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.DiffUtil
+import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -103,6 +105,18 @@ open class MediaCenterActivity : AppCompatActivity() {
     private var compactToolbar: LinearLayout? = null
     private var seriesFilter:String?=null
     private var homeSlots=emptyMap<String,LinearLayout>()
+    private data class HomeBoard(
+        val section: CenterSection,
+        val items: List<CenterTitle>,
+        val loadedAt: Long? = null,
+        val fromCache: Boolean = false
+    )
+    private data class HomeShelf(val list: ListAdapter<CenterTitle, Poster>, val note: TextView)
+    private val homeBoards = linkedMapOf<String, HomeBoard>()
+    private val homeShelves = mutableMapOf<String, HomeShelf>()
+    private var homeStatus: TextView? = null
+    private var homeAlternative: View? = null
+    private val shelfCache by lazy { CenterShelfCache(applicationContext) }
     private var releaseFiltersExpanded = false
     private var page = "home"
     private var nav = "Главная"
@@ -373,6 +387,7 @@ open class MediaCenterActivity : AppCompatActivity() {
     }
     private fun clear(title: String) {
         menuReturnTag=null;homeSlots=emptyMap()
+        homeBoards.clear(); homeShelves.clear(); homeStatus = null; homeAlternative = null
         gridGeneration++; gridJob?.cancel(); gridJob = null; compactToolbar = null; episodeFocus=null
         content.removeAllViews(); scroll.scrollTo(0, 0)
         content.addView(text(title, 27).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) })
@@ -440,36 +455,75 @@ open class MediaCenterActivity : AppCompatActivity() {
     }
     protected open fun loadHome() {
         selected = null; catalogPage = 1
-        if (nav != "Главная") { loadLibrary(store.libraryBrowse(if(nav=="Сериалы") "tv" else "movie")); return }
+        if (nav != "Главная") {
+            loadLibrary(store.libraryBrowse(if (nav == "Сериалы") "tv" else "movie"))
+            return
+        }
+        drawDashboard(emptyList(), loading = true)
+        refreshShelves()
+    }
+
+    private fun refreshShelves() {
+        val status = homeStatus ?: return
         job?.cancel()
-        val provider=store.catalog
-        val boards=mutableListOf<Pair<CenterSection,List<CenterTitle>>>()
-        val unavailable=mutableListOf<String>()
-        showDashboard(emptyList(),loading=true)
-        val status=text("Загружаю подборки ${CenterCatalog.name(provider)}…",14,muted)
-        content.addView(status)
-        job=lifecycleScope.launch {
-            val limiter=Semaphore(3)
-            coroutineScope { CenterCatalog.homeSections(provider).filter { it.id !in store.homeHidden(provider) }.map { category -> launch {
-                val result=try { Result.success(limiter.withPermit { catalogItems(provider,category) }) }
-                    catch(e:CancellationException) { throw e }
-                    catch(e:Exception) { Result.failure<List<CenterTitle>>(e) }
-                result.fold(onSuccess={ items ->
-                    boards.add(category to items)
-                    dashboardBoard(category,items)
-                },onFailure={ unavailable.add(category.label) })
-                // Capture immutable copies for Back: later network completions cannot alter a saved screen.
-                val savedBoards=boards.toList();val savedUnavailable=unavailable.toList()
-                currentScreen={showDashboard(savedBoards,savedUnavailable)}
-            } }.joinAll() }
-            val numUnavailable = provider == "num" && unavailable.isNotEmpty() &&
-                boards.none { (_, items) -> items.isNotEmpty() || (items is CenterTitlePage && items.hasMore) }
-            status.text = when {
-                numUnavailable -> "Не удалось получить подборки NUM. Можно повторить загрузку или открыть TMDB."
-                unavailable.isEmpty() -> "Подборки обновлены"
-                else -> "Не загрузились: ${unavailable.joinToString()}. Можно обновить подборки или сменить каталог."
+        val provider = store.catalog
+        val host = if (provider == "tmdb") "" else store.catalogHost(provider)
+        val sections = CenterCatalog.homeSections(provider).filter { it.id in homeSlots }
+        val unavailable = mutableListOf<String>()
+        status.text = "Загружаю подборки ${CenterCatalog.name(provider)}…"
+        homeAlternative?.visibility = View.GONE
+        job = lifecycleScope.launch {
+            val address = withContext(Dispatchers.IO) { shelfCache.address(host) }
+            val missing = sections.filter { it.id !in homeBoards }
+            val saved = withContext(Dispatchers.IO) {
+                missing.mapNotNull { section ->
+                    shelfCache.read(provider, address, section)?.let { HomeBoard(section, it.titles(), it.at, fromCache = true) }
+                }
             }
-            if (numUnavailable) content.addView(button("Открыть каталог TMDB") { switchCatalog("tmdb") })
+            saved.forEach(::showHomeBoard)
+            rememberDashboard(unavailable)
+            val limiter = Semaphore(3)
+            coroutineScope {
+                sections.forEach { section -> launch {
+                    try {
+                        val items = limiter.withPermit {
+                            if (provider == "tmdb") backend.section(section, 1)
+                            else catalogs.browse(provider, host, section, 1)
+                        }
+                        val loadedAt = System.currentTimeMillis()
+                        showHomeBoard(HomeBoard(section, items, loadedAt))
+                        rememberDashboard(unavailable)
+                        withContext(Dispatchers.IO) { shelfCache.save(provider, address, section, items, loadedAt) }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        unavailable.add(section.label)
+                        homeBoards[section.id]?.let { board ->
+                            if (board.loadedAt != null) showHomeBoard(board.copy(fromCache = true))
+                        }
+                        rememberDashboard(unavailable)
+                    }
+                } }
+            }
+            updateDashboardStatus(unavailable)
+        }
+    }
+
+    private fun rememberDashboard(unavailable: List<String>) {
+        val boards = homeBoards.values.toList()
+        val failures = unavailable.toList()
+        currentScreen = { drawDashboard(boards, failures) }
+    }
+
+    private fun updateDashboardStatus(unavailable: List<String>, loading: Boolean = false) {
+        val numUnavailable = store.catalog == "num" && homeBoards.isEmpty() && unavailable.isNotEmpty()
+        homeAlternative?.visibility = if (numUnavailable) View.VISIBLE else View.GONE
+        homeStatus?.text = when {
+            loading -> "Загружаю подборки ${CenterCatalog.name(store.catalog)}…"
+            numUnavailable -> "Не удалось получить подборки NUM. Можно повторить загрузку или открыть TMDB."
+            unavailable.isNotEmpty() -> "Не загрузились: ${unavailable.joinToString()}. Можно обновить подборки или сменить каталог."
+            homeBoards.isEmpty() -> "Подборки пока пусты. Открой разделы или выбери другой каталог."
+            else -> ""
         }
     }
 
@@ -597,29 +651,26 @@ open class MediaCenterActivity : AppCompatActivity() {
         store.catalog = provider
         navigate("Главная")
     }
-    protected fun showDashboard(boards: List<Pair<CenterSection, List<CenterTitle>>>, unavailable: List<String> = emptyList(), loading:Boolean=false) {
-        currentScreen = { showDashboard(boards, unavailable) }; page = "home"; clear("Главная"); catalogTools()
+    protected fun showDashboard(boards: List<Pair<CenterSection, List<CenterTitle>>>, unavailable: List<String> = emptyList()) {
+        drawDashboard(boards.map { (section, items) -> HomeBoard(section, items) }, unavailable)
+    }
+
+    private fun drawDashboard(boards: List<HomeBoard>, unavailable: List<String> = emptyList(), loading: Boolean = false) {
+        page = "home"; clear("Главная"); catalogTools()
         val provider=store.catalog;val hidden=store.homeHidden(provider)
-        homeSlots=(store.homeOrder(provider)+boards.map { it.first.id }).distinct().filterNot { it in hidden }.associateWith { column().apply {visibility=View.GONE;content.addView(this)} }
+        homeSlots=(store.homeOrder(provider)+boards.map { it.section.id }).distinct().filterNot { it in hidden }.associateWith { column().apply {visibility=View.GONE;content.addView(this)} }
         if(store.history().isNotEmpty())homeSlot("continue") { section("Продолжить просмотр");historyCards(store.history().take(8));space(content,14) }
         listOf("movie" to "pinned_movies","tv" to "pinned_series").forEach { (type,key) ->
             val pinned=store.pinned().filter { it.type==type }
-            if(pinned.isNotEmpty())homeSlot(key){section(if(type=="tv")"Закреплённые сериалы" else "Закреплённые фильмы");shelf(pinned,"pinned:");space(content,14)}
+            if(pinned.isNotEmpty())homeSlot(key){section(if(type=="movie")"Закреплённые фильмы" else "Закреплённые сериалы");shelf(pinned,"pinned:");space(content,14)}
         }
-        val visibleBoards=boards.filter { (_,items) -> items.isNotEmpty() || (items is CenterTitlePage&&items.hasMore) }
-        val numUnavailable = provider == "num" && visibleBoards.isEmpty() && unavailable.isNotEmpty()
-        if (visibleBoards.isEmpty() && !loading && !numUnavailable) {
-            content.addView(text("Подборки пока пусты. Открой разделы или выбери другой каталог.", 15, muted))
-        }
-        visibleBoards.forEach { (category,items) -> dashboardBoard(category,items) }
-        if (numUnavailable) {
-            content.addView(text("Не удалось получить подборки NUM. Можно повторить загрузку или открыть TMDB.", 14, muted))
-            content.addView(button("Открыть каталог TMDB") { switchCatalog("tmdb") })
-        } else if (unavailable.isNotEmpty()) {
-            content.addView(text("Не загрузились: ${unavailable.joinToString()}. Можно обновить подборки или сменить каталог.", 14, muted))
-        }
+        boards.forEach(::showHomeBoard)
+        homeStatus = text("", 14, muted).also { content.addView(it) }
+        homeAlternative = button("Открыть каталог TMDB") { switchCatalog("tmdb") }.also { content.addView(it) }
         content.addView(button("Полки главной"){homeSettings()})
-        content.addView(button("Обновить подборки") { catalogs.clearCache(); loadHome() })
+        content.addView(button("Обновить подборки") { catalogs.clearCache(); refreshShelves() })
+        updateDashboardStatus(unavailable, loading)
+        rememberDashboard(unavailable)
     }
     private fun homeSlot(key:String,draw:()->Unit) {
         val slot=homeSlots[key] ?: return
@@ -627,17 +678,51 @@ open class MediaCenterActivity : AppCompatActivity() {
         val start=content.childCount;draw()
         while(content.childCount>start){val view=content.getChildAt(start);content.removeViewAt(start);slot.addView(view)}
     }
-    private fun dashboardBoard(category:CenterSection,items:List<CenterTitle>) {
-        if(items.isEmpty() && !(items is CenterTitlePage && items.hasMore))return
-        homeSlot(category.id) {
-            section(category.label)
-            if (items is CenterTitlePage && items.sourcePage == 2) {
-                content.addView(text("NUM: первая страница пуста. Показаны карточки со второй страницы.", 13, muted))
-            }
-            if(category.description.isNotBlank())content.addView(text(category.description,13,muted).apply { tag="section_info:${category.id}" })
-            if(items.isNotEmpty())shelf(items,"${category.id}:")
-            content.addView(button("Все: ${category.label}   ›") { enter { loadCategory(category) } });space(content,14)
+
+    private fun showHomeBoard(board: HomeBoard) {
+        val (category, items, loadedAt, fromCache) = board
+        val slot = homeSlots[category.id] ?: return
+        if (items.isEmpty() && !(items is CenterTitlePage && items.hasMore)) {
+            val focused = slot.hasFocus()
+            homeBoards.remove(category.id)
+            homeShelves.remove(category.id)
+            slot.removeAllViews()
+            slot.visibility = View.GONE
+            if (focused) findTag(content, "Обновить подборки")?.requestFocus()
+            return
         }
+        val previous = homeBoards.put(category.id, board)
+        val shelf = homeShelves[category.id] ?: run {
+            homeSlot(category.id) {
+                section(category.label)
+                if (category.description.isNotBlank()) {
+                    content.addView(text(category.description, 13, muted).apply { tag = "section_info:${category.id}" })
+                }
+                val note = text("", 13, muted)
+                content.addView(note)
+                val list = shelf(items, "${category.id}:")
+                homeShelves[category.id] = HomeShelf(list, note)
+                content.addView(button("Все: ${category.label}   ›") {
+                    val saved = homeBoards[category.id]
+                    enter {
+                        if (saved?.fromCache == true) {
+                            val sourcePage = (saved.items as? CenterTitlePage)?.sourcePage ?: 1
+                            showHome(saved.items, category.label, sourcePage, category)
+                        } else loadCategory(category)
+                    }
+                })
+                space(content, 14)
+            }
+            homeShelves.getValue(category.id)
+        }
+        if (previous != null && previous.items != items) shelf.list.submitList(items.toList())
+        shelf.note.text = when {
+            fromCache && loadedAt != null -> "Сохранённая подборка · " +
+                android.text.format.DateFormat.getMediumDateFormat(this).format(java.util.Date(loadedAt))
+            items is CenterTitlePage && items.sourcePage == 2 -> "NUM: показаны карточки со второй страницы"
+            else -> ""
+        }
+        shelf.note.visibility = if (shelf.note.text.isEmpty()) View.GONE else View.VISIBLE
     }
     private fun homeSettings() {
         val provider=store.catalog
@@ -934,12 +1019,15 @@ open class MediaCenterActivity : AppCompatActivity() {
         }
         return grid to focus
     }
-    private fun shelf(items: List<CenterTitle>, prefix: String = "") {
+    private fun shelf(items: List<CenterTitle>, prefix: String = ""): ListAdapter<CenterTitle, Poster> {
         val width = when (store.cardSize) { "compact" -> 104; "large" -> 164; else -> 132 }
         val artHeight = width * 166 / 132
         val cardHeight = artHeight + 65
-        rail(object : RecyclerView.Adapter<Poster>() {
-            override fun getItemCount() = items.size
+        val changes = object : DiffUtil.ItemCallback<CenterTitle>() {
+            override fun areItemsTheSame(old: CenterTitle, new: CenterTitle) = old.key == new.key
+            override fun areContentsTheSame(old: CenterTitle, new: CenterTitle) = old == new
+        }
+        val adapter = object : ListAdapter<CenterTitle, Poster>(changes) {
             override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Poster {
                 val view = column().apply {
                     isFocusable = true; isClickable = true; background = bg(panel)
@@ -954,7 +1042,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                 return Poster(view, art, title, info)
             }
             override fun onBindViewHolder(holder: Poster, position: Int) {
-                val item = items[position]; holder.title.text = item.title; holder.info.text = item.updateLabel?.takeIf { it.isNotBlank() } ?: listOf(item.year, item.rating.takeIf { it.isNotBlank() }?.let { "★ $it" }).filterNotNull().filter { it.isNotBlank() }.joinToString(" · ")
+                val item = getItem(position); holder.title.text = item.title; holder.info.text = item.updateLabel?.takeIf { it.isNotBlank() } ?: listOf(item.year, item.rating.takeIf { it.isNotBlank() }?.let { "★ $it" }).filterNotNull().filter { it.isNotBlank() }.joinToString(" · ")
                 holder.art.removeAllViews(); holder.art.addView(catalogArt(item, width, artHeight), FrameLayout.LayoutParams(-1, -1))
                 holder.itemView.tag = prefix + if (item.provider == null) "title:${item.type}:${item.id}" else "title:${item.key}"
                 holder.itemView.setOnClickListener { enter { detail(item) } }
@@ -964,7 +1052,10 @@ open class MediaCenterActivity : AppCompatActivity() {
                     v.animate().scaleX(if (focus) 1.025f else 1f).scaleY(if (focus) 1.025f else 1f).setDuration(100).start()
                 }
             }
-        }, cardHeight + 22)
+        }
+        adapter.submitList(items.toList())
+        rail(adapter, cardHeight + 22)
+        return adapter
     }
     private fun posterActions(item:CenterTitle,anchor:View) {
         val screen=snapshot()
@@ -1138,10 +1229,23 @@ open class MediaCenterActivity : AppCompatActivity() {
             }
         }
         val canOnline=movie.provider==null||CenterOnline.onlineSupported(movie.provider)
-        if(canOnline) {
-            val watch=button("Смотреть онлайн"){enter {if(movie.provider==null)showTmdbOnlineSources(movie) else online(movie)}}
-            if(saved==null)primary(watch)
+        val savedSource = if (movie.provider == null) store.onlineSource(movie) else null
+        if (canOnline) {
+            val label = savedSource?.let { "Смотреть · ${CenterCatalog.name(it.provider)}" } ?: "Смотреть онлайн"
+            val watch = button(label) {
+                enter {
+                    when {
+                        savedSource != null -> online(savedSource, catalogItem = movie.copy(sourceUrl = savedSource.sourceUrl), quickPlay = true)
+                        movie.provider == null -> showTmdbOnlineSources(movie)
+                        else -> online(movie)
+                    }
+                }
+            }
+            if (saved == null) primary(watch)
             copy.addView(watch)
+            if (savedSource != null) {
+                copy.addView(button("Выбрать источник") { enter { showTmdbOnlineSources(movie) } })
+            }
         }
         if(movie.provider!=null||movie.type!="tv") {
             val torrent=button("Найти торрент-раздачу"){enter {find(movie,null)}}
@@ -1320,7 +1424,8 @@ open class MediaCenterActivity : AppCompatActivity() {
     }
 
     private fun online(item: CenterTitle, resume: CardMeta? = null, refresh: Boolean = false, returnTo: Screen? = null,
-        selectedSeason: Int? = null, selectedVoice: String? = null, catalogItem: CenterTitle? = null, playerIndex:Int?=null, choosePlayerAfterLoad:Boolean=false) {
+        selectedSeason: Int? = null, selectedVoice: String? = null, catalogItem: CenterTitle? = null, playerIndex:Int?=null,
+        choosePlayerAfterLoad:Boolean=false, quickPlay: Boolean = false) {
         if(item.provider==null) { tmdbOnline(item,resume,refresh,returnTo,selectedSeason,selectedVoice,playerIndex=playerIndex,choosePlayerAfterLoad=choosePlayerAfterLoad);return }
         val identity=catalogItem ?: item
         if(resume!=null)sourceContext=identity.key to resume
@@ -1332,7 +1437,8 @@ open class MediaCenterActivity : AppCompatActivity() {
         work("Получаю список серий · ${CenterCatalog.name(item.provider)}…",onlineItem=identity,
             onlineRecovery=previousVideo?.takeIf { it.playerCount>1 }?.let { old -> { chooseOnlinePlayer(old,contextSeason,contextVoice) } }
                 ?: if(playerIndex!=null)({online(item,refresh=true,selectedSeason=contextSeason,selectedVoice=contextVoice,catalogItem=catalogItem,choosePlayerAfterLoad=true)}) else null,
-            onlineRefresh={online(item,resume,refresh=true,selectedSeason=selectedSeason,selectedVoice=selectedVoice,catalogItem=catalogItem,playerIndex=playerIndex)}) {
+            onlineRefresh={online(item,resume,refresh=true,selectedSeason=selectedSeason,selectedVoice=selectedVoice,
+                catalogItem=catalogItem,playerIndex=playerIndex,quickPlay=quickPlay)}) {
             val cached = onlineCache[identity.key]?.takeIf { System.currentTimeMillis() - it.first < 180000 && !refresh && it.second.item.key==item.key && it.second.item.sourceUrl==item.sourceUrl && (playerIndex==null||it.second.pinnedPlayer&&it.second.playerIndex==playerIndex) }?.second
             val loaded = cached ?: (if(playerIndex==null)resolveOnline(item) else resolveOnlinePlayer(item,playerIndex)).copy(catalogItem=catalogItem).also {
                 if (onlineCache.size >= 4) onlineCache.remove(onlineCache.keys.first())
@@ -1356,11 +1462,24 @@ open class MediaCenterActivity : AppCompatActivity() {
             // Keep available context after refresh, but never invent a missing season or voice.
             val wantedSeason = selectedSeason ?: resume?.let { it.seasonNumber ?: 0 }
             val season = wantedSeason?.takeIf { value -> video.episodes.any { it.season == value } }
-            val wantedVoice = selectedVoice ?: resume?.translator
-            val voice = wantedVoice?.takeIf { value -> video.episodes.any {
+                ?: if (quickPlay && item.type == "tv") video.episodes.map { it.season }.distinct().singleOrNull() else null
+            val wantedVoices = listOfNotNull(selectedVoice ?: resume?.translator, store.voice(video.identity.key))
+            val voice = wantedVoices.firstOrNull { value -> video.episodes.any {
                 (season == null || it.season == season) && it.voice == value
             } }
-            showOnline(video, season, voice ?: store.voice(video.identity.key)?.takeIf { saved -> video.episodes.any { (season == null || it.season == season) && it.voice == saved } })
+            if (quickPlay && item.type == "movie" && video.notice == null) {
+                val entry = video.episodes.filter { it.season == 0 && it.number == 0 && (voice == null || it.voice == voice) }
+                    .singleOrNull()
+                val preferred = store.preferredQuality(item.provider)
+                val quality = entry?.sources?.keys?.let { choices ->
+                    if (preferred == null) choices.singleOrNull() else preferred.takeIf { it in choices }
+                }
+                if (entry != null && quality != null) {
+                    playOnline(video, entry, quality)
+                    return@work
+                }
+            }
+            showOnline(video, season, voice)
             if(choosePlayerAfterLoad&&video.playerCount>1)chooseOnlinePlayer(video,season,voice)
         }
     }
@@ -1475,7 +1594,7 @@ open class MediaCenterActivity : AppCompatActivity() {
             online(video.identity, (video.resumeCard?.takeIf { (it.seasonNumber ?: 0)==episode.season&&(it.episodeNumber ?: 0)==episode.number } ?: CardMeta(video.identity.title)).copy(
                 seasonNumber=episode.season.takeIf { it>0 },episodeNumber=episode.number,translator=episode.voice,quality=quality.toString()), refresh = true, returnTo = returnTo ?: snapshot(),playerIndex=video.playerIndex.takeIf { video.pinnedPlayer }); return
         }
-        val previous=returnTo ?: snapshot()
+        val previous = returnTo ?: if (page == "loading") null else snapshot()
         sourceContext=video.identity.key to (video.resumeCard?.takeIf { (it.seasonNumber ?: 0)==episode.season&&(it.episodeNumber ?: 0)==episode.number } ?: progressCard(video.identity,episode.season,episode.number)).copy(
             seasonNumber=episode.season.takeIf { it>0 },episodeNumber=episode.number.takeIf { it>0 },translator=episode.voice,quality=quality.toString())
         work("Проверяю доступность видео…",onlineItem=video.identity,onlineRecovery=

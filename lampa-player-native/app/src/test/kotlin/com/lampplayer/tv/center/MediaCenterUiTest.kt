@@ -1087,7 +1087,7 @@ class MediaCenterUiTest {
             CenterStore(host).setOnlineSource(item,first)
             host.nextOnline=OnlineVideo(first,listOf(OnlineEpisode(2,5,"Пятая","Voice",mapOf(720 to "https://cdn.test/first.m3u8"))),emptyMap())
             host.detailFixture(CenterDetails(item,listOf(1,2),""));frame(root)
-            label(root,"Смотреть онлайн").performClick();frame(root)
+            label(root,"Выбрать источник").performClick();frame(root)
             all(root).first { it.tag=="online_source:kinovod" }.performClick();repeat(3){frame(root)}
             label(root,"Сезон 2").performClick();frame(root)
             label(root,"Другой онлайн-источник").performClick();frame(root)
@@ -1503,12 +1503,70 @@ class MediaCenterUiTest {
             assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Продолжить просмотр" })
             assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Закреплённые фильмы" })
             gate.complete(Unit);repeat(8){frame(root)}
+            awaitUi(root) { all(root).filterIsInstance<TextView>().any { it.text.startsWith("Не загрузились:") } }
             val texts=all(root).filterIsInstance<TextView>().map { it.text.toString() }
             assertTrue(texts.contains("Продолжить просмотр"));assertTrue(texts.contains("Закреплённые фильмы"))
             assertFalse(texts.contains("Не удалось загрузить"))
             assertTrue(texts.any { it.startsWith("Не загрузились:") })
         } finally { controller.pause().stop().destroy() }
     }
+    @Test fun failedShelfRefreshKeepsTheSamePosterAndFocusAndSurvivesOpeningHomeAgain() {
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
+        val controller = Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
+        try {
+            val host = controller.get()
+            val root = host.findViewById<View>(android.R.id.content)
+            CenterStore(host).catalog = "tmdb"
+            host.realHomeFixture()
+            val tag = "new_movies:title:movie:880"
+            awaitUi(root) { all(root).any { it.tag == tag } }
+            awaitUi(root) { all(root).filterIsInstance<TextView>().none { it.text.startsWith("Загружаю подборки") } }
+            val poster = all(root).first { it.tag == tag }
+            assertTrue(poster.requestFocus())
+
+            val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+            host.failHomeAfter(gate)
+            label(root, "Обновить подборки").performClick()
+            frame(root)
+            assertSame(poster, root.findFocus())
+            gate.complete(Unit)
+            awaitUi(root) { all(root).filterIsInstance<TextView>().any { it.text.startsWith("Сохранённая подборка") } }
+            assertSame(poster, root.findFocus())
+
+            host.realHomeFixture()
+            awaitUi(root) { all(root).any { it.tag == tag } &&
+                all(root).filterIsInstance<TextView>().any { it.text.startsWith("Сохранённая подборка") } }
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun savedMovieSourceStartsWithThePreferredQualityAndKeepsManualSourceSelection() {
+        val controller = Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host = controller.get()
+            val root = host.findViewById<View>(android.R.id.content)
+            val movie = CenterTitle(777, "movie", "Остров", year = "2006")
+            val source = movie.copy(id = 101, provider = "kinovod", sourceUrl = "https://kinovod.pro/film/101-ostrov")
+            val store = CenterStore(host)
+            store.setOnlineSource(movie, source)
+            store.setPreferredQuality("kinovod", 720)
+            host.nextOnline = OnlineVideo(source, listOf(OnlineEpisode(0, 0, "Остров", "Voice",
+                mapOf(720 to "https://cdn.test/movie.mp4", 1080 to "https://cdn.test/hd.mp4"))), emptyMap())
+            host.detailFixture(CenterDetails(movie, emptyList(), ""))
+            frame(root)
+            label(root, "Выбрать источник").performClick()
+            frame(root)
+            assertTrue(all(root).any { it.tag == "online_source:kinotac" })
+            host.onBackPressedDispatcher.onBackPressed()
+            frame(root)
+            label(root, "Смотреть · Киновод").performClick()
+            repeat(4) { frame(root) }
+            val played = com.lampplayer.tv.player.IntentParser.parse(shadowOf(host).nextStartedActivity)!!
+            assertEquals("https://cdn.test/movie.mp4", played.first)
+            assertEquals(movie.key, played.second.contentKey)
+            assertTrue(host.kinoQueries.isEmpty())
+        } finally { controller.pause().stop().destroy() }
+    }
+
     @Test fun menuCancellationRestoresTheFocusedPoster() {
         InstrumentationRegistry.getInstrumentation().setInTouchMode(false)
         val controller=Robolectric.buildActivity(Host::class.java).setup().visible().windowFocusChanged(true)
