@@ -20,6 +20,11 @@ class HomeActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (BuildConfig.MEDIA_CENTER) {
+            startActivity(Intent(this, com.lampplayer.tv.center.MediaCenterActivity::class.java).putExtra("open_home", true))
+            finish()
+            return
+        }
         binding = ActivityHomeBinding.inflate(layoutInflater)
         setContentView(binding.root)
 

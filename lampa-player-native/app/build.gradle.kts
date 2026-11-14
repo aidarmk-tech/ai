@@ -12,11 +12,14 @@ android {
 
     defaultConfig {
         val preview = project.findProperty("lampCorePreview") == "true"
-        applicationId = if (preview) "com.lampplayer.tv.lampcore" else "com.lampplayer.tv"
-        manifestPlaceholders["appLabel"] = if (preview) "LampPlayer · LampCore" else "@string/app_name"
+        val center = project.findProperty("mediaCenter") == "true"
+        applicationId = if (center) "com.lampplayer.tv.center" else if (preview) "com.lampplayer.tv.lampcore" else "com.lampplayer.tv"
+        manifestPlaceholders["appLabel"] = if (center) "LampMedia" else if (preview) "LampPlayer · LampCore" else "@string/app_name"
+        buildConfigField("boolean", "MEDIA_CENTER", center.toString())
         buildConfigField("boolean", "LAMPCORE_PREVIEW", preview.toString())
         minSdk = 21
         targetSdk = 34
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Overridable from CI (-PverCode / -PverName) so each build is upgradeable.
         versionCode = (project.findProperty("verCode") as String?)?.toIntOrNull() ?: 1
         versionName = (project.findProperty("verName") as String?) ?: "1.0.0"
@@ -25,7 +28,7 @@ android {
         // APK (libVLC ships large native libs per ABI) so it installs on
         // low-storage devices like the Mi TV Stick.
         ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+            abiFilters += if (project.findProperty("centerEmulator") == "true") listOf("x86_64") else listOf("arm64-v8a", "armeabi-v7a")
         }
     }
 
@@ -68,9 +71,19 @@ android {
     testOptions {
         unitTests.isIncludeAndroidResources = true
     }
+    packaging {
+        jniLibs.useLegacyPackaging = true
+        jniLibs.keepDebugSymbols += "**/libtorrentengine.so"
+    }
 }
 
 dependencies {
+    implementation("org.jsoup:jsoup:1.18.3")
+    implementation("androidx.webkit:webkit:1.10.0")
+    androidTestImplementation("androidx.test.ext:junit:1.1.5")
+    androidTestImplementation("androidx.test:runner:1.5.2")
+    androidTestImplementation("androidx.test:core:1.5.0")
+    androidTestImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("org.robolectric:robolectric:4.12.2")

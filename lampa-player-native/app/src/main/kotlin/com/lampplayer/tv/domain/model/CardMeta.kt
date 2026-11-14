@@ -48,6 +48,9 @@ data class CardMeta(
     val iptvEpgMap: Map<String, String> = emptyMap(),
     // When the map was scraped (epoch ms): entries go stale as programmes end.
     val iptvEpgTs: Long = 0L,
+    // Standalone catalog identity; website IDs are never treated as TMDB IDs.
+    val contentKey: String? = null,
+    val sourcePage: String? = null,
 )
 
 /** External subtitle track supplied through the launch intent. */
