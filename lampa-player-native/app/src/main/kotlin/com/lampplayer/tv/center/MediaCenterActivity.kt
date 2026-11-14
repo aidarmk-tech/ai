@@ -42,6 +42,8 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.util.ArrayDeque
 
 /** Native TV catalog; playback and episode navigation use the shared player. */
+private const val REOPEN_SETTINGS = "reopen_settings"
+
 open class MediaCenterActivity : AppCompatActivity() {
     protected open val backend = CenterBackend()
     private var exitPressedAt: Long? = null
@@ -126,23 +128,25 @@ open class MediaCenterActivity : AppCompatActivity() {
     private var currentScreen: (() -> Unit)? = null
     private var playerReturn: Screen? = null
     private val seasonData = mutableMapOf<Pair<Int, Int>, List<CenterEpisode>>()
-    private val ink = Color.rgb(242, 246, 252)
-    private val muted = Color.rgb(153, 172, 197)
-    private val accent = Color.rgb(136, 196, 255)
-    private val panel = Color.rgb(20, 30, 45)
+    private var theme = CenterTheme.default
+    private val ink get() = theme.ink
+    private val muted get() = theme.muted
+    private val accent get() = theme.accent
+    private val panel get() = theme.panel
+    private fun sp(size: Int) = theme.textSize(size)
     private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
     private fun bg(color: Int, stroke: Int = Color.TRANSPARENT, radius: Int = 14) = GradientDrawable().apply {
         setColor(color); cornerRadius = dp(radius).toFloat(); setStroke(dp(2), stroke)
     }
     private fun text(value: String, size: Int = 16, color: Int = ink) = TextView(this).apply {
-        text = value; textSize = size.toFloat(); setTextColor(color); includeFontPadding = false
+        text = value; textSize = sp(size); setTextColor(color); includeFontPadding = false
     }
     private fun column() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
     private fun facts(item: CenterTitle) = listOf(if (item.type == "tv") "Сериал" else "Фильм", item.year,
         item.rating.takeIf { it.isNotBlank() }?.let { "★ $it" }).filterNotNull().filter { it.isNotBlank() }.joinToString(" · ")
     private fun row() = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
     private fun paintButton(view: View, focus: Boolean) {
-        view.background = bg(when { focus -> Color.rgb(38, 65, 96); view.isActivated -> Color.rgb(25, 45, 66); else -> panel },
+        view.background = bg(when { focus -> theme.panelFocus; view.isActivated -> theme.panelActive; else -> panel },
             if (focus) accent else Color.TRANSPARENT)
         (view as? TextView)?.setTextColor(if (focus || view.isActivated) ink else muted)
     }
@@ -156,10 +160,10 @@ open class MediaCenterActivity : AppCompatActivity() {
     }
     private fun iconButton(symbol: String, label: String, action: () -> Unit): TextView =
         button(label, action).apply {
-            text = "$symbol  $label"; textSize=12f; contentDescription=label; tag=label
+            text = "$symbol  $label"; textSize=sp(14); contentDescription=label; tag=label
             gravity=Gravity.CENTER; maxLines=1; ellipsize=TextUtils.TruncateAt.END
             setPadding(dp(10),0,dp(10),0)
-            layoutParams=LinearLayout.LayoutParams(-2,dp(34)).apply { rightMargin=dp(6) }
+            layoutParams=LinearLayout.LayoutParams(-2,dp(40)).apply { rightMargin=dp(6) }
             setOnFocusChangeListener { view,focused -> paintButton(view,focused) }
         }
     private fun space(parent: LinearLayout, n: Int) { parent.addView(View(this), LinearLayout.LayoutParams(1, dp(n))) }
@@ -223,18 +227,23 @@ open class MediaCenterActivity : AppCompatActivity() {
             else -> loadHome()
         }
     }
+    private var reopenSettings = false
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState); outState.putBoolean(REOPEN_SETTINGS, reopenSettings)
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         com.lampplayer.tv.data.BrowserMediaSession.install { url -> android.webkit.CookieManager.getInstance().getCookie(url) }
         store = CenterStore(this)
-        val root = FrameLayout(this).apply { setBackgroundColor(Color.rgb(8, 13, 22)); setPadding(dp(22), dp(22), dp(18), dp(14)) }
+        theme = CenterTheme.of(store.palette, store.textScale)
+        val root = FrameLayout(this).apply { setBackgroundColor(theme.background); setPadding(dp(22), dp(22), dp(18), dp(14)) }
         navigation = column().apply { setPadding(0, 0, dp(22), 0) }
         navigation.addView(text("LampMedia", 24, accent).apply { typeface = Typeface.DEFAULT_BOLD })
         space(navigation, 24)
         listOf("Главная", "Фильмы", "Сериалы", "Поиск", "Мои сериалы", "Избранное", "История", "Источники", "Настройки").forEach { label ->
             navigation.addView(button(label) { navigate(label); closeMenu() }.apply {
-                textSize = 14f
-                layoutParams = LinearLayout.LayoutParams(-1, dp(38)).apply { bottomMargin = dp(4) }
+                textSize = sp(15)
+                layoutParams = LinearLayout.LayoutParams(-1, dp(42)).apply { bottomMargin = dp(4) }
                 setOnKeyListener { _, key, event ->
                     if (key == KeyEvent.KEYCODE_DPAD_RIGHT && event.action == KeyEvent.ACTION_DOWN) {
                         closeMenu();true
@@ -253,7 +262,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         }
         root.addView(menuHandle, FrameLayout.LayoutParams(dp(42), dp(48)))
         navigation.setPadding(dp(10), dp(8), dp(10), dp(8))
-        navigation.setBackgroundColor(Color.rgb(13, 22, 36))
+        navigation.setBackgroundColor(theme.navigation)
         navigation.elevation = dp(16).toFloat()
         navigation.visibility = View.GONE
         root.addView(navigation, FrameLayout.LayoutParams(dp(220), -1))
@@ -267,7 +276,9 @@ open class MediaCenterActivity : AppCompatActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() = back()
         })
-        highlightNavigation(); menuHandle.requestFocus(); loadHome()
+        // После смены размера текста/оформления activity пересоздаётся — возвращаемся в настройки.
+        if (savedInstanceState?.getBoolean(REOPEN_SETTINGS) == true) navigate("Настройки")
+        else { highlightNavigation(); menuHandle.requestFocus(); loadHome() }
         checkAutomaticUpdates()
     }
     private fun inside(parent: View, view: View?): Boolean {
@@ -743,9 +754,8 @@ open class MediaCenterActivity : AppCompatActivity() {
     }
     private fun artFrame(title: String, width: Int, height: Int, url: String?, seed: Int = 0): FrameLayout {
         val frame = FrameLayout(this)
-        frame.background = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(
-            Color.rgb(30 + (seed * 7 and 31), 54, 79), Color.rgb(12, 23 + (seed * 3 and 15), 40)))
-        frame.addView(text(title.take(1).uppercase(), 52, Color.rgb(77, 111, 144)).apply { gravity = Gravity.CENTER }, FrameLayout.LayoutParams(-1, -1))
+        frame.background = GradientDrawable(GradientDrawable.Orientation.TL_BR, theme.placeholderGradient(seed))
+        frame.addView(text(title.take(1).uppercase(), 52, theme.placeholderInk).apply { gravity = Gravity.CENTER }, FrameLayout.LayoutParams(-1, -1))
         val image = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
         frame.addView(image, FrameLayout.LayoutParams(-1, -1))
         Glide.with(this).load(url).override(dp(width), dp(height)).dontAnimate().into(image)
@@ -776,7 +786,7 @@ open class MediaCenterActivity : AppCompatActivity() {
     private fun featured(item: CenterTitle) {
         val hero = artFrame(item.title, 780, 215, item.backdrop ?: item.poster, item.id)
         hero.addView(View(this).apply { background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
-            intArrayOf(Color.argb(250, 15, 25, 41), Color.argb(235, 15, 25, 41), Color.argb(50, 15, 25, 41))) }, FrameLayout.LayoutParams(-1, -1))
+            theme.heroGradient()) }, FrameLayout.LayoutParams(-1, -1))
         val copy = column().apply { setPadding(dp(23), dp(17), dp(23), dp(12)) }
         copy.addView(text(facts(item), 12, accent))
         space(copy, 8)
@@ -920,7 +930,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                 holder.itemView.setOnLongClickListener { posterActions(item,holder.itemView);true }
                 holder.itemView.setOnFocusChangeListener { view, focused ->
                     if(focused)describe(item)
-                    view.background = bg(if(focused) Color.rgb(34,54,79) else panel,if(focused) accent else Color.TRANSPARENT)
+                    view.background = bg(if(focused) theme.cardFocus else panel,if(focused) accent else Color.TRANSPARENT)
                     if(focused && holder.bindingAdapterPosition >= loaded.size-columns*2) nextPage()
                 }
             }
@@ -991,7 +1001,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                 val frame=FrameLayout(this@MediaCenterActivity).apply {
                     layoutParams=RecyclerView.LayoutParams(-1,dp(90)).apply { setMargins(dp(4),dp(4),dp(4),dp(4)) }
                 }
-                val label=button("") {}.apply { maxLines=3;ellipsize=TextUtils.TruncateAt.END;textSize=14f;setPadding(dp(12),dp(9),dp(12),dp(11)) }
+                val label=button("") {}.apply { maxLines=3;ellipsize=TextUtils.TruncateAt.END;textSize=sp(14);setPadding(dp(12),dp(9),dp(12),dp(11)) }
                 val bar=ProgressBar(this@MediaCenterActivity,null,android.R.attr.progressBarStyleHorizontal).apply {
                     max=100;isIndeterminate=false;isFocusable=false;progressTintList=android.content.res.ColorStateList.valueOf(accent)
                 }
@@ -1048,7 +1058,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                 holder.itemView.setOnClickListener { enter { detail(item) } }
                 holder.itemView.setOnLongClickListener { posterActions(item,holder.itemView);true }
                 holder.itemView.setOnFocusChangeListener { v, focus ->
-                    v.background = bg(if (focus) Color.rgb(34, 54, 79) else panel, if (focus) accent else Color.TRANSPARENT)
+                    v.background = bg(if (focus) theme.cardFocus else panel, if (focus) accent else Color.TRANSPARENT)
                     v.animate().scaleX(if (focus) 1.025f else 1f).scaleY(if (focus) 1.025f else 1f).setDuration(100).start()
                 }
             }
@@ -1124,7 +1134,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                 holder.itemView.tag = historyTag(card)
                 holder.itemView.setOnClickListener { enter { resume(saved) } }
                 holder.itemView.setOnLongClickListener { historyActions(saved, history, holder.bindingAdapterPosition); true }
-                holder.itemView.setOnFocusChangeListener { v, focus -> v.background = bg(if (focus) Color.rgb(34, 54, 79) else panel, if (focus) accent else Color.TRANSPARENT) }
+                holder.itemView.setOnFocusChangeListener { v, focus -> v.background = bg(if (focus) theme.cardFocus else panel, if (focus) accent else Color.TRANSPARENT) }
                 lifecycleScope.launch {
                     val progress = PositionDataStore(applicationContext).getPosition(saved.url, card)
                     if (holder.url == saved.url && progress != null) {
@@ -1246,7 +1256,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         val copy = column().apply { setPadding(dp(24), 0, 0, 0) }
         val moreActions=column().apply { tag="detail_more_panel";visibility=if(detailMoreKey==movie.key)View.VISIBLE else View.GONE }
         fun primary(view:TextView):TextView = view.apply {
-            isActivated=true;textSize=17f;typeface=Typeface.DEFAULT_BOLD
+            isActivated=true;textSize=sp(17);typeface=Typeface.DEFAULT_BOLD
             paintButton(this,false);setTextColor(ink)
             setOnFocusChangeListener { v,focused ->paintButton(v,focused);(v as TextView).setTextColor(ink) }
         }
@@ -1540,7 +1550,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         fun chips(values:List<Pair<String,()->Unit>>,selected:String?=null):List<TextView> {
             val strip=row()
             val controls=values.map { (label,click) -> button(label,click).apply {
-                textSize=14f;maxLines=1;isActivated=label==selected;paintButton(this,false)
+                textSize=sp(14);maxLines=1;isActivated=label==selected;paintButton(this,false)
                 layoutParams=LinearLayout.LayoutParams(-2,dp(38)).apply { rightMargin=dp(7) }
                 strip.addView(this)
             } }
@@ -1559,12 +1569,12 @@ open class MediaCenterActivity : AppCompatActivity() {
                 AlertDialog.Builder(this).setTitle("Озвучка").setItems(voices.toTypedArray()) { _,index ->
                     store.setVoice(video.identity.key,voices[index]);showOnline(video,activeSeason,voices[index])
                 }.setNeutralButton("Сбросить выбор") { _,_->store.setVoice(video.identity.key,null);showOnline(video,activeSeason) }.setNegativeButton("Отмена",null).show()
-            }.apply { layoutParams.height=dp(38);textSize=14f })
+            }.apply { layoutParams.height=dp(40);textSize=sp(14) })
         }
         if(CenterOnline.manualPlayers(video.item.provider)&&video.playerCount>1)
             content.addView(button("Плеер источника · ${video.playerIndex+1} из ${video.playerCount}"+if(video.pinnedPlayer)" · выбран" else " · авто") {
                 chooseOnlinePlayer(video,activeSeason,selectedVoice)
-            }.apply { layoutParams.height=dp(38);textSize=14f })
+            }.apply { layoutParams.height=dp(40);textSize=sp(14) })
         if(video.item.type=="tv"&&activeSeason==null) {
             content.addView(text("Выбери сезон",15,muted))
             episodeFocus={seasonControls.firstOrNull()?.requestFocus();Unit}
@@ -1803,7 +1813,7 @@ open class MediaCenterActivity : AppCompatActivity() {
     }
     protected fun torrentLoading(item: CenterTitle, detail: String, stage: String): Pair<ProgressBar, TextView> {
         page = "torrent_loading"; clear("Готовим просмотр")
-        val card = column().apply { setPadding(dp(28), dp(24), dp(28), dp(24)); background = bg(panel, Color.rgb(35, 58, 82), 20) }
+        val card = column().apply { setPadding(dp(28), dp(24), dp(28), dp(24)); background = bg(panel, theme.outline, 20) }
         card.addView(text(item.title, 26).apply { maxLines = 2; ellipsize = TextUtils.TruncateAt.END })
         space(card, 10)
         card.addView(text(detail, 14, muted).apply { maxLines = 2; ellipsize = TextUtils.TruncateAt.END })
@@ -2005,6 +2015,20 @@ open class MediaCenterActivity : AppCompatActivity() {
             AlertDialog.Builder(this).setTitle("Размер карточек")
                 .setSingleChoiceItems(arrayOf("Компактные", "Обычные", "Крупные"), sizes.indexOf(store.cardSize)) { dialog, index ->
                     store.cardSize = sizes[index]; dialog.dismiss(); settings()
+                }.setNegativeButton("Отмена", null).show()
+        })
+        content.addView(button("Размер текста · " + CenterTheme.scaleLabels.getValue(store.textScale)) {
+            val keys = CenterTheme.scaleLabels.keys.toList()
+            AlertDialog.Builder(this).setTitle("Размер текста")
+                .setSingleChoiceItems(CenterTheme.scaleLabels.values.toTypedArray(), keys.indexOf(store.textScale)) { dialog, index ->
+                    store.textScale = keys[index]; dialog.dismiss(); reopenSettings = true; recreate()
+                }.setNegativeButton("Отмена", null).show()
+        })
+        content.addView(button("Оформление · " + CenterTheme.paletteLabels.getValue(store.palette)) {
+            val keys = CenterTheme.paletteLabels.keys.toList()
+            AlertDialog.Builder(this).setTitle("Оформление")
+                .setSingleChoiceItems(CenterTheme.paletteLabels.values.toTypedArray(), keys.indexOf(store.palette)) { dialog, index ->
+                    store.palette = keys[index]; dialog.dismiss(); reopenSettings = true; recreate()
                 }.setNegativeButton("Отмена", null).show()
         })
         content.addView(button("Каталоги · выбор и адреса сайтов") { catalogSettings() })

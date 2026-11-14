@@ -76,6 +76,12 @@ class CenterStore(context: Context) {
     var cardSize: String
         get() = prefs.getString("card_size", "normal").orEmpty().takeIf { it in listOf("compact", "normal", "large") } ?: "normal"
         set(value) { require(value in listOf("compact", "normal", "large")); prefs.edit().putString("card_size", value).apply() }
+    var textScale: String
+        get() = prefs.getString("text_scale", "normal").orEmpty().takeIf { it in CenterTheme.scales } ?: "normal"
+        set(value) { require(value in CenterTheme.scales); prefs.edit().putString("text_scale", value).apply() }
+    var palette: String
+        get() = prefs.getString("palette", "default").orEmpty().takeIf { it in CenterTheme.paletteLabels } ?: "default"
+        set(value) { require(value in CenterTheme.paletteLabels); prefs.edit().putString("palette", value).apply() }
     fun voice(key: String): String? = prefs.getString("voice_$key", null)
     fun setVoice(key: String, voice: String?) {
         prefs.edit().apply { if (voice == null) remove("voice_$key") else putString("voice_$key", voice) }.apply()
