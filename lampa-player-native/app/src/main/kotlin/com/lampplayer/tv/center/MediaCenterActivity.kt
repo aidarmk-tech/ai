@@ -46,6 +46,8 @@ private const val REOPEN_SETTINGS = "reopen_settings"
 /** Сколько держать разобранный список серий. Ссылки всё равно проверяются перед запуском и обновляются при ошибке. */
 internal const val ONLINE_CACHE_MS = 30 * 60_000L
 internal const val ONLINE_CACHE_SIZE = 12
+/** До скольких раздач список рисуется обычными кнопками; длиннее — через RecyclerView. */
+internal const val RELEASES_PLAIN_LIMIT = 30
 
 open class MediaCenterActivity : AppCompatActivity() {
     protected open val backend = CenterBackend()
@@ -1679,20 +1681,37 @@ open class MediaCenterActivity : AppCompatActivity() {
             .sortedByDescending { CenterBackend.matchesRelease(it, item, episode) }
         content.addView(text("${quality} · ${sortLabel} · ${visible.size} / ${releases.size} раздач", 13, muted)); space(content, 10)
         if (visible.isEmpty()) content.addView(text("Нет раздач с выбранными фильтрами. Измени качество, отключи фильтр сидов или точные совпадения", 18, muted))
-        visible.forEach { release ->
-            content.addView(button("${release.title}\nРаздают: ${if (release.seedsKnown) release.seeds.toString() else "—"} · Качают: ${release.leechers?.toString() ?: "—"}\nБитрейт: ${release.bitrate ?: "—"} · ${size(release.size)} · ${release.tracker}") {
-                enter { openRelease(item, episode, release) }
-            }.apply {
-                tag = "release:${release.link}"; layoutParams.height = dp(132); maxLines = 5
-                if(release.voices.isNotEmpty()) text = text.toString() + "\nОзвучка: " + release.voices.joinToString(", ")
-                setOnLongClickListener {
-                    AlertDialog.Builder(this@MediaCenterActivity).setTitle(release.title)
-                        .setMessage("Трекер: ${release.tracker}\nОзвучка: ${release.voices.joinToString(", ").ifBlank { "Не указана" }}\nФормат: ${CenterBackend.releaseFormat(release)}\nБитрейт: ${release.bitrate ?: "Не указан"}\nРазмер: ${size(release.size)}\nРаздают: ${if(release.seedsKnown) release.seeds.toString() else "—"} · Качают: ${release.leechers?.toString() ?: "—"}")
-                        .setPositiveButton("Смотреть") { _, _ -> enter { openRelease(item, episode, release) } }
-                        .setNegativeButton("Закрыть", null).show()
-                    true
+        fun releaseLabel(release: CenterRelease) = "${release.title}\nРаздают: ${if (release.seedsKnown) release.seeds.toString() else "—"} · Качают: ${release.leechers?.toString() ?: "—"}\nБитрейт: ${release.bitrate ?: "—"} · ${size(release.size)} · ${release.tracker}" +
+            (if (release.voices.isNotEmpty()) "\nОзвучка: " + release.voices.joinToString(", ") else "")
+        fun bindRelease(view: TextView, release: CenterRelease) {
+            view.text = releaseLabel(release); view.tag = "release:${release.link}"
+            view.setOnClickListener { enter { openRelease(item, episode, release) } }
+            view.setOnLongClickListener {
+                AlertDialog.Builder(this@MediaCenterActivity).setTitle(release.title)
+                    .setMessage("Трекер: ${release.tracker}\nОзвучка: ${release.voices.joinToString(", ").ifBlank { "Не указана" }}\nФормат: ${CenterBackend.releaseFormat(release)}\nБитрейт: ${release.bitrate ?: "Не указан"}\nРазмер: ${size(release.size)}\nРаздают: ${if(release.seedsKnown) release.seeds.toString() else "—"} · Качают: ${release.leechers?.toString() ?: "—"}")
+                    .setPositiveButton("Смотреть") { _, _ -> enter { openRelease(item, episode, release) } }
+                    .setNegativeButton("Закрыть", null).show()
+                true
+            }
+        }
+        if (visible.size <= RELEASES_PLAIN_LIMIT) visible.forEach { release ->
+            content.addView(button("") {}.apply { layoutParams.height = dp(132); maxLines = 5; bindRelease(this, release) })
+        } else {
+            // Длинная выдача: создаются только видимые строки, остальные переиспользуются при прокрутке.
+            val list = RecyclerView(this).apply {
+                tag = "release_list"; layoutManager = LinearLayoutManager(this@MediaCenterActivity); itemAnimator = null
+                descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+                adapter = object : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+                    override fun getItemCount() = visible.size
+                    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) = object : RecyclerView.ViewHolder(
+                        button("") {}.apply { maxLines = 5; layoutParams = RecyclerView.LayoutParams(-1, dp(132)).apply { bottomMargin = dp(8) } }) {}
+                    override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+                        val view = holder.itemView as TextView; bindRelease(view, visible[position]); paintButton(view, view.hasFocus())
+                    }
                 }
-            })
+            }
+            val height = (resources.configuration.screenHeightDp - 120).coerceAtLeast(300)
+            content.addView(list, LinearLayout.LayoutParams(-1, dp(height)))
         }
         content.addView(button("Открыть свою magnet-ссылку / .torrent") { magnet(item, episode) })
     }

@@ -752,6 +752,19 @@ class MediaCenterUiTest {
         } finally { controller.pause().stop().destroy() }
     }
 
+    @Test fun longReleaseListsCreateOnlyVisibleRows() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            CenterStore(host).exactReleases=false
+            host.releaseFixture((1..120).map { CenterRelease("Sorting 2020 1080p #$it","magnet:?xt=urn:btih:${it.toString().padStart(40,'0')}",120-it,1_000_000L*it,"tracker") })
+            repeat(3) { frame(root) }
+            assertTrue(all(root).any { it.tag=="release_list" })
+            val bound=all(root).count { (it.tag as? String)?.startsWith("release:")==true }
+            assertTrue("bound $bound",bound in 1 until 120)
+        } finally { controller.pause().stop().destroy() }
+    }
+
     @Test fun replacementCatalogsAppearInBothSelectorsWithTheirOwnSections() {
         val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
         try {

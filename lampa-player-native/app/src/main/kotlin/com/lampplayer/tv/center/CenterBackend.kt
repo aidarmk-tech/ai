@@ -385,14 +385,18 @@ open class CenterBackend {
     suspend fun openRelease(base: String, release: CenterRelease, item: CenterTitle): CenterTorrent {
         var state = torrent(base, "add", link = release.link, item = item)
         val hash = state.str("hash").takeIf { Regex("[a-fA-F0-9]{40}").matches(it) } ?: error("Сервер не сообщил хеш раздачи")
-        repeat(90) {
+        // Метаданные часто приходят за доли секунды: первые 3 с опрашиваем каждые 300 мс, дальше раз в секунду.
+        // Общий лимит ожидания прежний — около 90 с.
+        val deadline = System.currentTimeMillis() + 90_000L
+        var attempt = 0
+        while (System.currentTimeMillis() < deadline) {
             currentCoroutineContext().ensureActive()
             val files = state.getAsJsonArray("file_stats").orEmpty().mapNotNull {
                 val o = it.asJsonObject; val path = o.str("path"); val id = o.num("id").toInt()
                 if (id <= 0 || !video(path)) null else CenterFile(id, path, o.num("length"))
             }
             if (files.isNotEmpty()) return CenterTorrent(hash, files)
-            delay(1000)
+            delay(if (attempt++ < 10) 300 else 1000)
             state = torrent(base, "get", hash)
         }
         error("Не удалось получить файлы раздачи. Проверь доступность пиров и попробуй другую раздачу")
