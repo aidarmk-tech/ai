@@ -51,6 +51,8 @@ class MediaCenterUiTest {
     }
     class Host : MediaCenterActivity() {
         override val backend=FakeBackend()
+        var prefetch=false
+        override val prefetchEnabled get()=prefetch
         val categoryCalls get()=backend.sectionCalls
         var updateChecks = 0
         var updateFailure:Exception?=null
@@ -674,9 +676,11 @@ class MediaCenterUiTest {
             (all(root).first { it.tag=="search_query" } as android.widget.EditText).setText("Источник")
             all(root).first { it.tag=="search_source" }.performClick();frame(root)
             val dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
-            val list=dialog.listView;list.performItemClick(list.getChildAt(1),1,list.adapter.getItemId(1));frame(root)
+            // Первый пункт — «Везде», затем каталоги по порядку.
+            val list=dialog.listView;list.performItemClick(list.getChildAt(2),2,list.adapter.getItemId(2));frame(root)
             assertEquals("tmdb",CenterStore(host).catalog)
             assertEquals("kinovod",CenterStore(host).searchCatalog)
+            assertFalse(CenterStore(host).searchEverywhere)
             assertEquals("Источник",(all(root).first { it.tag=="search_query" } as TextView).text.toString())
             assertEquals("search_source",root.findFocus()?.tag)
             all(root).first { it.tag=="search_recent:Король Талсы" }.performClick();repeat(3) { frame(root) }
@@ -730,6 +734,78 @@ class MediaCenterUiTest {
             screenshot(root,"media-center-collapsed-release-filters")
         } finally { controller.pause().stop().destroy() }
     }
+    @Test fun searchEverywhereQueriesEveryCatalogAndKeepsResultsAfterReturning() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            CenterStore(host).searchEverywhere=true
+            host.browsePages[1]=listOf(CenterTitle(901,"movie","Дюна",year="2021"))
+            all(root).first { it.tag=="Поиск" }.performClick();frame(root)
+            assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Искать в: все каталоги" })
+            (all(root).first { it.tag=="search_query" } as android.widget.EditText).setText("Дюна")
+            all(root).first { it.tag=="search_submit" }.performClick();repeat(4) { frame(root) }
+            assertEquals(CenterCatalog.searchProviders.toSet(),host.browseProviders.toSet())
+            assertTrue(host.browseCalls.all { it.first.query=="Дюна" && it.first.type=="all" })
+            assertTrue(all(root).any { (it.tag as? String)?.startsWith("everywhere:tmdb:")==true })
+            val calls=host.browseProviders.size
+            host.onBackPressedDispatcher.onBackPressed();frame(root)
+            all(root).first { it.tag=="search_submit" }.performClick();repeat(3) { frame(root) }
+            assertEquals("Повторный показ берёт ответы из памяти",calls,host.browseProviders.size)
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun detailPrefetchMarksSitesAndReusesResultsWhenASiteIsChosen() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            host.prefetch=true
+            val tmdb=CenterTitle(153312,"tv","Король Талсы",original="Tulsa King",year="2022")
+            host.sourceResults["kinokong"]=listOf(CenterTitle(18,"movie","Король Талсы (2022) 1-2 сезон",year="2022",provider="kinokong",sourceUrl="https://kinokong.es/18-show.html"))
+            host.detailFixture(CenterDetails(tmdb,emptyList(),""));repeat(3) { frame(root) }
+            // Киновод в тестовом окружении отвечает через searchKinoVod, остальные сайты — через sourceQueries.
+            val queried=host.sourceQueries.size+host.kinoQueries.size
+            assertEquals(CenterOnlineMatch.providers.toSet()-"kinovod",host.sourceQueries.map { it.first }.toSet())
+            assertTrue(host.kinoQueries.isNotEmpty())
+            host.showTmdbOnlineSources(tmdb);repeat(3) { frame(root) }
+            assertEquals("KinoKong · карточка найдена",(all(root).first { it.tag=="online_source:kinokong" } as TextView).text.toString())
+            assertEquals("Не найдено на Zona","Zona.movie · не найдено",(all(root).first { it.tag=="online_source:zona" } as TextView).text.toString())
+            all(root).first { it.tag=="online_source:kinokong" }.performClick();repeat(4) { frame(root) }
+            assertEquals("выбор сайта не повторяет поиск",queried,host.sourceQueries.size+host.kinoQueries.size)
+            assertEquals("tv",CenterStore(host).onlineSource(tmdb,"kinokong")?.type)
+        } finally { controller.pause().stop().destroy() }
+    }
+    @Test fun searchEverywhereShowsOneCardPerTitleAndBindsExactSiteMatches() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            val tmdb=CenterTitle(153312,"tv","Король Талсы",original="Tulsa King",year="2022")
+            val kong=CenterTitle(18,"movie","Король Талсы / Tulsa King",year="2022",provider="kinokong",sourceUrl="https://kinokong.es/18-show.html")
+            val gogo=CenterTitle(17,"tv","Король Талсы 2 сезон",year="2022",provider="kinogo",sourceUrl="https://kz.kinogo.moi/17-show.html")
+            host.everywhereResults.clear();host.everywhereTerm="Король"
+            host.everywhereResults["tmdb"]=EverywhereResult.Found(listOf(tmdb))
+            host.everywhereResults["kinokong"]=EverywhereResult.Found(listOf(kong))
+            host.everywhereResults["kinogo"]=EverywhereResult.Found(listOf(gogo))
+            CenterCatalog.searchProviders.filterNot { it in host.everywhereResults }.forEach { host.everywhereResults[it]=EverywhereResult.Found(emptyList()) }
+            host.searchEverywhere("Король");repeat(3) { frame(root) }
+            val merged=all(root).filter { (it.tag as? String)?.startsWith("everywhere:all:")==true }
+            assertEquals(1,merged.size)
+            assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Сериал · 2022 · TMDB, KinoKong, KinoGo · KZ" })
+            assertNotNull(CenterStore(host).onlineSource(tmdb,"kinokong"));assertNotNull(CenterStore(host).onlineSource(tmdb,"kinogo"))
+        } finally { controller.pause().stop().destroy() }
+    }
+    @Test fun longReleaseListsCreateOnlyVisibleRows() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            CenterStore(host).exactReleases=false
+            host.releaseFixture((1..120).map { CenterRelease("Sorting 2020 1080p #$it","magnet:?xt=urn:btih:${it.toString().padStart(40,'0')}",120-it,1_000_000L*it,"tracker") })
+            repeat(3) { frame(root) }
+            assertTrue(all(root).any { it.tag=="release_list" })
+            val bound=all(root).count { (it.tag as? String)?.startsWith("release:")==true }
+            assertTrue("bound $bound",bound in 1 until 120)
+        } finally { controller.pause().stop().destroy() }
+    }
+
     @Test fun replacementCatalogsAppearInBothSelectorsWithTheirOwnSections() {
         val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
         try {
@@ -751,7 +827,7 @@ class MediaCenterUiTest {
             label(root,"Поиск").performClick();frame(root)
             label(root,"Искать в: KinoTac").performClick();frame(root)
             dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
-            assertEquals(CenterCatalog.searchProviders.size,dialog.listView.adapter.count);dialog.dismiss()
+            assertEquals(CenterCatalog.searchProviders.size+1,dialog.listView.adapter.count);dialog.dismiss()
         } finally { controller.pause().stop().destroy() }
     }
 

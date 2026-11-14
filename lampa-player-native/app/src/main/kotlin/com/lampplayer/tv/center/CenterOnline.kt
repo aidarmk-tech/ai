@@ -38,6 +38,8 @@ class OnlineMediaUnavailable(val status:Int, val detail:String, message:String):
 /** Resolves the selected provider's own player metadata, without showing a website or starting video. */
 class CenterOnline(private val activity:AppCompatActivity) {
     var diagnostics: String = "not started"; private set
+    /** Время этапов последнего разбора, мс: страница сайта, первый список серий, итог. */
+    var timings: String = ""; private set
     suspend fun resolve(item:CenterTitle,preferredPlayer:Int?=null):OnlineVideo = withContext(Dispatchers.Main.immediate) {
         require(preferredPlayer==null||(manualPlayers(item.provider)&&preferredPlayer>=0)) { "Выбор плеера недоступен для этого источника" }
         val source=source(item)
@@ -48,13 +50,20 @@ class CenterOnline(private val activity:AppCompatActivity) {
         var preparedFrames=0
         var declaredFrames=emptyList<String>()
         val libraryCalls=Collections.synchronizedSet(mutableSetOf<Call>())
+        val started=android.os.SystemClock.elapsedRealtime()
+        fun elapsed()=android.os.SystemClock.elapsedRealtime()-started
+        var pageAt=-1L;var firstListAt=-1L
+        timings=""
         try {
             @SuppressLint("SetJavaScriptEnabled")
             val browser=WebView(activity).apply {
                 settings.javaScriptEnabled=true;settings.domStorageEnabled=true
                 settings.allowFileAccess=false;settings.allowContentAccess=false
                 settings.mediaPlaybackRequiresUserGesture=true;settings.setSupportMultipleWindows(false)
-                settings.cacheMode=WebSettings.LOAD_NO_CACHE
+                // Скрипты плееров берутся из обычного HTTP-кэша: повторное открытие не качает их заново.
+                settings.cacheMode=WebSettings.LOAD_DEFAULT
+                // Скрытый браузер не показывает картинки — постеры и баннеры не нужны для списка серий.
+                settings.blockNetworkImage=true
                 isFocusable=false;importantForAccessibility=android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS;alpha=0f
             }
             web=browser
@@ -67,6 +76,7 @@ class CenterOnline(private val activity:AppCompatActivity) {
                 diagnostics="bootstrap=native prepared=$preparedFrames stage=webview"
                 if(frames.isNotEmpty())kinokongDocument(item,frames).toByteArray(Charsets.UTF_8) else null
             } else null
+            pageAt=elapsed()
             android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(browser,true)
             browser.webChromeClient=object:WebChromeClient() {
                 override fun onConsoleMessage(message:ConsoleMessage):Boolean {
@@ -167,9 +177,14 @@ class CenterOnline(private val activity:AppCompatActivity) {
                     val entries=if(allowEntries)decode(item,snapshot) else emptyList()
                     diagnostics += " entries=${entries.size} mirrors=${entries.sumOf { e -> e.alternatives.values.sumOf { maxOf(0,it.size-1) } }} hosts=${entries.flatMap { e -> e.alternatives.values.flatten().ifEmpty { e.sources.values.toList() } }.mapNotNull { it.toHttpUrlOrNull()?.host }.distinct().take(6)} errors=$issues"
                     if(entries.isNotEmpty()) {
+                        if(firstListAt<0)firstListAt=elapsed()
                         val signature=Gson().toJson(entries)
                         stable=if(signature==last)stable+1 else 0;last=signature
-                        if(stable>=4) {
+                        // Список принимается после двух одинаковых снимков (~0,6 с). Если сайт сообщает,
+                        // что часть ссылок ещё загружается, ждём дольше, как раньше.
+                        val stillLoading=(snapshot.get("modern")?.takeIf { it.isJsonObject }?.asJsonObject
+                            ?.get("pending")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0)>0
+                        if(stable>=(if(stillLoading)4 else 2)) {
                             val referer=frameReferer ?: browser.url?.takeIf { sameTitleNavigation(item,it) } ?: source.toString()
                             val origin=referer.toHttpUrlOrNull() ?: source
                             val modern=snapshot.get("modern")?.takeIf { it.isJsonObject }?.asJsonObject
@@ -190,6 +205,8 @@ class CenterOnline(private val activity:AppCompatActivity) {
         } catch(e:TimeoutCancellationException) {
             error("${CenterCatalog.name(item.provider)} "+(if(item.type=="movie")"не отдал ссылку на видео." else "не отдал список серий.")+" Попробуй повторить или выбери другой источник")
         } finally {
+            timings="page=${pageAt}ms list=${firstListAt}ms total=${elapsed()}ms"
+            android.util.Log.i("LampMediaPerf","${item.provider} ${item.id}: $timings")
             active.set(false);synchronized(libraryCalls) { libraryCalls.toList() }.forEach { it.cancel() }
             web?.let { it.stopLoading();(it.parent as? ViewGroup)?.removeView(it);it.destroy() }
         }

@@ -79,6 +79,8 @@ jobs:
           path: lampa-player-native/app/build/reports/androidTests/
   publish:
     needs: [android, device]
+    # Обновление для пользователей публикуется только из основной ветки LampMedia.
+    if: github.ref == 'refs/heads/codex/media-center'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

@@ -24,6 +24,27 @@ class CenterOnlineMatchTest {
         assertNull(CenterOnlineMatch.automatic(tmdb,listOf(source.copy(year=""))))
         assertEquals(source.copy(title="Tulsa King (2022)"),CenterOnlineMatch.automatic(tmdb,listOf(source.copy(title="Tulsa King (2022)"))))
     }
+    @Test fun siteTitleDecorationsAndBilingualTitlesStillMatch() {
+        val kong=source.copy(id=18,provider="kinokong",sourceUrl="https://kinokong.es/18-show.html")
+        for(title in listOf("Король Талсы (2022) 1-2 сезон","Король Талсы / Tulsa King","Король Талсы смотреть онлайн",
+            "Король Талсы (сериал)","Король Талсы 2 сезон","КОРОЛЬ ТАЛСЫ","Tulsa King: все серии"))
+            assertNotNull(title,CenterOnlineMatch.automatic(tmdb,listOf(kong.copy(title=title))))
+        // Номер части — это другое произведение, а не приписка.
+        assertNull(CenterOnlineMatch.automatic(tmdb,listOf(kong.copy(title="Король Талсы 2"))))
+        // Название из одного года не превращается в пустую строку.
+        val film=CenterTitle(14161,"movie","2012",year="2009")
+        assertNotNull(CenterOnlineMatch.automatic(film,listOf(source.copy(id=5,type="movie",title="2012 (2009)",year="2009",sourceUrl="https://kinovod.pro/film/5-2012"))))
+        assertNull(CenterOnlineMatch.automatic(film,listOf(source.copy(id=6,type="movie",title="2013",year="2009",sourceUrl="https://kinovod.pro/film/6-2013"))))
+    }
+    @Test fun guessedSiteTypesFollowTmdbButKinovodTypesMustAgree() {
+        val kong=source.copy(id=18,type="movie",provider="kinokong",sourceUrl="https://kinokong.es/18-show.html")
+        assertEquals("tv",CenterOnlineMatch.automatic(tmdb,listOf(kong))?.type)
+        assertNull(CenterOnlineMatch.automatic(tmdb,listOf(source.copy(type="movie",sourceUrl="https://kinovod.pro/film/240279-title"))))
+    }
+    @Test fun queriesAddTheTitleWithoutSubtitle() {
+        val dune=CenterTitle(693134,"movie","Дюна: Часть вторая",original="Dune: Part Two",year="2024")
+        assertEquals(listOf("Дюна: Часть вторая","Dune: Part Two","Дюна"),CenterOnlineMatch.queries(dune))
+    }
     @Test fun duplicateTitlesAndWrongOrUnsupportedUrlsDoNotAutoSelect() {
         val other=source.copy(id=240280,sourceUrl="https://kinovod.pro/serial/240280-another")
         assertNull(CenterOnlineMatch.automatic(tmdb,listOf(source,other)))

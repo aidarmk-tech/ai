@@ -28,6 +28,10 @@ class CenterStore(context: Context) {
     var searchCatalog:String
         get() = prefs.getString("search_catalog",null)?.takeIf { it in CenterCatalog.searchProviders } ?: catalog.takeIf { it in CenterCatalog.searchProviders } ?: "tmdb"
         set(value) { require(value in CenterCatalog.searchProviders);prefs.edit().putString("search_catalog",value).apply() }
+    /** «Поиск везде»: искать сразу во всех каталогах вместо [searchCatalog]. */
+    var searchEverywhere: Boolean
+        get() = prefs.getBoolean("search_everywhere", false)
+        set(value) { prefs.edit().putBoolean("search_everywhere", value).apply() }
     /** Browsing preferences belong to each TMDB media type; search text is never persisted here. */
     fun libraryBrowse(type: String): CenterBrowse {
         require(type in listOf("movie","tv"))
@@ -76,6 +80,12 @@ class CenterStore(context: Context) {
     var cardSize: String
         get() = prefs.getString("card_size", "normal").orEmpty().takeIf { it in listOf("compact", "normal", "large") } ?: "normal"
         set(value) { require(value in listOf("compact", "normal", "large")); prefs.edit().putString("card_size", value).apply() }
+    var textScale: String
+        get() = prefs.getString("text_scale", "normal").orEmpty().takeIf { it in CenterTheme.scales } ?: "normal"
+        set(value) { require(value in CenterTheme.scales); prefs.edit().putString("text_scale", value).apply() }
+    var palette: String
+        get() = prefs.getString("palette", "default").orEmpty().takeIf { it in CenterTheme.paletteLabels } ?: "default"
+        set(value) { require(value in CenterTheme.paletteLabels); prefs.edit().putString("palette", value).apply() }
     fun voice(key: String): String? = prefs.getString("voice_$key", null)
     fun setVoice(key: String, voice: String?) {
         prefs.edit().apply { if (voice == null) remove("voice_$key") else putString("voice_$key", voice) }.apply()
@@ -93,6 +103,16 @@ class CenterStore(context: Context) {
         require(CenterOnlineMatch.valid(item,source))
         prefs.edit().putString("online_"+source.provider+"_"+item.key,gson.toJson(source))
             .putString("online_last_"+item.key,source.provider).apply()
+    }
+    /**
+     * Привязка, найденная автоматически (поиск везде, предзагрузка): записывается, только если для этого сайта
+     * ещё нет выбора, и не меняет сайт, который пользователь выбрал последним.
+     */
+    fun suggestOnlineSource(item:CenterTitle,source:CenterTitle):Boolean {
+        if(!CenterOnlineMatch.valid(item,source)||source.type!=item.type||onlineSource(item,source.provider)!=null)return false
+        val edit=prefs.edit().putString("online_"+source.provider+"_"+item.key,gson.toJson(source))
+        if(!prefs.contains("online_last_"+item.key))edit.putString("online_last_"+item.key,source.provider)
+        edit.apply();return true
     }
     fun searches(): List<String> = runCatching {
         gson.fromJson<List<String>>(prefs.getString("searches", "[]"), object : TypeToken<List<String>>() {}.type)
@@ -148,11 +168,16 @@ class CenterStore(context: Context) {
     fun removeHistory(card: CardMeta) {
         prefs.edit().putString("history", gson.toJson(history().filterNot { historyKey(it.card) == historyKey(card) })).apply()
     }
+    /** Возвращает запись, убранную из истории, на прежнее место по времени просмотра. */
+    fun restoreHistory(entry: CenterHistory) {
+        val list = (history().filterNot { historyKey(it.card) == historyKey(entry.card) } + entry).sortedByDescending { it.at }
+        prefs.edit().putString("history", gson.toJson(list.take(HISTORY_LIMIT))).apply()
+    }
     fun clearHistory() { prefs.edit().remove("history").apply() }
     fun remember(url: String, card: CardMeta) {
         val list = history().filterNot { historyKey(it.card) == historyKey(card) }.toMutableList()
         list.add(0, CenterHistory(url, card, System.currentTimeMillis()))
-        prefs.edit().putString("history", gson.toJson(list.take(30))).apply()
+        prefs.edit().putString("history", gson.toJson(list.take(HISTORY_LIMIT))).apply()
     }
     fun seriesStatus(key:String):String = prefs.getString("series_status_$key","watching").orEmpty()
         .takeIf { it in seriesStatuses } ?: "watching"
@@ -233,7 +258,7 @@ class CenterStore(context: Context) {
                 }
                 key=="history" -> {
                     val incoming=gson.fromJson<List<CenterHistory>>(value,object:TypeToken<List<CenterHistory>>(){}.type).map { it.copy(card=it.card.copy(headers=emptyMap())) }
-                    val existing=history();val merged=(existing+incoming).sortedByDescending { it.at }.distinctBy { historyKey(it.card) }.take(30)
+                    val existing=history();val merged=(existing+incoming).sortedByDescending { it.at }.distinctBy { historyKey(it.card) }.take(HISTORY_LIMIT)
                     edit.putString(key,gson.toJson(merged));imported+=(merged.size-existing.size).coerceAtLeast(0)
                 }
                 !prefs.contains(key) -> {
@@ -248,6 +273,8 @@ class CenterStore(context: Context) {
     }
 
     companion object {
+        /** Сколько произведений хранит «Продолжить просмотр»; таймкоды хранятся отдельно и не ограничены этой лентой. */
+        const val HISTORY_LIMIT = 200
         val seriesStatuses=linkedMapOf("watching" to "Смотрю","unwatched" to "Есть непросмотренные","waiting" to "Жду продолжения","done" to "Досмотрено")
         fun rebase(url: String, base: String): String {
             val original = url.toHttpUrlOrNull() ?: return url

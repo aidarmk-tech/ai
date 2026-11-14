@@ -137,6 +137,20 @@ class CenterBackendTest {
         assertEquals(listOf("Movie"),store.history().map { it.card.title })
         store.clearHistory();assertTrue(store.history().isEmpty());assertEquals(1,store.favorites().size)
     }
+    @Test fun historyKeepsMoreThanThirtyTitlesAndUndoRestoresTheOriginalOrder() {
+        val context=RuntimeEnvironment.getApplication()
+        context.getSharedPreferences("media_center",0).edit().clear().commit()
+        val store=CenterStore(context)
+        for (i in 1..40) { store.remember("u$i",CardMeta("Film $i",tmdbId=i)); Thread.sleep(1) }
+        assertEquals(40,store.history().size)
+        val middle=store.history()[5]
+        store.removeHistory(middle.card)
+        assertFalse(store.history().any { it.card.title==middle.card.title })
+        store.restoreHistory(middle)
+        assertEquals(middle.card.title,store.history()[5].card.title)
+        for (i in 41..(CenterStore.HISTORY_LIMIT+10)) store.remember("u$i",CardMeta("Film $i",tmdbId=i))
+        assertEquals(CenterStore.HISTORY_LIMIT,store.history().size)
+    }
 
 
     @Test fun torrentPreloadReportsRealBytesAndUsesARange() = runBlocking {
