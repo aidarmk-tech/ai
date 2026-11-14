@@ -43,6 +43,9 @@ import java.util.ArrayDeque
 
 /** Native TV catalog; playback and episode navigation use the shared player. */
 private const val REOPEN_SETTINGS = "reopen_settings"
+/** Сколько держать разобранный список серий. Ссылки всё равно проверяются перед запуском и обновляются при ошибке. */
+internal const val ONLINE_CACHE_MS = 30 * 60_000L
+internal const val ONLINE_CACHE_SIZE = 12
 
 open class MediaCenterActivity : AppCompatActivity() {
     protected open val backend = CenterBackend()
@@ -1265,7 +1268,8 @@ open class MediaCenterActivity : AppCompatActivity() {
     protected open suspend fun resolveOnlinePlayer(item:CenterTitle,playerIndex:Int?):OnlineVideo {
         val resolver=CenterOnline(this)
         fun report() = "LampMedia · ${BuildConfig.VERSION_NAME}\nИсточник: ${CenterCatalog.name(item.provider)}\nКарточка: ${item.key}\n"+
-            resolver.diagnostics.substringBefore(" errors=")
+            resolver.diagnostics.substringBefore(" errors=").substringBefore(" timing[")+
+            resolver.timings.takeIf { it.isNotBlank() }?.let { "\nВремя: $it" }.orEmpty()
         try { return resolver.resolve(item,playerIndex) }
         catch(e:CancellationException) { throw e }
         catch(e:Exception) { onlineReport=report();throw onlineFailure(e) }
@@ -1396,9 +1400,9 @@ open class MediaCenterActivity : AppCompatActivity() {
                 ?: if(playerIndex!=null)({online(item,refresh=true,selectedSeason=contextSeason,selectedVoice=contextVoice,catalogItem=catalogItem,choosePlayerAfterLoad=true)}) else null,
             onlineRefresh={online(item,resume,refresh=true,selectedSeason=selectedSeason,selectedVoice=selectedVoice,
                 catalogItem=catalogItem,playerIndex=playerIndex,quickPlay=quickPlay)}) {
-            val cached = onlineCache[identity.key]?.takeIf { System.currentTimeMillis() - it.first < 180000 && !refresh && it.second.item.key==item.key && it.second.item.sourceUrl==item.sourceUrl && (playerIndex==null||it.second.pinnedPlayer&&it.second.playerIndex==playerIndex) }?.second
+            val cached = onlineCache[identity.key]?.takeIf { System.currentTimeMillis() - it.first < ONLINE_CACHE_MS && !refresh && it.second.item.key==item.key && it.second.item.sourceUrl==item.sourceUrl && (playerIndex==null||it.second.pinnedPlayer&&it.second.playerIndex==playerIndex) }?.second
             val loaded = cached ?: (if(playerIndex==null)resolveOnline(item) else resolveOnlinePlayer(item,playerIndex)).copy(catalogItem=catalogItem).also {
-                if (onlineCache.size >= 4) onlineCache.remove(onlineCache.keys.first())
+                if (onlineCache.size >= ONLINE_CACHE_SIZE) onlineCache.remove(onlineCache.keys.first())
                 onlineCache[identity.key] = System.currentTimeMillis() to it
             }
             val video=loaded.copy(resumeCard=resume ?: loaded.resumeCard)
