@@ -148,11 +148,16 @@ class CenterStore(context: Context) {
     fun removeHistory(card: CardMeta) {
         prefs.edit().putString("history", gson.toJson(history().filterNot { historyKey(it.card) == historyKey(card) })).apply()
     }
+    /** Возвращает запись, убранную из истории, на прежнее место по времени просмотра. */
+    fun restoreHistory(entry: CenterHistory) {
+        val list = (history().filterNot { historyKey(it.card) == historyKey(entry.card) } + entry).sortedByDescending { it.at }
+        prefs.edit().putString("history", gson.toJson(list.take(HISTORY_LIMIT))).apply()
+    }
     fun clearHistory() { prefs.edit().remove("history").apply() }
     fun remember(url: String, card: CardMeta) {
         val list = history().filterNot { historyKey(it.card) == historyKey(card) }.toMutableList()
         list.add(0, CenterHistory(url, card, System.currentTimeMillis()))
-        prefs.edit().putString("history", gson.toJson(list.take(30))).apply()
+        prefs.edit().putString("history", gson.toJson(list.take(HISTORY_LIMIT))).apply()
     }
     fun seriesStatus(key:String):String = prefs.getString("series_status_$key","watching").orEmpty()
         .takeIf { it in seriesStatuses } ?: "watching"
@@ -233,7 +238,7 @@ class CenterStore(context: Context) {
                 }
                 key=="history" -> {
                     val incoming=gson.fromJson<List<CenterHistory>>(value,object:TypeToken<List<CenterHistory>>(){}.type).map { it.copy(card=it.card.copy(headers=emptyMap())) }
-                    val existing=history();val merged=(existing+incoming).sortedByDescending { it.at }.distinctBy { historyKey(it.card) }.take(30)
+                    val existing=history();val merged=(existing+incoming).sortedByDescending { it.at }.distinctBy { historyKey(it.card) }.take(HISTORY_LIMIT)
                     edit.putString(key,gson.toJson(merged));imported+=(merged.size-existing.size).coerceAtLeast(0)
                 }
                 !prefs.contains(key) -> {
@@ -248,6 +253,8 @@ class CenterStore(context: Context) {
     }
 
     companion object {
+        /** Сколько произведений хранит «Продолжить просмотр»; таймкоды хранятся отдельно и не ограничены этой лентой. */
+        const val HISTORY_LIMIT = 200
         val seriesStatuses=linkedMapOf("watching" to "Смотрю","unwatched" to "Есть непросмотренные","waiting" to "Жду продолжения","done" to "Досмотрено")
         fun rebase(url: String, base: String): String {
             val original = url.toHttpUrlOrNull() ?: return url

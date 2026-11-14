@@ -1096,7 +1096,7 @@ open class MediaCenterActivity : AppCompatActivity() {
         val history = store.history()
         if (history.isEmpty()) content.addView(text("Здесь появятся фильмы и сериалы после начала просмотра", 17, muted))
         else {
-            content.addView(text("Удерживай ОК на карточке, чтобы убрать её из истории", 14, muted)); space(content, 16)
+            content.addView(text("Удерживай ОК на карточке: продолжить, открыть карточку или убрать из истории", 14, muted)); space(content, 16)
             historyCards(history)
         }
     }
@@ -1121,11 +1121,9 @@ open class MediaCenterActivity : AppCompatActivity() {
                 val episode = card.episodeNumber?.let { number -> (card.seasonNumber?.let { "S$it · " } ?: "") + "Серия $number" } ?: if (card.contentKey?.contains(":tv:") == true) "Сериал" else "Фильм"
                 holder.time.text = episode; holder.progress.progress = 0
                 holder.art.removeAllViews(); holder.art.addView(artFrame(card.title, 220, 110, card.backdropUrl ?: card.posterUrl), FrameLayout.LayoutParams(-1, -1))
-                holder.itemView.tag = "history:${card.contentKey ?: card.tmdbId}:${card.seasonNumber}:${card.title}"
+                holder.itemView.tag = historyTag(card)
                 holder.itemView.setOnClickListener { enter { resume(saved) } }
-                holder.itemView.setOnLongClickListener {
-                    store.removeHistory(card); currentScreen?.invoke(); content.post { content.getFocusables(View.FOCUS_FORWARD).firstOrNull()?.requestFocus() }; true
-                }
+                holder.itemView.setOnLongClickListener { historyActions(saved, history, holder.bindingAdapterPosition); true }
                 holder.itemView.setOnFocusChangeListener { v, focus -> v.background = bg(if (focus) Color.rgb(34, 54, 79) else panel, if (focus) accent else Color.TRANSPARENT) }
                 lifecycleScope.launch {
                     val progress = PositionDataStore(applicationContext).getPosition(saved.url, card)
@@ -1136,6 +1134,41 @@ open class MediaCenterActivity : AppCompatActivity() {
                 }
             }
         }, 220)
+    }
+    /** Меню записи «Продолжить»: ничего не меняется без явного выбора, удаление можно отменить. */
+    private fun historyActions(saved: CenterHistory, history: List<CenterHistory>, position: Int) {
+        val card = saved.card
+        val actions = listOf<Pair<String, () -> Unit>>(
+            "Продолжить" to { enter { resume(saved) } },
+            "Открыть карточку" to { enter { detail(historyTitle(card)) } },
+            "Убрать из истории" to { removeFromHistory(saved, history, position) })
+        AlertDialog.Builder(this).setTitle(card.title).setItems(actions.map { it.first }.toTypedArray()) { _, index -> actions[index].second() }
+            .setNegativeButton("Отмена", null).show()
+    }
+    private fun removeFromHistory(saved: CenterHistory, history: List<CenterHistory>, position: Int) {
+        // Фокус переходит на соседнюю карточку, а не в начало экрана.
+        val neighbour = history.getOrNull(position + 1) ?: history.getOrNull(position - 1)
+        store.removeHistory(saved.card); currentScreen?.invoke()
+        content.post {
+            val target = neighbour?.let { n -> findTag(content, historyTag(n.card)) }
+            (target ?: content.getFocusables(View.FOCUS_FORWARD).firstOrNull())?.requestFocus()
+        }
+        AlertDialog.Builder(this).setMessage("«${saved.card.title}» убран из истории. Таймкод сохранён.")
+            .setPositiveButton("Готово", null)
+            .setNegativeButton("Отменить") { _, _ ->
+                store.restoreHistory(saved); currentScreen?.invoke()
+                content.post { findTag(content, historyTag(saved.card))?.requestFocus() }
+            }.show()
+    }
+    private fun historyTag(card: CardMeta) = "history:${card.contentKey ?: card.tmdbId}:${card.seasonNumber}:${card.title}"
+    /** Восстанавливает карточку каталога из записи истории (TMDB или сайт). */
+    private fun historyTitle(card: CardMeta): CenterTitle {
+        val key = card.contentKey?.split(':').orEmpty()
+        val provider = key.firstOrNull()?.takeIf { CenterCatalog.isSiteIdentity(it) }
+        return CenterTitle(key.getOrNull(2)?.toIntOrNull() ?: card.tmdbId ?: 0,
+            if (card.seasonNumber != null || key.getOrNull(1) == "tv") "tv" else "movie",
+            card.title, original = card.originalTitle.orEmpty(), overview = card.overview.orEmpty(),
+            poster = card.posterUrl, year=card.releaseYear?.toString().orEmpty(), provider = provider, sourceUrl = card.sourcePage)
     }
     private class HistoryHolder(view: View, val art: FrameLayout, val title: TextView, val time: TextView, val progress: ProgressBar) : RecyclerView.ViewHolder(view) { var url = "" }
 
@@ -1844,12 +1877,8 @@ open class MediaCenterActivity : AppCompatActivity() {
         work("Продолжаю ${saved.card.title}…") {
             if (!localTorrent(saved.url)) {
                 val card = saved.card
-                val key = card.contentKey?.split(':').orEmpty()
-                val provider = key.firstOrNull()?.takeIf { CenterCatalog.isSiteIdentity(it) }
-                val item = CenterTitle(key.getOrNull(2)?.toIntOrNull() ?: card.tmdbId ?: 0,
-                    if (card.seasonNumber != null || key.getOrNull(1) == "tv") "tv" else "movie",
-                    card.title, original = card.originalTitle.orEmpty(), overview = card.overview.orEmpty(),
-                    poster = card.posterUrl, year=card.releaseYear?.toString().orEmpty(), provider = provider, sourceUrl = card.sourcePage)
+                val item = historyTitle(card)
+                val provider = item.provider
                 content.post {
                     if(provider==null||CenterOnline.onlineSupported(provider)) online(item,card,refresh=true)
                     else find(item, card.episodeNumber?.let { CenterEpisode(card.seasonNumber ?: 1, it, "", "") })
