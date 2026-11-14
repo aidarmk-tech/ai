@@ -206,7 +206,6 @@ class CenterOnline(private val activity:AppCompatActivity) {
             error("${CenterCatalog.name(item.provider)} "+(if(item.type=="movie")"не отдал ссылку на видео." else "не отдал список серий.")+" Попробуй повторить или выбери другой источник")
         } finally {
             timings="page=${pageAt}ms list=${firstListAt}ms total=${elapsed()}ms"
-            diagnostics+=" timing[$timings]"
             android.util.Log.i("LampMediaPerf","${item.provider} ${item.id}: $timings")
             active.set(false);synchronized(libraryCalls) { libraryCalls.toList() }.forEach { it.cancel() }
             web?.let { it.stopLoading();(it.parent as? ViewGroup)?.removeView(it);it.destroy() }

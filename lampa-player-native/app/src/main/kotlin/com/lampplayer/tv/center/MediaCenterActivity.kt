@@ -1275,7 +1275,7 @@ open class MediaCenterActivity : AppCompatActivity() {
     protected open suspend fun resolveOnlinePlayer(item:CenterTitle,playerIndex:Int?):OnlineVideo {
         val resolver=CenterOnline(this)
         fun report() = "LampMedia · ${BuildConfig.VERSION_NAME}\nИсточник: ${CenterCatalog.name(item.provider)}\nКарточка: ${item.key}\n"+
-            resolver.diagnostics.substringBefore(" errors=").substringBefore(" timing[")+
+            resolver.diagnostics.substringBefore(" errors=")+
             resolver.timings.takeIf { it.isNotBlank() }?.let { "\nВремя: $it" }.orEmpty()
         try { return resolver.resolve(item,playerIndex) }
         catch(e:CancellationException) { throw e }
