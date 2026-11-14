@@ -53,6 +53,9 @@ open class MediaCenterActivity : AppCompatActivity() {
     internal var updateStatus:String?=null
     /** Доступ экранов из других файлов к подменяемым в тестах зависимостям. */
     internal val engineBackend get() = backend
+    internal suspend fun searchCatalogPage(provider: String, request: CenterBrowse, number: Int) = browsePage(provider, request, number)
+    internal var everywhereTerm: String? = null
+    internal val everywhereResults = mutableMapOf<String, EverywhereResult>()
     internal suspend fun checkForUpdate() = availableUpdate()
     protected open fun elapsedTime(): Long = android.os.SystemClock.elapsedRealtime()
     internal var onlineReport: String? = null
@@ -1049,6 +1052,14 @@ open class MediaCenterActivity : AppCompatActivity() {
     internal fun posterActions(item:CenterTitle,anchor:View) {
         val screen=snapshot()
         val actions=mutableListOf<Pair<String,()->Unit>>()
+        // Быстрый запуск прямо с постера, без захода в карточку.
+        val saved=store.history().firstOrNull { (it.card.contentKey ?: "tmdb:${item.type}:${it.card.tmdbId}")==item.key }
+        val savedSource=if(saved==null&&item.provider==null) store.onlineSource(item) else null
+        when {
+            saved!=null -> actions.add("▶ Продолжить" to { enter { resume(saved) } })
+            savedSource!=null -> actions.add("▶ Смотреть · ${CenterCatalog.name(savedSource.provider)}" to {
+                enter { online(savedSource, catalogItem = item.copy(sourceUrl = savedSource.sourceUrl), quickPlay = true) } })
+        }
         actions.add("Открыть карточку" to { anchor.performClick();Unit })
         fun change(label:String,action:()->Unit) {
             actions.add(label to {
@@ -1096,6 +1107,7 @@ open class MediaCenterActivity : AppCompatActivity() {
                 ?.hideSoftInputFromWindow(query.windowToken,0)
             val provider=store.searchCatalog
             currentScreen = { searchScreen(term) }
+            if (store.searchEverywhere) { enter { searchEverywhere(term) }; return }
             enter { work("Ищу «$term»…") {
                 val spec=CenterBrowse(type="all",query=term)
                 showHome(browsePage(provider,spec,1),"Результаты поиска",1,null,if(provider=="tmdb") spec else null,sourceProvider=provider)
@@ -1104,11 +1116,15 @@ open class MediaCenterActivity : AppCompatActivity() {
         query.setOnEditorActionListener { _, action, event ->
             if (action == EditorInfo.IME_ACTION_SEARCH || event?.let { it.keyCode == KeyEvent.KEYCODE_ENTER && it.action == KeyEvent.ACTION_DOWN } == true) { search(); true } else false
         }
-        content.addView(button("Искать в: ${CenterCatalog.name(store.searchCatalog)}") {
+        content.addView(button("Искать в: " + if (store.searchEverywhere) "все каталоги" else CenterCatalog.name(store.searchCatalog)) {
             val providers=CenterCatalog.searchProviders
+            val labels=listOf("Везде · все каталоги сразу")+providers.map { CenterCatalog.name(it) }
+            val checked=if(store.searchEverywhere) 0 else providers.indexOf(store.searchCatalog)+1
             AlertDialog.Builder(this).setTitle("Каталог для поиска")
-                .setSingleChoiceItems(providers.map { CenterCatalog.name(it) }.toTypedArray(),providers.indexOf(store.searchCatalog)) { dialog,index ->
-                    store.searchCatalog=providers[index];dialog.dismiss();searchScreen(query.text.toString())
+                .setSingleChoiceItems(labels.toTypedArray(),checked) { dialog,index ->
+                    store.searchEverywhere=index==0
+                    if(index>0) store.searchCatalog=providers[index-1]
+                    dialog.dismiss();searchScreen(query.text.toString())
                     content.post { findTag(content,"search_source")?.requestFocus() }
                 }.setNegativeButton("Отмена",null).show()
         }.apply { tag="search_source" })

@@ -674,9 +674,11 @@ class MediaCenterUiTest {
             (all(root).first { it.tag=="search_query" } as android.widget.EditText).setText("Источник")
             all(root).first { it.tag=="search_source" }.performClick();frame(root)
             val dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
-            val list=dialog.listView;list.performItemClick(list.getChildAt(1),1,list.adapter.getItemId(1));frame(root)
+            // Первый пункт — «Везде», затем каталоги по порядку.
+            val list=dialog.listView;list.performItemClick(list.getChildAt(2),2,list.adapter.getItemId(2));frame(root)
             assertEquals("tmdb",CenterStore(host).catalog)
             assertEquals("kinovod",CenterStore(host).searchCatalog)
+            assertFalse(CenterStore(host).searchEverywhere)
             assertEquals("Источник",(all(root).first { it.tag=="search_query" } as TextView).text.toString())
             assertEquals("search_source",root.findFocus()?.tag)
             all(root).first { it.tag=="search_recent:Король Талсы" }.performClick();repeat(3) { frame(root) }
@@ -730,6 +732,26 @@ class MediaCenterUiTest {
             screenshot(root,"media-center-collapsed-release-filters")
         } finally { controller.pause().stop().destroy() }
     }
+    @Test fun searchEverywhereQueriesEveryCatalogAndKeepsResultsAfterReturning() {
+        val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
+        try {
+            val host=controller.get();val root=host.findViewById<View>(android.R.id.content)
+            CenterStore(host).searchEverywhere=true
+            host.browsePages[1]=listOf(CenterTitle(901,"movie","Дюна",year="2021"))
+            all(root).first { it.tag=="Поиск" }.performClick();frame(root)
+            assertTrue(all(root).filterIsInstance<TextView>().any { it.text.toString()=="Искать в: все каталоги" })
+            (all(root).first { it.tag=="search_query" } as android.widget.EditText).setText("Дюна")
+            all(root).first { it.tag=="search_submit" }.performClick();repeat(4) { frame(root) }
+            assertEquals(CenterCatalog.searchProviders.toSet(),host.browseProviders.toSet())
+            assertTrue(host.browseCalls.all { it.first.query=="Дюна" && it.first.type=="all" })
+            assertTrue(all(root).any { (it.tag as? String)?.startsWith("everywhere:tmdb:")==true })
+            val calls=host.browseProviders.size
+            host.onBackPressedDispatcher.onBackPressed();frame(root)
+            all(root).first { it.tag=="search_submit" }.performClick();repeat(3) { frame(root) }
+            assertEquals("Повторный показ берёт ответы из памяти",calls,host.browseProviders.size)
+        } finally { controller.pause().stop().destroy() }
+    }
+
     @Test fun replacementCatalogsAppearInBothSelectorsWithTheirOwnSections() {
         val controller=Robolectric.buildActivity(Host::class.java).setup().visible()
         try {
@@ -751,7 +773,7 @@ class MediaCenterUiTest {
             label(root,"Поиск").performClick();frame(root)
             label(root,"Искать в: KinoTac").performClick();frame(root)
             dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog() as androidx.appcompat.app.AlertDialog
-            assertEquals(CenterCatalog.searchProviders.size,dialog.listView.adapter.count);dialog.dismiss()
+            assertEquals(CenterCatalog.searchProviders.size+1,dialog.listView.adapter.count);dialog.dismiss()
         } finally { controller.pause().stop().destroy() }
     }
 
